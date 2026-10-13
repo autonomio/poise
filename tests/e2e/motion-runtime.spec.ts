@@ -87,3 +87,49 @@ test('retirement keeps the presented opacity and print releases the inert visual
   })
   expect(result).toEqual({ removed: true, opacity: .35, inert: true, ghostRemoved: true })
 })
+
+test('guided scrolling stops when its destination actor departs', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(async () => {
+    const owner = document.createElement('div'); owner.style.cssText = 'height:100px;width:200px;overflow:auto'
+    owner.innerHTML = '<div style="height:1000px"><div style="height:40px;margin-top:600px">Destination</div></div>'
+    document.body.append(owner)
+    const actor = owner.firstElementChild!.firstElementChild as HTMLElement
+    window.Motion.scrollToActor(actor, 'center')
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const before = owner.scrollTop
+    actor.remove()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    return { before, after: owner.scrollTop, running: owner.hasAttribute('data-motion-running') }
+  })
+  expect(result.before).toBeGreaterThan(0)
+  expect(result.after).toBe(result.before)
+  expect(result.running).toBe(false)
+})
+
+test('retained popup controls become inert at logical close', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(async () => {
+    const panel = document.createElement('aside'); panel.hidden = true; panel.style.cssText = 'width:200px;height:100px'
+    panel.innerHTML = '<button>Retiring control</button>'; document.body.append(panel)
+    window.Motion.watchPanel(panel, () => !panel.hidden)
+    panel.hidden = false
+    await new Promise(resolve => setTimeout(resolve, 80))
+    panel.hidden = true
+    await new Promise<void>(resolve => queueMicrotask(resolve))
+    panel.querySelector('button')!.focus()
+    return { inert: panel.inert, presented: !!panel.getClientRects().length, focused: panel.contains(document.activeElement) }
+  })
+  expect(result).toEqual({ inert: true, presented: true, focused: false })
+})
+
+test('table retirement applies actor opacity once', async ({ page }) => {
+  await runtime(page)
+  const opacity = await page.evaluate(() => {
+    const table = document.createElement('table'); table.innerHTML = '<tbody><tr style="opacity:.35"><td>Departing row</td></tr></tbody>'; document.body.append(table)
+    window.Motion.retire(table.querySelector('tr')!)
+    const ghost = document.querySelector<HTMLElement>('[data-flow-retiring]')!
+    return Number(getComputedStyle(ghost).opacity) * Number(getComputedStyle(ghost.querySelector('tr')!).opacity)
+  })
+  expect(opacity).toBe(.35)
+})

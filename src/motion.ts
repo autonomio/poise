@@ -8,6 +8,7 @@ interface MotionOptions {
   write(values: MotionValues): void
   complete?(): void
   canComplete?(): boolean
+  valid?(): boolean
   delay?: number
   rebase?: boolean
 }
@@ -69,6 +70,7 @@ function tick(now: number): void {
   previousTime = now
   for (const channel of [...moving]) {
     if (!channel.active) continue
+    if (channel.options.valid && !channel.options.valid()) { cancelMotion(channel.owner, channel.name); continue }
     if (!channel.owner.isConnected || !channel.owner.getClientRects().length) {
       if (channel.name === 'scroll') cancelMotion(channel.owner, channel.name)
       else complete(channel)
@@ -184,6 +186,7 @@ export function retire(element: HTMLElement): void {
   let ghost = element.cloneNode(true) as HTMLElement
   if (element instanceof HTMLTableRowElement) {
     const row = ghost as HTMLTableRowElement
+    row.style.opacity = '1'
     ;[...row.cells].forEach((cell, index) => { cell.style.width = `${element.cells[index].getBoundingClientRect().width}px` })
     ghost = element.closest('table')!.cloneNode(false) as HTMLTableElement
     const body = document.createElement('tbody'); body.append(row); ghost.append(body)
@@ -260,6 +263,7 @@ export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -
     const next = opened()
     if (previous === next) return
     previous = next
+    element.inert = !next
     if (next) delete element.dataset.flowRetained
     else element.dataset.flowRetained = ''
     spring(element, 'panel', { from: { progress: next ? 0 : 1 }, to: { progress: next ? 1 : 0 },
@@ -276,8 +280,9 @@ export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -
 }
 
 /** Bounded scrolling follows live geometry and yields immediately to direct input. */
-export function scroll(element: HTMLElement, destination: () => number): void {
+export function scroll(element: HTMLElement, destination: () => number, actor?: HTMLElement): void {
   spring(element, 'scroll', { from: { y: element.scrollTop }, to: () => ({ y: Math.max(0, Math.min(element.scrollHeight - element.clientHeight, destination())) }),
+    valid: () => !actor || actor.isConnected && !!actor.getClientRects().length,
     write: ({ y }) => { element.scrollTop = y }, complete: () => cancelMotion(element, 'scroll') })
 }
 
@@ -289,7 +294,7 @@ export function scrollToActor(actor: HTMLElement, block: 'center' | 'nearest' = 
     const box = actor.getBoundingClientRect(), parent = owner === document.documentElement ? { top: 0, height: innerHeight, bottom: innerHeight } : owner.getBoundingClientRect()
     if (block === 'center') return owner.scrollTop + box.top - parent.top - (parent.height - box.height) / 2
     return box.top < parent.top ? owner.scrollTop + box.top - parent.top : box.bottom > parent.bottom ? owner.scrollTop + box.bottom - parent.bottom : owner.scrollTop
-  })
+  }, actor)
 }
 
 export function initMotion(): void {
