@@ -81,7 +81,7 @@ test('connects a CLI from Settings in a terminal and shows its new sign-in', asy
     await expect(row('claude')).toContainText('2.1.288')
     await expect(row('claude')).toContainText('Claude Max subscription')
     await expect(row('codex').locator('.st-account-state')).toHaveText('Not signed in')
-    await expect(row('codex')).toContainText('Runs codex login --device-auth')
+    await expect(row('codex').getByRole('button', { name: 'Connect Codex' })).toHaveAttribute('data-help', 'Opens a sign-in terminal: codex login --device-auth')
     await expect(row('gh').locator('.st-account-state')).toHaveText('Signed in as octocat')
     // Settings → General names octocat as your account and octo-agent as the agent's.
     await expect(row('gh').locator('.st-gh-account[data-login="octocat"] .st-gh-notes')).toHaveText('active · your GitHub account')

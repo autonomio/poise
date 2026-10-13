@@ -127,7 +127,8 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     const panel = openPanel()
     const wantedWidth = panel ? panel.classList.contains('st-terminal-open') ? 640 : 420 : 252
     surface.style.top = `${box.bottom - 1}px`
-    surface.style.right = `${Math.max(0, innerWidth - box.right)}px`
+    // Fixed-position offsets use the layout viewport, excluding its scrollbar.
+    surface.style.right = `${Math.max(0, document.documentElement.clientWidth - box.right)}px`
     surface.style.width = `${Math.min(wantedWidth, box.right - 12)}px`
     surface.style.height = `${panel ? Math.min(680, available) : Math.min(menu.scrollHeight + 2, available)}px`
     surface.style.maxHeight = `${available}px`
@@ -173,6 +174,7 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
       back.type = 'button'
       back.className = 'tp-back'
       back.setAttribute('aria-label', 'Back to menu')
+      back.dataset.help = 'Back to menu'
       back.innerHTML = ICON_BACK
       back.addEventListener('click', () => { callbacks.onClosePanels(); openMenu(); menu.querySelector<HTMLButtonElement>('.menu-item:not([hidden])')?.focus() })
       header?.prepend(back)

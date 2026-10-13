@@ -13,6 +13,7 @@ export function installIconTooltips(root: HTMLElement = document.body): () => vo
     if (help && root.contains(help)) return help
     const button = node instanceof Element ? node.closest<HTMLElement>('button, [role="button"]') : null
     if (!button || !root.contains(button)) return null
+    if (button.id === 'menu-toggle' && button.getAttribute('aria-expanded') === 'true') return null
     return button.matches('.chat-icon-btn, .chat-copy-btn, .chat-attachment-remove, .chat-session-delete, [data-tooltip]')
       || (!!button.querySelector('svg') && !button.textContent?.trim()) ? button : null
   }
@@ -64,8 +65,8 @@ export function installIconTooltips(root: HTMLElement = document.body): () => vo
   document.addEventListener('keydown', key, true)
   document.addEventListener('scroll', hide, true)
   window.addEventListener('resize', hide)
-  const observer = new MutationObserver(() => { if (target && (!target.isConnected || target.closest('[hidden], [inert]'))) hide() })
-  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'inert'] })
+  const observer = new MutationObserver(() => { if (target && (!target.isConnected || target.closest('[hidden], [inert]') || target.id === 'menu-toggle' && target.getAttribute('aria-expanded') === 'true')) hide() })
+  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'inert', 'aria-expanded'] })
   return () => {
     hide()
     observer.disconnect()

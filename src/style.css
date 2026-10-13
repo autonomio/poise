@@ -1333,7 +1333,7 @@ tr:hover .review-btn { opacity: 1; }
 }
 #menu-surface {
   position: fixed;
-  z-index: 111;
+  z-index: 131;
   width: 252px;
   background: var(--surface);
   border: var(--b-base);
