@@ -88,7 +88,7 @@ const GH_ROLES = [
   {
     key: 'sign-in:gh:agent',
     login: (identities: GitHubIdentities) => identities.agentAccount,
-    title: 'The agent account is not signed in to gh',
+    title: 'Your GitHub automation account is not signed in',
     body: (login: string) => `Reviews and comments are posted as ${login}, which gh does not hold signed in. Connect GitHub in Settings → Accounts and sign in as ${login}.`,
   },
 ]

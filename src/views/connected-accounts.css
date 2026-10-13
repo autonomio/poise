@@ -8,6 +8,9 @@
   margin-bottom: var(--sp-3);
 }
 
+.st-account-group { display: grid; gap: var(--sp-2); min-width: 0; }
+.st-account-group .tp-group-label { margin-bottom: 0; }
+
 .st-account {
   padding: var(--sp-3);
   border: var(--b-base);

@@ -1,7 +1,7 @@
 # Connected accounts
 
-Settings → Accounts shows the agent CLIs Poise runs (Claude Code, Codex, gh,
-Grok, Muse and Antigravity) as each CLI's own status command reports them,
+Settings → Accounts separates AI provider sign-ins (Claude Code, Codex, Grok,
+Muse and Antigravity) from GitHub sign-ins. Each CLI's status command reports them,
 and opens each one's login in a terminal inside Settings. In a workspace that
 is how a person connects their own accounts; on a personal computer it works
 the same way. [Service architecture](Service-architecture.md#accounts-identities-and-the-terminal)
@@ -41,7 +41,7 @@ whenever a terminal exits.
 
 Each read also records a sign-in alert, which Poise Link shows on the desktop:
 for an installed CLI that says it is not signed in (Codex, today), and for
-your GitHub account or the agent account while gh does not hold it signed in.
+your GitHub account or the GitHub automation account while gh does not hold it signed in.
 An alert comes once and again only after it has cleared, which happens when
 the CLI or the account is signed in again; a CLI that cannot say changes
 nothing. Claude's alert comes from Poise's own Claude sign-in check instead.

@@ -54,7 +54,7 @@ function ghAccounts(account: ConnectedAccount, identities: GitHubIdentities): st
     const notes = [
       gh.active ? 'active' : '',
       sameLogin(gh.login, identities.me) ? 'your GitHub account' : '',
-      sameLogin(gh.login, identities.agentAccount) ? 'agent account' : '',
+      sameLogin(gh.login, identities.agentAccount) ? 'automation account' : '',
     ].filter(Boolean)
     return `<li class="st-gh-account st-account-state-${gh.signedIn ? 'on' : 'off'}" data-login="${escapeHtml(gh.login)}">
       <span class="st-gh-login">${escapeHtml(gh.login)}</span>${notes.length ? `<span class="st-gh-notes">${notes.join(' · ')}</span>` : ''}
@@ -64,14 +64,14 @@ function ghAccounts(account: ConnectedAccount, identities: GitHubIdentities): st
   const usable = (login: string) => held.some((gh) => gh.signedIn && sameLogin(gh.login, login))
   const missing = [
     identities.me && !usable(identities.me) ? `Your GitHub account ${identities.me} is not signed in to gh.` : '',
-    identities.agentAccount && !usable(identities.agentAccount) ? `The agent account ${identities.agentAccount} is not signed in to gh.` : '',
+    identities.agentAccount && !usable(identities.agentAccount) ? `Your GitHub automation account ${identities.agentAccount} is not signed in to gh.` : '',
   ].filter(Boolean)
   return list + missing.map((text) => `<div class="st-help st-help-error st-gh-missing">${escapeHtml(text)}</div>`).join('')
 }
 
 /** The rows. `busy` while a terminal runs: one login at a time. */
 export function accountsHtml(accounts: ConnectedAccount[], identities: GitHubIdentities, busy: boolean): string {
-  return accounts.map((account) => {
+  const rows = (entries: ConnectedAccount[]) => entries.map((account) => {
     const name = ACCOUNT_NAMES[account.id]
     const { text, tone } = state(account)
     const action = account.signedIn ? 'Reconnect' : 'Connect'
@@ -89,4 +89,12 @@ export function accountsHtml(accounts: ConnectedAccount[], identities: GitHubIde
       <div class="st-help st-help-info st-account-login">Runs <code>${escapeHtml(account.login.label)}</code></div>
     </div>`
   }).join('')
+  return [
+    { label: 'AI accounts', entries: accounts.filter((account) => account.id !== 'gh') },
+    { label: 'GitHub accounts', entries: accounts.filter((account) => account.id === 'gh') },
+  ].filter((group) => group.entries.length).map((group) => `
+    <section class="st-account-group" aria-label="${group.label}">
+      <h3 class="tp-group-label">${group.label}</h3>
+      ${rows(group.entries)}
+    </section>`).join('')
 }
