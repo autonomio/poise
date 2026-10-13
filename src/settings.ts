@@ -807,7 +807,6 @@ function selectSection(panel: HTMLElement, tab: SettingsSection) {
   for (const section of panel.querySelectorAll<HTMLElement>('.st-tab')) {
     section.hidden = section.dataset.tab !== tab
   }
-  panel.querySelector('.tp-body')!.scrollTop = 0
   panel.querySelector<HTMLElement>('.st-footer')!.hidden = tab === 'accounts' || tab === 'admin'
   if (tab === 'accounts') void loadAccounts()
   window.dispatchEvent(new CustomEvent('poise:settings-section-changed', { detail: { section: tab } }))

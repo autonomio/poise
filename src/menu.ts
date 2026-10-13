@@ -63,6 +63,8 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
   let current: ViewName = loadView()
   let closeTimer: ReturnType<typeof setTimeout> | undefined
   let positionFrame = 0
+  let activePanel: HTMLElement | null = null
+  let activeSection: string | undefined
   const nav = document.createElement('nav')
   nav.id = 'top-nav'
   nav.innerHTML = VIEW_ITEMS.map((v) => `<button class="nav-item" data-view="${v.key}">${v.label}</button>`).join('')
@@ -154,6 +156,10 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
       surface.hidden = false
       surface.removeAttribute('inert')
       positionSurface()
+      if (panel && (panel !== activePanel || panel.dataset.section !== activeSection)) {
+        const body = panel.querySelector<HTMLElement>('.tp-body')
+        if (body) body.scrollTop = 0
+      }
       requestAnimationFrame(() => {
         if (!menu.hidden || openPanel()) surface.classList.add('open')
       })
@@ -165,6 +171,8 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
       }, 220)
       if (surface.contains(document.activeElement) || document.activeElement === document.body) toggle.focus({ preventScroll: true })
     }
+    activePanel = panel
+    activeSection = panel?.dataset.section
   }
 
   const knownPanels = new WeakSet<HTMLElement>()
