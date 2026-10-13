@@ -204,6 +204,39 @@ test('a delayed session deletion cannot flash outside a collapsed sidebar fade',
   await expect(page.locator('.chat-session-list > [data-id="s2"]')).toHaveCount(1)
 })
 
+test('a delayed session deletion cannot reveal a row scrolled above its list', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
+  const state = makeState(Array.from({ length: 40 }, (_, index) => session({ id: `s${index + 1}`, title: `Session ${index + 1}` })))
+  await installRoutes(page, state); await installSocket(page)
+  let releaseDelete!: () => void, requested = false
+  const delayed = new Promise<void>(resolve => { releaseDelete = resolve })
+  await page.route('**/api/chat/sessions/s1', async route => {
+    if (route.request().method() !== 'DELETE') return route.fallback()
+    requested = true; await delayed
+    state.sessions = state.sessions.filter(record => record.id !== 's1')
+    await route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/'); await settled(page)
+  const row = page.locator('.chat-session-list > [data-id="s1"]'), original = await row.elementHandle()
+  await row.locator('.chat-session-delete').click(); await row.locator('.chat-session-delete').click()
+  await expect.poll(() => requested).toBe(true)
+  const presentation = await page.locator('.chat-session-list').evaluate(element => {
+    const row = element.querySelector<HTMLElement>('[data-id="s1"]')!
+    element.scrollTop += row.getBoundingClientRect().bottom - element.getBoundingClientRect().top + 2
+    window.retiredSessionOpacities = []
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches('.chat-session-item[data-flow-retiring][data-id="s1"]')) window.retiredSessionOpacities.push(Number(getComputedStyle(node).opacity))
+    }).observe(document.body, { childList: true })
+    return { top: row.getBoundingClientRect().top, bottom: row.getBoundingClientRect().bottom, clip: element.getBoundingClientRect().top }
+  })
+  expect(presentation.top).toBeGreaterThan(0)
+  expect(presentation.bottom).toBeLessThan(presentation.clip)
+  releaseDelete()
+  await expect.poll(() => original!.evaluate(element => element.isConnected)).toBe(false)
+  expect(await page.evaluate(() => window.retiredSessionOpacities)).toEqual([])
+  await settled(page)
+})
+
 test('a model menu lands once and keeps its catalogue visible', async ({ page }) => {
   await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   await installRoutes(page, makeState([])); await installSocket(page)

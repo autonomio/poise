@@ -25,7 +25,9 @@ departed visuals inertly. Changed text and elapsed time remain immediate.
 Batch departures use geometry captured before the layout mutation; retiring
 descendants retain their presented translations and transforms. Retiring
 visuals retain intermediate ancestors' opacity; fully faded actors leave
-without creating an invisible visual.
+without creating an invisible visual. Ancestor overflow bounds are captured
+before mutation and stay fixed through retirement; fully clipped actors leave
+without a visual.
 Intrinsic disclosures animate height, padding and opacity and return to auto
 sizing. Fixed measurement clones are removed synchronously and never shrink
 the live document's native scroll bounds.

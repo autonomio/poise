@@ -211,6 +211,38 @@ test('retirement retains ancestor opacity once and skips fully faded actors', as
   }
 })
 
+test('retirement skips scrolled-out actors and keeps partial clips fixed during exit', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(async () => {
+    const owner = document.createElement('div'); owner.style.cssText = 'position:fixed;top:160px;left:100px;width:100px;height:100px;border:4px solid transparent;overflow:auto'
+    owner.innerHTML = '<div style="width:300px;height:400px"><div style="width:200px;height:40px">Clipped departure</div></div>'
+    document.body.append(owner)
+    owner.scrollTop = 80; owner.scrollLeft = 20
+    const outside = owner.firstElementChild!.firstElementChild as HTMLElement
+    const originalBox = outside.getBoundingClientRect()
+    window.Motion.retire(outside)
+    const skipped = !document.querySelector('[data-flow-retiring]')
+    const partial = document.createElement('div'); partial.style.cssText = 'width:200px;height:40px'; partial.textContent = 'Partial departure'
+    owner.firstElementChild!.prepend(partial); owner.scrollTop = 20; owner.scrollLeft = 20
+    const clip = owner.getBoundingClientRect()
+    window.Motion.retire(partial)
+    const ghost = document.querySelector<HTMLElement>('[data-flow-retiring]')!
+    const visibleBounds = () => {
+      const box = ghost.getBoundingClientRect(), insets = ghost.style.clipPath.match(/[\d.]+/g)!.map(Number)
+      return { top: box.top + insets[0], right: box.right - insets[1], left: box.left + insets[3] }
+    }
+    const before = visibleBounds()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const after = visibleBounds()
+    const result = { skipped, originallyInsideViewport: originalBox.top > 0, before, after, expected: { top: clip.top + owner.clientTop, left: clip.left + owner.clientLeft, right: clip.left + owner.clientLeft + owner.clientWidth } }
+    window.dispatchEvent(new Event('beforeprint')); owner.remove()
+    return result
+  })
+  expect(result.skipped).toBe(true)
+  expect(result.originallyInsideViewport).toBe(true)
+  for (const bounds of [result.before, result.after]) for (const edge of ['top', 'left', 'right'] as const) expect(bounds[edge]).toBeCloseTo(result.expected[edge], 1)
+})
+
 test('batch card and table departures keep every pre-mutation position', async ({ page }) => {
   await runtime(page)
   const samples = await page.evaluate(() => {

@@ -30,7 +30,8 @@ const moving = new Set<Channel>()
 const listeners = new Set<() => void>()
 const disclosurePadding = new WeakMap<HTMLElement, { top: number, bottom: number }>()
 const nativeDetails = new WeakSet<HTMLDetailsElement>()
-interface RetirementGeometry { box: DOMRect, cellWidths?: number[] }
+interface ClipBounds { left: number, top: number, right: number, bottom: number }
+interface RetirementGeometry { box: DOMRect, clip: ClipBounds, cellWidths?: number[] }
 let retirementGeometry = new Map<HTMLElement, RetirementGeometry>()
 let preference: MediaQueryList | undefined
 let frame = 0, previousTime = 0
@@ -150,14 +151,37 @@ export function reveal(element: HTMLElement, { distance = MOTION.travel, delay =
     } })
 }
 
+function retirementClip(parent: Element | null, cache = new Map<Element, ClipBounds>()): ClipBounds {
+  if (!parent || parent === document.body || parent === document.documentElement) return { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+  const cached = cache.get(parent)
+  if (cached) return cached
+  const clip = { ...retirementClip(parent.parentElement, cache) }
+  if (parent.getClientRects().length) {
+    const style = getComputedStyle(parent), box = parent.getBoundingClientRect()
+    const scaleX = parent instanceof HTMLElement && parent.offsetWidth ? box.width / parent.offsetWidth : 1
+    const scaleY = parent instanceof HTMLElement && parent.offsetHeight ? box.height / parent.offsetHeight : 1
+    if (/^(auto|scroll|hidden|clip)$/.test(style.overflowX)) {
+      const left = box.left + parent.clientLeft * scaleX
+      clip.left = Math.max(clip.left, left); clip.right = Math.min(clip.right, left + parent.clientWidth * scaleX)
+    }
+    if (/^(auto|scroll|hidden|clip)$/.test(style.overflowY)) {
+      const top = box.top + parent.clientTop * scaleY
+      clip.top = Math.max(clip.top, top); clip.bottom = Math.min(clip.bottom, top + parent.clientHeight * scaleY)
+    }
+  }
+  cache.set(parent, clip)
+  return clip
+}
+
 export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope > *', key: (element: HTMLElement) => string | HTMLElement = element => element): T {
   const active = document.activeElement
   const before = new Map([...root.querySelectorAll<HTMLElement>(selector)].map(element => [key(element), { element, box: element.getBoundingClientRect() }]))
   // Departures share the same pre-mutation geometry as surviving layout actors.
   const previousGeometry = retirementGeometry
   retirementGeometry = new Map(previousGeometry)
+  const clips = new Map<Element, ClipBounds>()
   for (const { element, box } of before.values()) if (!retirementGeometry.has(element)) retirementGeometry.set(element, {
-    box, cellWidths: element instanceof HTMLTableRowElement ? [...element.cells].map(cell => cell.getBoundingClientRect().width) : undefined,
+    box, clip: retirementClip(element.parentElement, clips), cellWidths: element instanceof HTMLTableRowElement ? [...element.cells].map(cell => cell.getBoundingClientRect().width) : undefined,
   })
   let result: T
   try { result = change() } finally { retirementGeometry = previousGeometry }
@@ -191,10 +215,11 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 export function retire(element: HTMLElement): void {
   const presentedGeometry = retirementGeometry.get(element)
   const box = presentedGeometry?.box ?? element.getBoundingClientRect()
+  const clip = presentedGeometry?.clip ?? retirementClip(element.parentElement)
   let opacity = Number(getComputedStyle(element).opacity)
   // The body still composites the fixed visual; intermediate ancestors no longer do.
   for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity)
-  if (!box.width || !box.height || !opacity || reducedMotion()) { finishMotion(element); element.remove(); return }
+  if (!box.width || !box.height || !opacity || clip.right <= clip.left || clip.bottom <= clip.top || box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom || reducedMotion()) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
   const descendants = [...element.querySelectorAll<HTMLElement>('*')]
   const copies = [...ghost.querySelectorAll<HTMLElement>('*')]
@@ -225,7 +250,10 @@ export function retire(element: HTMLElement): void {
   element.remove()
   document.body.appendChild(ghost)
   spring(ghost, 'retirement', { from: { opacity, y: 0 }, to: { opacity: 0, y: -MOTION.information },
-    write: ({ opacity, y }) => { ghost.style.opacity = String(bounded(opacity)); ghost.style.translate = `0 ${y}px` },
+    write: ({ opacity, y }) => {
+      ghost.style.opacity = String(bounded(opacity)); ghost.style.translate = `0 ${y}px`
+      ghost.style.clipPath = `inset(${Math.max(0, clip.top - box.top - y)}px ${Math.max(0, box.right - clip.right)}px ${Math.max(0, box.bottom + y - clip.bottom)}px ${Math.max(0, clip.left - box.left)}px)`
+    },
     complete: () => { ghost.remove(); cancelMotion(ghost, 'retirement') } })
 }
 
