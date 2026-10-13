@@ -199,7 +199,7 @@ test('native request disclosure keeps its model suggestions hidden during openin
     })
     return visible
   })).toBe(false)
-  await expect(page.getByRole('textbox', { name: 'JEV model', exact: true })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'JEV model', exact: true })).toBeVisible()
 })
 
 test('reordered results retain each question’s native distribution state', async ({ page }) => {
