@@ -28,6 +28,7 @@ const channels = new WeakMap<HTMLElement, Map<string, Channel>>()
 const moving = new Set<Channel>()
 const listeners = new Set<() => void>()
 const disclosurePadding = new WeakMap<HTMLElement, { top: number, bottom: number }>()
+const nativeDetails = new WeakSet<HTMLDetailsElement>()
 let preference: MediaQueryList | undefined
 let frame = 0, previousTime = 0
 const bounded = (value: number) => Math.max(0, Math.min(1, value))
@@ -308,14 +309,22 @@ export function initMotion(): void {
     const summary = (event.target as Element).closest('summary')
     const details = summary?.parentElement
     if (!(details instanceof HTMLDetailsElement) || summary !== details.querySelector(':scope > summary') || event.defaultPrevented) return
+    if ((event.target as Element).closest('a, button, input, select, textarea')) return
     const bodies = [...details.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== summary)
     if (!bodies.length) return
+    if (!nativeDetails.has(details)) {
+      nativeDetails.add(details)
+      details.addEventListener('toggle', () => {
+        if (details.hasAttribute('data-flow-details')) return
+        for (const body of bodies) { body.hidden = false; body.inert = !details.open }
+      })
+    }
     event.preventDefault()
     const opened = !details.open
     const heights = bodies.map(body => body.getBoundingClientRect().height)
     details.dataset.flowDetails = ''
     details.open = opened
     let remaining = bodies.length
-    bodies.forEach((body, index) => disclosure(body, opened, () => { if (!--remaining) delete details.dataset.flowDetails }, heights[index]))
+    bodies.forEach((body, index) => disclosure(body, opened, () => { body.hidden = false; body.inert = !details.open; if (!--remaining) delete details.dataset.flowDetails }, heights[index]))
   })
 }
