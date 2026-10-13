@@ -516,7 +516,6 @@ function renderAll(type?: LaneType) {
     for (const lane of LANES) {
       const list = laneListEl(lane.key)
       if (type && lane.type !== type) { for (const actor of list.querySelectorAll<HTMLElement>(':scope > .card')) keep.add(actor); continue }
-      list.querySelector('.lane-empty')?.remove()
       let cursor = list.firstChild
       const place = (actor: HTMLElement) => {
         keep.add(actor)
@@ -551,18 +550,19 @@ function renderAll(type?: LaneType) {
 // one is the confusing case: the board looks like it has lost your work.
 function renderLaneEmptyState(l: LaneConfig, count: number): void {
   const list = laneListEl(l.key)
-  if (count > 0) return
+  const existing = list.querySelector<HTMLParagraphElement>('.lane-empty')
+  if (count > 0) { existing?.remove(); return }
   const filtered = l.type === 'manual'
     ? !!searchQuery
     : !!searchQuery || timeFilter !== 'all' || statusFilter !== 'all'
-  const note = document.createElement('p')
+  const note = existing ?? document.createElement('p')
   note.className = 'lane-empty'
   note.textContent = filtered
     ? (l.type === 'live' && liveTruncated
         ? 'Nothing matches — and this lane is capped, so older items are not loaded.'
         : 'Nothing matches the current filter.')
     : (l.type === 'manual' ? 'No cards yet.' : 'Nothing here.')
-  list.appendChild(note)
+  if (!existing) list.appendChild(note)
 }
 
 function renderLiveOnly() {
@@ -576,7 +576,6 @@ function renderLiveLaneAnimated(laneKey: 'issue' | 'pr') {
     const existing = new Map([...list.querySelectorAll<HTMLElement>(':scope > .card')].map(el => [el.dataset.id!, el]))
     const ids = new Set(items.map(prKey))
     for (const [id, el] of existing) if (!ids.has(id)) retire(el)
-    list.querySelector('.lane-empty')?.remove()
     let cursor = list.firstChild
     for (const item of items) {
       const el = existing.get(prKey(item)) ?? renderLiveItem(item)
@@ -585,6 +584,7 @@ function renderLiveLaneAnimated(laneKey: 'issue' | 'pr') {
       cursor = el.nextSibling
       if (!existing.has(prKey(item))) reveal(el)
     }
+    renderLaneEmptyState(LANES.find(lane => lane.key === laneKey)!, items.length)
   }, ':scope > .card')
   laneCountEl(laneKey).textContent = String(items.length)
 }

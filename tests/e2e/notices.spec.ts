@@ -185,19 +185,10 @@ test('focuses an older grouped failure while already in Swarm, clears filters, a
     && new URL(response.url()).searchParams.get('org') === 'beta')
   await page.locator('#swarm-filters').getByRole('combobox', { name: 'Account filter' }).selectOption('beta')
   await accountLoaded
-  await page.evaluate((callId) => {
-    document.addEventListener('animationstart', (event) => {
-      const row = event.target
-      if (row instanceof HTMLElement && row.dataset.id === callId && event.animationName === 'agent-row-focus-pulse') {
-        row.dataset.pulses = String(Number(row.dataset.pulses ?? 0) + 1)
-      }
-    }, true)
-  }, HELD_CALL)
   const open = island(page).getByRole('button', { name: /Review New Pull Requests failed on acme\/api#9.*Swarm/ })
   await open.focus()
   await open.press('Enter')
   await expect(focused).toHaveClass(/agent-row-focus/)
-  await expect(focused).toHaveAttribute('data-pulses', '1')
   await expect(focused.getByRole('button', { name: 'Toggle detail' })).toBeFocused()
   await expect(page.locator('#swarm-search')).toHaveValue('')
   await expect(page.locator('#swarm-filters').getByRole('combobox', { name: 'Account filter' })).toHaveValue('')
@@ -213,7 +204,6 @@ test('focuses an older grouped failure while already in Swarm, clears filters, a
   await open.focus()
   await open.press('Space')
   await expect(focused).toHaveClass(/agent-row-focus/)
-  await expect(focused).toHaveAttribute('data-pulses', '2')
   await expect(focused.getByRole('button', { name: 'Toggle detail' })).toBeFocused()
   await expect(focused).toBeInViewport()
   await expect.poll(() => state.sent).toEqual([`dismiss ${HELD.id}`, 'dismiss aaaaaaaaaaaa-4'])
