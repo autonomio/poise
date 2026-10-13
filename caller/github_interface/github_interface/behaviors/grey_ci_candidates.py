@@ -5,22 +5,19 @@ from github_interface.client import GitHubClient
 
 REQUIRE_TOKEN_USER = True
 GREY_CONCLUSIONS = {"cancelled", "stale"}
-CONTEXTS = """
+SUITES = """
   pageInfo { hasNextPage endCursor }
-  nodes { ... on CheckRun {
-    checkSuite { status conclusion workflowRun {
-      databaseId runAttempt event createdAt
-      workflow { databaseId }
-    } }
+  nodes { status conclusion workflowRun {
+    databaseId runAttempt event createdAt
+    workflow { databaseId }
   } }
 """
-FIELDS = "state isDraft commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { " + CONTEXTS + " } } } } }"
+FIELDS = "state isDraft commits(last: 1) { nodes { commit { checkSuites(first: 100) { " + SUITES + " } } } }"
 
 
 def grey_runs(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     latest = {}
-    for context in contexts:
-        suite = context.get("checkSuite")
+    for suite in contexts:
         if not suite or not suite.get("workflowRun"):
             continue
         run = suite["workflowRun"]
@@ -52,10 +49,7 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
             commits = (pull.get("commits") or {}).get("nodes") or []
             if not commits or not commits[0].get("commit"):
                 raise ValueError("GitHub returned missing current commit evidence")
-            rollup = commits[0]["commit"]["statusCheckRollup"]
-            if rollup is None:
-                continue
-            page = rollup["contexts"]
+            page = commits[0]["commit"]["checkSuites"]
             contexts = list(page["nodes"])
             while page["pageInfo"]["hasNextPage"]:
                 cursor = page["pageInfo"]["endCursor"]
@@ -65,8 +59,8 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
                 query = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
                   rateLimit { cost }
                   repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
-                    headRefOid commits(last: 1) { nodes { commit { statusCheckRollup {
-                      contexts(first: 100, after: $cursor) { """ + CONTEXTS + " } } } } } } } }"
+                    headRefOid commits(last: 1) { nodes { commit {
+                      checkSuites(first: 100, after: $cursor) { """ + SUITES + " } } } } } } }"
                 data = await client.graphql(query, {"owner": owner, "repo": repo, "number": record["number"], "cursor": cursor})
                 cost = data["rateLimit"]["cost"]
                 if type(cost) is not int or cost < 1:
@@ -75,7 +69,7 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
                 current = data["repository"]["pullRequest"]
                 if current["headRefOid"] != record["head_sha"]:
                     raise ValueError("Pull request head changed during CI pagination")
-                page = current["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]
+                page = current["commits"]["nodes"][0]["commit"]["checkSuites"]
                 contexts.extend(page["nodes"])
             record["runs"] = grey_runs(contexts)
         except (KeyError, TypeError, AttributeError, ValueError, RuntimeError) as error:

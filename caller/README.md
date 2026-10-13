@@ -92,7 +92,7 @@ The read does not merge or use REST polling. An empty list adds no API requests.
 `github-interface --grey-ci-candidates --requests-json
 '[{"repository":"owner/repo","number":7}]' --token-user AGENT` discovers completed
 cancelled/stale GitHub Actions workflows on current PR heads. Up to 50 PRs share
-one GraphQL query; truncated check context inventories get extra pages. JSON
+one GraphQL query; truncated check workflow inventories get extra pages. JSON
 includes `actor`, actual `graphql_cost`, and ordered records with `head_sha`,
 `author`, `runs` and `error`. The newest workflow/event run supersedes older ones.
 

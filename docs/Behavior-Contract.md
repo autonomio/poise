@@ -103,9 +103,9 @@ exposed in the Caller batch packet.
 
 `rerun-grey-ci` is off unless `behavior_rerun_grey_ci_enabled` is `1`. It reads
 `--grey-ci-candidates --requests-json JSON --token-user AGENT` in batches of 50
-with no REST polling. Current-head rollup contexts identify only completed
+with no REST polling. Current-head workflow check suites identify only completed
 cancelled/stale GitHub Actions runs. Additional GraphQL pages complete truncated
-context inventories. The latest run per workflow/event excludes superseded
+workflow inventories. The latest run per workflow/event excludes superseded
 interruptions; third-party checks and intentional skips do not become reruns.
 
 A ready candidate takes the shared PR operation lock. Immediately before launch,
@@ -166,7 +166,7 @@ an exact proof that this particular run never submitted.
 
 ## Where the pull-request behaviors act
 
-`review-new-prs`, `approve-prs`, `resolve-unblocking` , `merge-prs` and `rerun-grey-ci` each have a Skip
+`review-new-prs`, `approve-prs`, `resolve-unblocking`, `merge-prs` and `rerun-grey-ci` each have a Skip
 repositories list (`behavior_<behavior>_skip_repos`): `owner/repo` names, one
 list per behavior shared by every ready account. Before a scan claims, reads or
 launches anything, it keeps only the pull requests that pass one check: open,
@@ -182,7 +182,7 @@ already open when the behavior began, wherever it is. Saving a skip list never
 retakes the baseline or clears the ledger. Unskipping a repository therefore
 makes its open pull requests eligible on the next tick exactly as new ones are:
 those opened since the baseline are reviewed, and the backlog it recorded is
-not. `approve-prs`, `resolve-unblocking` , `merge-prs` and `rerun-grey-ci` have no baseline; an unskipped
+not. `approve-prs`, `resolve-unblocking`, `merge-prs` and `rerun-grey-ci` have no baseline; an unskipped
 repository's pull requests are evaluated on the next tick like any other.
 
 ## Replays

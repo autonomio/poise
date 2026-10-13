@@ -300,7 +300,7 @@ it confirms the request, not that CI passed. No model is launched.
 
 Discovery checks up to 50 PRs per ready account in one GraphQL query each minute,
 with zero per-PR REST polling. A positive candidate normally adds five REST reads
-and one rerun write; large check/job inventories require extra pages. Transient
+and one rerun write; large workflow/job inventories require extra pages. Transient
 read retries may add calls. When disabled, this behavior adds zero requests.
 This is additional discovery traffic when Merge Pull Requests is also enabled.
 A durable workflow/head/event marker allows one automatic recovery on that head,

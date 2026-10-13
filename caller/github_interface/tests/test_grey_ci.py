@@ -18,15 +18,15 @@ PAYLOAD = {'repository': 'acme/app', 'pr': '#7', 'expected_head': HEAD, 'author'
 
 
 def context(status='COMPLETED', conclusion='CANCELLED', run_id=100, created='2026-10-13T09:23:04Z', event='pull_request_review'):
-    return {'checkSuite': {'status': status, 'conclusion': conclusion, 'workflowRun': {
-        'databaseId': run_id, 'runAttempt': 2, 'event': event, 'createdAt': created, 'workflow': {'databaseId': 70}}}}
+    return {'status': status, 'conclusion': conclusion, 'workflowRun': {
+        'databaseId': run_id, 'runAttempt': 2, 'event': event, 'createdAt': created, 'workflow': {'databaseId': 70}}}
 
 
 def response(contexts=None):
     contexts = [context()] if contexts is None else contexts
     pull = {'state': 'OPEN', 'isDraft': False, 'headRefOid': HEAD, 'author': {'login': 'octocat'},
-            'commits': {'nodes': [{'commit': {'statusCheckRollup': {'contexts': {
-                'nodes': contexts, 'pageInfo': {'hasNextPage': False, 'endCursor': None}}}}}]}}
+            'commits': {'nodes': [{'commit': {'checkSuites': {
+                'nodes': contexts, 'pageInfo': {'hasNextPage': False, 'endCursor': None}}}}]}}
     return {'data': {'viewer': {'login': 'review-bot'}, 'rateLimit': {'cost': 1},
                      **{f'pr{i}': {'nameWithOwner': r['repository'], 'pullRequest': {**deepcopy(pull), 'number': r['number']}}
                         for i, r in enumerate(REQUESTS)}}}
@@ -76,7 +76,7 @@ class TestGreyDiscovery(IsolatedAsyncioTestCase):
         self.assertEqual(len((await self.read())['records'][0]['runs']), 1)
 
     async def test_duplicate_matrix_contexts_do_not_duplicate_workflow_recovery(self):
-        self.client.request.return_value = response([context(), context(), {'checkSuite': {'workflowRun': None}}])
+        self.client.request.return_value = response([context(), context(), {'workflowRun': None}])
         self.assertEqual(len((await self.read())['records'][0]['runs']), 1)
 
     async def test_partial_error_is_scoped_and_does_not_drop_readable_targets(self):
@@ -91,13 +91,13 @@ class TestGreyDiscovery(IsolatedAsyncioTestCase):
     async def test_truncated_contexts_are_completed_and_latest_replacement_is_seen(self):
         value = response()
         for i in range(10):
-            value['data'][f'pr{i}']['pullRequest']['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']['pageInfo'] = {
+            value['data'][f'pr{i}']['pullRequest']['commits']['nodes'][0]['commit']['checkSuites']['pageInfo'] = {
                 'hasNextPage': True, 'endCursor': 'next'}
         self.client.request.return_value = value
         page = {'nodes': [context('IN_PROGRESS', None, 101, '2026-10-13T10:00:00Z')],
                 'pageInfo': {'hasNextPage': False, 'endCursor': None}}
         self.client.graphql.return_value = {'rateLimit': {'cost': 1}, 'repository': {'pullRequest': {
-            'headRefOid': HEAD, 'commits': {'nodes': [{'commit': {'statusCheckRollup': {'contexts': page}}}]}}}}
+            'headRefOid': HEAD, 'commits': {'nodes': [{'commit': {'checkSuites': page}}]}}}}
         result = await self.read()
         self.assertEqual(result['graphql_cost'], 11)
         self.assertTrue(all(not row['runs'] for row in result['records']))
