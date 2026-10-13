@@ -41,7 +41,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
       : classification.code === 'head_changed' ? 'PR changed during review preparation; the current head will be reconsidered.' : cause
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}${failure.nextRetryAt ? `; next check ${failure.nextRetryAt}` : ''}`
     add(classification, scope, message, detail)
-    failureCauses.add(JSON.stringify([ref, classification.code, cause]))
+    if (failure.callId) failureCauses.add(JSON.stringify([failure.callId, classification.code, cause]))
   }
   for (const letter of diagnostics.deadLetters) {
     const ref = targetRef(letter.target)
@@ -49,7 +49,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     // A retryable no-action attempt can also have an audit incident. Its
     // classified failure already shows it; genuinely held incidents stay errors.
     const rawClassification = classifyBehaviorDiagnostic(letter.error)
-    if (failureCauses.has(JSON.stringify([ref, rawClassification.code, cause]))) continue
+    if (letter.callId && failureCauses.has(JSON.stringify([letter.callId, rawClassification.code, cause]))) continue
     add(classifyBehaviorDiagnostic(letter.error, { held: true }), ref, cause,
       `${letter.behavior} ${letter.target}: ${cause} (${letter.attemptCount ?? 1} attempts)`)
   }

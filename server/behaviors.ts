@@ -341,6 +341,7 @@ interface PersistedBehaviorFailure {
   // What failed last, so the view can say why rather than only how often.
   error?: string
   diagnostic?: DiagnosticClassification
+  callId?: string
 }
 
 function failureKey(key: BehaviorKey, target?: string): string {
@@ -369,15 +370,16 @@ function readBehaviorFailure(key: BehaviorKey, target?: string): PersistedBehavi
       ...(typeof value.error === 'string' && value.error ? { error: value.error.slice(0, 300) } : {}),
       ...(value.diagnostic && ['error', 'warning'].includes(value.diagnostic.severity)
         && typeof value.diagnostic.code === 'string' ? { diagnostic: value.diagnostic } : {}),
+      ...(typeof value.callId === 'string' && /^[a-f0-9]{32}$/.test(value.callId) ? { callId: value.callId } : {}),
     }
   } catch {
     return null
   }
 }
 
-function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions): void
+function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string): void
-function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions = {}): void {
+function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions & { callId?: string } = {}): void {
   if (!isEnabled(key)) return
   const previous = readBehaviorFailure(key, target)
   const consecutiveFailures = Math.min((previous?.consecutiveFailures ?? 0) + 1, 31)
@@ -395,6 +397,7 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
     nextRetryAtMs: now + delayMs,
     ...(error ? { error } : {}),
     diagnostic,
+    ...(options.callId ? { callId: options.callId } : {}),
   } satisfies PersistedBehaviorFailure))
 }
 
@@ -408,7 +411,7 @@ function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: L
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
   if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
     || previous.diagnostic?.severity !== diagnostic.severity) {
-    setMeta(failureKey(behavior, target), JSON.stringify({ ...previous, error, diagnostic }))
+    setMeta(failureKey(behavior, target), JSON.stringify({ ...previous, error, diagnostic, callId: call.id }))
   }
 }
 
@@ -1298,7 +1301,7 @@ async function reconcileBehaviorLaunchClaims(
       } else {
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
-          recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false })
+          recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false, callId: call.id })
         }
       }
       continue
@@ -4245,6 +4248,7 @@ export interface BehaviorsRuntimeHealth {
     nextRetryAt: string
     error?: string
     diagnostic?: DiagnosticClassification
+    callId?: string
   }>
   datastore: DatastoreFreshness
   identity: {
@@ -4297,6 +4301,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
         nextRetryAt: new Date(failure.nextRetryAtMs).toISOString(),
         ...(failure.error ? { error: failure.error } : {}),
         ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
+        ...(failure.callId ? { callId: failure.callId } : {}),
       }] : []
     })
   })

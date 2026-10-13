@@ -74,6 +74,7 @@ export interface BehaviorDiagnostics {
     nextRetryAt: string
     error?: string
     diagnostic?: DiagnosticClassification
+    callId?: string
   }>
   deadLetters: Array<{
     id: string
@@ -82,6 +83,7 @@ export interface BehaviorDiagnostics {
     error: string
     createdAt: string
     attemptCount?: number
+    callId?: string | null
   }>
 }
 
@@ -381,18 +383,18 @@ export async function refreshState(): Promise<void> {
     stateLoadOk = false
     diagnostics = {
       ...(diagnostics ?? {
-      status: 'degraded',
-      agentLogsError: null,
-      datastore: {
-        status: 'unchecked',
-        checkedAt: new Date().toISOString(),
-        ageSeconds: null,
-        lastSuccessAt: null,
-        error: null,
-      },
-      identity: { status: 'unknown', actor: null, error: null },
-      failures: [],
-      deadLetters: [],
+        status: 'degraded',
+        agentLogsError: null,
+        datastore: {
+          status: 'unchecked',
+          checkedAt: new Date().toISOString(),
+          ageSeconds: null,
+          lastSuccessAt: null,
+          error: null,
+        },
+        identity: { status: 'unknown', actor: null, error: null },
+        failures: [],
+        deadLetters: [],
       }),
       apiError: {
         ...(requestFailure ?? classifyBehaviorDiagnostic(error instanceof Error ? error.message : String(error))),

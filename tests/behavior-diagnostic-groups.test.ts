@@ -39,4 +39,16 @@ describe('behavior diagnostic groups', () => {
     const groups = behaviorDiagnosticGroups(diagnostics)
     expect(groups.map((group) => [group.scope, group.severity])).toEqual([['Behaviors', 'warning'], ['Identity', 'error']])
   })
+  it('deduplicates only the exact no-action attempt, never an unrelated held result with the same cause', () => {
+    const diagnostics = snapshot()
+    const error = 'Selected model is at capacity.'
+    diagnostics.failures.push({ behavior: 'approve-prs', target: 'org/repo#1@head=a', kind: 'worker',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error, callId: 'safe-attempt',
+      diagnostic: { severity: 'warning', code: 'provider_capacity' } })
+    diagnostics.deadLetters.push({ id: 'x', behavior: 'approve-prs', target: 'org/repo#1',
+      error, createdAt: '', callId: 'safe-attempt' })
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning'])
+    diagnostics.deadLetters[0]!.callId = 'uncertain-attempt'
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning', 'error'])
+  })
 })
