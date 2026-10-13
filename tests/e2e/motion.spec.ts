@@ -132,9 +132,10 @@ test('draft typing resizes immediately without a delayed height transition', asy
   await installRoutes(page, makeState([session()])); await installSocket(page)
   await page.goto('/'); await settled(page)
   const measurements = await input(page).evaluate(async element => {
+    const textarea = element as HTMLTextAreaElement
     const results: Array<{ expected: number, actual: number, interpolating: boolean }> = []
     for (const draft of [Array(10).fill('Typing line').join('\n'), 'Short draft']) {
-      element.value = draft; element.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.value = draft; textarea.dispatchEvent(new Event('input', { bubbles: true }))
       await new Promise(resolve => requestAnimationFrame(resolve))
       results.push({ expected: parseFloat(element.style.height), actual: parseFloat(getComputedStyle(element).height), interpolating: element.getAnimations().some(animation => animation.playState === 'running') })
     }
