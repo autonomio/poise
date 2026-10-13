@@ -3,6 +3,7 @@ import { workspace } from './fixtures/workspace'
 import { session, makeState, installRoutes, installSocket, input, env } from './fixtures/chat'
 import { freeze, resume, settled, stableLanding } from './fixtures/motion'
 import { setupWorkspace } from './onboarding-fixture'
+declare global { interface Window { retiredSessionOpacities: number[] } }
 
 for (const entering of [false, true]) test(`setup retirement preserves its ${entering ? 'entering' : 'settled'} dialog geometry`, async ({ page }) => {
   await setupWorkspace(page)
@@ -167,6 +168,40 @@ test('pointer takeover uses the moving sidebar width and releases the spring', a
   await resume(page)
   await settled(page)
   await expect(page.locator('#view-chat')).not.toHaveClass(/chat-sidebar-resizing/)
+})
+
+test('a delayed session deletion cannot flash outside a collapsed sidebar fade', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
+  const state = makeState([session(), session({ id: 's2', title: 'Remaining session' })])
+  await installRoutes(page, state); await installSocket(page)
+  let releaseDelete!: () => void, requested = false
+  const delayed = new Promise<void>(resolve => { releaseDelete = resolve })
+  await page.route('**/api/chat/sessions/s1', async route => {
+    if (route.request().method() !== 'DELETE') return route.fallback()
+    requested = true; await delayed
+    state.sessions = state.sessions.filter(record => record.id !== 's1')
+    await route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/'); await settled(page)
+  const row = page.locator('.chat-session-list > [data-id="s1"]')
+  const original = await row.elementHandle()
+  await row.locator('.chat-session-delete').click(); await row.locator('.chat-session-delete').click()
+  await expect.poll(() => requested).toBe(true)
+  await page.getByRole('button', { name: 'Toggle sessions' }).click()
+  await freeze(page)
+  await expect(page.locator('.chat-session-list')).toHaveCSS('opacity', '0')
+  expect(await original!.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThan(1)
+  await page.evaluate(() => {
+    window.retiredSessionOpacities = []
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches('.chat-session-item[data-flow-retiring]')) window.retiredSessionOpacities.push(Number(getComputedStyle(node).opacity))
+    }).observe(document.body, { childList: true })
+  })
+  releaseDelete(); await resume(page)
+  await expect.poll(() => original!.evaluate(element => element.isConnected)).toBe(false)
+  expect(await page.evaluate(() => window.retiredSessionOpacities.every(opacity => opacity === 0))).toBe(true)
+  await settled(page)
+  await expect(page.locator('.chat-session-list > [data-id="s2"]')).toHaveCount(1)
 })
 
 test('a model menu lands once and keeps its catalogue visible', async ({ page }) => {

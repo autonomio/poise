@@ -181,6 +181,36 @@ test('retirement keeps the presented opacity and print releases the inert visual
   expect(result).toEqual({ removed: true, opacity: .35, inert: true, ghostRemoved: true })
 })
 
+test('retirement retains ancestor opacity once and skips fully faded actors', async ({ page }) => {
+  await runtime(page)
+  const samples = await page.evaluate(() => {
+    const samples: Array<{ ancestor: number, effective: number, ghosts: number, detached: boolean }> = []
+    const bodyOpacity = document.body.style.opacity
+    document.body.style.opacity = '.6'
+    for (const row of [false, true]) for (const ancestor of [.4, 0]) {
+      const outer = document.createElement('div'), inner = document.createElement('div')
+      outer.style.opacity = '.5'; inner.style.opacity = String(ancestor)
+      inner.innerHTML = row ? '<table><tbody><tr style="opacity:.35"><td><span style="opacity:.5">Departing words</span></td></tr></tbody></table>'
+        : '<div style="opacity:.35;width:120px;height:40px"><span style="opacity:.5">Departing words</span></div>'
+      outer.append(inner); document.body.append(outer)
+      const actor = inner.querySelector<HTMLElement>(row ? 'tr' : ':scope > div')!
+      window.Motion.retire(actor)
+      const ghosts = [...document.querySelectorAll<HTMLElement>('[data-flow-retiring]')]
+      const ghost = ghosts[0]
+      const effective = ghost ? Number(getComputedStyle(ghost).opacity) * Number(getComputedStyle(ghost.querySelector('span')!).opacity) * .6 : 0
+      samples.push({ ancestor, effective, ghosts: ghosts.length, detached: !actor.isConnected })
+      window.dispatchEvent(new Event('beforeprint')); outer.remove()
+    }
+    document.body.style.opacity = bodyOpacity
+    return samples
+  })
+  for (const sample of samples) {
+    expect(sample.detached).toBe(true)
+    expect(sample.ghosts).toBe(sample.ancestor ? 1 : 0)
+    expect(sample.effective).toBeCloseTo(.35 * .5 * sample.ancestor * .5 * .6, 6)
+  }
+})
+
 test('batch card and table departures keep every pre-mutation position', async ({ page }) => {
   await runtime(page)
   const samples = await page.evaluate(() => {

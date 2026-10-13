@@ -191,8 +191,10 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 export function retire(element: HTMLElement): void {
   const presentedGeometry = retirementGeometry.get(element)
   const box = presentedGeometry?.box ?? element.getBoundingClientRect()
-  const opacity = Number(getComputedStyle(element).opacity)
-  if (!box.width || !box.height || reducedMotion()) { finishMotion(element); element.remove(); return }
+  let opacity = Number(getComputedStyle(element).opacity)
+  // The body still composites the fixed visual; intermediate ancestors no longer do.
+  for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity)
+  if (!box.width || !box.height || !opacity || reducedMotion()) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
   const descendants = [...element.querySelectorAll<HTMLElement>('*')]
   const copies = [...ghost.querySelectorAll<HTMLElement>('*')]
