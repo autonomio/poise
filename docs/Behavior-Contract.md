@@ -27,6 +27,9 @@ If the browser cannot read `/api/behaviors`, it reports one request diagnostic
 and retains its last known snapshot. It does not infer agent-log, datastore or
 identity failures from that request. Controls remain unavailable until a
 successful read restores current state.
+An initial unread runtime has `status: 'unknown'`. A previously observed
+degraded runtime remains an error alongside the request diagnostic until a
+successful read supplies new health evidence.
 
 An operator can POST `/api/behaviors/retry-pr-reviews` with 1-3 `callIds`
 from failed automated slots on one PR/head. Poise verifies exact launch

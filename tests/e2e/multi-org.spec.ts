@@ -408,6 +408,7 @@ test('shows one API availability warning and clears it on a successful refresh',
   await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
   const diagnostics = page.locator('#behavior-diagnostics')
   await expect(diagnostics.locator('.behavior-warnings > summary')).toHaveText('Warnings (1)')
+  await expect(diagnostics.locator('.behavior-errors')).toHaveCount(0)
   await diagnostics.locator('.behavior-warnings > summary').click()
   await expect(diagnostics).toContainText('Behaviors: Status could not be refreshed (HTTP 502).')
   await expect(diagnostics).not.toContainText('Datastore:')
@@ -420,6 +421,29 @@ test('shows one API availability warning and clears it on a successful refresh',
   await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
   await expect(diagnostics).toBeHidden()
   await expect(page.locator('input[data-behavior="review-new-prs"]')).toBeEnabled()
+})
+
+test('keeps the last-known runtime error visible alongside a later API outage', async ({ page }) => {
+  const state = await setup(page)
+  state.diagnostics = { status: 'degraded', agentLogsError: null,
+    datastore: { status: 'healthy', checkedAt: '', ageSeconds: 1, lastSuccessAt: '', error: null },
+    identity: { status: 'valid', actor: 'bit-mis', error: null }, failures: [], deadLetters: [] }
+  let unavailable = false
+  await page.route(/\/api\/behaviors(?:\?.*)?$/, async (route) => unavailable
+    ? route.fulfill({ status: 502, body: 'Bad Gateway' }) : route.fallback())
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
+  const diagnostics = page.locator('#behavior-diagnostics')
+  await expect(diagnostics.locator('.behavior-errors')).toContainText('Behavior runtime is degraded.')
+  unavailable = true
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+  await expect(diagnostics.locator('.behavior-warnings > summary')).toHaveText('Warnings (1)')
+  await expect(diagnostics.locator('.behavior-errors > strong')).toHaveText('Errors (1)')
+  await expect(diagnostics.locator('.behavior-errors')).toContainText('Behavior runtime is degraded.')
+  unavailable = false
+  state.diagnostics.status = 'ok'
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+  await expect(diagnostics).toBeHidden()
 })
 
 test('preserves selected repositories when one account cannot be listed', async ({ page }) => {

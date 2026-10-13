@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { behaviorDiagnosticGroups } from '../src/behavior-diagnostics'
 
 // src/behaviors.ts is the browser-side mirror of the behaviour state. It has
 // no imports, so it loads under the node environment with `fetch` and
@@ -44,10 +45,32 @@ describe('Behaviors availability diagnostics', () => {
     vi.stubGlobal('fetch', async () => ({ ok: false, status: 502 }))
     await behaviors.refreshState()
     expect(behaviors.getBehaviorDiagnostics()).toMatchObject({
+      status: 'unknown',
       apiError: { severity: 'warning', code: 'upstream_unavailable', message: 'HTTP 502' },
       agentLogsError: null, datastore: { status: 'unchecked', error: null }, identity: { status: 'unknown', error: null },
     })
+    expect(behaviorDiagnosticGroups(behaviors.getBehaviorDiagnostics()!).map((group) => group.code)).toEqual(['upstream_unavailable'])
     expect(behaviors.isBehaviorStateLoaded()).toBe(false)
+  })
+  it('keeps a known degraded runtime visible through a 502 until a healthy read', async () => {
+    const snapshot = { status: 'degraded', agentLogsError: null,
+      datastore: { status: 'healthy', error: null }, identity: { status: 'valid', actor: 'reviewer', error: null },
+      failures: [], deadLetters: [] }
+    let outage = false
+    vi.stubGlobal('fetch', async () => outage ? { ok: false, status: 502 }
+      : { ok: true, json: async () => ({ ...payload(), diagnostics: snapshot }) })
+    await behaviors.refreshState()
+    const before = behaviorDiagnosticGroups(behaviors.getBehaviorDiagnostics()!)
+    expect(before.map((group) => group.code)).toEqual(['runtime_unhealthy'])
+    outage = true
+    await behaviors.refreshState()
+    const during = behaviorDiagnosticGroups(behaviors.getBehaviorDiagnostics()!)
+    expect(during[0]).toEqual(before[0])
+    expect(during.map((group) => group.code)).toEqual(['runtime_unhealthy', 'upstream_unavailable'])
+    outage = false
+    snapshot.status = 'ok'
+    await behaviors.refreshState()
+    expect(behaviorDiagnosticGroups(behaviors.getBehaviorDiagnostics()!)).toEqual([])
   })
   it('preserves real last-known errors during an outage and clears availability after recovery', async () => {
     const snapshot = { status: 'ok', agentLogsError: null, datastore: { status: 'healthy', error: null },

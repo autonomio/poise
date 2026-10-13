@@ -20,10 +20,6 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
       if (!existing.details.includes(detail)) existing.details.push(detail)
     } else groups.set(key, { ...classification, scope, message, details: [detail] })
   }
-  if (diagnostics.apiError) {
-    const error = diagnostics.apiError
-    add(error, 'Behaviors', `Status could not be refreshed (${error.message}).`, error.message)
-  }
   for (const [scope, error] of [
     ['Agent log', diagnostics.agentLogsError], ['Datastore', diagnostics.datastore.error], ['Identity', diagnostics.identity.error],
   ]) {
@@ -57,6 +53,11 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
   }
   if (groups.size === 0 && diagnostics.status === 'degraded') {
     add({ severity: 'error', code: 'runtime_unhealthy' }, 'Behaviors', 'Behavior runtime is degraded.', 'Runtime health check failed.')
+  }
+  // Availability cannot replace health evidence from the last successful read.
+  if (diagnostics.apiError) {
+    const error = diagnostics.apiError
+    add(error, 'Behaviors', `Status could not be refreshed (${error.message}).`, error.message)
   }
   return [...groups.values()]
 }

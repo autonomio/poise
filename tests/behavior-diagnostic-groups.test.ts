@@ -37,7 +37,15 @@ describe('behavior diagnostic groups', () => {
     diagnostics.apiError = { severity: 'warning', code: 'upstream_unavailable', message: 'HTTP 502' }
     diagnostics.identity.error = 'Reviewer is not configured'
     const groups = behaviorDiagnosticGroups(diagnostics)
-    expect(groups.map((group) => [group.scope, group.severity])).toEqual([['Behaviors', 'warning'], ['Identity', 'error']])
+    expect(groups.map((group) => [group.scope, group.severity])).toEqual([['Identity', 'error'], ['Behaviors', 'warning']])
+  })
+  it('retains unexplained degraded runtime evidence alongside an API warning', () => {
+    const diagnostics = snapshot()
+    diagnostics.status = 'degraded'
+    diagnostics.apiError = { severity: 'warning', code: 'upstream_unavailable', message: 'HTTP 502' }
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => [group.severity, group.code])).toEqual([
+      ['error', 'runtime_unhealthy'], ['warning', 'upstream_unavailable'],
+    ])
   })
   it('retains the organization and behavior origin for an untargeted GitHub access failure', () => {
     const diagnostics = snapshot()

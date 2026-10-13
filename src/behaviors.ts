@@ -49,7 +49,7 @@ export type BehaviorSetting = 'p0' | 'p1' | 'p2' | 'p3' | 'p4'
 export type ReviewerCount = 1 | 2 | 3
 export interface LastTriggered { at: string; target: string }
 export interface BehaviorDiagnostics {
-  status: 'ok' | 'degraded'
+  status: 'ok' | 'degraded' | 'unknown'
   agentLogsError: string | null
   apiError?: DiagnosticClassification & { message: string }
   datastore: {
@@ -384,7 +384,7 @@ export async function refreshState(): Promise<void> {
     stateLoadOk = false
     diagnostics = {
       ...(diagnostics ?? {
-        status: 'degraded',
+        status: 'unknown',
         agentLogsError: null,
         datastore: {
           status: 'unchecked',
