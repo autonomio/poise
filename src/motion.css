@@ -1,5 +1,9 @@
 /* Spatial motion composes with native transforms, including full-bleed layout. */
 [data-flow-enter], [data-flow-layout] {
+  --flow-layout-x: 0px;
+  --flow-layout-y: 0px;
+  --flow-enter-x: 0px;
+  --flow-enter-y: 0px;
   translate: calc(var(--flow-layout-x, 0px) + var(--flow-enter-x, 0px)) calc(var(--flow-layout-y, 0px) + var(--flow-enter-y, 0px));
 }
 [data-flow-retained][hidden], [data-flow-panel-retained] { display: var(--flow-display, block) !important; pointer-events: none; }

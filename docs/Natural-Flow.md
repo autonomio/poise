@@ -16,6 +16,8 @@ belongs to the latest request. Layout offsets compose through individual
 outside transformed entrance owners. Chat and Writer view entry only fade;
 their console and fixed selection geometry remain native. Ordinary entry
 travels 20px; local information uses 8px.
+Each motion actor owns its offsets; children never inherit an ancestor's
+entry or layout offset into their own translation.
 
 Keyed reconciliation retains controls, drafts, selections, native details and
 active motion styles. Structural lists reveal new actors once and retire
@@ -43,7 +45,8 @@ changes, resizing and printing settle geometry and release temporary styles.
 Detachment settles non-scroll channels. Hidden documents and view departure
 cancel scrolling at the presented reading position. Visible guided scrolling
 follows bounded live targets and yields to wheel, pointer, touch or keyboard
-input. Chat retains its existing near-bottom reading policy.
+input. Nearest navigation to a tall actor settles once it covers the viewport,
+without alternating between its edges. Chat retains its existing near-bottom reading policy.
 
 Typing, IME composition, streaming, terminal output, native dragging, Writer
 source offsets/table editing/selection marks and account operations remain

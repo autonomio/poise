@@ -77,6 +77,65 @@ test('a fade-only entrance cannot change fixed descendant coordinates', async ({
   expect(result.after).toEqual(result.before)
 })
 
+test('nested actors compose only their own entry and layout offsets', async ({ page }) => {
+  await runtime(page)
+  const samples = await page.evaluate(() => {
+    const samples: Array<{ before: number, first: number, combined: number, enteringParent: boolean }> = []
+    for (const enteringParent of [true, false]) {
+      const root = document.createElement('div'), parent = document.createElement('section'), child = document.createElement('div')
+      parent.style.cssText = 'width:200px;height:120px'; child.style.height = '40px'
+      parent.append(child); root.append(parent); document.body.append(root)
+      const gap = () => { const gap = document.createElement('div'); gap.style.height = '40px'; return gap }
+      if (enteringParent) window.Motion.reveal(parent)
+      else window.Motion.layout(root, () => root.prepend(gap()))
+      const before = child.getBoundingClientRect().top
+      if (enteringParent) window.Motion.layout(parent, () => parent.prepend(gap()))
+      else window.Motion.reveal(child, { distance: 8 })
+      const first = child.getBoundingClientRect().top
+      if (enteringParent) window.Motion.reveal(child, { distance: 8 })
+      else window.Motion.layout(parent, () => parent.prepend(gap()))
+      samples.push({ before, first, combined: child.getBoundingClientRect().top, enteringParent })
+      window.Motion.finishMotion(root); root.remove()
+    }
+    return samples
+  })
+  for (const sample of samples) {
+    expect(sample.first).toBeCloseTo(sample.before + (sample.enteringParent ? 0 : 8), 1)
+    expect(sample.combined).toBeCloseTo(sample.before + 8, 1)
+  }
+})
+
+test('nearest navigation settles tall destinations from either side or an existing reading position', async ({ page }) => {
+  await runtime(page)
+  const samples = await page.evaluate(async () => {
+    const samples: Array<{ initial: number, settled: boolean, coversViewport: boolean, atRest: number, later: number }> = []
+    for (const initial of [0, 800, 450]) {
+      const owner = document.createElement('div'); owner.style.cssText = 'height:100px;width:200px;overflow:auto;border:4px solid transparent'
+      owner.innerHTML = '<div style="height:400px"></div><div data-target style="height:300px">Tall destination</div><div style="height:500px"></div>'
+      document.body.append(owner); owner.scrollTop = initial
+      const actor = owner.querySelector<HTMLElement>('[data-target]')!
+      window.Motion.scrollToActor(actor)
+      const start = performance.now()
+      await new Promise<void>(resolve => {
+        const frame = () => owner.hasAttribute('data-motion-running') && performance.now() - start < 3000 ? requestAnimationFrame(frame) : resolve()
+        requestAnimationFrame(frame)
+      })
+      const top = owner.getBoundingClientRect().top + owner.clientTop, box = actor.getBoundingClientRect()
+      const settled = !owner.hasAttribute('data-motion-running'), atRest = owner.scrollTop
+      await new Promise(resolve => setTimeout(resolve, 200))
+      samples.push({ initial, settled, coversViewport: box.top <= top + .5 && box.bottom >= top + owner.clientHeight - .5, atRest, later: owner.scrollTop })
+      window.Motion.finishMotion(owner, true); owner.remove()
+    }
+    return samples
+  })
+  for (const sample of samples) {
+    expect(sample.settled).toBe(true)
+    expect(sample.coversViewport).toBe(true)
+    expect(sample.later).toBe(sample.atRest)
+    if (sample.initial === 450) expect(sample.atRest).toBe(450)
+  }
+})
+
 test('hiding a scrolling document cancels navigation at its presented reading position', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(async () => {

@@ -323,9 +323,16 @@ export function scrollToActor(actor: HTMLElement, block: 'center' | 'nearest' = 
   while (container && container !== document.body && !/(auto|scroll)/.test(getComputedStyle(container).overflowY)) container = container.parentElement
   const owner = container && container !== document.body ? container : document.documentElement
   scroll(owner, () => {
-    const box = actor.getBoundingClientRect(), parent = owner === document.documentElement ? { top: 0, height: innerHeight, bottom: innerHeight } : owner.getBoundingClientRect()
+    const box = actor.getBoundingClientRect(), top = owner === document.documentElement ? 0 : owner.getBoundingClientRect().top + owner.clientTop
+    const height = owner === document.documentElement ? innerHeight : owner.clientHeight
+    const parent = { top, height, bottom: top + height }
     if (block === 'center') return owner.scrollTop + box.top - parent.top - (parent.height - box.height) / 2
-    return box.top < parent.top ? owner.scrollTop + box.top - parent.top : box.bottom > parent.bottom ? owner.scrollTop + box.bottom - parent.bottom : owner.scrollTop
+    const above = box.top < parent.top, below = box.bottom > parent.bottom
+    if (above && below) return owner.scrollTop
+    const tall = box.height > parent.height
+    if (above) return owner.scrollTop + (tall ? box.bottom - parent.bottom : box.top - parent.top)
+    if (below) return owner.scrollTop + (tall ? box.top - parent.top : box.bottom - parent.bottom)
+    return owner.scrollTop
   }, actor)
 }
 
