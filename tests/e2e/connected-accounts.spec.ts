@@ -103,6 +103,12 @@ test('connects a CLI from Settings in a terminal and shows its new sign-in', asy
     await expect(terminal.locator('.xterm-rows')).toContainText('ABCD-1234')
     await expect(terminal.locator('.st-terminal-status')).toHaveText('Running in your workspace. Close ends it.')
     await expect(page.locator('#settings-panel')).toHaveClass(/st-terminal-open/)
+    await page.setViewportSize({ width: 420, height: 820 })
+    await expect.poll(() => page.locator('#settings-panel').evaluate((panel) => {
+      const frame = document.getElementById('menu-surface')!
+      return panel.scrollWidth - frame.clientWidth
+    })).toBeLessThanOrEqual(1)
+    await page.setViewportSize({ width: 1280, height: 720 })
     // One login at a time from here.
     await expect(page.getByRole('button', { name: 'Reconnect Claude' })).toBeDisabled()
     for (const theme of ['light', 'dark']) {

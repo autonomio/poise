@@ -119,6 +119,7 @@ test('separates GitHub sign-ins and keeps command details out of the account row
 test('shows full contextual help after 500 ms on hover and keyboard focus, then dismisses it', async ({ page }) => {
   await workspace(page)
   await open(page, 'General')
+  await settled(page)
   const start = Date.now()
   await page.clock.install({ time: new Date(start) })
   await page.clock.pauseAt(new Date(start + 1000))

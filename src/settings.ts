@@ -510,7 +510,12 @@ function renderCatalogStatus(data: ModelsResponse) {
   catalogStatusEl.dataset.help = line
   catalogStatusEl.tabIndex = 0
   const failed = report && modelRefreshSummary(report).level === 'error'
-  catalogStatusEl.textContent = `${data.catalog.models.length} models${report ? failed ? ' · Check failed' : ' · Checked ' + new Date(report.completed_at || report.checked_at || '').toLocaleDateString() : ' · Not checked yet'}`
+  const checkedAt = report?.completed_at || report?.checked_at
+  const when = checkedAt ? new Date(checkedAt) : null
+  const checked = when && !Number.isNaN(when.getTime()) ? `Checked ${when.toLocaleDateString()}` : 'Checked'
+  catalogStatusEl.textContent = failed
+    ? modelRefreshSummary(report).text
+    : `${data.catalog.models.length} models · ${report ? checked : 'Not checked yet'}`
   catalogStatusEl.classList.toggle('st-help-error', !!failed)
 }
 

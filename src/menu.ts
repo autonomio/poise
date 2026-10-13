@@ -125,7 +125,8 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     if (!box.width) return
     const available = Math.max(80, innerHeight - box.bottom - 12)
     const panel = openPanel()
-    const wantedWidth = panel ? panel.classList.contains('st-terminal-open') ? 640 : 420 : 252
+    const terminalVisible = panel?.dataset.section === 'accounts' && panel.classList.contains('st-terminal-open')
+    const wantedWidth = panel ? terminalVisible ? 640 : 420 : 252
     surface.style.top = `${box.bottom - 1}px`
     // Anchor by a measured coordinate: a reserved scrollbar gutter can make
     // viewport-relative right offsets differ even when clientWidth is unchanged.
