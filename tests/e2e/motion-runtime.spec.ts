@@ -122,6 +122,71 @@ test('retirement keeps the presented opacity and print releases the inert visual
   expect(result).toEqual({ removed: true, opacity: .35, inert: true, ghostRemoved: true })
 })
 
+test('batch card and table departures keep every pre-mutation position', async ({ page }) => {
+  await runtime(page)
+  const samples = await page.evaluate(() => {
+    const samples: Array<{ before: number, after: number, inert: boolean, detached: boolean }> = []
+    for (const tableRows of [false, true]) {
+      const parent = document.createElement(tableRows ? 'table' : 'div')
+      parent.style.cssText = 'width:240px;border-collapse:collapse'
+      parent.innerHTML = tableRows
+        ? '<tbody><tr><td>First departure</td></tr><tr><td>Second departure</td></tr><tr><td>Third departure</td></tr></tbody>'
+        : '<div>First departure</div><div>Second departure</div><div>Third departure</div>'
+      document.body.append(parent)
+      const root = (tableRows ? parent.firstElementChild : parent) as HTMLElement
+      const actors = [...root.children] as HTMLElement[]
+      actors.forEach(actor => { actor.style.height = '40px' })
+      const positions = actors.map(actor => actor.getBoundingClientRect().top)
+      window.Motion.layout(root, () => actors.forEach(actor => window.Motion.retire(actor)))
+      const ghosts = [...document.querySelectorAll<HTMLElement>('[data-flow-retiring]')]
+      actors.forEach((actor, index) => {
+        const ghost = ghosts.find(ghost => ghost.textContent === actor.textContent)!
+        samples.push({ before: positions[index], after: ghost.getBoundingClientRect().top, inert: ghost.inert, detached: !actor.isConnected })
+      })
+      window.dispatchEvent(new Event('beforeprint'))
+      parent.remove()
+    }
+    return samples
+  })
+  expect(samples).toHaveLength(6)
+  for (const sample of samples) {
+    expect(Math.abs(sample.after - sample.before)).toBeLessThan(.5)
+    expect(sample).toMatchObject({ inert: true, detached: true })
+  }
+})
+
+test('retiring a container freezes moving descendant geometry and opacity', async ({ page }) => {
+  await runtime(page)
+  const samples = await page.evaluate(async () => {
+    const parent = document.createElement('div'); parent.style.cssText = 'width:240px;height:240px'
+    parent.innerHTML = '<div data-key="entry" style="height:40px">Entering child</div><div data-key="layout" style="height:40px;transform:translateX(7px)">Moving child</div>'
+    document.body.append(parent)
+    const children = [...parent.children] as HTMLElement[]
+    window.Motion.layout(parent, () => {
+      const gap = document.createElement('div'); gap.style.height = '40px'; parent.prepend(gap)
+    })
+    window.Motion.reveal(children[0])
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const presentation = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect()
+      return { x: box.x, y: box.y, opacity: Number(getComputedStyle(element).opacity) }
+    }
+    const before = children.map(presentation)
+    const moving = children.map(child => child.hasAttribute('data-motion-running'))
+    window.Motion.retire(parent)
+    const ghost = document.querySelector<HTMLElement>('[data-flow-retiring]')!
+    return children.map((child, index) => ({ before: before[index], after: presentation(ghost.querySelector<HTMLElement>(`[data-key="${child.dataset.key}"]`)! ), moving: moving[index] }))
+  })
+  for (const sample of samples) {
+    expect(sample.moving).toBe(true)
+    expect(Math.abs(sample.after.x - sample.before.x)).toBeLessThan(.5)
+    expect(Math.abs(sample.after.y - sample.before.y)).toBeLessThan(.5)
+    expect(sample.after.opacity).toBe(sample.before.opacity)
+  }
+  await settled(page)
+  await expect(page.locator('[data-flow-retiring]')).toHaveCount(0)
+})
+
 test('guided scrolling stops when its destination actor departs', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(async () => {

@@ -20,6 +20,8 @@ travels 20px; local information uses 8px.
 Keyed reconciliation retains controls, drafts, selections, native details and
 active motion styles. Structural lists reveal new actors once and retire
 departed visuals inertly. Changed text and elapsed time remain immediate.
+Batch departures use geometry captured before the layout mutation; retiring
+descendants retain their presented translations and transforms.
 Intrinsic disclosures animate height, padding and opacity and return to auto
 sizing. Fixed measurement clones are removed synchronously and never shrink
 the live document's native scroll bounds.

@@ -30,6 +30,7 @@ const moving = new Set<Channel>()
 const listeners = new Set<() => void>()
 const disclosurePadding = new WeakMap<HTMLElement, { top: number, bottom: number }>()
 const nativeDetails = new WeakSet<HTMLDetailsElement>()
+let retirementBoxes = new Map<HTMLElement, DOMRect>()
 let preference: MediaQueryList | undefined
 let frame = 0, previousTime = 0
 const bounded = (value: number) => Math.max(0, Math.min(1, value))
@@ -151,7 +152,12 @@ export function reveal(element: HTMLElement, { distance = MOTION.travel, delay =
 export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope > *', key: (element: HTMLElement) => string | HTMLElement = element => element): T {
   const active = document.activeElement
   const before = new Map([...root.querySelectorAll<HTMLElement>(selector)].map(element => [key(element), { element, box: element.getBoundingClientRect() }]))
-  const result = change()
+  // Departures share the same pre-mutation geometry as surviving layout actors.
+  const previousBoxes = retirementBoxes
+  retirementBoxes = new Map(previousBoxes)
+  for (const { element, box } of before.values()) if (!retirementBoxes.has(element)) retirementBoxes.set(element, box)
+  let result: T
+  try { result = change() } finally { retirementBoxes = previousBoxes }
   if (active instanceof HTMLElement && active.isConnected && root.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
   const after = [...root.querySelectorAll<HTMLElement>(selector)]
   // Remove all old layout offsets before measuring any new destination.
@@ -180,10 +186,17 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 
 /** Logical removal is immediate; the inert visual has no IDs or live controls. */
 export function retire(element: HTMLElement): void {
-  const box = element.getBoundingClientRect()
+  const box = retirementBoxes.get(element) ?? element.getBoundingClientRect()
   const opacity = Number(getComputedStyle(element).opacity)
   if (!box.width || !box.height || reducedMotion()) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
+  const descendants = [...element.querySelectorAll<HTMLElement>('*')]
+  const copies = [...ghost.querySelectorAll<HTMLElement>('*')]
+  descendants.forEach((node, index) => {
+    const presented = getComputedStyle(node)
+    Object.assign(copies[index].style, { translate: presented.translate, transform: presented.transform, opacity: presented.opacity, transition: 'none', animation: 'none' })
+  })
+  ghost.style.translate = 'none'; ghost.style.transform = 'none'
   if (element instanceof HTMLTableRowElement) {
     const row = ghost as HTMLTableRowElement
     row.style.opacity = '1'
