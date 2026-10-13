@@ -2878,7 +2878,7 @@ describe('behavior launch claims', () => {
     const key = `behavior_approve_prs_failure:${launched.target}`
     db.setMeta(key, JSON.stringify({ kind: 'worker', consecutiveFailures: 1,
       lastFailureAtMs: Date.now() - 1_000, nextRetryAtMs: Date.now() + 60_000,
-      error: 'Selected model is at capacity.', diagnostic: { severity: 'warning', code: 'provider_capacity' } }))
+      error: 'Selected model is at capacity.', callId: 'd'.repeat(32), diagnostic: { severity: 'warning', code: 'provider_capacity' } }))
     expect(runtime.getBehaviorsRuntimeHealth().failures).toHaveLength(1)
     const target = `${pr.repo}#${pr.number}@head=${NEXT_HEAD_SHA}`
     const claimId = db.claimSeenOwned('approve-prs', target)!
@@ -2887,8 +2887,16 @@ describe('behavior launch claims', () => {
       expectedHead: NEXT_HEAD_SHA, actor: launched.actor, source: launched.source, correlationId: claimId })).toBe(true)
     expect(db.completeBehaviorLaunchOwned({ key: 'approve-prs', target, claimId,
       action: 'approved', outcome: 'approved', completedAt: new Date().toISOString(), headSha: NEXT_HEAD_SHA })).toBe(true)
-    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([expect.objectContaining({ recovered: true })])
     expect(db.getMeta(key)).not.toBeNull()
+    // An audit can be recreated after completion during log reconciliation.
+    // It must not turn an already recovered no-action attempt into an error.
+    vi.setSystemTime(new Date(Date.now() + 1_000))
+    const original = db.listBehaviorLaunchClaims('approve-prs').find((claim) => claim.target === launched.target)!
+    db.recordBehaviorDeadLetter(original, 'Selected model is at capacity.', 'd'.repeat(32))
+    const { behaviorDiagnosticGroups } = await import('../src/behavior-diagnostics')
+    expect(behaviorDiagnosticGroups({ ...runtime.getBehaviorsRuntimeHealth(), agentLogsError: null })).toEqual([])
+    expect(db.listBehaviorDeadLetters()).toHaveLength(1)
     db.db.prepare("UPDATE behavior_seen SET launch_quarantine = 'unreadable' WHERE key = 'approve-prs' AND target = ?").run(launched.target)
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([expect.objectContaining({
       diagnostic: { severity: 'error', code: 'held_result' },

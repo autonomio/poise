@@ -80,4 +80,15 @@ describe('behavior diagnostic groups', () => {
       error: 'Provider rejected the request', createdAt: '', callId: 'verified-attempt' })
     expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning'])
   })
+  it('keeps recovered warning identity for audit suppression without rendering either as an active problem', () => {
+    const diagnostics = snapshot()
+    diagnostics.failures.push({ behavior: 'approve-prs', target: 'org/repo#1', kind: 'worker',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error: 'Selected model is at capacity.',
+      callId: 'recovered-attempt', recovered: true, diagnostic: { severity: 'warning', code: 'provider_capacity' } })
+    diagnostics.deadLetters.push({ id: 'x', behavior: 'approve-prs', target: 'org/repo#1',
+      error: 'Selected model is at capacity.', createdAt: '', callId: 'recovered-attempt' })
+    expect(behaviorDiagnosticGroups(diagnostics)).toEqual([])
+    diagnostics.deadLetters[0]!.callId = 'unrelated-held-attempt'
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['error'])
+  })
 })

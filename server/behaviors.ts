@@ -4263,6 +4263,7 @@ export interface BehaviorsRuntimeHealth {
     error?: string
     diagnostic?: DiagnosticClassification
     callId?: string
+    recovered?: boolean
   }>
   datastore: DatastoreFreshness
   identity: {
@@ -4291,6 +4292,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
     if (!isEnabled(behavior)) return []
     return [undefined, ...behaviorFailureTargets(behavior)].flatMap((target) => {
       const failure = readBehaviorFailure(behavior, target)
+      let recovered = false
       if (failure?.kind === 'worker' && failure.diagnostic?.severity === 'warning' && target
         && db.prepare('SELECT 1 FROM behavior_seen WHERE key = ? AND target = ? AND launch_quarantine IS NOT NULL')
           .get(behavior, target)) {
@@ -4309,7 +4311,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
               AND held.target = ? AND held.launch_quarantine IS NOT NULL)
           LIMIT 1
         `).get(behavior, ref[1], Number(ref[2]), agentAccount(), `poise:${behavior}`,
-          new Date(failure.lastFailureAtMs).toISOString(), behavior, target, behavior, target)) return []
+          new Date(failure.lastFailureAtMs).toISOString(), behavior, target, behavior, target)) recovered = true
       }
       return failure ? [{
         behavior,
@@ -4321,6 +4323,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
         ...(failure.error ? { error: failure.error } : {}),
         ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
         ...(failure.callId ? { callId: failure.callId } : {}),
+        ...(recovered ? { recovered: true } : {}),
       }] : []
     })
   })

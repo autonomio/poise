@@ -37,13 +37,14 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     const scope = (classification.code === 'github_access' ? ref.split('#')[0] : ref)
       || `${failure.org ?? ''} ${failure.behavior}`.trim()
     const cause = failureCause(error)
+    if (failure.callId) failureCauses.add(JSON.stringify([failure.behavior, failure.callId, cause]))
+    if (failure.recovered === true) continue
     const message = classification.code === 'github_access'
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`
       : classification.code === 'head_changed' ? 'PR changed during review preparation; the current head will be reconsidered.'
         : classification.code === 'held_result' ? `Review outcome needs verification before retry. ${cause}` : cause
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}${failure.nextRetryAt ? `; next check ${failure.nextRetryAt}` : ''}`
     add(classification, scope, message, detail)
-    if (failure.callId) failureCauses.add(JSON.stringify([failure.behavior, failure.callId, cause]))
   }
   for (const letter of diagnostics.deadLetters) {
     const ref = targetRef(letter.target)

@@ -75,6 +75,7 @@ export interface BehaviorDiagnostics {
     error?: string
     diagnostic?: DiagnosticClassification
     callId?: string
+    recovered?: boolean
   }>
   deadLetters: Array<{
     id: string

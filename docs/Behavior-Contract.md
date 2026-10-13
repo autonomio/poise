@@ -19,6 +19,9 @@ validated Caller identity, without changing failure counts or retry clocks.
 A later authoritative completion removes transient warnings from the current
 view; uncertain held work and the audit history remain. Severity changes no
 launch, retry, ownership or publication rule.
+Recovered attempts carry `recovered: true` in the diagnostic payload so their
+exact audit identities can still suppress duplicate incidents. The view shows
+neither as an active problem; unrelated held attempts remain errors.
 
 If the browser cannot read `/api/behaviors`, it reports one request diagnostic
 and retains its last known snapshot. It does not infer agent-log, datastore or
