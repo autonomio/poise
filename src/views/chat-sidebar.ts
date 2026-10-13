@@ -55,7 +55,7 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     if (pointer !== undefined && handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer)
     onLayout()
   }
-  function setCollapsed(next: boolean): void {
+  function setCollapsed(next: boolean, animate = true): void {
     const presented = sidebar.getBoundingClientRect().width
     cancelResize()
     collapsed = next
@@ -64,6 +64,7 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     view.classList.toggle('chat-sidebar-collapsed', collapsed)
     toggle.setAttribute('aria-pressed', String(!collapsed))
     toggle.setAttribute('aria-expanded', String(!collapsed))
+    if (!animate) { writeWidth(collapsed ? 0 : width); return }
     spring(sidebar, 'width', { from: { width: presented }, to: () => ({ width: collapsed ? 0 : width }),
       write: ({ width }) => { writeWidth(width); onLayout() }, complete: () => { writeWidth(collapsed ? 0 : width); cancelMotion(sidebar, 'width'); onLayout() } })
   }
@@ -112,6 +113,6 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
   const memories = view.querySelector<HTMLElement>('.chat-memories-pane')
   if (memories) observer.observe(memories)
   resize()
-  setCollapsed(collapsed)
+  setCollapsed(collapsed, false)
   return { cancelResize }
 }
