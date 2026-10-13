@@ -466,7 +466,7 @@ function renderPlaces(data: ModelsResponse) {
     if (!dirtyModels.has(key)) continue
     kept.set(key, sectionChoice(section))
   }
-  modelsEl.innerHTML = data.places.map((place) => {
+  patchContent(modelsEl, data.places.map((place) => {
     const current: ModelChoice = kept.get(place.key)
       || { default: place.default, fallback: place.fallback, secondary: place.secondary, tertiary: place.tertiary }
     const notes = place.notes.map((n) => `<div class="st-help st-help-error">${escapeHtml(n)}</div>`).join('')
@@ -485,15 +485,15 @@ function renderPlaces(data: ModelsResponse) {
         ${reviewers}
         ${notes}
       </div>`
-  }).join('')
+  }).join(''))
   for (const section of modelsEl.querySelectorAll<HTMLElement>('.st-place')) {
-    section.addEventListener('change', () => { dirtyModels.add(section.dataset.place || '') })
+    section.onchange = () => { dirtyModels.add(section.dataset.place || '') }
   }
-  fixedEl.innerHTML = data.fixed.map((place) => `
+  patchContent(fixedEl, data.fixed.map((place) => `
       <div class="tp-section">
         <label class="tp-label" ${helpAttributes(place.why)}>${escapeHtml(place.label)}</label>
         <div class="st-fixed-model"><code>${escapeHtml(place.model)}</code></div>
-      </div>`).join('')
+      </div>`).join(''))
   const fixedHeading = panelEl?.querySelector<HTMLElement>('.st-fixed-heading')
   if (fixedHeading) fixedHeading.hidden = data.fixed.length === 0
   renderCatalogStatus(data)

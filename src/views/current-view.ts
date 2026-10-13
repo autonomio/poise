@@ -509,27 +509,40 @@ function restoreOpenEdit(draft: EditDraft | null): void {
 
 function renderAll() {
   const draft = captureOpenEdit() ?? openEditDraft
-  for (const l of LANES) {
-    const list = laneListEl(l.key)
-    list.innerHTML = ''
-    let count = 0
-    if (l.type === 'manual') {
-      const items = manualInLane(l.key as 'idea' | 'concept' | 'plan')
-      for (const c of items) list.appendChild(renderManualCard(c))
-      count = items.length
-    } else {
-      const items = liveInLane(l.key as 'issue' | 'pr')
-      for (const i of items) list.appendChild(renderLiveItem(i))
-      count = items.length
+  layout(viewEl, () => {
+    const existing = new Map([...viewEl.querySelectorAll<HTMLElement>('.lane-list > .card')].map(el => [el.dataset.id!, el]))
+    const keep = new Set<HTMLElement>()
+    for (const lane of LANES) {
+      const list = laneListEl(lane.key)
+      list.querySelector('.lane-empty')?.remove()
+      let cursor = list.firstChild
+      const place = (actor: HTMLElement) => {
+        keep.add(actor)
+        if (actor !== cursor) list.insertBefore(actor, cursor)
+        cursor = actor.nextSibling
+      }
+      const manual = lane.type === 'manual' ? manualInLane(lane.key as 'idea' | 'concept' | 'plan') : []
+      const live = lane.type === 'live' ? liveInLane(lane.key as 'issue' | 'pr') : []
+      for (const card of manual) {
+        const fresh = renderManualCard(card)
+        const actor = existing.get(String(card.id)) ?? fresh
+        if (actor !== fresh && !actor.classList.contains('editing')) patchContent(actor, fresh.innerHTML)
+        actor.dataset.lane = lane.key
+        place(actor)
+      }
+      for (const item of live) {
+        const actor = existing.get(prKey(item)) ?? renderLiveItem(item)
+        if (existing.has(prKey(item))) paintLiveItem(actor, item)
+        place(actor)
+      }
+      const count = manual.length + live.length
+      laneCountEl(lane.key).textContent = lane.type === 'live' && liveTruncated ? `${count}+` : String(count)
+      laneCountEl(lane.key).title = lane.type === 'live' && liveTruncated ? `Showing the ${LIVE_LIMIT} most recently updated issues and pull requests combined; older ones are not loaded.` : ''
+      renderLaneEmptyState(lane, count)
     }
-    // Say the count is a floor, not a total, when the read was capped.
-    laneCountEl(l.key).textContent = l.type === 'live' && liveTruncated ? `${count}+` : String(count)
-    laneCountEl(l.key).title = l.type === 'live' && liveTruncated
-      ? `Showing the ${LIVE_LIMIT} most recently updated issues and pull requests combined; older ones are not loaded.`
-      : ''
-    renderLaneEmptyState(l, count)
-  }
-  restoreOpenEdit(draft)
+    for (const actor of existing.values()) if (!keep.has(actor)) retire(actor)
+  }, '.lane-list > .card')
+  if (!viewEl.querySelector('.card.editing')) restoreOpenEdit(draft)
 }
 
 // An empty lane and a lane emptied by a filter look identical, and the second
@@ -550,28 +563,8 @@ function renderLaneEmptyState(l: LaneConfig, count: number): void {
   list.appendChild(note)
 }
 
-// Re-render only the live lanes. Two modes:
-//   - snap (animate=false): clear + rebuild — used for filter / search
-//     changes, where the user initiated the change and expects a hard
-//     update.
-//   - animated (animate=true): used by the once-a-minute background
-//     refresh. Re-orders existing card nodes via a FLIP transition so
-//     they glide to their new positions; new cards drop-and-fade in;
-//     leaving cards just disappear (rare, and the FLIP handles the gap).
-function renderLiveOnly(opts: { animate?: boolean } = {}) {
-  for (const l of LANES) {
-    if (l.type !== 'live') continue
-    if (opts.animate) renderLiveLaneAnimated(l.key as 'issue' | 'pr')
-    else              renderLiveLaneSnap(l.key as 'issue' | 'pr')
-  }
-}
-
-function renderLiveLaneSnap(laneKey: 'issue' | 'pr') {
-  const list = laneListEl(laneKey)
-  list.innerHTML = ''
-  const items = liveInLane(laneKey)
-  for (const i of items) list.appendChild(renderLiveItem(i))
-  laneCountEl(laneKey).textContent = String(items.length)
+function renderLiveOnly() {
+  for (const lane of LANES) if (lane.type === 'live') renderLiveLaneAnimated(lane.key as 'issue' | 'pr')
 }
 
 function renderLiveLaneAnimated(laneKey: 'issue' | 'pr') {
@@ -721,7 +714,7 @@ export function stopCurrentPolling() {
 async function pollLiveTick() {
   try {
     await fetchLive()
-    renderLiveOnly({ animate: true })
+    renderLiveOnly()
     // A refresh that starts working again has to clear the notice it left —
     // otherwise the first failure's message stays on screen for the rest of
     // the session, outliving the problem it described.
@@ -1099,7 +1092,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
       }
       close()
       await fetchLive()
-      renderLiveOnly({ animate: true })
+      renderLiveOnly()
       // Created, but the active filter excludes it — otherwise the composer
       // just closes and nothing appears, which reads as a failed write.
       const created = pendingLiveItems.find((p) => p.repo === repo)

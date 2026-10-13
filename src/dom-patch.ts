@@ -1,7 +1,7 @@
 /** Preserve semantic actors, focused controls, native disclosure and draft state. */
 function identity(node: Node): string | null {
   if (!(node instanceof Element)) return null
-  const key = ['id', 'data-id', 'data-key', 'data-identity', 'data-request-id', 'data-request', 'data-queue-item', 'data-device', 'data-account', 'data-handle', 'data-org', 'data-jev-id', 'data-trigger', 'data-slug', 'data-action', 'data-expand-for', 'data-refusal-for'].find(name => node.hasAttribute(name))
+  const key = ['id', 'data-id', 'data-key', 'data-identity', 'data-request-id', 'data-request', 'data-queue-item', 'data-device', 'data-account', 'data-handle', 'data-org', 'data-jev-id', 'data-trigger', 'data-slug', 'data-behavior', 'data-place', 'data-q', 'data-option', 'data-level', 'data-field', 'data-action', 'data-expand-for', 'data-refusal-for'].find(name => node.hasAttribute(name))
   return key ? `${node.nodeName}:${key}:${node.getAttribute(key)}` : null
 }
 

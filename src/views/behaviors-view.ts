@@ -1,4 +1,5 @@
-import { watchPanel } from '../motion'
+import { patchContent } from '../dom-patch'
+import { layout, watchPanel } from '../motion'
 // Behaviors — a table view listing automations with on/off toggles.
 //
 // Visual contract matches Archive and Swarm exactly: universal `table`,
@@ -1027,10 +1028,7 @@ function renderDiagnostics() {
 
 function renderRows() {
   const tbody = viewEl.querySelector<HTMLTableSectionElement>('#behaviors-tbody')!
-  tbody.innerHTML = ''
-  const frag = document.createDocumentFragment()
-  for (const meta of BEHAVIORS) frag.appendChild(renderRow(meta))
-  tbody.appendChild(frag)
+  layout(tbody, () => patchContent(tbody, BEHAVIORS.map(meta => renderRow(meta).outerHTML).join('')))
 }
 
 function attachHandlers() {

@@ -1,3 +1,5 @@
+import { layout } from '../motion'
+import { patchContent } from '../dom-patch'
 import { escapeHtml as esc } from '../markdown'
 import { emptyJevDraft, requestFromDraft, draftFromRequest, newQuestion, nextQuestionId, type JevDraft } from '../jev-draft'
 import type { Primitive } from '../jev-types'
@@ -19,13 +21,13 @@ export function createJevBuilder(handlers: Handlers) {
     const focus = document.activeElement instanceof HTMLElement && el.contains(document.activeElement) ? document.activeElement : null
     const focusedField = focus?.dataset.field, question = focus?.closest<HTMLElement>('[data-q]')?.dataset.q
     const raw = current.raw !== null
-    el.innerHTML = `<div class="jev-builder-tabs" role="group" aria-label="Builder view"><button type="button" class="st-clear" data-action="build" aria-pressed="${!raw}">Build</button><button type="button" class="st-clear" data-action="json" aria-pressed="${raw}">Request JSON</button><span class="jev-spacer"></span><button type="button" class="st-clear" data-action="example">Try an example</button><button type="button" class="st-clear" data-action="template">Load snippet</button></div>
+    const markup = `<div class="jev-builder-tabs" role="group" aria-label="Builder view"><button type="button" class="st-clear" data-action="build" aria-pressed="${!raw}">Build</button><button type="button" class="st-clear" data-action="json" aria-pressed="${raw}">Request JSON</button><span class="jev-spacer"></span><button type="button" class="st-clear" data-action="example">Try an example</button><button type="button" class="st-clear" data-action="template">Load snippet</button></div>
       <div class="jev-build-error st-help st-help-error" role="alert" hidden></div>
       ${raw ? field('Request JSON', current.raw, 'data-field="raw" aria-label="Request JSON" spellcheck="false"', true) : `<div class="jev-build-canvas"><section class="jev-state-card"><div class="jev-section-heading"><h3>1. State</h3><span>The material to evaluate</span><span class="jev-spacer"></span><button type="button" class="st-clear" data-action="file">Load text file</button><input type="file" class="jev-file" accept=".txt,.md,.json,.csv,.log" hidden></div>
         <div class="jev-builder-tabs"><button type="button" class="st-clear" data-format="text" aria-pressed="${current.format === 'text'}">Text</button><button type="button" class="st-clear" data-format="json" aria-pressed="${current.format === 'json'}">JSON</button></div>
         ${field('State', current.state, 'data-field="state" aria-label="State" placeholder="Paste the message, document or record to evaluate…" spellcheck="false"', true)}</section>
         <section class="jev-question-column"><div class="jev-section-heading"><h3>2. Questions</h3><span>Each one evaluates the same state, independently.</span></div>
-        <div class="jev-questions">${current.questions.map((q, i) => `<details class="jev-question" data-q="${i}" ${i < 3 ? 'open' : ''}><summary><span class="chat-pill">${q.type === 'noul' ? 'Noul' : q.type === 'choice' ? 'Choice' : 'Score'}</span> <span>${esc(q.id || 'Untitled question')}</span></summary><div class="jev-question-body">
+        <div class="jev-questions">${current.questions.map((q, i) => `<details class="jev-question" data-key="question:${esc(q.id)}" data-q="${i}" ${i < 3 ? 'open' : ''}><summary><span class="chat-pill">${q.type === 'noul' ? 'Noul' : q.type === 'choice' ? 'Choice' : 'Score'}</span> <span>${esc(q.id || 'Untitled question')}</span></summary><div class="jev-question-body">
           <div class="jev-question-top">${field('Answer ID', q.id, 'data-field="id" aria-label="Answer ID" spellcheck="false"')}<label class="jev-field">Primitive<select class="st-select" data-field="type" aria-label="Primitive">${Object.entries(names).map(([type, name]) => `<option value="${type}" ${q.type === type ? 'selected' : ''}>${name} · ${type}</option>`).join('')}</select></label><button type="button" class="st-clear" data-action="duplicate">Duplicate</button><button type="button" class="st-clear" data-action="remove" ${current.questions.length === 1 ? 'disabled' : ''}>Remove</button></div>
           <p class="jev-shape">${q.type === 'noul' ? 'Returns a probability of yes, from 0 to 1.' : q.type === 'choice' ? 'Returns one option, with probabilities and confidence.' : `Returns a score from 0 to ${q.levels.length - 1}, with probabilities and confidence.`}</p>
           ${field('Instructions', q.instructions, 'data-field="instructions" aria-label="Instructions" placeholder="Ask one clear, focused question about the state…"', true)}
@@ -35,6 +37,8 @@ export function createJevBuilder(handlers: Handlers) {
         </div></details>`).join('')}</div>
         <div class="jev-add-questions" role="group" aria-label="Add primitive">${Object.entries(names).map(([type, name]) => `<button type="button" class="st-clear" data-add="${type}">+ ${name}</button>`).join('')}</div></section></div>`}
       <details class="jev-advanced"><summary>Model & request details</summary>${raw ? '<p>Change the model in Request JSON.</p>' : field('Model or alias', current.model, 'data-field="model" aria-label="JEV model" list="jev-models" placeholder="jev-latest"')}<datalist id="jev-models">${modelList.map(m => `<option value="${esc(m.name)}">${esc(m.description)}</option>`).join('')}</datalist><p class="st-help">jev-latest follows stable releases. Use jev-preview or a versioned ID to choose another release. No chat history, tools, or agent permissions are sent.</p><button type="button" class="st-clear" data-action="preview">Preview exact request</button></details>`
+    if (preserve) layout(el, () => patchContent(el, markup), '.jev-question')
+    else el.innerHTML = markup
     restoreUi(disclosure, preserve, focusedField, question)
   }
   function restoreUi(disclosure: Map<string, boolean>, preserve: boolean, field?: string, question?: string) {
