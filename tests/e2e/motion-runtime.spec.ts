@@ -225,6 +225,24 @@ test('question editors survive temporarily duplicated editable answer IDs', asyn
   await expect(ids.nth(1)).toHaveValue('corrected')
 })
 
+test('removing an earlier choice keeps the remaining edited options and controls', async ({ page }) => {
+  await runtime(page)
+  await page.evaluate(() => {
+    const builder = window.Builder.createJevBuilder({ models: async () => [], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
+    builder.set(builder.draft); document.body.append(builder.el)
+  })
+  await page.getByRole('combobox', { name: 'Primitive', exact: true }).selectOption('choice')
+  await page.locator('[data-action="add-option"]').click()
+  const names = page.getByRole('textbox', { name: 'Option name', exact: true })
+  for (const [index, name] of ['Alpha', 'Beta', 'Gamma'].entries()) await names.nth(index).fill(name)
+  const second = await names.nth(1).elementHandle()
+  await page.locator('.jev-option [data-action="remove-option"]').first().click()
+  await expect(names).toHaveCount(2)
+  await expect(names.nth(0)).toHaveValue('Beta')
+  await expect(names.nth(1)).toHaveValue('Gamma')
+  expect(await second!.evaluate(element => element === document.querySelector('[data-field="option-name"]'))).toBe(true)
+})
+
 test('native request disclosure keeps its model suggestions hidden during opening', async ({ page }) => {
   await runtime(page)
   await page.evaluate(() => {
