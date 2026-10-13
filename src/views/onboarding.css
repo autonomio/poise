@@ -23,7 +23,6 @@ html.ob-open body { overflow: hidden; }
 }
 
 .ob-backdrop.ob-visible { opacity: 1; }
-.ob-backdrop.ob-leaving { opacity: 0; pointer-events: none; }
 
 .ob-dialog {
   width: min(620px, 100%);
@@ -41,7 +40,6 @@ html.ob-open body { overflow: hidden; }
 }
 
 .ob-visible .ob-dialog { transform: none; }
-.ob-leaving .ob-dialog { transform: translateY(6px) scale(0.99); }
 
 /* ── Head: the step rail, where you are, the step's title ── */
 

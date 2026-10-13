@@ -2,6 +2,44 @@ import { expect, test } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 import { session, makeState, installRoutes, installSocket, input, env } from './fixtures/chat'
 import { freeze, resume, settled, stableLanding } from './fixtures/motion'
+import { setupWorkspace } from './onboarding-fixture'
+
+for (const entering of [false, true]) test(`setup retirement preserves its ${entering ? 'entering' : 'settled'} dialog geometry`, async ({ page }) => {
+  await setupWorkspace(page)
+  await page.goto('/')
+  await expect(page.locator('.ob-backdrop')).toHaveClass(/ob-visible/)
+  if (!entering) await settled(page)
+  const result = await page.evaluate(async entering => {
+    const root = document.querySelector<HTMLElement>('.ob-backdrop')!
+    const dialog = root.querySelector<HTMLElement>('.ob-dialog')!
+    const geometry = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect()
+      return { x: box.x, y: box.y, width: box.width, height: box.height, transform: getComputedStyle(element).transform }
+    }
+    if (entering) {
+      const start = performance.now()
+      await new Promise<void>((resolve, reject) => {
+        const frame = () => {
+          const matrix = new DOMMatrix(getComputedStyle(dialog).transform)
+          if (matrix.m42 > .5 && matrix.m42 < 9 && Number(getComputedStyle(root).opacity) > 0) resolve()
+          else if (performance.now() - start < 5000) requestAnimationFrame(frame)
+          else reject(new Error('Setup did not present an unfinished entrance.'))
+        }
+        frame()
+      })
+    }
+    const before = geometry(dialog)
+    root.querySelector<HTMLButtonElement>('.ob-later')!.click()
+    const ghost = document.querySelector<HTMLElement>('.ob-backdrop[data-flow-retiring]')!
+    const visual = ghost.querySelector<HTMLElement>('.ob-dialog')!
+    return { before, after: geometry(visual), detached: !root.isConnected, inert: ghost.inert, hidden: ghost.getAttribute('aria-hidden'), appUsable: !document.getElementById('app')!.inert, transition: getComputedStyle(visual).transitionDuration }
+  }, entering)
+  expect(result).toMatchObject({ detached: true, inert: true, hidden: 'true', appUsable: true, transition: '0s' })
+  expect(result.after.transform).toBe(result.before.transform)
+  for (const axis of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(result.after[axis] - result.before[axis])).toBeLessThan(.5)
+  await settled(page)
+  await expect(page.locator('.ob-backdrop')).toHaveCount(0)
+})
 
 test('Current keeps each empty-lane explanation through background refreshes', async ({ page }) => {
   await workspace(page)

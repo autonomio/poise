@@ -1106,11 +1106,12 @@ class Onboarding {
     this.closeTerminal()
     this.view?.dispose?.()
     this.view = null
+    // The inert copy keeps the dialog's presented pose, including an unfinished entrance.
+    this.dialog.style.transform = getComputedStyle(this.dialog).transform
+    this.dialog.style.transition = 'none'
+    retire(this.root)
     for (const node of this.inerted) node.removeAttribute('inert')
     document.documentElement.classList.remove('ob-open')
-    this.root.classList.remove('ob-visible')
-    this.root.classList.add('ob-leaving')
-    retire(this.root)
     active = null
     window.dispatchEvent(new CustomEvent('poise:synced'))
     if (finished) {

@@ -29,6 +29,8 @@ occur immediately. Menu exit retains its departing words. Sliding panels
 declare their anchor direction. Sidebar dragging takes over from presented
 width. The console channel writes position and composer width together,
 without trailing CSS interpolation.
+Setup retirement captures the dialog's presented transform before releasing
+modality, including an unfinished entrance.
 Repository pickers fit inside the viewport and refit after asynchronous
 content changes, keeping their confirmation controls reachable.
 
