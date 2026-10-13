@@ -71,7 +71,7 @@ test('connects a CLI from Settings in a terminal and shows its new sign-in', asy
     // Where a sign-in alert opens the workspace: Settings → Connected accounts.
     await page.goto(`${fixture.origin}/?settings=accounts`)
     await expect(page.locator('#settings-panel')).toHaveClass(/open/)
-    await expect(page.getByRole('tab', { name: 'Accounts' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('#settings-panel')).toHaveAttribute('data-section', 'accounts')
     await expect(page).toHaveURL(`${fixture.origin}/`)
 
     const row = (id: string) => page.locator(`.st-account[data-account="${id}"]`)

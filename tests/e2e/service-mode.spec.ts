@@ -79,7 +79,7 @@ test('signs in to Claude from the banner in a Connected accounts terminal, not a
 
   await alert.getByRole('button', { name: 'Sign in with Claude' }).click()
   await expect(page.locator('#settings-panel')).toHaveClass(/open/)
-  await expect(page.getByRole('tab', { name: 'Accounts' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('#settings-panel')).toHaveAttribute('data-section', 'accounts')
   const terminal = page.locator('.st-terminal[data-preset="claude"]')
   await expect(terminal.locator('.st-terminal-title')).toHaveText('claude auth login --claudeai')
   await expect(terminal.locator('.xterm-rows')).toContainText('Paste code here if prompted')
