@@ -240,3 +240,55 @@ test('promoting a linked card preserves its intended repository before and after
     await expect(page.getByRole('button', { name: 'Edit card: Promote this linked card', exact: true })).toBeVisible()
   } finally { repos.release() }
 })
+
+test('a delayed count still reopens Archive paging when its sentinel stays visible', async ({ page }) => {
+  await setup(page, 'main')
+  await page.setViewportSize({ width: 1280, height: 1800 })
+  const count = deferred()
+  let refreshing = false
+  const offsets: number[] = []
+  await page.route('**/api/gh', async (route) => {
+    if (!refreshing) return route.fallback()
+    const body = route.request().postDataJSON() as { count_only?: boolean, offset?: number }
+    if (body.count_only) {
+      await count.promise
+      return route.fulfill({ json: { count: 40 } })
+    }
+    const offset = body.offset || 0
+    offsets.push(offset)
+    return route.fulfill({ json: { records: Array.from({ length: 20 }, (_, index) => ({
+      ...issue, number: offset + index + 1, title: `Refresh issue ${offset + index + 1}`,
+    })) } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#count')).toHaveText('1 / 1')
+    refreshing = true
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+    await expect(page.locator('#tbody')).toContainText('Refresh issue 20')
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    count.release()
+    await expect.poll(() => offsets.includes(20)).toBe(true)
+    await expect(page.locator('#tbody > tr')).toHaveCount(40)
+  } finally { count.release() }
+})
+
+test('an issue composer reports discovery failure without an unhandled rejection', async ({ page }) => {
+  await setup(page)
+  const repos = deferred()
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.route(/\/api\/repos(?:\?.*)?$/, async (route) => {
+    await repos.promise
+    await route.fulfill({ status: 502, json: { error: 'Repository discovery unavailable' } })
+  })
+  try {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Add an issue', exact: true }).click()
+    const composer = page.locator('.composer-issue')
+    await expect(composer).toBeVisible()
+    repos.release()
+    await expect(composer).toContainText('Could not load repositories')
+    expect(errors).toEqual([])
+  } finally { repos.release() }
+})
