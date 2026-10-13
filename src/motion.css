@@ -4,6 +4,8 @@
 }
 [data-flow-retained][hidden] { display: block !important; pointer-events: none; }
 [data-flow-retiring] { animation: none !important; transition: none !important; }
+[data-motion-running] { animation: none !important; transition: none !important; }
+details[data-flow-details] > :not(summary) { display: block !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;

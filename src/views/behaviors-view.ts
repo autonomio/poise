@@ -1,3 +1,4 @@
+import { watchPanel } from '../motion'
 // Behaviors — a table view listing automations with on/off toggles.
 //
 // Visual contract matches Archive and Swarm exactly: universal `table`,
@@ -532,6 +533,7 @@ function openTriggersPanel(key: BehaviorKey) {
   if (!triggersPanelEl) {
     triggersPanelEl = buildTriggersPanel()
     document.body.appendChild(triggersPanelEl)
+    watchPanel(triggersPanelEl, () => !!triggersPanelEl?.classList.contains('open'))
   }
   const meta = behaviorMeta(key)
   const mode = meta.hasSkips ? 'skips' : 'triggers'
@@ -766,6 +768,7 @@ function openMemoryPanel(key: BehaviorKey) {
   if (!memoryPanelEl) {
     memoryPanelEl = buildMemoryPanel()
     document.body.appendChild(memoryPanelEl)
+    watchPanel(memoryPanelEl, () => !!memoryPanelEl?.classList.contains('open'), true)
   }
   memoryKey = key
   const meta = BEHAVIORS.find((b) => b.key === key)

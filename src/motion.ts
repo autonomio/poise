@@ -206,8 +206,8 @@ export function intrinsicHeight(element: HTMLElement): number {
 }
 
 /** An intrinsic block keeps its logical hidden state while its old words retire. */
-export function disclosure(element: HTMLElement, opened: boolean): void {
-  const height = element.getBoundingClientRect().height
+export function disclosure(element: HTMLElement, opened: boolean, done?: () => void, presentedHeight = element.getBoundingClientRect().height): void {
+  const height = presentedHeight
   const opacity = Number(getComputedStyle(element).opacity)
   element.hidden = !opened
   element.inert = !opened
@@ -222,7 +222,42 @@ export function disclosure(element: HTMLElement, opened: boolean): void {
       element.style.height = ''; element.style.opacity = ''; element.style.overflow = ''
       delete element.dataset.flowDisclosure; delete element.dataset.flowRetained
       cancelMotion(element, 'disclosure')
+      done?.()
     } })
+}
+
+/** Changed information settles in place; typing and streaming never call this. */
+export function resizeContent<T>(element: HTMLElement, change: () => T): T {
+  const height = element.getBoundingClientRect().height
+  const result = change()
+  if (!height || !element.getClientRects().length) return result
+  element.style.overflow = 'hidden'
+  spring(element, 'content-size', { from: { height }, to: () => ({ height: intrinsicHeight(element) }),
+    write: ({ height }) => { element.style.height = `${Math.max(0, height)}px` },
+    complete: () => { element.style.height = ''; element.style.overflow = ''; cancelMotion(element, 'content-size') } })
+  return result
+}
+
+/** Fixed owners opt in explicitly; descendants and text mutations are ignored. */
+export function watchPanel(element: HTMLElement, opened: () => boolean, slide = false): void {
+  let previous = opened()
+  new MutationObserver(() => {
+    const next = opened()
+    if (previous === next) return
+    previous = next
+    if (next) delete element.dataset.flowRetained
+    else element.dataset.flowRetained = ''
+    spring(element, 'panel', { from: { progress: next ? 0 : 1 }, to: { progress: next ? 1 : 0 },
+      write: ({ progress }) => {
+        element.style.opacity = String(bounded(progress))
+        if (slide) element.style.transform = `translateX(${(1 - progress) * 100}%)`
+        else element.style.translate = `0 ${(1 - progress) * MOTION.travel}px`
+      }, complete: () => {
+        element.style.opacity = ''; element.style.translate = ''
+        if (slide) element.style.transform = ''
+        delete element.dataset.flowRetained; cancelMotion(element, 'panel')
+      } })
+  }).observe(element, { attributes: true, attributeFilter: ['class', 'hidden'] })
 }
 
 /** Bounded scrolling follows live geometry and yields immediately to direct input. */
@@ -256,4 +291,18 @@ export function initMotion(): void {
   for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) document.addEventListener(event, () => {
     for (const channel of [...moving]) if (channel.name === 'scroll') cancelMotion(channel.owner, 'scroll')
   }, { capture: true, passive: true })
+  document.addEventListener('click', event => {
+    const summary = (event.target as Element).closest('summary')
+    const details = summary?.parentElement
+    if (!(details instanceof HTMLDetailsElement) || summary !== details.querySelector(':scope > summary') || event.defaultPrevented) return
+    const bodies = [...details.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== summary)
+    if (!bodies.length) return
+    event.preventDefault()
+    const opened = !details.open
+    const heights = bodies.map(body => body.getBoundingClientRect().height)
+    details.dataset.flowDetails = ''
+    details.open = opened
+    let remaining = bodies.length
+    bodies.forEach((body, index) => disclosure(body, opened, () => { if (!--remaining) delete details.dataset.flowDetails }, heights[index]))
+  })
 }

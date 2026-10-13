@@ -36,10 +36,7 @@
   color: var(--ni-ink);
   box-shadow: var(--e-2);
   overflow: hidden;
-  transition:
-    width var(--t-slow) var(--ease),
-    opacity var(--t-slow) var(--ease),
-    transform var(--t-slow) var(--ease);
+  transition: width var(--flow-settle) var(--flow-spring), opacity var(--flow-feedback) ease-out, transform var(--flow-settle) var(--flow-spring);
 }
 #notice-island[data-state="entering"] .ni-shell,
 #notice-island[data-state="leaving"] .ni-shell {
@@ -94,7 +91,7 @@
 }
 button.ni-main {
   cursor: pointer;
-  transition: background var(--t-quick) ease;
+  transition: background var(--flow-feedback) ease-out;
 }
 button.ni-main:hover { background: var(--ni-hover); }
 
@@ -152,7 +149,7 @@ button.ni-main:hover { background: var(--ni-hover); }
   color: var(--ni-muted);
   font: inherit;
   cursor: pointer;
-  transition: color var(--t-quick) ease, background var(--t-quick) ease;
+  transition: color var(--flow-feedback) ease-out, background var(--flow-feedback) ease-out;
 }
 .ni-action:hover {
   color: var(--ni-ink);
