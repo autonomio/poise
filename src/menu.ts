@@ -154,11 +154,15 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
       surface.hidden = false
       surface.removeAttribute('inert')
       positionSurface()
-      requestAnimationFrame(() => surface.classList.add('open'))
+      requestAnimationFrame(() => {
+        if (!menu.hidden || openPanel()) surface.classList.add('open')
+      })
     } else {
       surface.classList.remove('open')
       surface.setAttribute('inert', '')
-      closeTimer = setTimeout(() => { surface.hidden = true }, 220)
+      closeTimer = setTimeout(() => {
+        if (menu.hidden && !openPanel()) surface.hidden = true
+      }, 220)
       if (surface.contains(document.activeElement) || document.activeElement === document.body) toggle.focus({ preventScroll: true })
     }
   }
