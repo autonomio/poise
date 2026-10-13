@@ -696,6 +696,7 @@ async function fetchAllRepos(sequence = currentLoadSequence) {
   if (org !== getSelectedOrganization() || sequence !== currentLoadSequence) return
   repoLoadWarning = organizationErrors(data)
   allRepos = Array.isArray(data.repos) ? data.repos : []
+  refreshRepositorySelectors()
 }
 
 // Pull /api/agent-logs and rebuild the set of running-job keys. Called
@@ -927,12 +928,24 @@ function attachAddHandlers() {
 // only if /api/repos hasn't loaded yet (cold start race).
 function manualRepoOptionsHtml(selected: string | null = null): string {
   const repos = allRepos.length > 0 ? allRepos : distinctRepos()
-  const opts = ['<option value="">— no repo —</option>']
-  for (const r of repos) {
-    const sel = selected === r ? ' selected' : ''
-    opts.push(`<option value="${escapeHtml(r)}"${sel}>${escapeHtml(r)}</option>`)
+  return '<option value="">— no repo —</option>' + repositoryOptionsHtml(repos, selected || '')
+}
+
+function repositoryOptionsHtml(repos: string[], selected: string): string {
+  // A card's linked repository is intent, even before discovery can confirm
+  // it. Never substitute the first live-feed repository for that selection.
+  const choices = [...new Set([...repos, ...(selected ? [selected] : [])])]
+  return choices.map((repo) => `<option value="${escapeHtml(repo)}"${repo === selected ? ' selected' : ''}>${escapeHtml(repo)}</option>`).join('')
+}
+
+function refreshRepositorySelectors(): void {
+  for (const select of viewEl.querySelectorAll<HTMLSelectElement>('.manual-repo')) {
+    select.innerHTML = manualRepoOptionsHtml(select.value || null)
   }
-  return opts.join('')
+  for (const select of viewEl.querySelectorAll<HTMLSelectElement>('.issue-repo')) {
+    select.innerHTML = repositoryOptionsHtml(allRepos, select.value)
+      || '<option value="">(no repos available)</option>'
+  }
 }
 
 function openManualComposer(lane: 'idea' | 'concept' | 'plan') {
@@ -1041,9 +1054,8 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   // pre-select it; the user can still change it before submitting.
   const repos = allRepos.length > 0 ? allRepos : distinctRepos()
   const wantRepo = prefill?.repo || ''
-  const repoOptions = repos.length === 0
-    ? '<option value="">(no repos available)</option>'
-    : repos.map((r) => `<option value="${escapeHtml(r)}"${r === wantRepo ? ' selected' : ''}>${escapeHtml(r)}</option>`).join('')
+  const repoOptions = repositoryOptionsHtml(repos, wantRepo)
+    || '<option value="">(no repos available)</option>'
 
   const composer = document.createElement('div')
   composer.className = 'composer composer-issue'
@@ -1073,16 +1085,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   // is required" with no way out but closing the composer and losing the text.
   // Fill it in when the real list lands.
   if (allRepos.length === 0) {
-    void fetchAllRepos().then(() => {
-      if (!composer.isConnected || allRepos.length === 0) return
-      const chosen = repoSel.value
-      repoSel.innerHTML = allRepos
-        .map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`)
-        .join('')
-      // Keep whatever was already picked if it survived into the real list.
-      if (chosen && allRepos.includes(chosen)) repoSel.value = chosen
-      else if (wantRepo && allRepos.includes(wantRepo)) repoSel.value = wantRepo
-    }).catch((error: unknown) => {
+    void fetchAllRepos().catch((error: unknown) => {
       if (composer.isConnected) showError(`Could not load repositories — ${(error as Error).message}`)
     })
   }

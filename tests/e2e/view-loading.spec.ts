@@ -194,3 +194,49 @@ test('Archive ignores a count from the previous account filter', async ({ page }
     await expect(page.locator('#count')).toHaveText('1 / 42')
   } finally { oldCount.release() }
 })
+
+test('late repository discovery updates an open manual editor without changing its draft', async ({ page }) => {
+  await setup(page)
+  const repos = deferred()
+  await page.route(/\/api\/repos(?:\?.*)?$/, async (route) => {
+    await repos.promise
+    await route.fulfill({ json: { repos: ['acme/project', 'acme/discovered'] } })
+  })
+  try {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Edit card: Available personal card', exact: true }).click()
+    const editor = page.locator('.card.editing')
+    await editor.locator('textarea').fill('Draft before discovery')
+    const picker = editor.locator('.manual-repo')
+    await expect(picker).toHaveValue('')
+    repos.release()
+    await expect(picker.locator('option[value="acme/discovered"]')).toHaveCount(1)
+    await expect(picker).toHaveValue('')
+    await expect(editor.locator('textarea')).toHaveValue('Draft before discovery')
+  } finally { repos.release() }
+})
+
+test('promoting a linked card preserves its intended repository before and after discovery', async ({ page }) => {
+  await setup(page)
+  const repos = deferred()
+  await page.route(/\/api\/repos(?:\?.*)?$/, async (route) => {
+    await repos.promise
+    // Even partial discovery must not replace the explicitly linked repo.
+    await route.fulfill({ json: { repos: ['acme/project'], errors: [{ org: 'acme', error: 'Partial repository discovery' }] } })
+  })
+  await page.route(/\/api\/current(?:\?.*)?$/, (route) => route.fulfill({ json: { cards: [{
+    id: 1, text: 'Promote this linked card', lane: 'plan', position: 0, repo: 'acme/intended',
+    created_at: issue.created_at, updated_at: issue.updated_at,
+  }] } }))
+  try {
+    await page.goto('/')
+    await expect(page.getByRole('link', { name: /Available GitHub issue/ })).toBeVisible()
+    await page.locator('.card[data-id="1"]').dragTo(page.locator('.lane[data-lane="issue"]'))
+    const picker = page.getByLabel('Repository for the new issue')
+    await expect(picker).toHaveValue('acme/intended')
+    repos.release()
+    await expect(page.locator('#view-current')).toContainText('Partial repository discovery')
+    await expect(picker).toHaveValue('acme/intended')
+    await expect(page.getByRole('button', { name: 'Edit card: Promote this linked card', exact: true })).toBeVisible()
+  } finally { repos.release() }
+})
