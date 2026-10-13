@@ -410,7 +410,7 @@ function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: L
   const held = call.action !== 'not_started' || call.outcome !== 'preflight_failed'
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
   if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
-    || previous.diagnostic?.severity !== diagnostic.severity) {
+    || previous.diagnostic?.severity !== diagnostic.severity || previous.callId !== call.id) {
     setMeta(failureKey(behavior, target), JSON.stringify({ ...previous, error, diagnostic, callId: call.id }))
   }
 }
@@ -4277,6 +4277,11 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
     if (!isEnabled(behavior)) return []
     return [undefined, ...behaviorFailureTargets(behavior)].flatMap((target) => {
       const failure = readBehaviorFailure(behavior, target)
+      if (failure?.kind === 'worker' && failure.diagnostic?.severity === 'warning' && target
+        && db.prepare('SELECT 1 FROM behavior_seen WHERE key = ? AND target = ? AND launch_quarantine IS NOT NULL')
+          .get(behavior, target)) {
+        failure.diagnostic = { severity: 'error', code: 'held_result' }
+      }
       if (failure?.kind === 'worker' && failure.diagnostic?.severity === 'warning' && target) {
         const ref = /^([^#]+)#(\d+)/.exec(target)
         if (ref && db.prepare(`

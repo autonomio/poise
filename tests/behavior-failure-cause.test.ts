@@ -54,4 +54,8 @@ describe('deterministic behavior severity', () => {
     expect(classifyBehaviorDiagnostic(error).severity).toBe('error')
     expect(failureCause(error)).toBe('invalid result contract')
   })
+  it('keeps an unknown structured failure or quoted capacity text as an error', () => {
+    expect(classifyBehaviorDiagnostic('Selected model is at capacity.', { errorCode: 'new_unknown_failure' }).severity).toBe('error')
+    expect(classifyBehaviorDiagnostic('Invalid result: "Selected model is at capacity."').severity).toBe('error')
+  })
 })

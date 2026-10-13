@@ -2852,7 +2852,9 @@ describe('behavior launch claims', () => {
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
     expect(db.getMeta(key)).not.toBeNull()
     db.db.prepare("UPDATE behavior_seen SET launch_quarantine = 'unreadable' WHERE key = 'approve-prs' AND target = ?").run(launched.target)
-    expect(runtime.getBehaviorsRuntimeHealth().failures).toHaveLength(1)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([expect.objectContaining({
+      diagnostic: { severity: 'error', code: 'held_result' },
+    })])
   })
 
   it.each(['review-new-prs', 'approve-prs'] as const)('holds an oversized %s packet across restart until the head changes', async (behavior) => {

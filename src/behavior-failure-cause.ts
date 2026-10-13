@@ -35,11 +35,15 @@ export interface DiagnosticOptions { errorCode?: string | null; held?: boolean }
 // Warning rules are an allowlist of observable transient outcomes. Neither a
 // retry count nor text saying "warning" can downgrade unknown or held evidence.
 export function classifyBehaviorDiagnostic(error: string, options: DiagnosticOptions = {}): DiagnosticClassification {
-  if (options.held || ['invalid_agent_result', 'review_provider_blocked', 'review_packet_too_large',
+  const blockingCode = ['invalid_agent_result', 'review_provider_blocked', 'review_packet_too_large',
     'review_contract_violation', 'review_recovery_failed', 'review_budget_exhausted', 'model_output_limit']
-    .includes(options.errorCode ?? '')) return { severity: 'error', code: options.errorCode || 'held_result' }
+    .includes(options.errorCode ?? '')
+  if (options.held || blockingCode) return { severity: 'error', code: blockingCode ? options.errorCode! : 'held_result' }
+  if (options.errorCode && !['overloaded', 'rate_limit', 'server_error', 'authentication_failed'].includes(options.errorCode)) {
+    return { severity: 'error', code: 'unknown' }
+  }
   const cause = terminalProviderMessage(error) ?? error
-  if (/Selected model is at capacity\./.test(cause) || options.errorCode === 'overloaded') {
+  if (/^Selected model is at capacity\.(?: Please try a different model\.)?$/.test(cause.trim()) || options.errorCode === 'overloaded') {
     return { severity: 'warning', code: 'provider_capacity' }
   }
   if (/pull-request head or base changed while building review packet|pull-request head changed: expected [a-f0-9]{40}, got [a-f0-9]{40}/.test(cause)) {

@@ -38,7 +38,8 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     const cause = failureCause(error)
     const message = classification.code === 'github_access'
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`
-      : classification.code === 'head_changed' ? 'PR changed during review preparation; the current head will be reconsidered.' : cause
+      : classification.code === 'head_changed' ? 'PR changed during review preparation; the current head will be reconsidered.'
+        : classification.code === 'held_result' ? `Review outcome needs verification before retry. ${cause}` : cause
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}${failure.nextRetryAt ? `; next check ${failure.nextRetryAt}` : ''}`
     add(classification, scope, message, detail)
     if (failure.callId) failureCauses.add(JSON.stringify([failure.callId, classification.code, cause]))
