@@ -51,7 +51,7 @@ describe('retained incident actionability', () => {
     claimId: 'launch', leaseUntil: null, launchBehavior: 'pr_review', launchRepo: incident.repo!, launchPr: 18,
     launchRequestedAt: call.started_at, launchExpectedHead: call.expected_head!, launchActor: incident.actor!,
     launchSource: incident.source!, launchCorrelationId: incident.correlationId!, launchCallId: incident.callId,
-    launchError: null, launchQuarantine: null, launchQuarantineMayRun: false }
+    launchError: null, launchQuarantine: null, launchQuarantineMayRun: false, launchCovers: [] }
   it('shows a proven no-action head change as automatic without an active failure summary', () => {
     const result = behaviorIncidentDiagnostics([incident], { entries: [call], quarantined: [] })
     expect(result[0]).toMatchObject({ attemptCount: 3, diagnostic: { severity: 'info', code: 'head_changed' } })
