@@ -94,4 +94,10 @@ describe('retained incident actionability', () => {
     const result = behaviorIncidentDiagnostics([incident], { entries: [call], quarantined: [] }, [{ ...launch, launchQuarantine }])
     expect(result[0]?.diagnostic.severity).toBe(launchQuarantine === 'invalid_result' ? 'error' : 'warning')
   })
+  it.each([null, ''] as const)('never borrows an unrelated quarantine through missing identity %j', (correlationId) => {
+    const result = behaviorIncidentDiagnostics([{ ...incident, callId: null, correlationId }], { entries: [], quarantined: [] }, [
+      { ...launch, launchCallId: null, launchCorrelationId: 'unrelated-launch', launchQuarantine: 'invalid_result', launchError: 'Unrelated fault' },
+    ])
+    expect(result[0]).toMatchObject({ error: incident.error, diagnostic: { severity: 'warning', code: 'held_result' } })
+  })
 })

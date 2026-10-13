@@ -8,7 +8,8 @@ export function behaviorIncidentDiagnostics(incidents: BehaviorDeadLetter[], sna
   return incidents.map((incident) => {
     const matches = snapshot?.entries.filter((row) => row.id === incident.callId) ?? []
     const call = matches.length === 1 ? matches[0] : undefined
-    const persisted = launches.filter((launch) => launch.launchCallId === incident.callId || launch.launchCorrelationId === incident.correlationId)
+    const persisted = launches.filter((launch) => (!!incident.callId && launch.launchCallId === incident.callId)
+      || (!!incident.correlationId && launch.launchCorrelationId === incident.correlationId))
     const launch = persisted.length === 1 ? persisted[0] : undefined
     const expectedBehavior = incident.behavior === 'review-new-prs' ? 'pr_review'
       : incident.behavior === 'approve-prs' ? 'pr_approve' : null
