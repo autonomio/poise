@@ -43,15 +43,14 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
         : classification.code === 'held_result' ? `Review outcome needs verification before retry. ${cause}` : cause
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}${failure.nextRetryAt ? `; next check ${failure.nextRetryAt}` : ''}`
     add(classification, scope, message, detail)
-    if (failure.callId) failureCauses.add(JSON.stringify([failure.behavior, failure.callId, classification.code, cause]))
+    if (failure.callId) failureCauses.add(JSON.stringify([failure.behavior, failure.callId, cause]))
   }
   for (const letter of diagnostics.deadLetters) {
     const ref = targetRef(letter.target)
     const cause = failureCause(letter.error)
     // A retryable no-action attempt can also have an audit incident. Its
     // classified failure already shows it; genuinely held incidents stay errors.
-    const rawClassification = classifyBehaviorDiagnostic(letter.error)
-    if (letter.callId && failureCauses.has(JSON.stringify([letter.behavior, letter.callId, rawClassification.code, cause]))) continue
+    if (letter.callId && failureCauses.has(JSON.stringify([letter.behavior, letter.callId, cause]))) continue
     add(classifyBehaviorDiagnostic(letter.error, { held: true }), ref, `Review outcome needs verification before retry. ${cause}`,
       `${letter.behavior} ${letter.target}: ${cause} (${letter.attemptCount ?? 1} attempts)`)
   }

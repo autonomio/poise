@@ -71,4 +71,13 @@ describe('behavior diagnostic groups', () => {
     expect(groups[0]?.severity).toBe('error')
     expect(groups[0]?.details).toHaveLength(2)
   })
+  it.each(['provider_capacity', 'rate_limit', 'upstream_unavailable'])('deduplicates a verified warning classified by structured code %s', (code) => {
+    const diagnostics = snapshot()
+    diagnostics.failures.push({ behavior: 'approve-prs', target: 'org/repo#1', kind: 'worker',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error: 'Provider rejected the request',
+      callId: 'verified-attempt', diagnostic: { severity: 'warning', code } })
+    diagnostics.deadLetters.push({ id: 'x', behavior: 'approve-prs', target: 'org/repo#1',
+      error: 'Provider rejected the request', createdAt: '', callId: 'verified-attempt' })
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning'])
+  })
 })
