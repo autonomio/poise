@@ -44,7 +44,6 @@ test('a status patch cannot reset an entering actor or replace its focused butto
     const button = row.querySelector('button')!; button.focus()
     window.Motion.reveal(row)
     const style = row.getAttribute('style')
-    window.Patch.patchContent(document.body.appendChild(Object.assign(document.createElement('div'), { innerHTML: '' })), '')
     const list = document.createElement('div'); row.replaceWith(list); list.append(row); button.focus()
     window.Patch.patchContent(list, '<div style="height:40px;width:200px"><button data-action="delete">Confirm</button></div>')
     return { connected: row.isConnected, sameButton: row.querySelector('button') === button, focused: document.activeElement === button, before: style, after: row.getAttribute('style') }

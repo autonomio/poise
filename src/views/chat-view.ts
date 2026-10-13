@@ -1,5 +1,5 @@
 import { createJevWorkspace } from './jev-workspace'
-import { cancelMotion, layout, motionValue, spring } from '../motion'
+import { cancelMotion, layout, motionValue, retire, spring } from '../motion'
 import { patchContent } from '../dom-patch'
 import { parseSwitchCreation, RESERVED_SWITCHES, type ChatSwitches } from '../chat-switches'
 // Chat — one view for a full coding-agent conversation with any installed
@@ -554,7 +554,7 @@ function renderSidebar(): void {
   const html = sidebarHtml()
   if (html === lastSidebarHtml) return
   lastSidebarHtml = html
-  layout(listEl, () => patchContent(listEl, html))
+  layout(listEl, () => patchContent(listEl, html, retire))
 }
 
 function sidebarHtml(): string {

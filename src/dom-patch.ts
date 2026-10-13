@@ -5,7 +5,7 @@ function identity(node: Node): string | null {
   return key ? `${node.nodeName}:${key}:${node.getAttribute(key)}` : null
 }
 
-export function patchNode(current: Node, next: Node): void {
+export function patchNode(current: Node, next: Node, onRemove?: (element: HTMLElement) => void): void {
   if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
     current.parentNode?.replaceChild(next.cloneNode(true), current)
     return
@@ -36,13 +36,16 @@ export function patchNode(current: Node, next: Node): void {
     if (actor !== cursor) current.insertBefore(actor, cursor)
     cursor = actor.nextSibling
   }
-  for (const node of old) if (!used.has(node)) node.parentNode?.removeChild(node)
+  for (const node of old) if (!used.has(node)) {
+    if (onRemove && node instanceof HTMLElement) onRemove(node)
+    else node.parentNode?.removeChild(node)
+  }
 }
 
-export function patchContent(element: Element, markup: string): void {
+export function patchContent(element: Element, markup: string, onRemove?: (element: HTMLElement) => void): void {
   const next = element.cloneNode(false) as Element
   next.innerHTML = markup
   const active = document.activeElement
-  patchNode(element, next)
+  patchNode(element, next, onRemove)
   if (active instanceof HTMLElement && active.isConnected && element.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
 }
