@@ -125,23 +125,24 @@ test('retirement keeps the presented opacity and print releases the inert visual
 test('batch card and table departures keep every pre-mutation position', async ({ page }) => {
   await runtime(page)
   const samples = await page.evaluate(() => {
-    const samples: Array<{ before: number, after: number, inert: boolean, detached: boolean }> = []
+    const samples: Array<{ before: number, after: number, cellsBefore: number[], cellsAfter: number[], inert: boolean, detached: boolean }> = []
     for (const tableRows of [false, true]) {
       const parent = document.createElement(tableRows ? 'table' : 'div')
       parent.style.cssText = 'width:240px;border-collapse:collapse'
       parent.innerHTML = tableRows
-        ? '<tbody><tr><td>First departure</td></tr><tr><td>Second departure</td></tr><tr><td>Third departure</td></tr></tbody>'
+        ? '<tbody><tr><td style="width:180px">First departure</td><td>One</td></tr><tr><td>Second departure</td><td>Two</td></tr><tr><td>Third departure</td><td>Three</td></tr></tbody>'
         : '<div>First departure</div><div>Second departure</div><div>Third departure</div>'
       document.body.append(parent)
       const root = (tableRows ? parent.firstElementChild : parent) as HTMLElement
       const actors = [...root.children] as HTMLElement[]
       actors.forEach(actor => { actor.style.height = '40px' })
       const positions = actors.map(actor => actor.getBoundingClientRect().top)
+      const cellWidths = actors.map(actor => [...actor.querySelectorAll('td')].map(cell => cell.getBoundingClientRect().width))
       window.Motion.layout(root, () => actors.forEach(actor => window.Motion.retire(actor)))
       const ghosts = [...document.querySelectorAll<HTMLElement>('[data-flow-retiring]')]
       actors.forEach((actor, index) => {
         const ghost = ghosts.find(ghost => ghost.textContent === actor.textContent)!
-        samples.push({ before: positions[index], after: ghost.getBoundingClientRect().top, inert: ghost.inert, detached: !actor.isConnected })
+        samples.push({ before: positions[index], after: ghost.getBoundingClientRect().top, cellsBefore: cellWidths[index], cellsAfter: [...ghost.querySelectorAll('td')].map(cell => cell.getBoundingClientRect().width), inert: ghost.inert, detached: !actor.isConnected })
       })
       window.dispatchEvent(new Event('beforeprint'))
       parent.remove()
@@ -151,6 +152,7 @@ test('batch card and table departures keep every pre-mutation position', async (
   expect(samples).toHaveLength(6)
   for (const sample of samples) {
     expect(Math.abs(sample.after - sample.before)).toBeLessThan(.5)
+    sample.cellsBefore.forEach((width, index) => expect(Math.abs(sample.cellsAfter[index] - width)).toBeLessThan(.5))
     expect(sample).toMatchObject({ inert: true, detached: true })
   }
 })
@@ -175,7 +177,7 @@ test('retiring a container freezes moving descendant geometry and opacity', asyn
     const moving = children.map(child => child.hasAttribute('data-motion-running'))
     window.Motion.retire(parent)
     const ghost = document.querySelector<HTMLElement>('[data-flow-retiring]')!
-    return children.map((child, index) => ({ before: before[index], after: presentation(ghost.querySelector<HTMLElement>(`[data-key="${child.dataset.key}"]`)! ), moving: moving[index] }))
+    return children.map((child, index) => ({ before: before[index], after: presentation(ghost.querySelector<HTMLElement>(`[data-key="${child.dataset.key}"]`)!), moving: moving[index] }))
   })
   for (const sample of samples) {
     expect(sample.moving).toBe(true)

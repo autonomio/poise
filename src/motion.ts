@@ -204,7 +204,10 @@ export function retire(element: HTMLElement): void {
   if (element instanceof HTMLTableRowElement) {
     const row = ghost as HTMLTableRowElement
     row.style.opacity = '1'
-    ;[...row.cells].forEach((cell, index) => { cell.style.width = `${presentedGeometry?.cellWidths?.[index] ?? element.cells[index].getBoundingClientRect().width}px` })
+    ;[...row.cells].forEach((cell, index) => {
+      cell.style.boxSizing = 'border-box'
+      cell.style.width = `${presentedGeometry?.cellWidths?.[index] ?? element.cells[index].getBoundingClientRect().width}px`
+    })
     ghost = element.closest('table')!.cloneNode(false) as HTMLTableElement
     const body = document.createElement('tbody'); body.append(row); ghost.append(body)
   }
