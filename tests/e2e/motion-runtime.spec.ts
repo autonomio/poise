@@ -75,6 +75,19 @@ test('hiding a scrolling document cancels navigation at its presented reading po
   expect(result.running).toBe(false)
 })
 
+test('late navigation cannot move a hidden reduced-motion document', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await runtime(page)
+  const result = await page.evaluate(() => {
+    const owner = document.createElement('div'); owner.style.cssText = 'height:100px;width:200px;overflow:auto'; owner.innerHTML = '<div style="height:1000px">Reading</div>'; document.body.append(owner)
+    owner.scrollTop = 50
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    window.Motion.scroll(owner, () => 800)
+    return { y: owner.scrollTop, running: owner.hasAttribute('data-motion-running') }
+  })
+  expect(result).toEqual({ y: 50, running: false })
+})
+
 test('retirement keeps the presented opacity and print releases the inert visual', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(() => {
@@ -138,6 +151,7 @@ test('question editors survive temporarily duplicated editable answer IDs', asyn
   await runtime(page)
   await page.evaluate(() => {
     const builder = window.Builder.createJevBuilder({ models: async () => [], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
+    builder.set(builder.draft)
     document.body.append(builder.el)
   })
   await page.locator('.jev-builder [data-add="choice"]').click()

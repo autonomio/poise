@@ -281,6 +281,7 @@ export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -
 
 /** Bounded scrolling follows live geometry and yields immediately to direct input. */
 export function scroll(element: HTMLElement, destination: () => number, actor?: HTMLElement): void {
+  if (document.hidden || !element.getClientRects().length || actor && (!actor.isConnected || !actor.getClientRects().length)) { cancelMotion(element, 'scroll'); return }
   spring(element, 'scroll', { from: { y: element.scrollTop }, to: () => ({ y: Math.max(0, Math.min(element.scrollHeight - element.clientHeight, destination())) }),
     valid: () => !actor || actor.isConnected && !!actor.getClientRects().length,
     write: ({ y }) => { element.scrollTop = y }, complete: () => cancelMotion(element, 'scroll') })

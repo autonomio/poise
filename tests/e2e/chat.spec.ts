@@ -2091,8 +2091,11 @@ test('command models: typing /model opens catalogue rows above the console witho
   await expect(commandModels(page)).toBeVisible()
   await expect(commandModels(page).getByRole('option')).toHaveCount((AGENTS.agents as Array<{ models: unknown[] }>).reduce((n, agent) => n + agent.models.length, 0))
   await expect(commandModels(page).locator('[data-identity="grok-4.6-xhigh"]')).toHaveAttribute('aria-disabled', 'true')
-  const panel = (await commandModels(page).boundingBox())!, console = (await page.locator('.chat-v-composer').boundingBox())!
-  expect(panel.y + panel.height).toBeLessThanOrEqual(console.y)
+  const placement = await page.evaluate(() => ({
+    panelBottom: document.querySelector('.chat-command-models')!.getBoundingClientRect().bottom,
+    consoleTop: document.querySelector('.chat-v-composer')!.getBoundingClientRect().top,
+  }))
+  expect(placement.panelBottom).toBeLessThanOrEqual(placement.consoleTop)
   await commandModels(page).locator('[data-identity="gpt-6-astra-max"]').click()
   await expect(input(page)).toHaveValue(''); await expect(page.locator('.chat-command-model-chip')).toContainText('GPT 6 Astra')
   expect(sock.framesOf('set_model')).toHaveLength(0); expect(sock.framesOf('prompt')).toHaveLength(0)
