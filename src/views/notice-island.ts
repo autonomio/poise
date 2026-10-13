@@ -229,7 +229,7 @@ export function mountNoticeIsland(feed: NoticeFeed, actions: IslandActions): () 
   const fit = () => {
     cancelAnimationFrame(fitting)
     fitting = requestAnimationFrame(() => {
-      if (content && island.dataset.state === 'shown') { cancelMotion(shell, 'shape'); shell.style.width = `${measure(content)}px` }
+      if (content && island.dataset.state === 'shown') { shape(measure(content), true); finishMotion(shell) }
     })
   }
   window.addEventListener('resize', fit)

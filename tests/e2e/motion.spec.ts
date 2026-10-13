@@ -46,6 +46,18 @@ test('closed menu retains its words until exit while focus and interaction close
   await expect(page.locator('#menu-surface')).not.toHaveAttribute('inert')
 })
 
+test('a notice arriving between resize and its queued fit remains readable', async ({ page }) => {
+  await workspace(page); await settled(page)
+  const notice: import('../../src/notices').Notice = { id: 'resize-arrival', kind: 'chat_turn_finished', title: 'Arrived during resize', body: 'Browser fixture', since: '2026-10-13T10:00:00Z', due: '2026-10-13T10:00:00Z', silenceable: false, target: null }
+  await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices: [notice] } }))
+  await freeze(page)
+  await page.evaluate(() => { window.dispatchEvent(new Event('resize')); window.dispatchEvent(new Event('focus')) })
+  await expect(page.locator('#notice-island .ni-title')).toHaveText(notice.title)
+  await resume(page); await settled(page)
+  await expect(page.locator('#notice-island .ni-shell')).toHaveCSS('opacity', '1')
+  await expect(page.locator('#notice-island .ni-content')).toHaveCSS('opacity', '1')
+})
+
 test('swapping a notice during entrance keeps its presented position', async ({ page }) => {
   await workspace(page)
   const notices: import('../../src/notices').Notice[] = ['First notice', 'Second notice'].map((title, index) => ({ id: `motion-${index}`, kind: 'chat_turn_finished', title, body: 'Browser fixture', since: '2026-10-13T10:00:00Z', due: '2026-10-13T10:00:00Z', silenceable: false, target: null }))
