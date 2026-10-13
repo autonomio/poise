@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { Notice } from '../../src/notices'
+import { settled } from './fixtures/motion'
 
 // The notification island at the top of the page (src/views/notice-island.ts):
 // where it sits, one notice at a time, putting one away, stepping through
@@ -68,6 +69,26 @@ async function workspace(page: Page, notices: Notice[], enabled = true, accounts
 
 const island = (page: Page) => page.getByRole('region', { name: 'Notifications' })
 const shownTitle = (page: Page) => island(page).locator('.ni-content:not(.ni-leaving) .ni-title')
+
+test('notice exit retains its presented geometry and words until the shell retires', async ({ page }) => {
+  await workspace(page, [READY])
+  await page.goto('/')
+  await expect(shownTitle(page)).toHaveText(READY.title)
+  await settled(page)
+  const value = await page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>('#notice-island')!, shell = root.querySelector<HTMLElement>('.ni-shell')!, content = root.querySelector<HTMLElement>('.ni-content')!
+    const before = shell.getBoundingClientRect().width
+    root.querySelector<HTMLButtonElement>('[data-action="dismiss"]')!.click()
+    await new Promise<void>(resolve => { const frame = () => root.dataset.state === 'leaving' ? resolve() : requestAnimationFrame(frame); requestAnimationFrame(frame) })
+    return { before, width: shell.getBoundingClientRect().width, opacity: Number(getComputedStyle(content).opacity), words: content.textContent, inert: content.inert }
+  })
+  expect(value.width).toBeGreaterThan(value.before * .9)
+  expect(value.opacity).toBeGreaterThan(.9)
+  expect(value.words).toContain(READY.title)
+  expect(value.inert).toBe(true)
+  await settled(page)
+  await expect(island(page)).toBeHidden()
+})
 
 test('shows the most pressing notice at the top centre, clear of every control', async ({ page }) => {
   await workspace(page, [WAITING, HELD, READY])

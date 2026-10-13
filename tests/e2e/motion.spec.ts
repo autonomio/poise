@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 import { session, makeState, installRoutes, installSocket, input } from './fixtures/chat'
-import { freeze, resume, settled } from './fixtures/motion'
+import { freeze, resume, settled, stableLanding } from './fixtures/motion'
 
 test('closed menu retains its words until exit while focus and interaction close immediately', async ({ page }) => {
   await workspace(page)
@@ -70,6 +70,16 @@ test('pointer takeover uses the moving sidebar width and releases the spring', a
   await resume(page)
   await settled(page)
   await expect(page.locator('#view-chat')).not.toHaveClass(/chat-sidebar-resizing/)
+})
+
+test('a model menu lands once and keeps its catalogue visible', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
+  await installRoutes(page, makeState([])); await installSocket(page)
+  await page.goto('/')
+  await page.locator('.chat-default-model').click()
+  await expect(page.locator('.chat-model-menu [data-identity]')).toHaveCount(10)
+  await stableLanding(page.locator('.chat-model-menu'))
+  await expect(page.locator('.chat-model-menu')).toBeVisible()
 })
 
 test('reduced motion removes feedback waits and settles active panels on preference, resize and print', async ({ page }) => {

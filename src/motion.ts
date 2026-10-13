@@ -137,11 +137,11 @@ export function finishMotion(root?: HTMLElement, cancelScroll = document.hidden)
 export function onMotionFrame(listener: () => void): () => void { listeners.add(listener); return () => listeners.delete(listener) }
 
 export function reveal(element: HTMLElement, { distance = MOTION.travel, delay = 0 }: { distance?: number, delay?: number } = {}): void {
-  spring(element, 'entry', { from: { progress: 0 }, to: { progress: 1 }, delay,
-    write: ({ progress }) => {
+  spring(element, 'entry', { from: { opacity: 0, y: distance }, to: { opacity: 1, y: 0 }, delay,
+    write: ({ opacity, y }) => {
       element.dataset.flowEnter = ''
-      element.style.opacity = String(bounded(progress))
-      element.style.setProperty('--flow-enter-y', `${(1 - progress) * distance}px`)
+      element.style.opacity = String(bounded(opacity))
+      element.style.setProperty('--flow-enter-y', `${y}px`)
     }, complete: () => {
       element.style.opacity = ''; element.style.removeProperty('--flow-enter-y')
       delete element.dataset.flowEnter; cancelMotion(element, 'entry')

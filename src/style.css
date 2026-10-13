@@ -2861,7 +2861,7 @@ tr:hover .review-btn { opacity: 1; }
   to   { opacity: 1; }
 }
 #view-swarm tbody td.started-cell .date.date-tick {
-  animation: swarm-date-tick 380ms ease-out;
+  animation: swarm-date-tick var(--flow-feedback) ease-out;
 }
 
 /* Distinct cell flavors */
@@ -3067,7 +3067,8 @@ tr:hover .stop-btn { opacity: 1; }
   20%       { background: var(--tint-a1); }
 }
 #view-swarm tr.agent-row.agent-row-focus {
-  animation: agent-row-focus-pulse 1.5s ease-out 1;
+  background: var(--tint-a1);
+  transition: background var(--flow-feedback) ease-out;
 }
 
 /* Why a replay was refused, under the row it was asked for. */
@@ -4057,7 +4058,7 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
   pointer-events: none;
   background: color-mix(in srgb, var(--a4, #c89b3c) 18%, transparent);
   border-radius: 3px;
-  animation: edit-hover-mark-in 140ms ease-out;
+  animation: edit-hover-mark-in var(--flow-feedback) ease-out;
 }
 @keyframes edit-hover-mark-in {
   from { opacity: 0; }
@@ -6163,7 +6164,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
   border: var(--b-hair);
   border-radius: var(--r-md);
   box-shadow: var(--e-2);
-  animation: chat-model-enter var(--flow-settle) var(--flow-spring);
+  animation: none;
 }
 .chat-model-menu[data-side="below"] { bottom: auto; top: calc(100% + var(--sp-2)); }
 .chat-model-group + .chat-model-group { border-top: var(--b-hair); margin-top: var(--sp-1); }
@@ -6190,7 +6191,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
 .chat-model-option[aria-selected="true"], .chat-model-option:hover:not([aria-disabled="true"]), .chat-model-retry:hover { background: var(--hover); }
 .chat-model-option:focus-visible, .chat-model-retry:focus-visible { outline-offset: -2px; }
 .chat-model-check { flex: 0 0 12px; color: var(--text-secondary); }
-@keyframes chat-model-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes chat-model-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .chat-v-composer .chat-input-wrap.drag-over { border-color: var(--a1); }
 .chat-input-row { position: relative; }
 /* The chip lives inside the textarea's box; chat-composer.ts measures it and

@@ -179,9 +179,9 @@ export function mountNoticeIsland(feed: NoticeFeed, actions: IslandActions): () 
     content = next
     if (previous) {
       previous.classList.add('ni-leaving'); previous.inert = true; previous.setAttribute('aria-hidden', 'true')
-      spring(previous, 'exit', { from: { opacity: Number(getComputedStyle(previous).opacity), y: 0 }, to: { opacity: 0, y: -8 },
-        write: ({ opacity, y }) => { previous.style.opacity = String(Math.max(0, Math.min(1, opacity))); previous.style.translate = `0 ${y}px` },
-        complete: () => { previous.remove(); cancelMotion(previous, 'exit') } })
+      spring(previous, 'entry', { from: { opacity: Number(getComputedStyle(previous).opacity), y: previous.getBoundingClientRect().top - shell.getBoundingClientRect().top }, to: { opacity: 0, y: -8 },
+        write: ({ opacity, y }) => { previous.dataset.flowEnter = ''; previous.style.opacity = String(Math.max(0, Math.min(1, opacity))); previous.style.setProperty('--flow-enter-y', `${y}px`) },
+        complete: () => { previous.remove(); cancelMotion(previous, 'entry') } })
     }
     if (appearing) { shell.style.width = '28px'; shell.style.opacity = '0' }
     island.dataset.state = 'shown'
