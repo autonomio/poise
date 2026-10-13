@@ -13,11 +13,18 @@ function field(label: string, value: unknown, attrs: string, multiline = false):
 export function createJevBuilder(handlers: Handlers) {
   const el = document.createElement('div'); el.className = 'jev-builder'
   let current = emptyJevDraft()
+  const questionKeys = new WeakMap<JevDraft['questions'][number], number>()
+  let nextQuestionKey = 0
+  function questionKey(question: JevDraft['questions'][number]): number {
+    let key = questionKeys.get(question)
+    if (key === undefined) { key = ++nextQuestionKey; questionKeys.set(question, key) }
+    return key
+  }
   let modelList = [{ name: 'jev-latest', description: 'Latest stable' }, { name: 'jev-preview', description: 'Latest preview' }]
   let modelsLoaded = false, modelsLoading = false
   function changed() { handlers.changed(current) }
   function render(preserve = true) {
-    const disclosure = new Map([...el.querySelectorAll<HTMLDetailsElement>('details')].map(d => [`${d.closest<HTMLElement>('[data-q]')?.dataset.q || ''}:${d.className}`, d.open]))
+    const disclosure = new Map([...el.querySelectorAll<HTMLDetailsElement>('details')].map(d => [`${d.closest<HTMLElement>('[data-q]')?.dataset.key || ''}:${d.className}`, d.open]))
     const focus = document.activeElement instanceof HTMLElement && el.contains(document.activeElement) ? document.activeElement : null
     const focusedField = focus?.dataset.field, question = focus?.closest<HTMLElement>('[data-q]')?.dataset.q
     const raw = current.raw !== null
@@ -27,7 +34,7 @@ export function createJevBuilder(handlers: Handlers) {
         <div class="jev-builder-tabs"><button type="button" class="st-clear" data-format="text" aria-pressed="${current.format === 'text'}">Text</button><button type="button" class="st-clear" data-format="json" aria-pressed="${current.format === 'json'}">JSON</button></div>
         ${field('State', current.state, 'data-field="state" aria-label="State" placeholder="Paste the message, document or record to evaluate…" spellcheck="false"', true)}</section>
         <section class="jev-question-column"><div class="jev-section-heading"><h3>2. Questions</h3><span>Each one evaluates the same state, independently.</span></div>
-        <div class="jev-questions">${current.questions.map((q, i) => `<details class="jev-question" data-key="question:${esc(q.id)}" data-q="${i}" ${i < 3 ? 'open' : ''}><summary><span class="chat-pill">${q.type === 'noul' ? 'Noul' : q.type === 'choice' ? 'Choice' : 'Score'}</span> <span>${esc(q.id || 'Untitled question')}</span></summary><div class="jev-question-body">
+        <div class="jev-questions">${current.questions.map((q, i) => `<details class="jev-question" data-key="question:${questionKey(q)}" data-q="${i}" ${i < 3 ? 'open' : ''}><summary><span class="chat-pill">${q.type === 'noul' ? 'Noul' : q.type === 'choice' ? 'Choice' : 'Score'}</span> <span>${esc(q.id || 'Untitled question')}</span></summary><div class="jev-question-body">
           <div class="jev-question-top">${field('Answer ID', q.id, 'data-field="id" aria-label="Answer ID" spellcheck="false"')}<label class="jev-field">Primitive<select class="st-select" data-field="type" aria-label="Primitive">${Object.entries(names).map(([type, name]) => `<option value="${type}" ${q.type === type ? 'selected' : ''}>${name} · ${type}</option>`).join('')}</select></label><button type="button" class="st-clear" data-action="duplicate">Duplicate</button><button type="button" class="st-clear" data-action="remove" ${current.questions.length === 1 ? 'disabled' : ''}>Remove</button></div>
           <p class="jev-shape">${q.type === 'noul' ? 'Returns a probability of yes, from 0 to 1.' : q.type === 'choice' ? 'Returns one option, with probabilities and confidence.' : `Returns a score from 0 to ${q.levels.length - 1}, with probabilities and confidence.`}</p>
           ${field('Instructions', q.instructions, 'data-field="instructions" aria-label="Instructions" placeholder="Ask one clear, focused question about the state…"', true)}
@@ -49,7 +56,7 @@ export function createJevBuilder(handlers: Handlers) {
       if (typeof value === 'string') area.value = value
     }
     if (preserve) for (const d of el.querySelectorAll<HTMLDetailsElement>('details')) {
-      const key = `${d.closest<HTMLElement>('[data-q]')?.dataset.q || ''}:${d.className}`
+      const key = `${d.closest<HTMLElement>('[data-q]')?.dataset.key || ''}:${d.className}`
       if (disclosure.has(key)) d.open = disclosure.get(key)!
     }
     if (preserve && field) el.querySelector<HTMLElement>(`${question !== undefined ? `[data-q="${question}"] ` : ''}[data-field="${field}"]`)?.focus({ preventScroll: true })

@@ -3,12 +3,12 @@ import { build } from 'esbuild'
 import { workspace } from './fixtures/workspace'
 import { settled } from './fixtures/motion'
 
-declare global { interface Window { Motion: typeof import('../../src/motion'); Patch: typeof import('../../src/dom-patch') } }
+declare global { interface Window { Motion: typeof import('../../src/motion'); Patch: typeof import('../../src/dom-patch'); Builder: typeof import('../../src/views/jev-builder') } }
 
 async function runtime(page: Page): Promise<void> {
   await workspace(page)
   await settled(page)
-  for (const [path, globalName] of [['src/motion.ts', 'Motion'], ['src/dom-patch.ts', 'Patch']]) {
+  for (const [path, globalName] of [['src/motion.ts', 'Motion'], ['src/dom-patch.ts', 'Patch'], ['src/views/jev-builder.ts', 'Builder']]) {
     const bundle = await build({ entryPoints: [path], bundle: true, write: false, format: 'iife', globalName })
     const url = `/__motion/${globalName}.js`
     await page.route(`**${url}`, route => route.fulfill({ body: bundle.outputFiles[0].text, contentType: 'application/javascript' }))
@@ -132,4 +132,26 @@ test('table retirement applies actor opacity once', async ({ page }) => {
     return Number(getComputedStyle(ghost).opacity) * Number(getComputedStyle(ghost.querySelector('tr')!).opacity)
   })
   expect(opacity).toBe(.35)
+})
+
+test('question editors survive temporarily duplicated editable answer IDs', async ({ page }) => {
+  await runtime(page)
+  await page.evaluate(() => {
+    const builder = window.Builder.createJevBuilder({ models: async () => [], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
+    document.body.append(builder.el)
+  })
+  await page.locator('.jev-builder [data-add="choice"]').click()
+  const editors = page.locator('.jev-question')
+  await expect(editors).toHaveCount(2)
+  const ids = page.getByRole('textbox', { name: 'Answer ID', exact: true })
+  const original = await ids.first().inputValue()
+  await ids.nth(1).fill(original)
+  await page.locator('.jev-builder [data-format="text"]').click()
+  await expect(editors).toHaveCount(2)
+  await expect(ids.nth(0)).toHaveValue(original)
+  await expect(ids.nth(1)).toHaveValue(original)
+  await ids.nth(1).fill('corrected')
+  await page.locator('.jev-builder [data-format="text"]').click()
+  await expect(editors).toHaveCount(2)
+  await expect(ids.nth(1)).toHaveValue('corrected')
 })
