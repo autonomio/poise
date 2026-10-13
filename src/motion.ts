@@ -222,12 +222,13 @@ export function intrinsicHeight(element: HTMLElement, padding?: { top: number, b
 export function disclosure(element: HTMLElement, opened: boolean, done?: () => void, presentedHeight = element.getBoundingClientRect().height): void {
   const height = presentedHeight
   const computed = getComputedStyle(element)
+  const display = computed.display
   const opacity = Number(computed.opacity)
   const padding = disclosurePadding.get(element) ?? { top: parseFloat(computed.paddingTop), bottom: parseFloat(computed.paddingBottom) }
   disclosurePadding.set(element, padding)
   element.hidden = !opened
   element.inert = !opened
-  element.style.setProperty('--flow-display', opened ? getComputedStyle(element).display : computed.display)
+  element.style.setProperty('--flow-display', opened ? getComputedStyle(element).display : display)
   element.dataset.flowDisclosure = ''
   if (!opened) element.dataset.flowRetained = ''
   else delete element.dataset.flowRetained
