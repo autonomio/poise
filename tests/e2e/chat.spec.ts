@@ -1,6 +1,6 @@
 import type { ChatSwitches } from '../../src/chat-switches'
 import { expect, test, type Page } from '@playwright/test'
-import type { ChatEnvelope, ChatEvent, ClientFrame, SessionRecord } from '../../server/chat/protocol'
+import type { ChatEnvelope, ChatEvent } from '../../server/chat/protocol'
 import { NOW, AGENTS, session, installRoutes, installSocket, env, makeState, input } from './fixtures/chat'
 import { settled } from './fixtures/motion'
 
