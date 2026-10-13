@@ -59,7 +59,7 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
         if not batch:
             raise RuntimeError("GitHub workflow job inventory is incomplete")
         page += 1
-    if not jobs or any(job.get("run_id") != run_id or job.get("run_attempt") != attempt
+    if any(job.get("run_id") != run_id or job.get("run_attempt") != attempt
                        or job.get("status") != "completed"
                        or job.get("conclusion") not in {"success", "skipped", "neutral", *GREY_CONCLUSIONS}
                        for job in jobs):
