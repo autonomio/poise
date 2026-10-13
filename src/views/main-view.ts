@@ -231,9 +231,8 @@ function reviewButtonHtml(item: PrRow, st: { text: string; cls: string }): strin
     + ` title="${isDone ? 'Reviewed — run again' : 'Run consensus review'}">${PLAY_SVG}</button>`
 }
 
-function buildRow(item: PrRow, animate: boolean): HTMLTableRowElement {
+function buildRow(item: PrRow): HTMLTableRowElement {
   const tr = document.createElement('tr')
-  if (animate) tr.className = 'new'
   tr.dataset.key = rowKey(item)
   paintRow(tr, item)
   return tr
@@ -283,7 +282,7 @@ function renderAll() {
   table.hidden = false
   empty.hidden = true
   for (const item of items) {
-    tbody.appendChild(buildRow(item, false))
+    tbody.appendChild(buildRow(item))
   }
   updateCount()
 }
@@ -294,9 +293,7 @@ function appendRows(newItems: PrRow[]) {
   // Batch append in a fragment to reduce reflows
   const frag = document.createDocumentFragment()
   for (let i = 0; i < newItems.length; i++) {
-    const tr = buildRow(newItems[i], true)
-    // Tighter stagger (max 10 steps), capped at 80ms total
-    tr.classList.remove('new')
+    const tr = buildRow(newItems[i])
     frag.appendChild(tr)
   }
   tbody.appendChild(frag)
@@ -316,7 +313,7 @@ function applyMainFlip(nextItems: PrRow[]) {
     for (const item of nextItems) {
       const existing = existingEls.get(rowKey(item))
       if (existing) { paintRow(existing, item); fragment.appendChild(existing) }
-      else fragment.appendChild(buildRow(item, true))
+      else fragment.appendChild(buildRow(item))
     }
     tbody.appendChild(fragment)
   })

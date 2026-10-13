@@ -94,7 +94,7 @@ test('reduced motion removes feedback waits and settles active panels on prefere
 test('repeated Archive reorders retain actors and have no stale cleanup jump', async ({ page }) => {
   await workspace(page, 'main')
   let order = [1, 2, 3]
-  await page.route('**/api/gh', route => route.fulfill({ json: { records: order.map(number => ({ repo: 'acme/app', number, kind: 'pr', title: `Motion row ${number}`, url: `https://github.com/acme/app/pull/${number}`, author: 'octocat', state: 'open', owner_login: null, owner_avatar: null, updated_at: '2026-10-13T10:00:00Z', merged_at: null })), count: 3, errors: [] } }))
+  await page.route('**/api/gh', route => route.fulfill({ json: { records: order.map(number => ({ repo: 'acme/app', number, kind: 'pr', title: `Motion row ${number}`, url: `https://github.com/acme/app/pull/${number}`, author: 'octocat', state: 'open', owner_login: null, owner_avatar: null, updated_at: '2026-10-13T10:00:00Z', merged_at: null })), count: order.length, errors: [] } }))
   await page.evaluate(() => localStorage.setItem('poise-view', 'main'))
   await page.reload()
   await expect(page.locator('#tbody > tr')).toHaveCount(3)
@@ -117,4 +117,26 @@ test('repeated Archive reorders retain actors and have no stale cleanup jump', a
   expect(await original!.evaluate(element => element.isConnected && element === document.querySelector('#tbody > tr'))).toBe(true)
   await settled(page)
   expect(await page.locator('#tbody > tr').evaluateAll(rows => rows.every(row => !row.hasAttribute('data-flow-layout')))).toBe(true)
+  order = [4, 1, 2, 3]
+  await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+  await expect(page.locator('#tbody > tr').first()).toContainText('Motion row 4')
+  const landing = await page.locator('#tbody > tr').first().evaluate(async row => {
+    let opaque = false, minimum = 1, completedAt: number | undefined
+    const started = performance.now()
+    await new Promise<void>(resolve => {
+      const frame = () => {
+        const now = performance.now(), opacity = Number(getComputedStyle(row).opacity)
+        if (opacity >= .99) opaque = true
+        if (opaque) minimum = Math.min(minimum, opacity)
+        if (!row.hasAttribute('data-motion-running') && completedAt === undefined) completedAt = now
+        if ((completedAt === undefined || now - completedAt < 200) && now - started < 5000) requestAnimationFrame(frame)
+        else resolve()
+      }
+      requestAnimationFrame(frame)
+    })
+    return { opaque, minimum, completed: completedAt !== undefined }
+  })
+  expect(landing.opaque).toBe(true)
+  expect(landing.completed).toBe(true)
+  expect(landing.minimum).toBeGreaterThan(.9)
 })
