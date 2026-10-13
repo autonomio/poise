@@ -72,6 +72,8 @@ test('opens Settings destinations directly on one frame and returns to the menu'
     await page.locator('#menu-popover').getByRole('button', { name: section, exact: true }).click()
     await expect(page.locator('#menu-surface .menu-panel.open .tp-title')).toHaveText(section)
     await expect(page.locator('#settings-panel [role="tablist"]')).toHaveCount(0)
+    if (section === 'General') await page.getByLabel('Branch prefix', { exact: true }).fill('scratch/')
+    if (section === 'Models') expect(await page.locator('#settings-panel .tp-body').evaluate((body) => body.scrollTop)).toBe(0)
     await expect(page.locator('#menu-toggle')).toHaveAttribute('aria-expanded', 'true')
     await attached(page)
     await page.getByRole('button', { name: 'Back to menu' }).click()
@@ -79,6 +81,8 @@ test('opens Settings destinations directly on one frame and returns to the menu'
     await expect(page.locator('#menu-surface .menu-panel.open')).toHaveCount(0)
     await attached(page)
   }
+  await page.locator('#menu-popover').getByRole('button', { name: 'General', exact: true }).click()
+  await expect(page.getByLabel('Branch prefix', { exact: true })).toHaveValue('scratch/')
   await page.keyboard.press('Escape')
   await expect(page.locator('#menu-toggle')).toBeFocused()
   await expect(page.locator('#menu-toggle')).toHaveAttribute('aria-expanded', 'false')

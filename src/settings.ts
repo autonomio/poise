@@ -72,6 +72,7 @@ let notificationsStatusEl: HTMLElement | null = null
 // A model select someone has changed keeps its value across background
 // reloads until Save, exactly like the text fields keep typed text.
 const dirtyModels = new Set<string>()
+const dirtyFields = new Set<HTMLInputElement | HTMLSelectElement>()
 let modelRefreshActive = false
 let modelsGeneration = 0
 // Bumped by each saved or deleted configuration: a catalog read that started before it brings older ones.
@@ -107,14 +108,14 @@ function syncFieldsFromCache() {
   // first characters someone has already typed into an empty field. Only fill
   // a field the person is not currently in.
   const active = document.activeElement
-  if (meInput && meInput !== active) meInput.value = s.me
-  if (agentInput && agentInput !== active) agentInput.value = s.agentAccount ?? ''
-  if (tzSelect && tzSelect !== active) {
+  if (meInput && meInput !== active && !dirtyFields.has(meInput)) meInput.value = s.me
+  if (agentInput && agentInput !== active && !dirtyFields.has(agentInput)) agentInput.value = s.agentAccount ?? ''
+  if (tzSelect && tzSelect !== active && !dirtyFields.has(tzSelect)) {
     const fallback = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return 'UTC' } })()
     tzSelect.value = ensureTimezoneOption(s.timezone || fallback)
   }
-  if (branchPrefixInput && branchPrefixInput !== active) branchPrefixInput.value = s.chat?.branchPrefix ?? CHAT_DEFAULTS.branchPrefix
-  if (idleTimeoutInput && idleTimeoutInput !== active) idleTimeoutInput.value = String(s.chat?.idleTimeoutMinutes ?? CHAT_DEFAULTS.idleTimeoutMinutes)
+  if (branchPrefixInput && branchPrefixInput !== active && !dirtyFields.has(branchPrefixInput)) branchPrefixInput.value = s.chat?.branchPrefix ?? CHAT_DEFAULTS.branchPrefix
+  if (idleTimeoutInput && idleTimeoutInput !== active && !dirtyFields.has(idleTimeoutInput)) idleTimeoutInput.value = String(s.chat?.idleTimeoutMinutes ?? CHAT_DEFAULTS.idleTimeoutMinutes)
   showNotificationsChoice(s.notifications?.enabled !== false)
 }
 
@@ -753,6 +754,8 @@ async function saveAll() {
   }
 
   saving = true
+  const savedValues = new Map([meInput, agentInput, tzSelect, branchPrefixInput, idleTimeoutInput]
+    .filter((field) => field !== null).map((field) => [field, field.value] as const))
   saveBtn.disabled = true
   saveBtn.textContent = 'Saving…'
   try {
@@ -766,6 +769,9 @@ async function saveAll() {
       return
     }
     dirtyModels.clear()
+    for (const [field, value] of savedValues) {
+      if (field.value === value) dirtyFields.delete(field)
+    }
     setLocalSettings(data)
     renderOrganizations()
     renderAccounts()
@@ -801,6 +807,7 @@ function selectSection(panel: HTMLElement, tab: SettingsSection) {
   for (const section of panel.querySelectorAll<HTMLElement>('.st-tab')) {
     section.hidden = section.dataset.tab !== tab
   }
+  panel.querySelector('.tp-body')!.scrollTop = 0
   panel.querySelector<HTMLElement>('.st-footer')!.hidden = tab === 'accounts' || tab === 'admin'
   if (tab === 'accounts') void loadAccounts()
   window.dispatchEvent(new CustomEvent('poise:settings-section-changed', { detail: { section: tab } }))
@@ -1012,6 +1019,11 @@ function buildPanel(): HTMLElement {
   })
   for (const inp of [meInput, agentInput, branchPrefixInput, idleTimeoutInput]) {
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveAll() })
+  }
+  for (const field of [meInput, agentInput, tzSelect, branchPrefixInput, idleTimeoutInput]) {
+    if (!field) continue
+    field.addEventListener('input', () => dirtyFields.add(field))
+    field.addEventListener('change', () => dirtyFields.add(field))
   }
 
   panel.querySelector('.tp-close')!.addEventListener('click', closeSettingsPanel)
