@@ -408,7 +408,9 @@ function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: L
   if (!previous || previous.kind !== 'worker') return
   if (previous.callId && previous.callId !== call.id) return
   const error = behaviorErrorMessage(call.error || 'agent call failed')
-  const held = call.action !== 'not_started' || call.outcome !== 'preflight_failed'
+  const held = call.behavior === ISSUE_REVIEW_BEHAVIOR ? !issueFailureCanRetry(target, call)
+    : call.action !== 'not_started' || call.outcome !== 'preflight_failed' || !!call.head_sha
+      || call.review_id != null || call.receipts != null
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
   if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
     || previous.diagnostic?.severity !== diagnostic.severity || previous.callId !== call.id) {
@@ -995,7 +997,8 @@ function restoreReadableFailedClaim(claim: BehaviorLaunchClaim, call: LogEntry |
     const retryFailure = claim.key === ISSUES_KEY
       ? call.error_code !== 'stopped' && (call.receipts != null || !HELD_ISSUE_REVIEW_ERRORS.has(call.error_code || ''))
       : !boundedReviewFailure(call) && call.error_code !== 'review_packet_too_large'
-    if (retryFailure) recordBehaviorFailure(claim.key as BehaviorKey, 'worker', message, claim.target)
+    if (retryFailure) recordBehaviorFailure(claim.key as BehaviorKey, 'worker', message, claim.target,
+      claim.key === ISSUES_KEY ? { errorCode: call.error_code, held: !issueFailureCanRetry(claim.target, call), callId: call.id } : {})
   })()
 }
 
@@ -3583,6 +3586,11 @@ async function fireIssueReview(
 // failure is not one held for a person, and it has not already had its retry.
 // `logs` is shared by the whole scan: a held reviewer is looked at every
 // tick, and each read of the agent log is a subprocess.
+function issueFailureCanRetry(target: string, call: LogEntry): boolean {
+  return call.receipts == null && !HELD_ISSUE_REVIEW_ERRORS.has(call.error_code || '')
+    && countBehaviorDeadLetters(ISSUES_KEY, target) < ISSUE_REVIEW_ATTEMPTS
+}
+
 async function releasableIssueReviewFailure(
   target: string,
   logs: () => Promise<AgentLogSnapshot>,
@@ -3600,8 +3608,7 @@ async function releasableIssueReviewFailure(
     || !FAILED_AGENT_STATUSES.has(call.status.toLowerCase())
     || call.behavior !== ISSUE_REVIEW_BEHAVIOR
     || call.correlation_id !== failed.launchCorrelationId
-    || (call.receipts !== null && call.receipts !== undefined)
-    || HELD_ISSUE_REVIEW_ERRORS.has(call.error_code || '')) return null
+    || !issueFailureCanRetry(target, call)) return null
   return failed
 }
 
@@ -3949,7 +3956,8 @@ async function reconcileIssueReviewClaims(): Promise<void> {
       if (deadLetterClaim(claim, message)) {
         const posted = call.receipts !== null && call.receipts !== undefined
         if (call.error_code !== 'stopped' && (posted || !HELD_ISSUE_REVIEW_ERRORS.has(call.error_code || ''))) {
-          recordBehaviorFailure(ISSUES_KEY, 'worker', message, claim.target)
+          recordBehaviorFailure(ISSUES_KEY, 'worker', message, claim.target,
+            { errorCode: call.error_code, held: !issueFailureCanRetry(claim.target, call), callId: call.id })
         }
         if (call.error_code !== 'stopped' && needsClaude(catalogForCalls, call.model)) claudeAuth.observeProcessFailure(message)
       }

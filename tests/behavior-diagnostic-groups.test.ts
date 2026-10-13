@@ -39,6 +39,12 @@ describe('behavior diagnostic groups', () => {
     const groups = behaviorDiagnosticGroups(diagnostics)
     expect(groups.map((group) => [group.scope, group.severity])).toEqual([['Behaviors', 'warning'], ['Identity', 'error']])
   })
+  it('retains the organization and behavior origin for an untargeted GitHub access failure', () => {
+    const diagnostics = snapshot()
+    diagnostics.failures.push({ org: 'acme', behavior: 'approve-prs', kind: 'operation',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error: 'GitHub 404: Not Found' })
+    expect(behaviorDiagnosticGroups(diagnostics)[0]?.scope).toBe('acme approve-prs')
+  })
   it('deduplicates only the exact no-action attempt, never an unrelated held result with the same cause', () => {
     const diagnostics = snapshot()
     const error = 'Selected model is at capacity.'

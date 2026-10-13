@@ -34,7 +34,8 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     const error = failure.error ?? 'Failure cause unavailable'
     const classification = failure.diagnostic ?? classifyBehaviorDiagnostic(error, { held: failure.kind === 'worker' })
     const ref = targetRef(failure.target ?? '')
-    const scope = classification.code === 'github_access' ? ref.split('#')[0] : ref || `${failure.org ?? ''} ${failure.behavior}`.trim()
+    const scope = (classification.code === 'github_access' ? ref.split('#')[0] : ref)
+      || `${failure.org ?? ''} ${failure.behavior}`.trim()
     const cause = failureCause(error)
     const message = classification.code === 'github_access'
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`

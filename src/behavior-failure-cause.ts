@@ -39,6 +39,7 @@ export function classifyBehaviorDiagnostic(error: string, options: DiagnosticOpt
     'review_contract_violation', 'review_recovery_failed', 'review_budget_exhausted', 'model_output_limit']
     .includes(options.errorCode ?? '')
   if (options.held || blockingCode) return { severity: 'error', code: blockingCode ? options.errorCode! : 'held_result' }
+  if (options.errorCode === 'authentication_failed') return { severity: 'error', code: 'authentication' }
   if (options.errorCode && !['overloaded', 'rate_limit', 'server_error', 'authentication_failed'].includes(options.errorCode)) {
     return { severity: 'error', code: 'unknown' }
   }
@@ -46,7 +47,7 @@ export function classifyBehaviorDiagnostic(error: string, options: DiagnosticOpt
   if (/^Selected model is at capacity\.(?: Please try a different model\.)?$/.test(cause.trim()) || options.errorCode === 'overloaded') {
     return { severity: 'warning', code: 'provider_capacity' }
   }
-  if (/pull-request head or base changed while building review packet|pull-request head changed: expected [a-f0-9]{40}, got [a-f0-9]{40}/.test(cause)) {
+  if (/pull-request head or base changed (?:while building review packet|before checkout|during checkout)\b|pull-request head changed(?: [a-z ]+)?: expected [a-f0-9]{40}, got [a-f0-9]{40}\b/.test(cause)) {
     return { severity: 'warning', code: 'head_changed' }
   }
   if (/\b(?:GitHub|HTTP|http_status["']?\s*[:=]|unexpected status|status)\s*["']?\s*429\b/.test(cause)

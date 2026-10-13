@@ -2895,6 +2895,42 @@ describe('behavior launch claims', () => {
     })])
   })
 
+  it.each([null, []] as const)('classifies the first issue-review timeout from its recorded posting state: %j', async (receipts) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    arrangeCli(false)
+    const original = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], options: unknown) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args[1] === 'issue') {
+        return { stdout: JSON.stringify([{ ...pr, title: 'Review retry diagnostics',
+          created_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+          updated_at: new Date(Date.now() - 20 * 60_000).toISOString(), comments_count: 0 }]), stderr: '' }
+      }
+      if (command === 'github-interface' && args[0] === '--sub-issues') {
+        return { stdout: JSON.stringify({ action: 'sub_issues', repository: pr.repo, issue_number: pr.number, sub_issues: [] }), stderr: '' }
+      }
+      return original(command, args, options)
+    })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const { database: db, behaviors: runtime } = await loadModules()
+    db.setMeta('me', 'poise-user')
+    db.setMeta('behavior_review_new_issues_enabled', '1')
+    db.setMeta('behavior_review_new_issues_repos', JSON.stringify([{ repo: pr.repo, since: new Date(Date.now() - 60 * 60_000).toISOString() }]))
+    runtime.startBehaviorsRuntime()
+    await runtime.runEnabledBehaviorsOnce()
+    const claim = db.listBehaviorLaunchClaims('review-new-issues')[0]!
+    expect(claim).toBeDefined()
+    agentLogs = [agentLog({ id: 'e'.repeat(32), behavior: 'issue_review', repo: pr.repo, pr_id: String(pr.number),
+      actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+      started_at: claim.launchRequestedAt, status: 'failed', action: null, outcome: null, expected_head: null,
+      error: 'httpx.ReadTimeout', receipts: receipts ? [] : null })]
+    await runtime.runEnabledBehaviorsOnce()
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+      behavior: 'review-new-issues', diagnostic: receipts ? { severity: 'error', code: 'held_result' }
+        : { severity: 'warning', code: 'network_interruption' },
+    }))
+  })
+
   it.each(['review-new-prs', 'approve-prs'] as const)('holds an oversized %s packet across restart until the head changes', async (behavior) => {
     const launched = behavior === 'review-new-prs'
       ? await launchReviewBeforeCrash() : await launchApprovalBeforeCrash()

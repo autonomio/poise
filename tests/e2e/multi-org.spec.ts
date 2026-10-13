@@ -414,6 +414,7 @@ test('shows one API availability warning and clears it on a successful refresh',
   await expect(diagnostics).not.toContainText('Identity:')
   await expect(diagnostics).not.toContainText('Agent log:')
   await expect(page.locator('input[data-behavior="review-new-prs"]')).toBeDisabled()
+  await expect(page.locator('tr[data-behavior="review-new-prs"] .last-dash[title*="unknown"]')).toHaveText('?')
   unavailable = false
   await page.reload()
   await page.getByRole('button', { name: 'Behaviors', exact: true }).click()

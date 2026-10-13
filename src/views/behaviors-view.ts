@@ -153,13 +153,13 @@ function relTime(iso: string): string {
 // from "this has never run". Say the truth instead: unknown, not never.
 function lastTriggeredUnavailable(): boolean {
   const d = getBehaviorDiagnostics()
-  return !!d?.agentLogsError
+  return stateUnknown() || !!d?.agentLogsError
 }
 
 function lastTriggeredCell(key: BehaviorKey): string {
   const last = getLastTriggered(key)
-  if (!last && key !== 'merge-prs' && lastTriggeredUnavailable()) {
-    return '<span class="last-dash" title="The agent log could not be read, so this is unknown — not necessarily never.">?</span>'
+  if (!last && (stateUnknown() || key !== 'merge-prs' && lastTriggeredUnavailable())) {
+    return '<span class="last-dash" title="The latest history could not be read, so this is unknown — not necessarily never.">?</span>'
   }
   if (!last) return '<span class="last-dash">—</span>'
   if (key === 'merge-prs') {

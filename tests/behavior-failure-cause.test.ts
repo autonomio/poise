@@ -35,6 +35,9 @@ describe('deterministic behavior severity', () => {
   })
   it.each([
     ['error: pull-request head or base changed while building review packet', 'head_changed'],
+    ['pull-request head or base changed before checkout', 'head_changed'],
+    ['pull-request head or base changed during checkout', 'head_changed'],
+    [`pull-request head changed during readiness check: expected ${'a'.repeat(40)}, got ${'b'.repeat(40)}`, 'head_changed'],
     ['GitHub 429: rate limited', 'rate_limit'], ['HTTP 502', 'upstream_unavailable'],
     ['GitHub 503: Service Unavailable', 'upstream_unavailable'], ['Traceback\nhttpx.ReadTimeout', 'network_interruption'],
   ])('recognizes the transient cause %s', (error, code) => {
@@ -57,5 +60,8 @@ describe('deterministic behavior severity', () => {
   it('keeps an unknown structured failure or quoted capacity text as an error', () => {
     expect(classifyBehaviorDiagnostic('Selected model is at capacity.', { errorCode: 'new_unknown_failure' }).severity).toBe('error')
     expect(classifyBehaviorDiagnostic('Invalid result: "Selected model is at capacity."').severity).toBe('error')
+    expect(classifyBehaviorDiagnostic(`pull-request head changed: expected ${'a'.repeat(40)}, got missing`).severity).toBe('error')
+    expect(classifyBehaviorDiagnostic('Selected model is at capacity.', { errorCode: 'authentication_failed' }))
+      .toEqual({ severity: 'error', code: 'authentication' })
   })
 })
