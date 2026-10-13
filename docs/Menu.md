@@ -7,6 +7,8 @@ strip inside Settings. Back returns to the menu on the same surface. The
 burger becomes the single close button while the menu or a panel is open;
 clicking it or pressing Escape closes the surface. Escape inside an account
 terminal belongs to the running program.
+If Writer mode is enabled with a panel open, the single close button remains
+visible until the surface is dismissed.
 
 General holds GitHub identities, accounts to follow, time, notifications,
 chat defaults and theme. Models holds named configurations and model choices.

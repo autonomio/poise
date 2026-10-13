@@ -182,7 +182,7 @@ for (const theme of ['light', 'dark']) test(`fits every destination at a narrow 
   }
 })
 
-test('uses reduced motion and reattaches after Typography reset and view changes', async ({ page }) => {
+test('uses reduced motion and retains the close control after reset, view changes and Writer mode', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await workspace(page)
   await open(page, 'Typography')
@@ -196,4 +196,21 @@ test('uses reduced motion and reattaches after Typography reset and view changes
   await expect(page.locator('#menu-surface .tp-close')).toHaveCount(0)
   await page.locator('#menu-toggle').click()
   await expect(page.locator('#typo-panel')).toHaveAttribute('inert', '')
+  await page.getByRole('button', { name: 'Editor', exact: true }).click()
+  const writer = page.getByRole('button', { name: 'Toggle writer mode' })
+  const toggle = page.locator('#menu-toggle')
+  for (const section of ['Typography', 'General', 'Analytics']) {
+    await open(page, section)
+    await writer.click()
+    await expect(writer).toHaveAttribute('aria-pressed', 'true')
+    await expect(toggle).toBeVisible()
+    await expect(page.locator('#top-nav')).toBeHidden()
+    await attached(page)
+    await toggle.click()
+    await expect(page.locator('#menu-surface')).toBeHidden()
+    await expect(page.locator('#menu-surface .menu-panel.open')).toHaveCount(0)
+    await expect(toggle).toBeHidden()
+    await writer.click()
+    await expect(toggle).toBeVisible()
+  }
 })
