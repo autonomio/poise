@@ -3522,6 +3522,7 @@ tr:hover .stop-btn { opacity: 1; }
   display: none;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
 }
 #behavior-triggers-panel.open { display: flex; }
 
