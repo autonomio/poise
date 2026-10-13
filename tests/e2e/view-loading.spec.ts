@@ -292,3 +292,32 @@ test('an issue composer reports discovery failure without an unhandled rejection
     expect(errors).toEqual([])
   } finally { repos.release() }
 })
+
+test('empty repository discovery preserves live-feed choices in an open issue composer', async ({ page }) => {
+  await setup(page)
+  const repos = deferred()
+  await page.route(/\/api\/repos(?:\?.*)?$/, async (route) => {
+    await repos.promise
+    await route.fulfill({ json: { repos: [] } })
+  })
+  await page.route('**/api/gh', (route) => route.fulfill({ json: { records: [issue, {
+    ...issue, repo: 'acme/other', number: 8, title: 'Other repository issue',
+  }] } }))
+  try {
+    await page.goto('/')
+    await expect(page.getByRole('link', { name: /Other repository issue/ })).toBeVisible()
+    await page.getByRole('button', { name: 'Add an issue', exact: true }).click()
+    await page.getByPlaceholder('Issue title', { exact: true }).fill('Draft issue')
+    const picker = page.getByLabel('Repository for the new issue')
+    await expect(picker.locator('option')).toHaveCount(2)
+    const selected = await picker.inputValue()
+    const response = page.waitForResponse((reply) => new URL(reply.url()).pathname === '/api/repos')
+    repos.release()
+    await response
+    await expect(picker.locator('option')).toHaveCount(2)
+    await expect(picker.locator('option[value="acme/project"]')).toHaveCount(1)
+    await expect(picker.locator('option[value="acme/other"]')).toHaveCount(1)
+    await expect(picker).toHaveValue(selected)
+    await expect(page.getByPlaceholder('Issue title', { exact: true })).toHaveValue('Draft issue')
+  } finally { repos.release() }
+})

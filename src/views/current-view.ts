@@ -939,11 +939,12 @@ function repositoryOptionsHtml(repos: string[], selected: string): string {
 }
 
 function refreshRepositorySelectors(): void {
+  const repos = allRepos.length > 0 ? allRepos : distinctRepos()
   for (const select of viewEl.querySelectorAll<HTMLSelectElement>('.manual-repo')) {
     select.innerHTML = manualRepoOptionsHtml(select.value || null)
   }
   for (const select of viewEl.querySelectorAll<HTMLSelectElement>('.issue-repo')) {
-    select.innerHTML = repositoryOptionsHtml(allRepos, select.value)
+    select.innerHTML = repositoryOptionsHtml(repos, select.value)
       || '<option value="">(no repos available)</option>'
   }
 }
