@@ -127,6 +127,26 @@ test('the final streamed response updates while selected text stays selected', a
   await expect(message).toHaveText('Selected words and the final update.')
 })
 
+test('draft typing resizes immediately without a delayed height transition', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
+  await installRoutes(page, makeState([session()])); await installSocket(page)
+  await page.goto('/'); await settled(page)
+  const measurements = await input(page).evaluate(async element => {
+    const results: Array<{ expected: number, actual: number, interpolating: boolean }> = []
+    for (const draft of [Array(10).fill('Typing line').join('\n'), 'Short draft']) {
+      element.value = draft; element.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      results.push({ expected: parseFloat(element.style.height), actual: parseFloat(getComputedStyle(element).height), interpolating: element.getAnimations().some(animation => animation.playState === 'running') })
+    }
+    return results
+  })
+  for (const sample of measurements) {
+    expect(Math.abs(sample.actual - sample.expected)).toBeLessThan(1)
+    expect(sample.interpolating).toBe(false)
+  }
+  expect(measurements[0].actual).toBeGreaterThan(measurements[1].actual)
+})
+
 test('reduced motion removes feedback waits and settles active panels on preference, resize and print', async ({ page }) => {
   await workspace(page)
   await page.locator('#menu-toggle').click()

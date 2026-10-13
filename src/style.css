@@ -4131,7 +4131,7 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
   height: 32px;              /* one-line floor; JS auto-grows from here */
   max-height: 210px;         /* ~10 lines before scrolling kicks in */
   overflow-y: hidden;
-  transition: height var(--flow-settle) var(--flow-spring);
+  transition: none;
 }
 .chat-input::placeholder { color: var(--text-tertiary); }
 
