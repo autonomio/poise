@@ -28,8 +28,16 @@ test('motion retains momentum on reversal and settles only the latest completion
     const before = actor.getBoundingClientRect().x
     window.Motion.spring(actor, 'x', { from: { x: 0 }, to: { x: 0 }, write, complete: () => completions.push('new') })
     const retargeted = actor.getBoundingClientRect().x
-    await new Promise(resolve => requestAnimationFrame(resolve))
-    const next = actor.getBoundingClientRect().x
+    let next = retargeted
+    await new Promise<void>(resolve => {
+      const start = performance.now()
+      const sample = () => {
+        next = actor.getBoundingClientRect().x
+        if (next !== retargeted || performance.now() - start > 1000) resolve()
+        else requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })
     await new Promise<void>(resolve => { const frame = () => actor.hasAttribute('data-motion-running') ? requestAnimationFrame(frame) : resolve(); requestAnimationFrame(frame) })
     return { before, retargeted, next, completions, translate: actor.style.translate }
   })
