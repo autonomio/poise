@@ -27,6 +27,7 @@ interface Channel {
 const channels = new WeakMap<HTMLElement, Map<string, Channel>>()
 const moving = new Set<Channel>()
 const listeners = new Set<() => void>()
+const disclosurePadding = new WeakMap<HTMLElement, { top: number, bottom: number }>()
 let preference: MediaQueryList | undefined
 let frame = 0, previousTime = 0
 const bounded = (value: number) => Math.max(0, Math.min(1, value))
@@ -120,8 +121,9 @@ export function cancelMotion(owner: HTMLElement, name: string): void {
 
 export function finishMotion(root?: HTMLElement): void {
   // Scroll targets depend on the final geometry of panels and disclosures.
-  const ordered = [...moving].sort((a, b) => Number(a.name === 'scroll') - Number(b.name === 'scroll'))
+  const ordered = [...moving].sort((a, b) => Number(a.name === 'scroll') - Number(b.name === 'scroll') || (a.owner.contains(b.owner) ? 1 : b.owner.contains(a.owner) ? -1 : 0))
   for (const channel of ordered) {
+    if (!channel.active) continue
     if (root && channel.owner !== root && !root.contains(channel.owner)) continue
     if (channel.name === 'scroll' && !channel.owner.getClientRects().length) { cancelMotion(channel.owner, channel.name); continue }
     if (channel.owner.getClientRects().length) target(channel)
@@ -195,12 +197,13 @@ export function retire(element: HTMLElement): void {
 }
 
 /** Fixed measurements never shrink the live document's native scroll bounds. */
-export function intrinsicHeight(element: HTMLElement): number {
+export function intrinsicHeight(element: HTMLElement, padding?: { top: number, bottom: number }): number {
   const clone = element.cloneNode(true) as HTMLElement
   clone.dataset.flowMeasuring = ''
   clone.inert = true
   clone.hidden = false
-  Object.assign(clone.style, { position: 'fixed', visibility: 'hidden', pointerEvents: 'none', width: `${element.getBoundingClientRect().width}px`, height: 'auto', maxHeight: 'none', translate: 'none', transform: 'none' })
+  Object.assign(clone.style, { position: 'fixed', visibility: 'hidden', pointerEvents: 'none', width: `${element.getBoundingClientRect().width}px`, height: 'auto', translate: 'none', transform: 'none' })
+  if (padding) { clone.style.paddingTop = `${padding.top}px`; clone.style.paddingBottom = `${padding.bottom}px` }
   element.parentElement!.appendChild(clone)
   try { return clone.getBoundingClientRect().height } finally { clone.remove() }
 }
@@ -208,18 +211,22 @@ export function intrinsicHeight(element: HTMLElement): number {
 /** An intrinsic block keeps its logical hidden state while its old words retire. */
 export function disclosure(element: HTMLElement, opened: boolean, done?: () => void, presentedHeight = element.getBoundingClientRect().height): void {
   const height = presentedHeight
-  const opacity = Number(getComputedStyle(element).opacity)
+  const computed = getComputedStyle(element)
+  const opacity = Number(computed.opacity)
+  const padding = disclosurePadding.get(element) ?? { top: parseFloat(computed.paddingTop), bottom: parseFloat(computed.paddingBottom) }
+  disclosurePadding.set(element, padding)
   element.hidden = !opened
   element.inert = !opened
   element.dataset.flowDisclosure = ''
   if (!opened) element.dataset.flowRetained = ''
   else delete element.dataset.flowRetained
   element.style.overflow = 'hidden'
-  spring(element, 'disclosure', { from: { height: opened && !height ? 0 : height, opacity: opened && !height ? 0 : opacity },
-    to: () => ({ height: opened ? intrinsicHeight(element) : 0, opacity: opened ? 1 : 0 }),
-    write: ({ height, opacity }) => { element.style.height = `${Math.max(0, height)}px`; element.style.opacity = String(bounded(opacity)) },
+  spring(element, 'disclosure', { from: { height, opacity: opened && !height ? 0 : opacity, top: opened && !height ? 0 : parseFloat(computed.paddingTop), bottom: opened && !height ? 0 : parseFloat(computed.paddingBottom) },
+    to: () => ({ height: opened ? intrinsicHeight(element, padding) : 0, opacity: opened ? 1 : 0, top: opened ? padding.top : 0, bottom: opened ? padding.bottom : 0 }),
+    write: ({ height, opacity, top, bottom }) => { element.style.height = `${Math.max(0, height)}px`; element.style.opacity = String(bounded(opacity)); element.style.paddingTop = `${Math.max(0, top)}px`; element.style.paddingBottom = `${Math.max(0, bottom)}px` },
     complete: () => {
       element.style.height = ''; element.style.opacity = ''; element.style.overflow = ''
+      element.style.paddingTop = ''; element.style.paddingBottom = ''
       delete element.dataset.flowDisclosure; delete element.dataset.flowRetained
       cancelMotion(element, 'disclosure')
       done?.()

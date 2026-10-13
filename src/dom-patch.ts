@@ -1,11 +1,11 @@
 /** Preserve semantic actors, focused controls, native disclosure and draft state. */
 function identity(node: Node): string | null {
   if (!(node instanceof Element)) return null
-  const key = ['id', 'data-id', 'data-key', 'data-identity', 'data-request-id', 'data-request', 'data-queue-item', 'data-device', 'data-account', 'data-handle', 'data-action', 'data-expand-for', 'data-refusal-for'].find(name => node.hasAttribute(name))
+  const key = ['id', 'data-id', 'data-key', 'data-identity', 'data-request-id', 'data-request', 'data-queue-item', 'data-device', 'data-account', 'data-handle', 'data-org', 'data-jev-id', 'data-action', 'data-expand-for', 'data-refusal-for'].find(name => node.hasAttribute(name))
   return key ? `${node.nodeName}:${key}:${node.getAttribute(key)}` : null
 }
 
-function patch(current: Node, next: Node): void {
+export function patchNode(current: Node, next: Node): void {
   if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
     current.parentNode?.replaceChild(next.cloneNode(true), current)
     return
@@ -28,7 +28,7 @@ function patch(current: Node, next: Node): void {
     const key = identity(child)
     const existing = key ? keyed.get(key) : old.find(node => !used.has(node) && !identity(node) && node.nodeType === child.nodeType && node.nodeName === child.nodeName)
     const actor = existing ?? child.cloneNode(true)
-    if (existing) patch(existing, child)
+    if (existing) patchNode(existing, child)
     used.add(actor)
     if (actor !== cursor) current.insertBefore(actor, cursor)
     cursor = actor.nextSibling
@@ -40,6 +40,6 @@ export function patchContent(element: Element, markup: string): void {
   const next = element.cloneNode(false) as Element
   next.innerHTML = markup
   const active = document.activeElement
-  patch(element, next)
+  patchNode(element, next)
   if (active instanceof HTMLElement && active.isConnected && element.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
 }

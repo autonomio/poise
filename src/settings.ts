@@ -1,3 +1,4 @@
+import { patchContent } from './dom-patch'
 import { MODEL_CHECK_TIMEOUT_MS, modelRefreshSummary, type ModelRefreshReport } from './model-refresh'
 // General, Models and Accounts are direct destinations in the burger menu.
 // They share one panel and keep their drafts while moving between destinations.
@@ -223,7 +224,7 @@ function renderOrganizations(): void {
   const rendered = JSON.stringify([organizations, organizationAdding, waiting])
   if (organizationsRendered === rendered) return
   organizationsRendered = rendered
-  list.innerHTML = organizations.map((org, index) => {
+  patchContent(list, organizations.map((org, index) => {
     const paused = waiting[index]
     const resetTime = paused ? new Date(org.retryAt!).toLocaleTimeString([], {
       timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -236,7 +237,7 @@ function renderOrganizations(): void {
       ${!paused && (org.status === 'error' || org.error) ? `<div class="st-help st-help-error">${escapeHtml(org.error || 'Activation failed. Try again.')}</div>` : ''}
       ${org.status === 'error' || org.error || paused ? `<button type="button" class="st-clear" data-retry-org="${escapeHtml(org.login)}"${organizationAdding || paused ? ' disabled' : ''}>Retry</button>` : ''}
     </div>`
-  }).join('') || '<div class="st-help st-help-info">No GitHub accounts added yet.</div>'
+  }).join('') || '<div class="st-help st-help-info">No GitHub accounts added yet.</div>')
 }
 
 async function pollOrganizations(): Promise<void> {
@@ -345,7 +346,7 @@ function terminalBusy(): boolean {
 
 function renderAccounts(): void {
   const settings = getCachedSettings()
-  if (accountsEl && accounts) accountsEl.innerHTML = accountsHtml(accounts, { me: settings.me, agentAccount: settings.agentAccount ?? '' }, terminalBusy())
+  if (accountsEl && accounts) patchContent(accountsEl, accountsHtml(accounts, { me: settings.me, agentAccount: settings.agentAccount ?? '' }, terminalBusy()))
   if (shellBtn) shellBtn.disabled = terminalBusy()
 }
 

@@ -1,5 +1,5 @@
 import { layout, scrollToActor } from '../motion'
-import { patchContent } from '../dom-patch'
+import { patchContent, patchNode } from '../dom-patch'
 import { mountOrganizationFilter, organizationUrl, getSelectedOrganization, setSelectedOrganization } from '../organizations'
 // Swarm — log of agent calls. Identical finished calls share a row: model, prompt
 // (truncated), status, time elapsed, response (View → expand row to
