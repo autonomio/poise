@@ -243,7 +243,7 @@ async function withBehaviorProcessLock<T>(
   }, operation)
 }
 
-export type BehaviorKey = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs' | 'rerun-grey-ci' | 'rerun-grey-ci' | 'review-new-issues'
+export type BehaviorKey = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs' | 'rerun-grey-ci' | 'review-new-issues'
 export const BEHAVIOR_KEYS: BehaviorKey[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci', 'review-new-issues']
 
 let behaviorAbortController: AbortController | null = null

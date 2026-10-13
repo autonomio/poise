@@ -30,7 +30,7 @@ async def read_pull_batch(client: GitHubClient, payload: dict[str, Any], fields:
         selections.append(f"""
           pr{index}: repository(owner: $owner{index}, name: $name{index}) {{
             nameWithOwner
-            pullRequest(number: $number{index}) {{ {fields} }}
+            pullRequest(number: $number{index}) {{ number headRefOid author {{ login }} {fields} }}
           }}
         """)
     result = {"actor": actor, "graphql_cost": 0, "records": []}
