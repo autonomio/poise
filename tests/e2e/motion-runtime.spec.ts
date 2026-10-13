@@ -10,7 +10,9 @@ async function runtime(page: Page): Promise<void> {
   await settled(page)
   for (const [path, globalName] of [['src/motion.ts', 'Motion'], ['src/dom-patch.ts', 'Patch']]) {
     const bundle = await build({ entryPoints: [path], bundle: true, write: false, format: 'iife', globalName })
-    await page.addScriptTag({ content: bundle.outputFiles[0].text })
+    const url = `/__motion/${globalName}.js`
+    await page.route(`**${url}`, route => route.fulfill({ body: bundle.outputFiles[0].text, contentType: 'application/javascript' }))
+    await page.addScriptTag({ url })
   }
   await page.evaluate(() => window.Motion.initMotion())
 }
@@ -40,16 +42,18 @@ test('motion retains momentum on reversal and settles only the latest completion
 test('a status patch cannot reset an entering actor or replace its focused button', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(() => {
-    const row = document.createElement('div'); row.style.cssText = 'height:40px;width:200px'; row.innerHTML = '<button data-action="delete">Delete</button>'; document.body.append(row)
+    const list = document.createElement('div'); list.innerHTML = '<div style="height:40px;width:200px"><button data-action="delete">Delete</button></div>'; document.body.append(list)
+    const row = list.firstElementChild as HTMLElement
     const button = row.querySelector('button')!; button.focus()
     window.Motion.reveal(row)
-    const style = row.getAttribute('style')
-    const list = document.createElement('div'); row.replaceWith(list); list.append(row); button.focus()
+    const box = row.getBoundingClientRect()
+    const before = { x: box.x, y: box.y, opacity: Number(getComputedStyle(row).opacity) }
     window.Patch.patchContent(list, '<div style="height:40px;width:200px"><button data-action="delete">Confirm</button></div>')
-    return { connected: row.isConnected, sameButton: row.querySelector('button') === button, focused: document.activeElement === button, before: style, after: row.getAttribute('style') }
+    const afterBox = row.getBoundingClientRect()
+    return { connected: row.isConnected, sameButton: row.querySelector('button') === button, focused: document.activeElement === button, before, after: { x: afterBox.x, y: afterBox.y, opacity: Number(getComputedStyle(row).opacity) } }
   })
   expect(result).toMatchObject({ connected: true, sameButton: true, focused: true })
-  expect(result.after).toBe(result.before)
+  expect(result.after).toEqual(result.before)
 })
 
 test('hiding a scrolling document cancels navigation at its presented reading position', async ({ page }) => {

@@ -92,7 +92,7 @@ test('reduced motion removes feedback waits and settles active panels on prefere
 })
 
 test('repeated Archive reorders retain actors and have no stale cleanup jump', async ({ page }) => {
-  await workspace(page)
+  await workspace(page, 'main')
   let order = [1, 2, 3]
   await page.route('**/api/gh', route => route.fulfill({ json: { records: order.map(number => ({ repo: 'acme/app', number, kind: 'pr', title: `Motion row ${number}`, url: `https://github.com/acme/app/pull/${number}`, author: 'octocat', state: 'open', owner_login: null, owner_avatar: null, updated_at: '2026-10-13T10:00:00Z', merged_at: null })), count: 3, errors: [] } }))
   await page.evaluate(() => localStorage.setItem('poise-view', 'main'))

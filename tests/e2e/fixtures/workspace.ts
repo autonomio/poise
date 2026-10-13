@@ -1,10 +1,10 @@
 import type { Page } from '@playwright/test'
 
-export async function workspace(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+export async function workspace(page: Page, view = 'current'): Promise<void> {
+  await page.addInitScript(view => {
     localStorage.clear()
-    localStorage.setItem('poise-view', 'current')
-  })
+    localStorage.setItem('poise-view', view)
+  }, view)
   await page.route(/https:\/\/(?:rsms\.me|fonts\.googleapis\.com|fonts\.gstatic\.com)\//, (route) => route.abort())
   await page.route('**/api/**', (route) => {
     const path = new URL(route.request().url()).pathname
