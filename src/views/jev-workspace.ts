@@ -1,3 +1,4 @@
+import { scrollToActor } from '../motion'
 import { patchContent } from '../dom-patch'
 import { jevApi, JevHttpError } from '../jev-client'
 import { emptyJevDraft, exampleJevDraft, parseJevDraft, requestFromDraft, draftFromRequest, type JevDraft } from '../jev-draft'
@@ -182,7 +183,7 @@ export function createJevWorkspace(parent: HTMLElement, sidebar: HTMLElement, ha
         runs = [confirmed, ...runs.filter(old => old.id !== run.id)]; selectedRun = run.id; renderRuns()
         // Reveal the evaluation the person just requested, but never pull them
         // away from newer edits or a workspace they have since navigated to.
-        if (navigation === generation && JSON.stringify(e.draft) === draftSnapshot) el.querySelector<HTMLElement>('.jev-run-view')!.scrollIntoView({ block: 'start' })
+        if (navigation === generation && JSON.stringify(e.draft) === draftSnapshot) scrollToActor(el.querySelector<HTMLElement>('.jev-run-view')!)
         void loadRuns()
       }
     } catch (error) {

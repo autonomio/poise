@@ -7,7 +7,7 @@
 // that opens a real GitHub issue via the proxy.
 
 import { getSettings } from '../config'
-import { layout, retire, reveal } from '../motion'
+import { disclosure, layout, retire, reveal } from '../motion'
 import { patchContent } from '../dom-patch'
 import { CURRENT_FILTER_KEY, TIME_RANGES, isTimeRange, timeRangeWindow, type TimeRange } from '../time-range'
 import { mountOrganizationFilter, organizationPayload, organizationUrl, getSelectedOrganization, organizationErrors } from '../organizations'
@@ -889,13 +889,14 @@ function openManualComposer(lane: 'idea' | 'concept' | 'plan') {
     <p class="composer-error st-help st-help-error" role="alert" hidden></p>
   `
   laneNode.insertBefore(composer, addBtn)
+  disclosure(composer, true, undefined, 0)
   const ta = composer.querySelector<HTMLTextAreaElement>('textarea')!
   const repoSel = composer.querySelector<HTMLSelectElement>('.manual-repo')!
   const addB = composer.querySelector<HTMLButtonElement>('.composer-add')!
   const cancelB = composer.querySelector<HTMLButtonElement>('.composer-cancel')!
   const errEl = composer.querySelector<HTMLElement>('.composer-error')!
 
-  const close = () => { composer.remove(); addBtn.hidden = false }
+  const close = () => { retire(composer); addBtn.hidden = false }
   let adding = false
   const submit = async () => {
     if (adding) return
@@ -990,6 +991,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     <div class="composer-error" hidden></div>
   `
   laneNode.insertBefore(composer, addBtn)
+  disclosure(composer, true, undefined, 0)
   const titleInput = composer.querySelector<HTMLInputElement>('.issue-title')!
   const bodyTa = composer.querySelector<HTMLTextAreaElement>('.issue-body')!
   const repoSel = composer.querySelector<HTMLSelectElement>('.issue-repo')!
@@ -1024,7 +1026,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   // the source card still deleted — the person just never saw either happen.
   const close = () => {
     if (submitting) { showError('Still opening the issue — wait for it to finish.'); return }
-    composer.remove()
+    retire(composer)
     addBtn.hidden = false
   }
   const showError = (msg: string) => {
@@ -1168,13 +1170,14 @@ function startEdit(cardEl: HTMLElement, draft?: EditDraft) {
   if (metaNode) metaNode.hidden = true
   if (deleteBtn) deleteBtn.hidden = true
   cardEl.appendChild(wrapper)
+  disclosure(wrapper, true, undefined, 0)
   ta.focus()
   ta.setSelectionRange(ta.value.length, ta.value.length)
 
   const close = () => {
     cardEl.classList.remove('editing')
     cardEl.draggable = true
-    wrapper.remove()
+    retire(wrapper)
     textNode.hidden = false
     if (metaNode) metaNode.hidden = false
     if (deleteBtn) deleteBtn.hidden = false

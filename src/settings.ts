@@ -1,3 +1,4 @@
+import { scrollToActor } from './motion'
 import { patchContent } from './dom-patch'
 import { MODEL_CHECK_TIMEOUT_MS, modelRefreshSummary, type ModelRefreshReport } from './model-refresh'
 // General, Models and Accounts are direct destinations in the burger menu.
@@ -405,7 +406,7 @@ async function connect(preset: TerminalPreset): Promise<void> {
     })
     terminal = opened
     terminalSlot.append(opened.element)
-    opened.element.scrollIntoView({ block: 'nearest' })
+    scrollToActor(opened.element)
   } catch (error) {
     panelEl.classList.remove('st-terminal-open')
     accountsStatus(`Could not open the terminal: ${(error as Error).message}`, true)

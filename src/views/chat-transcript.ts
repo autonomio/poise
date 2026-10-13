@@ -854,7 +854,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     for (const b of model.blocks) if (b.kind === 'turn') lastTurnKey = b.key
     for (const b of model.blocks) {
       keep.add(b.key)
-      const { el } = ensure(container, b.key, cursor, b.kind === 'turn' ? 'chat-turn' : `chat-block chat-block-${b.kind}`)
+      const { el, fresh } = ensure(container, b.key, cursor, b.kind === 'turn' ? 'chat-turn' : `chat-block chat-block-${b.kind}`)
       if (b.kind === 'turn') {
         // The running flag and the focused request only affect the last turn
         // and the turn holding the request; both sit in the item revisions,
@@ -866,6 +866,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
           ? `<div class="chat-msg chat-msg-agent chat-msg-error"><div class="chat-msg-body">${escapeHtml(b.message)}</div></div>`
           : `<div class="chat-note">${escapeHtml(b.text)}</div>`
       }
+      if (fresh) reveal(el, { distance: 8 })
       cursor = el.nextElementSibling as HTMLElement | null
     }
     prune(container, keep)

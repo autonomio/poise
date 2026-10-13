@@ -1,7 +1,7 @@
 // Main table view — reads through /api/gh from the unified /github API.
 
 import { midnightInZone, startOfWeekInZone } from '../config'
-import { layout } from '../motion'
+import { layout, retire, reveal } from '../motion'
 import { patchContent } from '../dom-patch'
 import { mountOrganizationFilter, organizationPayload, organizationErrors } from '../organizations'
 
@@ -296,10 +296,11 @@ function appendRows(newItems: PrRow[]) {
   for (let i = 0; i < newItems.length; i++) {
     const tr = buildRow(newItems[i], true)
     // Tighter stagger (max 10 steps), capped at 80ms total
-    tr.style.animationDelay = `${Math.min(i, 10) * 8}ms`
+    tr.classList.remove('new')
     frag.appendChild(tr)
   }
   tbody.appendChild(frag)
+  for (const row of [...tbody.querySelectorAll<HTMLElement>(':scope > tr')].slice(-newItems.length)) reveal(row, { distance: 8 })
   updateCount()
 }
 
@@ -310,7 +311,7 @@ function applyMainFlip(nextItems: PrRow[]) {
       if (el.dataset.key) existingEls.set(el.dataset.key, el)
     }
     const newKeys = new Set(nextItems.map(rowKey))
-    for (const [key, el] of existingEls) if (!newKeys.has(key)) el.remove()
+    for (const [key, el] of existingEls) if (!newKeys.has(key)) retire(el)
     const fragment = document.createDocumentFragment()
     for (const item of nextItems) {
       const existing = existingEls.get(rowKey(item))

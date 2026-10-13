@@ -1,4 +1,4 @@
-import { layout, scrollToActor } from '../motion'
+import { layout, retire, scrollToActor } from '../motion'
 import { patchContent, patchNode } from '../dom-patch'
 import { mountOrganizationFilter, organizationUrl, getSelectedOrganization, setSelectedOrganization } from '../organizations'
 // Swarm — log of agent calls. Identical finished calls share a row: model, prompt
@@ -756,9 +756,9 @@ function reconcileRows(nextRows: RunRow[]): void {
     if (row.dataset.refusalFor) refusal.set(row.dataset.refusalFor, row)
   }
   const ids = new Set(nextRows.map(({ entry }) => entry.id))
-  for (const [id, row] of main) if (!ids.has(id)) row.remove()
-  for (const [id, row] of detail) if (!ids.has(id) || !expanded.has(id)) row.remove()
-  for (const [id, row] of refusal) if (!ids.has(id) || !replayRefusals.has(id)) row.remove()
+  for (const [id, row] of main) if (!ids.has(id)) retire(row)
+  for (const [id, row] of detail) if (!ids.has(id) || !expanded.has(id)) retire(row)
+  for (const [id, row] of refusal) if (!ids.has(id) || !replayRefusals.has(id)) retire(row)
   let cursor: ChildNode | null = bodyEl.firstChild
   const place = (row: HTMLTableRowElement) => {
     if (cursor !== row) bodyEl.insertBefore(row, cursor)

@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+declare global { interface Window { resumeMotion?: () => void } }
 
 export async function settled(page: Page): Promise<void> {
   await expect.poll(() => page.evaluate(() => !document.querySelector('[data-motion-running]') && !document.getAnimations().some(animation => animation.playState === 'running')), { timeout: 5000 }).toBe(true)
@@ -10,7 +11,7 @@ export async function freeze(page: Page): Promise<void> {
     const native = window.requestAnimationFrame.bind(window)
     const queued: FrameRequestCallback[] = []
     window.requestAnimationFrame = callback => { queued.push(callback); return queued.length }
-    ;(window as Window & { resumeMotion: () => void }).resumeMotion = () => {
+    window.resumeMotion = () => {
       window.requestAnimationFrame = native
       queued.forEach(callback => native(callback))
     }
@@ -19,5 +20,5 @@ export async function freeze(page: Page): Promise<void> {
 }
 
 export async function resume(page: Page): Promise<void> {
-  await page.evaluate(() => (window as Window & { resumeMotion: () => void }).resumeMotion())
+  await page.evaluate(() => { if (!window.resumeMotion) throw new Error('Motion clock was not frozen.'); window.resumeMotion() })
 }

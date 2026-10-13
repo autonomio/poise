@@ -179,7 +179,13 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 export function retire(element: HTMLElement): void {
   const box = element.getBoundingClientRect()
   if (!box.width || !box.height || reducedMotion()) { finishMotion(element); element.remove(); return }
-  const ghost = element.cloneNode(true) as HTMLElement
+  let ghost = element.cloneNode(true) as HTMLElement
+  if (element instanceof HTMLTableRowElement) {
+    const row = ghost as HTMLTableRowElement
+    ;[...row.cells].forEach((cell, index) => { cell.style.width = `${element.cells[index].getBoundingClientRect().width}px` })
+    ghost = element.closest('table')!.cloneNode(false) as HTMLTableElement
+    const body = document.createElement('tbody'); body.append(row); ghost.append(body)
+  }
   ghost.inert = true
   ghost.setAttribute('aria-hidden', 'true')
   for (const node of [ghost, ...ghost.querySelectorAll<HTMLElement>('*')]) {
@@ -187,7 +193,7 @@ export function retire(element: HTMLElement): void {
     node.removeAttribute('data-flow-layout'); node.removeAttribute('data-flow-enter')
   }
   ghost.dataset.flowRetiring = ''
-  Object.assign(ghost.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, margin: '0', pointerEvents: 'none', zIndex: '132', translate: 'none', transform: 'none' })
+  Object.assign(ghost.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, margin: '0', pointerEvents: 'none', zIndex: getComputedStyle(element).zIndex === 'auto' ? '132' : getComputedStyle(element).zIndex, translate: 'none', transform: 'none' })
   finishMotion(element)
   element.remove()
   document.body.appendChild(ghost)
