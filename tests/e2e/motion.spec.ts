@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
-import { session, makeState, installRoutes, installSocket, input } from './fixtures/chat'
+import { session, makeState, installRoutes, installSocket, input, env } from './fixtures/chat'
 import { freeze, resume, settled, stableLanding } from './fixtures/motion'
 
 test('closed menu retains its words until exit while focus and interaction close immediately', async ({ page }) => {
@@ -22,6 +22,31 @@ test('closed menu retains its words until exit while focus and interaction close
   await settled(page)
   await expect(page.locator('#menu-popover')).toBeVisible()
   await expect(page.locator('#menu-surface')).not.toHaveAttribute('inert')
+})
+
+test('swapping a notice during entrance keeps its presented position', async ({ page }) => {
+  await workspace(page)
+  const notices: import('../../src/notices').Notice[] = ['First notice', 'Second notice'].map((title, index) => ({ id: `motion-${index}`, kind: 'chat_turn_finished', title, body: 'Browser fixture', since: '2026-10-13T10:00:00Z', due: '2026-10-13T10:00:00Z', silenceable: false, target: null }))
+  await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices } }))
+  await page.reload()
+  const result = await page.evaluate(() => new Promise<{ before: number, after: number, inert: boolean }>((resolve, reject) => {
+    const start = performance.now()
+    const frame = () => {
+      const actor = document.querySelector<HTMLElement>('.ni-content')
+      const y = actor ? parseFloat(actor.style.getPropertyValue('--flow-enter-y')) : NaN
+      if (actor && y > 1 && y < 7) {
+        const before = actor.getBoundingClientRect().top
+        actor.querySelector<HTMLButtonElement>('[data-action="next"]')!.click()
+        resolve({ before, after: actor.getBoundingClientRect().top, inert: actor.inert })
+      } else if (performance.now() - start < 5000) requestAnimationFrame(frame)
+      else reject(new Error('Notice did not enter.'))
+    }
+    requestAnimationFrame(frame)
+  }))
+  expect(result.after).toBe(result.before)
+  expect(result.inert).toBe(true)
+  await settled(page)
+  await expect(page.locator('.ni-title')).toHaveText('Second notice')
 })
 
 for (const narrow of [false, true]) test(`session controls retain focus and drafts through updates (${narrow ? 'narrow dark' : 'desktop light'})`, async ({ page }) => {
@@ -80,6 +105,26 @@ test('a model menu lands once and keeps its catalogue visible', async ({ page })
   await expect(page.locator('.chat-model-menu [data-identity]')).toHaveCount(10)
   await stableLanding(page.locator('.chat-model-menu'))
   await expect(page.locator('.chat-model-menu')).toBeVisible()
+})
+
+test('the final streamed response updates while selected text stays selected', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
+  await installRoutes(page, makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'go', attachments: [], mentions: [] } })] }))
+  const socket = await installSocket(page)
+  await page.goto('/'); await socket.subscribed('s1'); socket.seq = 1
+  socket.push('s1', { type: 'text.delta', turnId: 't1', messageId: 'm1', delta: 'Selected words' })
+  const message = page.locator('.chat-item-text .chat-msg-md')
+  await expect(message).toHaveText('Selected words')
+  await message.evaluate(element => {
+    const text = element.querySelector('p')!.firstChild!
+    window.getSelection()!.setBaseAndExtent(text, 0, text, 8)
+  })
+  socket.push('s1', { type: 'text.delta', turnId: 't1', messageId: 'm1', delta: ' and the final update.' })
+  socket.push('s1', { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+  await expect(message).toHaveText('Selected words and the final update.')
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe('Selected')
+  await page.evaluate(() => window.getSelection()!.removeAllRanges())
+  await expect(message).toHaveText('Selected words and the final update.')
 })
 
 test('reduced motion removes feedback waits and settles active panels on preference, resize and print', async ({ page }) => {

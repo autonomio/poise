@@ -3,12 +3,12 @@ import { build } from 'esbuild'
 import { workspace } from './fixtures/workspace'
 import { settled } from './fixtures/motion'
 
-declare global { interface Window { Motion: typeof import('../../src/motion'); Patch: typeof import('../../src/dom-patch'); Builder: typeof import('../../src/views/jev-builder') } }
+declare global { interface Window { Motion: typeof import('../../src/motion'); Patch: typeof import('../../src/dom-patch'); Builder: typeof import('../../src/views/jev-builder'); Results: typeof import('../../src/views/jev-results') } }
 
 async function runtime(page: Page): Promise<void> {
   await workspace(page)
   await settled(page)
-  for (const [path, globalName] of [['src/motion.ts', 'Motion'], ['src/dom-patch.ts', 'Patch'], ['src/views/jev-builder.ts', 'Builder']]) {
+  for (const [path, globalName] of [['src/motion.ts', 'Motion'], ['src/dom-patch.ts', 'Patch'], ['src/views/jev-builder.ts', 'Builder'], ['src/views/jev-results.ts', 'Results']]) {
     const bundle = await build({ entryPoints: [path], bundle: true, write: false, format: 'iife', globalName })
     const url = `/__motion/${globalName}.js`
     await page.route(`**${url}`, route => route.fulfill({ body: bundle.outputFiles[0].text, contentType: 'application/javascript' }))
@@ -181,4 +181,40 @@ test('question editors survive temporarily duplicated editable answer IDs', asyn
   await page.locator('.jev-builder [data-format="text"]').click()
   await expect(editors).toHaveCount(2)
   await expect(ids.nth(1)).toHaveValue('corrected')
+})
+
+test('native request disclosure keeps its model suggestions hidden during opening', async ({ page }) => {
+  await runtime(page)
+  await page.evaluate(() => {
+    const builder = window.Builder.createJevBuilder({ models: async () => [{ name: 'jev-latest', description: 'Stable model' }], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
+    builder.set(builder.draft); document.body.append(builder.el)
+  })
+  await page.locator('.jev-advanced > summary').click()
+  expect(await page.locator('.jev-advanced datalist').evaluate(async element => {
+    let visible = false
+    await new Promise<void>(resolve => {
+      const start = performance.now()
+      const frame = () => { visible ||= !!element.getClientRects().length; if (performance.now() - start < 800) requestAnimationFrame(frame); else resolve() }
+      requestAnimationFrame(frame)
+    })
+    return visible
+  })).toBe(false)
+  await expect(page.getByRole('textbox', { name: 'JEV model', exact: true })).toBeVisible()
+})
+
+test('reordered results retain each question’s native distribution state', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(() => {
+    const answer: import('../../src/jev-types').JevAnswer = { type: 'choice', choice: 'Yes', probabilities: { Yes: .75, No: .25 }, confidence: .5 }
+    const run: import('../../src/jev-types').JevRun = { id: 'fixture', sessionId: 'fixture', status: 'completed', startedAt: '2026-10-13T10:00:00Z',
+      request: { model: 'jev-latest', state: 'Browser fixture', questions: { First: { type: 'choice', instructions: 'First question' }, Second: { type: 'choice', instructions: 'Second question' } } },
+      result: { model: 'jev-latest', answers: { First: answer, Second: answer }, usage: { input_tokens: 0, output_tokens: 0 } } }
+    const container = document.createElement('section'); container.innerHTML = window.Results.renderJevRun(run); document.body.append(container)
+    const first = [...container.querySelectorAll('article')].find(card => card.querySelector('strong')?.textContent === 'First')!
+    first.querySelector('details')!.open = false
+    run.result!.answers = { Second: answer, First: answer }
+    window.Patch.patchContent(container, window.Results.renderJevRun(run))
+    return [...container.querySelectorAll('article')].map(card => ({ question: card.querySelector('strong')!.textContent, open: card.querySelector('details')!.open, retained: card === first }))
+  })
+  expect(result).toEqual([{ question: 'Second', open: true, retained: false }, { question: 'First', open: false, retained: true }])
 })

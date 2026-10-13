@@ -317,7 +317,8 @@ export function initMotion(): void {
     const details = summary?.parentElement
     if (!(details instanceof HTMLDetailsElement) || summary !== details.querySelector(':scope > summary') || event.defaultPrevented) return
     if ((event.target as Element).closest('a, button, input, select, textarea')) return
-    const bodies = [...details.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== summary)
+    const bodies = [...details.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== summary
+      && !child.matches('datalist, script, style, template, input[type="hidden"], [hidden]:not([data-flow-retained])'))
     if (!bodies.length) return
     if (!nativeDetails.has(details)) {
       nativeDetails.add(details)

@@ -21,8 +21,14 @@ export function patchNode(current: Node, next: Node, onRemove?: (element: HTMLEl
     if (current instanceof HTMLElement) for (const [name, value] of motionStyles) current.style.setProperty(name, value)
   } else if (current.nodeValue !== next.nodeValue) {
     const selection = window.getSelection()
-    if (selection && !selection.isCollapsed && (selection.anchorNode === current || selection.focusNode === current)) return
+    const anchor = selection?.anchorNode, focus = selection?.focusNode
+    const selected = selection && !selection.isCollapsed && (anchor === current || focus === current)
+    const anchorOffset = selection?.anchorOffset ?? 0, focusOffset = selection?.focusOffset ?? 0
     current.nodeValue = next.nodeValue
+    if (selected && anchor && focus) {
+      const length = current.nodeValue?.length ?? 0
+      selection.setBaseAndExtent(anchor, anchor === current ? Math.min(anchorOffset, length) : anchorOffset, focus, focus === current ? Math.min(focusOffset, length) : focusOffset)
+    }
   }
   const old = [...current.childNodes]
   const keyed = new Map(old.flatMap(node => { const key = identity(node); return key ? [[key, node] as const] : [] }))

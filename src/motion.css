@@ -5,7 +5,7 @@
 [data-flow-retained][hidden] { display: block !important; pointer-events: none; }
 [data-flow-retiring] { animation: none !important; transition: none !important; }
 [data-motion-running] { animation: none !important; transition: none !important; }
-details[data-flow-details] > :not(summary) { display: block !important; }
+details[data-flow-details] > [data-flow-disclosure] { display: block !important; }
 /* Native modal focus/cancel semantics occur before these optional visuals. */
 @supports (transition-behavior: allow-discrete) {
   dialog {
