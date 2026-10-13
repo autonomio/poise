@@ -1,6 +1,7 @@
 // Main table view — reads through /api/gh from the unified /github API.
 
 import { midnightInZone, startOfWeekInZone } from '../config'
+import { layout } from '../motion'
 import { mountOrganizationFilter, organizationPayload, organizationErrors } from '../organizations'
 
 const STORAGE_KEY = 'poise-filters'
@@ -301,79 +302,22 @@ function appendRows(newItems: PrRow[]) {
   updateCount()
 }
 
-// FLIP — same pattern Current uses for its live lanes. Reorders existing
-// rows in place via inverse-transform-then-animate-back so the user sees
-// the table settling into its new sort order rather than a cold rebuild.
-// Existing <tr> nodes are MOVED via fragment, never replaced — that
-// preserves expanded inline comments, hover state, and any in-flight
-// review buttons. Only newly-arriving rows get fresh DOM with .new for
-// the fade-in. Rows that left silently disappear.
-const FLIP_MS = 700
-
 function applyMainFlip(nextItems: PrRow[]) {
-  // 1. First — capture rects of all existing rows.
-  const firstRects = new Map<string, DOMRect>()
-  const existingEls = new Map<string, HTMLTableRowElement>()
-  for (const el of [...tbody.children] as HTMLTableRowElement[]) {
-    const k = el.dataset.key
-    if (!k) continue
-    firstRects.set(k, el.getBoundingClientRect())
-    existingEls.set(k, el)
-  }
-
-  // 2. Last — drop departed rows, then reorder/insert into a fragment.
-  const newKeys = new Set(nextItems.map(rowKey))
-  for (const [k, el] of existingEls) {
-    if (!newKeys.has(k)) el.remove()
-  }
-  const fragment = document.createDocumentFragment()
-  for (const item of nextItems) {
-    const k = rowKey(item)
-    const existing = existingEls.get(k)
-    if (existing) {
-      // Refresh the contents before reusing it — the element identity is what
-      // the FLIP needs, not its stale cells.
-      paintRow(existing, item)
-      fragment.appendChild(existing)         // moved to its new position
-    } else {
-      fragment.appendChild(buildRow(item, true))   // .new for fade-in
+  layout(tbody, () => {
+    const existingEls = new Map<string, HTMLTableRowElement>()
+    for (const el of [...tbody.children] as HTMLTableRowElement[]) {
+      if (el.dataset.key) existingEls.set(el.dataset.key, el)
     }
-  }
-  tbody.appendChild(fragment)
-
-  // 3. Invert — for every row that existed before AND after, apply the
-  //    inverse translateY so it visually stays where it was.
-  const movers: HTMLTableRowElement[] = []
-  for (const item of nextItems) {
-    const k = rowKey(item)
-    const cardEl = existingEls.get(k)
-    if (!cardEl) continue
-    const firstRect = firstRects.get(k)
-    if (!firstRect) continue
-    const lastRect = cardEl.getBoundingClientRect()
-    const dy = firstRect.top - lastRect.top
-    if (Math.abs(dy) < 0.5) continue
-    cardEl.style.transition = 'none'
-    cardEl.style.transform = `translateY(${dy}px)`
-    movers.push(cardEl)
-  }
-
-  // 4. Play — flush layout, then animate transform back to identity.
-  if (movers.length > 0) {
-    void tbody.offsetHeight
-    requestAnimationFrame(() => {
-      for (const cardEl of movers) {
-        cardEl.style.transition = `transform ${FLIP_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`
-        cardEl.style.transform = ''
-      }
-      window.setTimeout(() => {
-        for (const cardEl of movers) {
-          cardEl.style.transition = ''
-          cardEl.style.transform = ''
-        }
-      }, FLIP_MS + 50)
-    })
-  }
+    const newKeys = new Set(nextItems.map(rowKey))
+    for (const [key, el] of existingEls) if (!newKeys.has(key)) el.remove()
+    const fragment = document.createDocumentFragment()
+    for (const item of nextItems) {
+      const existing = existingEls.get(rowKey(item))
+      if (existing) { paintRow(existing, item); fragment.appendChild(existing) }
+      else fragment.appendChild(buildRow(item, true))
+    }
+    tbody.appendChild(fragment)
+  })
 }
 
 function sentinelNeedsFetch(): boolean {

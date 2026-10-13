@@ -1,4 +1,6 @@
 import './style.css'
+import { initMotion } from './motion'
+initMotion()
 import { installIconTooltips } from './icon-tooltips'
 installIconTooltips()
 import { initTypography, toggleTypographyPanel, closeTypographyPanel } from './typo'
