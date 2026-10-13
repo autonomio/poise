@@ -68,6 +68,7 @@ import {
 } from './db'
 import { HttpError } from './http'
 import { behaviorErrorMessage } from './behavior-diagnostics'
+import { classifyBehaviorDiagnostic, type DiagnosticClassification, type DiagnosticOptions } from '../src/behavior-failure-cause'
 import { recoverLegacyDatastore } from './legacy-datastore-recovery'
 import { resolveReviewCheckout } from './review-checkout'
 import { claudeSubscriptionEnvironment, runFile, spawnDetached } from './process'
@@ -339,6 +340,7 @@ interface PersistedBehaviorFailure {
   nextRetryAtMs: number
   // What failed last, so the view can say why rather than only how often.
   error?: string
+  diagnostic?: DiagnosticClassification
 }
 
 function failureKey(key: BehaviorKey, target?: string): string {
@@ -365,15 +367,17 @@ function readBehaviorFailure(key: BehaviorKey, target?: string): PersistedBehavi
       lastFailureAtMs: Number(value.lastFailureAtMs),
       nextRetryAtMs: Number(value.nextRetryAtMs),
       ...(typeof value.error === 'string' && value.error ? { error: value.error.slice(0, 300) } : {}),
+      ...(value.diagnostic && ['error', 'warning'].includes(value.diagnostic.severity)
+        && typeof value.diagnostic.code === 'string' ? { diagnostic: value.diagnostic } : {}),
     }
   } catch {
     return null
   }
 }
 
-function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string): void
+function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions): void
 function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string): void
-function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string): void {
+function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions = {}): void {
   if (!isEnabled(key)) return
   const previous = readBehaviorFailure(key, target)
   const consecutiveFailures = Math.min((previous?.consecutiveFailures ?? 0) + 1, 31)
@@ -383,13 +387,29 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
   )
   const now = Date.now()
   const error = cause === undefined ? undefined : behaviorErrorMessage(cause)
+  const diagnostic = classifyBehaviorDiagnostic(error ?? '', { held: kind === 'worker', ...options })
   setMeta(failureKey(key, target), JSON.stringify({
     kind,
     consecutiveFailures,
     lastFailureAtMs: now,
     nextRetryAtMs: now + delayMs,
     ...(error ? { error } : {}),
+    diagnostic,
   } satisfies PersistedBehaviorFailure))
+}
+
+// Classification is presentation metadata. Rehydrating old truncated summaries
+// must not count a new failure or change the scheduler's existing retry clock.
+function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry): void {
+  const previous = readBehaviorFailure(behavior, target)
+  if (!previous || previous.kind !== 'worker') return
+  const error = behaviorErrorMessage(call.error || 'agent call failed')
+  const held = call.action !== 'not_started' || call.outcome !== 'preflight_failed'
+  const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
+  if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
+    || previous.diagnostic?.severity !== diagnostic.severity) {
+    setMeta(failureKey(behavior, target), JSON.stringify({ ...previous, error, diagnostic }))
+  }
 }
 
 function clearBehaviorFailure(key: BehaviorKey, target?: string): void {
@@ -1083,6 +1103,15 @@ async function reconcileBehaviorLaunchClaims(
     if (call?.status.toLowerCase() === 'completed' && failed?.launchCallId === letter.callId
       && failed.launchCorrelationId === letter.correlationId
       && !clearCompletedUnreadableHold(failed, call, snapshot)) continue
+    if (call && FAILED_AGENT_STATUSES.has(call.status.toLowerCase())
+      && unambiguousAgentCall(snapshot, call)
+      && !failed?.launchQuarantine
+      && call.behavior === upstreamBehavior(behavior)
+      && call.repo === letter.repo && String(call.pr_id || '') === String(letter.pr)
+      && call.actor?.toLowerCase() === letter.actor?.toLowerCase()
+      && call.source === letter.source && call.correlation_id === letter.correlationId) {
+      refreshFailureDiagnostic(behavior, letter.target, call)
+    }
     const completedAt = String(call?.completed_at || '')
     const action = String(call?.action || '')
     const outcome = String(call?.outcome || '')
@@ -1269,7 +1298,7 @@ async function reconcileBehaviorLaunchClaims(
       } else {
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
-          recordBehaviorFailure(behavior, 'worker', message, claim.target)
+          recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false })
         }
       }
       continue
@@ -4215,6 +4244,7 @@ export interface BehaviorsRuntimeHealth {
     lastFailureAt: string
     nextRetryAt: string
     error?: string
+    diagnostic?: DiagnosticClassification
   }>
   datastore: DatastoreFreshness
   identity: {
@@ -4243,6 +4273,21 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
     if (!isEnabled(behavior)) return []
     return [undefined, ...behaviorFailureTargets(behavior)].flatMap((target) => {
       const failure = readBehaviorFailure(behavior, target)
+      if (failure?.kind === 'worker' && failure.diagnostic?.severity === 'warning' && target) {
+        const ref = /^([^#]+)#(\d+)/.exec(target)
+        if (ref && db.prepare(`
+          SELECT 1 FROM behavior_seen recovered
+          WHERE recovered.key = ? AND recovered.launch_repo = ? AND recovered.launch_pr = ?
+            AND lower(recovered.launch_actor) = lower(?) AND recovered.launch_source = ?
+            AND recovered.launch_outcome IN ('clean', 'approved', 'changes_requested', 'commented')
+            AND julianday(recovered.launch_completed_at) > julianday(?)
+            AND (? <> 'review-new-issues' OR recovered.target = ?)
+            AND NOT EXISTS (SELECT 1 FROM behavior_seen held WHERE held.key = ?
+              AND held.target = ? AND held.launch_quarantine IS NOT NULL)
+          LIMIT 1
+        `).get(behavior, ref[1], Number(ref[2]), agentAccount(), `poise:${behavior}`,
+          new Date(failure.lastFailureAtMs).toISOString(), behavior, target, behavior, target)) return []
+      }
       return failure ? [{
         behavior,
         ...(target ? { target } : {}),
@@ -4251,6 +4296,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
         lastFailureAt: new Date(failure.lastFailureAtMs).toISOString(),
         nextRetryAt: new Date(failure.nextRetryAtMs).toISOString(),
         ...(failure.error ? { error: failure.error } : {}),
+        ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
       }] : []
     })
   })

@@ -39,6 +39,39 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('Behaviors availability diagnostics', () => {
+  it('reports one 502 warning without inventing agent-log, datastore or identity failures', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 502 }))
+    await behaviors.refreshState()
+    expect(behaviors.getBehaviorDiagnostics()).toMatchObject({
+      apiError: { severity: 'warning', code: 'upstream_unavailable', message: 'HTTP 502' },
+      agentLogsError: null, datastore: { status: 'unchecked', error: null }, identity: { status: 'unknown', error: null },
+    })
+    expect(behaviors.isBehaviorStateLoaded()).toBe(false)
+  })
+  it('preserves real last-known errors during an outage and clears availability after recovery', async () => {
+    const snapshot = { status: 'ok', agentLogsError: null, datastore: { status: 'healthy', error: null },
+      identity: { status: 'valid', actor: 'reviewer', error: null },
+      failures: [{ behavior: 'approve-prs', error: 'GitHub 404: Not Found' }], deadLetters: [] }
+    let outage = false
+    vi.stubGlobal('fetch', async () => outage ? { ok: false, status: 502 }
+      : { ok: true, json: async () => ({ ...payload(), diagnostics: snapshot }) })
+    await behaviors.refreshState()
+    outage = true
+    await behaviors.refreshState()
+    expect(behaviors.getBehaviorDiagnostics()?.failures).toEqual(snapshot.failures)
+    expect(behaviors.getBehaviorDiagnostics()?.identity.actor).toBe('reviewer')
+    outage = false
+    await behaviors.refreshState()
+    expect(behaviors.getBehaviorDiagnostics()?.apiError).toBeUndefined()
+  })
+  it('keeps malformed successful responses as errors rather than network warnings', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => null }))
+    await behaviors.refreshState()
+    expect(behaviors.getBehaviorDiagnostics()?.apiError?.severity).toBe('error')
+  })
+})
+
 function respond(body: unknown): void {
   const next = deferredGets.shift()
   if (!next) throw new Error('no deferred GET outstanding')

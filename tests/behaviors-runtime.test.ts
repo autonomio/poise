@@ -2753,7 +2753,11 @@ describe('behavior launch claims', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
 
-  it('retries an approval after Caller reports that preflight failed before any action', async () => {
+  it.each([
+    ['httpx.ReadTimeout', 'network_interruption'],
+    ['Selected model is at capacity. Please try a different model.', 'provider_capacity'],
+    ['error: pull-request head or base changed while building review packet', 'head_changed'],
+  ])('retries a no-action approval and classifies %s as a warning', async (error, code) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
     const launched = await launchApprovalBeforeCrash()
@@ -2766,7 +2770,7 @@ describe('behavior launch claims', () => {
       status: 'failed',
       action: 'not_started',
       outcome: 'preflight_failed',
-      error: 'GitHub read timed out',
+      error,
       expected_head: launched.expectedHead,
       actor: launched.actor,
       source: launched.source,
@@ -2778,6 +2782,9 @@ describe('behavior launch claims', () => {
     await runtime.runEnabledBehaviorsOnce()
 
     expect(db.hasSeen('approve-prs', launched.target)).toBe(false)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+      target: launched.target, diagnostic: { severity: 'warning', code },
+    }))
     expect(mocks.observeAuthFailure).not.toHaveBeenCalled()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(db.listBehaviorDeadLetters()).toEqual([
