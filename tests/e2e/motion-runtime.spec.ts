@@ -133,6 +133,31 @@ test('guided scrolling stops when its destination actor departs', async ({ page 
   expect(result.running).toBe(false)
 })
 
+test('forced settlement cannot navigate to a destination that just detached or hid', async ({ page }) => {
+  await runtime(page)
+  const results = await page.evaluate(async () => {
+    const results: Array<{ before: number, after: number, running: boolean }> = []
+    for (const lifecycle of ['resize', 'beforeprint', 'finish']) for (const departure of ['detach', 'hide']) {
+      const owner = document.createElement('div'); owner.style.cssText = 'height:100px;width:200px;overflow:auto'
+      owner.innerHTML = '<div style="height:1000px"><div style="height:40px;margin-top:600px">Destination</div></div>'; document.body.append(owner)
+      const actor = owner.firstElementChild!.firstElementChild as HTMLElement
+      window.Motion.scrollToActor(actor, 'center')
+      await new Promise(resolve => setTimeout(resolve, 80))
+      const before = owner.scrollTop
+      if (departure === 'detach') actor.remove(); else actor.hidden = true
+      if (lifecycle === 'finish') window.Motion.finishMotion(); else window.dispatchEvent(new Event(lifecycle))
+      results.push({ before, after: owner.scrollTop, running: owner.hasAttribute('data-motion-running') })
+      owner.remove()
+    }
+    return results
+  })
+  for (const result of results) {
+    expect(result.before).toBeGreaterThan(0)
+    expect(result.after).toBe(result.before)
+    expect(result.running).toBe(false)
+  }
+})
+
 test('retained popup controls become inert at logical close', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(async () => {

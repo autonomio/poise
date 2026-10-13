@@ -128,6 +128,7 @@ export function finishMotion(root?: HTMLElement, cancelScroll = document.hidden)
   for (const channel of ordered) {
     if (!channel.active) continue
     if (root && channel.owner !== root && !root.contains(channel.owner)) continue
+    if (channel.options.valid && !channel.options.valid()) { cancelMotion(channel.owner, channel.name); continue }
     if (channel.name === 'scroll' && (cancelScroll || !channel.owner.getClientRects().length)) { cancelMotion(channel.owner, channel.name); continue }
     if (channel.owner.getClientRects().length) target(channel)
     complete(channel)
