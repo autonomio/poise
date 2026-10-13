@@ -412,7 +412,7 @@ function renderShell() {
     </form>
   `
   document.body.appendChild(panelEl)
-  watchPanel(panelEl, () => !!panelEl?.classList.contains('open'), true)
+  watchPanel(panelEl, () => !!panelEl?.classList.contains('open'), -1)
   loadChatWidth()
   attachResize(panelEl)
 

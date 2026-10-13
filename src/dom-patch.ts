@@ -11,10 +11,13 @@ export function patchNode(current: Node, next: Node): void {
     return
   }
   if (current instanceof Element && next instanceof Element) {
+    const motionStyles = current instanceof HTMLElement && current.hasAttribute('data-motion-running')
+      ? [...current.style].filter(name => name.startsWith('--flow-') || ['opacity', 'height', 'width', 'max-width', 'padding-top', 'padding-bottom', 'overflow', 'translate', 'transform'].includes(name)).map(name => [name, current.style.getPropertyValue(name)] as const) : []
     const protectedAttribute = (name: string) => name.startsWith('data-flow-') || name === 'data-motion-running'
       || current instanceof HTMLDetailsElement && name === 'open'
     for (const attr of [...current.attributes]) if (!protectedAttribute(attr.name) && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name)
     for (const attr of [...next.attributes]) if (!protectedAttribute(attr.name) && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value)
+    if (current instanceof HTMLElement) for (const [name, value] of motionStyles) current.style.setProperty(name, value)
   } else if (current.nodeValue !== next.nodeValue) {
     const selection = window.getSelection()
     if (selection && !selection.isCollapsed && (selection.anchorNode === current || selection.focusNode === current)) return

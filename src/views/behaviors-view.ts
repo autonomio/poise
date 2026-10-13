@@ -768,7 +768,7 @@ function openMemoryPanel(key: BehaviorKey) {
   if (!memoryPanelEl) {
     memoryPanelEl = buildMemoryPanel()
     document.body.appendChild(memoryPanelEl)
-    watchPanel(memoryPanelEl, () => !!memoryPanelEl?.classList.contains('open'), true)
+    watchPanel(memoryPanelEl, () => !!memoryPanelEl?.classList.contains('open'), 1)
   }
   memoryKey = key
   const meta = BEHAVIORS.find((b) => b.key === key)

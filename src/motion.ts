@@ -120,13 +120,13 @@ export function cancelMotion(owner: HTMLElement, name: string): void {
   mark(owner)
 }
 
-export function finishMotion(root?: HTMLElement): void {
+export function finishMotion(root?: HTMLElement, cancelScroll = document.hidden): void {
   // Scroll targets depend on the final geometry of panels and disclosures.
   const ordered = [...moving].sort((a, b) => Number(a.name === 'scroll') - Number(b.name === 'scroll') || (a.owner.contains(b.owner) ? 1 : b.owner.contains(a.owner) ? -1 : 0))
   for (const channel of ordered) {
     if (!channel.active) continue
     if (root && channel.owner !== root && !root.contains(channel.owner)) continue
-    if (channel.name === 'scroll' && !channel.owner.getClientRects().length) { cancelMotion(channel.owner, channel.name); continue }
+    if (channel.name === 'scroll' && (cancelScroll || !channel.owner.getClientRects().length)) { cancelMotion(channel.owner, channel.name); continue }
     if (channel.owner.getClientRects().length) target(channel)
     complete(channel)
   }
@@ -179,6 +179,7 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 /** Logical removal is immediate; the inert visual has no IDs or live controls. */
 export function retire(element: HTMLElement): void {
   const box = element.getBoundingClientRect()
+  const opacity = Number(getComputedStyle(element).opacity)
   if (!box.width || !box.height || reducedMotion()) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
   if (element instanceof HTMLTableRowElement) {
@@ -195,11 +196,11 @@ export function retire(element: HTMLElement): void {
   }
   ghost.dataset.flowRetiring = ''
   Object.assign(ghost.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, margin: '0', pointerEvents: 'none', zIndex: getComputedStyle(element).zIndex === 'auto' ? '132' : getComputedStyle(element).zIndex, translate: 'none', transform: 'none' })
-  finishMotion(element)
+  finishMotion(element, true)
   element.remove()
   document.body.appendChild(ghost)
-  spring(ghost, 'retirement', { from: { progress: 1 }, to: { progress: 0 },
-    write: ({ progress }) => { ghost.style.opacity = String(bounded(progress)); ghost.style.translate = `0 ${(1 - progress) * -MOTION.information}px` },
+  spring(ghost, 'retirement', { from: { opacity, y: 0 }, to: { opacity: 0, y: -MOTION.information },
+    write: ({ opacity, y }) => { ghost.style.opacity = String(bounded(opacity)); ghost.style.translate = `0 ${y}px` },
     complete: () => { ghost.remove(); cancelMotion(ghost, 'retirement') } })
 }
 
@@ -253,7 +254,7 @@ export function resizeContent<T>(element: HTMLElement, change: () => T): T {
 }
 
 /** Fixed owners opt in explicitly; descendants and text mutations are ignored. */
-export function watchPanel(element: HTMLElement, opened: () => boolean, slide = false): void {
+export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -1 | 0 | 1 = 0): void {
   let previous = opened()
   new MutationObserver(() => {
     const next = opened()
@@ -264,7 +265,7 @@ export function watchPanel(element: HTMLElement, opened: () => boolean, slide = 
     spring(element, 'panel', { from: { progress: next ? 0 : 1 }, to: { progress: next ? 1 : 0 },
       write: ({ progress }) => {
         element.style.opacity = String(bounded(progress))
-        if (slide) element.style.transform = `translateX(${(1 - progress) * 100}%)`
+        if (slide) element.style.transform = `translateX(${slide * (1 - progress) * 100}%)`
         else element.style.translate = `0 ${(1 - progress) * MOTION.travel}px`
       }, complete: () => {
         element.style.opacity = ''; element.style.translate = ''
@@ -302,6 +303,7 @@ export function initMotion(): void {
   window.addEventListener('resize', () => finishMotion())
   window.addEventListener('beforeprint', () => finishMotion())
   document.addEventListener('visibilitychange', () => { if (document.hidden) finishMotion() })
+  window.addEventListener('pagehide', () => finishMotion(undefined, true))
   for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) document.addEventListener(event, () => {
     for (const channel of [...moving]) if (channel.name === 'scroll') cancelMotion(channel.owner, 'scroll')
   }, { capture: true, passive: true })

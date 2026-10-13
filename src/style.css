@@ -6043,7 +6043,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
 .chat-dock {
   flex: 0 0 auto;
   padding: var(--sp-2) var(--sp-4) var(--sp-4);
-  transition: transform var(--flow-settle) var(--flow-spring);
+  transition: none;
 }
 /* The fresh console is a quiet, taller writing surface above centre. */
 .chat-empty-session .chat-dock { transform: translateY(calc(-1 * var(--chat-dock-lift, 40vh))); }
@@ -6053,7 +6053,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
   margin: 0 auto;
   padding: 0;
   border-top: none;
-  transition: max-width var(--flow-settle) var(--flow-spring);
+  transition: none;
 }
 .chat-empty-session .chat-v-composer { max-width: min(640px, var(--typo-width, 960px)); }
 .chat-empty-session .chat-v-composer .chat-input { min-height: 104px; padding-top: var(--sp-4); }
