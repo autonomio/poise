@@ -13,8 +13,8 @@ Each semantic actor has named channels. Retargeting retains position and
 velocity; an inactive channel restarts from presented geometry. Completion
 belongs to the latest request. Layout offsets compose through individual
 `translate`, preserving native full-bleed transforms. Fixed headers stay
-outside transformed entrance owners. Chat view entry fades because its
-console and full-bleed layout own their geometry separately. Ordinary entry
+outside transformed entrance owners. Chat and Writer view entry only fade;
+their console and fixed selection geometry remain native. Ordinary entry
 travels 20px; local information uses 8px.
 
 Keyed reconciliation retains controls, drafts, selections, native details and

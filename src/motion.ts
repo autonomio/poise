@@ -139,9 +139,8 @@ export function onMotionFrame(listener: () => void): () => void { listeners.add(
 export function reveal(element: HTMLElement, { distance = MOTION.travel, delay = 0 }: { distance?: number, delay?: number } = {}): void {
   spring(element, 'entry', { from: { opacity: 0, y: distance }, to: { opacity: 1, y: 0 }, delay,
     write: ({ opacity, y }) => {
-      element.dataset.flowEnter = ''
       element.style.opacity = String(bounded(opacity))
-      element.style.setProperty('--flow-enter-y', `${y}px`)
+      if (distance) { element.dataset.flowEnter = ''; element.style.setProperty('--flow-enter-y', `${y}px`) }
     }, complete: () => {
       element.style.opacity = ''; element.style.removeProperty('--flow-enter-y')
       delete element.dataset.flowEnter; cancelMotion(element, 'entry')

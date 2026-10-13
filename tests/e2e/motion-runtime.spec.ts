@@ -56,6 +56,19 @@ test('a status patch cannot reset an entering actor or replace its focused butto
   expect(result.after).toEqual(result.before)
 })
 
+test('a fade-only entrance cannot change fixed descendant coordinates', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(() => {
+    const parent = document.createElement('section'); parent.style.cssText = 'height:100px;width:200px;margin-top:100px'
+    const popup = document.createElement('div'); popup.style.cssText = 'position:fixed;top:10px;left:10px;width:40px;height:40px'; parent.append(popup); document.body.append(parent)
+    const before = popup.getBoundingClientRect()
+    window.Motion.reveal(parent, { distance: 0 })
+    const after = popup.getBoundingClientRect()
+    return { before: { x: before.x, y: before.y }, after: { x: after.x, y: after.y } }
+  })
+  expect(result.after).toEqual(result.before)
+})
+
 test('hiding a scrolling document cancels navigation at its presented reading position', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(async () => {

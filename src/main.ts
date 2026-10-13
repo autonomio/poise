@@ -103,7 +103,7 @@ function showView(v: ViewSlug) {
   for (const el of all) {
     if (el === target) {
       el.hidden = false
-      for (const child of el.querySelectorAll<HTMLElement>(':scope > :not(.view-header)')) reveal(child, { distance: v === 'chat' ? 0 : 20 })
+      for (const child of el.querySelectorAll<HTMLElement>(':scope > :not(.view-header)')) reveal(child, { distance: v === 'chat' || v === 'editor' ? 0 : 20 })
     } else {
       finishMotion(el, true)
       el.hidden = true
