@@ -57,6 +57,10 @@ describe('retained incident actionability', () => {
     expect(result[0]).toMatchObject({ attemptCount: 3, diagnostic: { severity: 'info', code: 'head_changed' } })
     expect(incident).not.toHaveProperty('diagnostic')
   })
+  it.each(['failed', 'error', 'invalid', 'cancelled', 'canceled', 'timed_out', 'timeout'])('accepts a validated no-action terminal status %s', (status) => {
+    expect(behaviorIncidentDiagnostics([incident], { entries: [{ ...call, status }], quarantined: [] })[0]?.diagnostic)
+      .toEqual({ severity: 'info', code: 'head_changed' })
+  })
   it.each([
     { id: 'e'.repeat(32) }, { correlation_id: 'other' }, { actor: 'other-bot' }, { repo: 'other/repo' },
     { pr_id: '19' }, { behavior: 'pr_approve' }, { source: 'manual' }, { head_sha: 'a'.repeat(40) },
