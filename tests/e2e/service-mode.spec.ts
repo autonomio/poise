@@ -92,7 +92,7 @@ test('says in Settings that no production updater runs in a workspace', async ({
   await serviceModeApi(page, [])
   await page.goto('/')
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
+  await page.locator('[data-settings="general"]').click()
   const line = page.locator('.st-production')
   await expect(line).toHaveText(UPDATER_OFF)
   await expect(line).toHaveClass(/st-help-info/)

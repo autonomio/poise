@@ -87,7 +87,7 @@ async function setup(page: Page, initial = [organization('acme')], me = 'octocat
 
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
+  await page.locator('[data-settings="general"]').click()
   await expect(page.locator('#settings-panel')).toHaveClass(/open/)
 }
 
@@ -244,7 +244,7 @@ test('keeps shared behavior memory editable when one account loses readiness', a
   // Keyboard navigation preserves the open memory draft while Settings reloads.
   await page.getByRole('button', { name: 'Menu', exact: true }).focus()
   await page.keyboard.press('Enter')
-  await page.locator('[data-action="settings"]').focus()
+  await page.locator('[data-settings="general"]').focus()
   await page.keyboard.press('Enter')
   await expect(page.locator('#settings-panel')).toHaveClass(/open/)
   await expect(page.locator('.st-organization[data-org="beta"]')).toContainText('Activating…')

@@ -1,11 +1,16 @@
 # Connected accounts
 
-Settings → Accounts separates AI provider sign-ins (Claude Code, Codex, Grok,
+Menu → Settings → Accounts separates AI provider sign-ins (Claude Code, Codex, Grok,
 Muse and Antigravity) from GitHub sign-ins. Each CLI's status command reports them,
 and opens each one's login in a terminal inside Settings. In a workspace that
 is how a person connects their own accounts; on a personal computer it works
 the same way. [Service architecture](Service-architecture.md#accounts-identities-and-the-terminal)
 is the contract.
+
+GitHub sign-ins appear in their own section below AI provider accounts. The
+automation identity is called the GitHub automation account in sign-in alerts.
+Login commands appear as contextual help on Connect, after half a second or
+on keyboard focus. See [Menu and Settings](Menu.md).
 
 ## What each row shows
 

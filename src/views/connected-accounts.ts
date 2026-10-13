@@ -80,13 +80,12 @@ export function accountsHtml(accounts: ConnectedAccount[], identities: GitHubIde
     <div class="st-account" data-account="${account.id}">
       <div class="st-account-head">
         <span class="st-account-name">${escapeHtml(name)}</span>
-        ${account.version ? `<span class="st-account-version">${escapeHtml(account.version)}</span>` : ''}
-        <button type="button" class="st-clear st-account-connect" data-connect="${account.id}" aria-label="${action} ${escapeHtml(name)}"${disabled ? ' disabled' : ''}>${action}</button>
+        ${account.version ? `<span class="st-account-version" data-help="${escapeHtml(name)} version ${escapeHtml(account.version)}" tabindex="0">${escapeHtml(account.version)}</span>` : ''}
+        <button type="button" class="st-clear st-account-connect" data-connect="${account.id}" data-help="Opens a sign-in terminal: ${escapeHtml(account.login.label)}" aria-label="${action} ${escapeHtml(name)}"${disabled ? ' disabled' : ''}>${action}</button>
       </div>
       <div class="st-account-state st-account-state-${tone}">${escapeHtml(text)}</div>
       ${account.detail ? `<div class="st-help st-help-info st-account-detail">${escapeHtml(account.detail)}</div>` : ''}
       ${ghAccounts(account, identities)}
-      <div class="st-help st-help-info st-account-login">Runs <code>${escapeHtml(account.login.label)}</code></div>
     </div>`
   }).join('')
   return [

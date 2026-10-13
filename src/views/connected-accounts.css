@@ -19,7 +19,8 @@
 
 .st-account-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
 }
 
@@ -33,6 +34,8 @@
   font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
   font-size: 0.625rem;
   color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .st-account-head .st-clear {

@@ -680,8 +680,8 @@ test('shows and saves the chat settings in General', async ({ page }) => {
   await installSocket(page)
   await page.goto('/')
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
-  const prefix = page.getByLabel('Branch prefix for new chat sessions')
+  await page.locator('[data-settings="general"]').click()
+  const prefix = page.getByLabel('Branch prefix', { exact: true })
   const idle = page.getByLabel('Idle timeout (minutes)')
   await expect(prefix).toHaveValue('chat/')
   await expect(idle).toHaveValue('120')
@@ -696,8 +696,8 @@ test('shows and saves the chat settings in General', async ({ page }) => {
   expect(saved.chat).toEqual({ branchPrefix: 'agent/', idleTimeoutMinutes: 45 })
   await page.reload()
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
-  await expect(page.getByLabel('Branch prefix for new chat sessions')).toHaveValue('agent/')
+  await page.locator('[data-settings="general"]').click()
+  await expect(page.getByLabel('Branch prefix', { exact: true })).toHaveValue('agent/')
   await expect(page.getByLabel('Idle timeout (minutes)')).toHaveValue('45')
 })
 
@@ -2966,8 +2966,8 @@ test('settings: opening autofocus never steals a field the person already chose'
   await page.clock.install({ time: clockStart })
   await page.clock.pauseAt(new Date(clockStart.getTime() + 10_000))
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
-  const prefix = page.getByLabel('Branch prefix for new chat sessions')
+  await page.locator('[data-settings="general"]').click()
+  const prefix = page.getByLabel('Branch prefix', { exact: true })
   await prefix.evaluate(element => element.focus())
   await expect(prefix).toBeFocused()
   await page.clock.runFor(300)
@@ -2999,9 +2999,8 @@ for (const queued of [false, true]) test(`CLI refresh: a fresh ${queued ? 'queue
 
 async function openModelSettings(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  await page.locator('[data-action="settings"]').click()
-  await page.getByRole('tab', { name: 'Models', exact: true }).click()
-  await expect(page.locator('.st-catalog-status')).toContainText('models from Caller')
+  await page.locator('[data-settings="models"]').click()
+  await expect(page.locator('.st-catalog-status')).toContainText('models')
 }
 
 test('CLI refresh: slow checks show elapsed progress and a CLI failure is not nothing new', async ({ page }) => {
