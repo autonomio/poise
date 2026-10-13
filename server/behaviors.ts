@@ -406,6 +406,7 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
 function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry): void {
   const previous = readBehaviorFailure(behavior, target)
   if (!previous || previous.kind !== 'worker') return
+  if (previous.callId && previous.callId !== call.id) return
   const error = behaviorErrorMessage(call.error || 'agent call failed')
   const held = call.action !== 'not_started' || call.outcome !== 'preflight_failed'
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
@@ -1096,6 +1097,10 @@ async function reconcileBehaviorLaunchClaims(
   const expectedActions = behavior === 'review-new-prs'
     ? new Map([['reviewed_clean', 'clean'], ['requested_changes', 'changes_requested']])
     : new Map([['approved', 'approved'], ['requested_changes', 'changes_requested']])
+  const newestLetters = new Map<string, string>()
+  for (const letter of deadLetters) {
+    if (!newestLetters.has(letter.target)) newestLetters.set(letter.target, letter.id)
+  }
   for (const letter of deadLetters) {
     const call = logs.find((row) => row.status.toLowerCase() === 'completed'
       && (row.id.toLowerCase() === letter.callId || (!!letter.correlationId && row.correlation_id === letter.correlationId)))
@@ -1112,7 +1117,8 @@ async function reconcileBehaviorLaunchClaims(
       && call.behavior === upstreamBehavior(behavior)
       && call.repo === letter.repo && String(call.pr_id || '') === String(letter.pr)
       && call.actor?.toLowerCase() === letter.actor?.toLowerCase()
-      && call.source === letter.source && call.correlation_id === letter.correlationId) {
+      && call.source === letter.source && call.correlation_id === letter.correlationId
+      && newestLetters.get(letter.target) === letter.id) {
       refreshFailureDiagnostic(behavior, letter.target, call)
     }
     const completedAt = String(call?.completed_at || '')

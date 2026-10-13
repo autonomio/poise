@@ -2832,6 +2832,44 @@ describe('behavior launch claims', () => {
       error: 'Selected model is at capacity. Please try a different model.' })
   })
 
+  it('binds a legacy failure summary to the newest attempt instead of overwriting it with an older cause', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const launched = await launchReviewBeforeCrash()
+    const old = agentLog({ id: 'd'.repeat(32),
+      started_at: new Date(Date.parse(launched.requestedAt) + 1_000).toISOString(),
+      status: 'failed', action: 'not_started', outcome: 'preflight_failed', error: 'Older invalid result',
+      expected_head: launched.expectedHead, actor: launched.actor, source: launched.source, correlation_id: launched.correlationId })
+    agentLogs = [old]
+    const { database: db, behaviors: runtime } = await restartModules()
+    runtime.startBehaviorsRuntime()
+    await runtime.runEnabledBehaviorsOnce()
+    vi.setSystemTime(new Date(Date.now() + runtime.BEHAVIOR_RETRY_BASE_MS))
+    await runtime.runEnabledBehaviorsOnce()
+    const current = db.listBehaviorLaunchClaims('review-new-prs').find((claim) => claim.target === launched.target)!
+    expect(current).toBeDefined()
+    const latest = agentLog({ id: 'e'.repeat(32),
+      started_at: current.launchRequestedAt, status: 'failed', action: 'not_started', outcome: 'preflight_failed',
+      error: 'Selected model is at capacity. Please try a different model.',
+      expected_head: current.launchExpectedHead, actor: current.launchActor, source: current.launchSource,
+      correlation_id: current.launchCorrelationId })
+    agentLogs = [latest, old]
+    await runtime.runEnabledBehaviorsOnce()
+    const key = `behavior_review_new_prs_failure:${launched.target}`
+    const stored = JSON.parse(db.getMeta(key)!)
+    expect(stored.consecutiveFailures).toBe(2)
+    const legacy = { ...stored }
+    delete legacy.diagnostic
+    delete legacy.callId
+    legacy.error = 'truncated legacy cause'
+    db.setMeta(key, JSON.stringify(legacy))
+    await runtime.runEnabledBehaviorsOnce()
+    expect(JSON.parse(db.getMeta(key)!)).toEqual(stored)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+      error: latest.error, callId: latest.id, diagnostic: { severity: 'warning', code: 'provider_capacity' },
+    }))
+  })
+
   it('hides an old transient approval warning only after later authoritative completion, retaining held evidence and history', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))

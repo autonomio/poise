@@ -50,5 +50,19 @@ describe('behavior diagnostic groups', () => {
     expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning'])
     diagnostics.deadLetters[0]!.callId = 'uncertain-attempt'
     expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning', 'error'])
+    diagnostics.deadLetters[0]!.callId = 'safe-attempt'
+    diagnostics.deadLetters[0]!.behavior = 'review-new-prs'
+    expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning', 'error'])
+  })
+  it('keeps a legacy worker error held when its Caller no-action proof is unavailable', () => {
+    const diagnostics = snapshot()
+    diagnostics.failures.push({ behavior: 'approve-prs', target: 'org/repo#1', kind: 'worker',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error: 'Selected model is at capacity.' })
+    diagnostics.deadLetters.push({ id: 'x', behavior: 'approve-prs', target: 'org/repo#1',
+      error: 'Selected model is at capacity.', createdAt: '' })
+    const groups = behaviorDiagnosticGroups(diagnostics)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.severity).toBe('error')
+    expect(groups[0]?.details).toHaveLength(2)
   })
 })
