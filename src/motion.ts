@@ -227,6 +227,7 @@ export function disclosure(element: HTMLElement, opened: boolean, done?: () => v
   disclosurePadding.set(element, padding)
   element.hidden = !opened
   element.inert = !opened
+  element.style.setProperty('--flow-display', opened ? getComputedStyle(element).display : computed.display)
   element.dataset.flowDisclosure = ''
   if (!opened) element.dataset.flowRetained = ''
   else delete element.dataset.flowRetained
@@ -237,6 +238,7 @@ export function disclosure(element: HTMLElement, opened: boolean, done?: () => v
     complete: () => {
       element.style.height = ''; element.style.opacity = ''; element.style.overflow = ''
       element.style.paddingTop = ''; element.style.paddingBottom = ''
+      element.style.removeProperty('--flow-display')
       delete element.dataset.flowDisclosure; delete element.dataset.flowRetained
       cancelMotion(element, 'disclosure')
       done?.()
@@ -258,13 +260,20 @@ export function resizeContent<T>(element: HTMLElement, change: () => T): T {
 /** Fixed owners opt in explicitly; descendants and text mutations are ignored. */
 export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -1 | 0 | 1 = 0): void {
   let previous = opened()
+  let display = getComputedStyle(element).display
   new MutationObserver(() => {
     const next = opened()
     if (previous === next) return
     previous = next
     element.inert = !next
-    if (next) delete element.dataset.flowRetained
-    else element.dataset.flowRetained = ''
+    if (next) {
+      delete element.dataset.flowRetained; delete element.dataset.flowPanelRetained
+      element.style.removeProperty('--flow-display')
+      display = getComputedStyle(element).display
+    } else {
+      element.style.setProperty('--flow-display', display)
+      element.dataset.flowRetained = ''; element.dataset.flowPanelRetained = ''
+    }
     spring(element, 'panel', { from: { progress: next ? 0 : 1 }, to: { progress: next ? 1 : 0 },
       write: ({ progress }) => {
         element.style.opacity = String(bounded(progress))
@@ -273,7 +282,8 @@ export function watchPanel(element: HTMLElement, opened: () => boolean, slide: -
       }, complete: () => {
         element.style.opacity = ''; element.style.translate = ''
         if (slide) element.style.transform = ''
-        delete element.dataset.flowRetained; cancelMotion(element, 'panel')
+        delete element.dataset.flowRetained; delete element.dataset.flowPanelRetained
+        element.style.removeProperty('--flow-display'); cancelMotion(element, 'panel')
       } })
   }).observe(element, { attributes: true, attributeFilter: ['class', 'hidden'] })
 }

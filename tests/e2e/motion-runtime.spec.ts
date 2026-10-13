@@ -149,6 +149,23 @@ test('retained popup controls become inert at logical close', async ({ page }) =
   expect(result).toEqual({ inert: true, presented: true, focused: false })
 })
 
+test('a popup closed by CSS class retains its presented flex layout until exit', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(async () => {
+    const panel = document.createElement('aside'); panel.id = 'behavior-triggers-panel'; panel.className = 'open'
+    panel.innerHTML = '<button>First control</button><button>Second control</button>'; document.body.append(panel)
+    window.Motion.watchPanel(panel, () => panel.classList.contains('open'))
+    const before = panel.getBoundingClientRect().height
+    panel.classList.remove('open')
+    await new Promise<void>(resolve => queueMicrotask(resolve))
+    return { before, after: panel.getBoundingClientRect().height, inert: panel.inert, display: getComputedStyle(panel).display }
+  })
+  expect(result.after).toBe(result.before)
+  expect(result).toMatchObject({ inert: true, display: 'flex' })
+  await settled(page)
+  await expect(page.locator('#behavior-triggers-panel')).toBeHidden()
+})
+
 test('table retirement applies actor opacity once', async ({ page }) => {
   await runtime(page)
   const opacity = await page.evaluate(() => {
@@ -189,7 +206,10 @@ test('native request disclosure keeps its model suggestions hidden during openin
     const builder = window.Builder.createJevBuilder({ models: async () => [{ name: 'jev-latest', description: 'Stable model' }], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
     builder.set(builder.draft); document.body.append(builder.el)
   })
+  const field = page.locator('.jev-advanced .jev-field')
+  const display = await field.evaluate(element => getComputedStyle(element).display)
   await page.locator('.jev-advanced > summary').click()
+  expect(await field.evaluate(element => getComputedStyle(element).display)).toBe(display)
   expect(await page.locator('.jev-advanced datalist').evaluate(async element => {
     let visible = false
     await new Promise<void>(resolve => {
