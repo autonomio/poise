@@ -2895,14 +2895,14 @@ describe('behavior launch claims', () => {
     })])
   })
 
-  it.each([null, []] as const)('classifies the first issue-review timeout from its recorded posting state: %j', async (receipts) => {
+  it.each([{ receipts: null }, { receipts: [] }])('classifies the first issue-review timeout from its recorded posting state: %j', async ({ receipts }) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
     arrangeCli(false)
     const original = mocks.runFile.getMockImplementation()!
     mocks.runFile.mockImplementation(async (command: string, args: string[], options: unknown) => {
       if (command === 'github-datastore' && args[0] === 'view' && args[1] === 'issue') {
-        return { stdout: JSON.stringify([{ ...pr, title: 'Review retry diagnostics',
+        return { stdout: JSON.stringify([{ ...pr, url: `https://github.com/${pr.repo}/issues/${pr.number}`, title: 'Review retry diagnostics',
           created_at: new Date(Date.now() - 20 * 60_000).toISOString(),
           updated_at: new Date(Date.now() - 20 * 60_000).toISOString(), comments_count: 0 }]), stderr: '' }
       }
