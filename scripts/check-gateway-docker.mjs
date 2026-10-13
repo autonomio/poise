@@ -23,6 +23,7 @@ if (process.platform !== 'darwin') {
   const dockerEnv = { DOCKER_CONFIG: dir, DOCKER_HOST: execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], { encoding: 'utf8', env: { ...process.env, PATH: `/usr/local/bin:${process.env.PATH}` } }).trim() }
   let built = false
   try {
+    writeFileSync(`${dockerfile}.dockerignore`, '*\n!package.json\n!package-lock.json\n!tsconfig.json\n!tsconfig.build.json\n!src\n!src/**\n!tests\n!tests/**\n')
     writeFileSync(dockerfile, `FROM docker:29-cli AS cli
 FROM node:22-bookworm-slim
 COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker
