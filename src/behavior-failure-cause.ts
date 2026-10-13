@@ -34,7 +34,7 @@ export interface DiagnosticOptions { errorCode?: string | null; held?: boolean }
 
 // Colour expresses who can correct the condition, not a process exit code.
 export function diagnosticClassification(code: string): DiagnosticClassification {
-  const severity: DiagnosticSeverity = ['invalid_agent_result', 'review_contract_violation', 'review_recovery_failed', 'runtime_unhealthy'].includes(code)
+  const severity: DiagnosticSeverity = ['invalid_agent_result', 'runtime_unhealthy'].includes(code)
     ? 'error' : ['head_changed', 'provider_capacity', 'rate_limit', 'upstream_unavailable', 'network_interruption'].includes(code)
       ? 'info' : 'warning'
   return { severity, code }

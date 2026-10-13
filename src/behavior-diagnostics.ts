@@ -20,8 +20,8 @@ function diagnosticMessage(code: string, cause: string): string {
     network_interruption: 'The connection was interrupted. Poise will try again.',
     held_result: 'The review outcome needs verification before retry.',
     invalid_agent_result: 'Poise could not reconcile the worker result.',
-    review_contract_violation: 'The worker result did not satisfy the review contract.',
-    review_recovery_failed: 'Poise could not recover the review result.',
+    review_contract_violation: 'The model did not produce a usable review.',
+    review_recovery_failed: 'The review needs attention after recovery failed.',
   } as Record<string, string>)[code] ?? cause
 }
 

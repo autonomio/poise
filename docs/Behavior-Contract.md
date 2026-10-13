@@ -6,9 +6,10 @@ construct reviews, or mutate review threads itself.
 ## Diagnostic severity
 
 Behaviors shows a compact Activity log grouped by target and cause. **Poise
-faults** are red and mean the scheduler or a result contract needs repair.
+faults** are red and mean the scheduler or Poise's launch/result integration needs repair.
 **Needs attention** is yellow for repository access, sign-in, provider limits
-and uncertain outcomes. **Automatic** is grey and folded for known capacity,
+and uncertain outcomes, including unusable model verdicts and exhausted review
+recovery. **Automatic** is grey and folded for known capacity,
 head changes, upstream 429/5xx and transport interruptions that Poise rechecks.
 Unknown causes stay yellow until their cause is established; a process exit or
 retry count alone never proves Poise is broken. Each row expands to its full
