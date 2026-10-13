@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-function run(command, args, cwd = root) {
-  const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/local/bin:${process.env.PATH}`, POISE_GATEWAY_DOCKER_TESTS: '1' } })
+function run(command, args, cwd = root, env = {}) {
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/local/bin:${process.env.PATH}`, POISE_GATEWAY_DOCKER_TESTS: '1', ...env } })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${command} exited with ${result.status ?? result.signal}.`)
 }
@@ -19,6 +19,8 @@ if (process.platform !== 'darwin') {
   const dir = mkdtempSync(`${tmpdir()}/poise-gateway-check-`)
   const image = `poise-gateway-check:${randomUUID()}`
   const dockerfile = `${dir}/Dockerfile`
+  // Public test images need no developer credentials or Keychain interaction.
+  const dockerEnv = { DOCKER_CONFIG: dir, DOCKER_HOST: execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], { encoding: 'utf8', env: { ...process.env, PATH: `/usr/local/bin:${process.env.PATH}` } }).trim() }
   let built = false
   try {
     writeFileSync(dockerfile, `FROM docker:29-cli AS cli
@@ -34,11 +36,11 @@ COPY src ./src
 COPY tests ./tests
 CMD ["npx", "vitest", "run", "tests/docker.integration.test.ts"]
 `)
-    run('docker', ['build', '--tag', image, '--file', dockerfile, 'gateway/'])
+    run('docker', ['build', '--tag', image, '--file', dockerfile, 'gateway/'], root, dockerEnv)
     built = true
-    run('docker', ['run', '--rm', '--network', 'host', '--mount', 'type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock', '--env', 'POISE_GATEWAY_DOCKER_TESTS=1', image])
+    run('docker', ['run', '--rm', '--network', 'host', '--mount', 'type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock', '--env', 'POISE_GATEWAY_DOCKER_TESTS=1', image], root, dockerEnv)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
-    if (built) run('docker', ['image', 'rm', image])
+    try { if (built) run('docker', ['image', 'rm', image], root, dockerEnv) }
+    finally { rmSync(dir, { recursive: true, force: true }) }
   }
 }
