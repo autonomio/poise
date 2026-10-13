@@ -57,7 +57,7 @@ describe('retained incident actionability', () => {
     expect(result[0]).toMatchObject({ attemptCount: 3, diagnostic: { severity: 'info', code: 'head_changed' } })
     expect(incident).not.toHaveProperty('diagnostic')
   })
-  it.each(['failed', 'error', 'invalid', 'cancelled', 'canceled', 'timed_out', 'timeout'])('accepts a validated no-action terminal status %s', (status) => {
+  it.each(['failed', 'error', 'cancelled', 'canceled', 'timed_out', 'timeout'])('accepts a retryable no-action terminal status %s', (status) => {
     expect(behaviorIncidentDiagnostics([incident], { entries: [{ ...call, status }], quarantined: [] })[0]?.diagnostic)
       .toEqual({ severity: 'info', code: 'head_changed' })
   })
@@ -65,7 +65,7 @@ describe('retained incident actionability', () => {
     { id: 'e'.repeat(32) }, { correlation_id: 'other' }, { actor: 'other-bot' }, { repo: 'other/repo' },
     { pr_id: '19' }, { behavior: 'pr_approve' }, { source: 'manual' }, { head_sha: 'a'.repeat(40) },
     { review_id: 123 }, { receipts: [] }, { action: null }, { outcome: null }, { expected_head: null },
-    { review_comments: 1 }, { status: 'completed' },
+    { review_comments: 1 }, { status: 'completed' }, { status: 'invalid' },
   ])('keeps mismatched or side-effect evidence visible for verification: %j', (change) => {
     const result = behaviorIncidentDiagnostics([incident], { entries: [{ ...call, ...change }], quarantined: [] })
     expect(result[0]?.diagnostic).toEqual({ severity: 'warning', code: 'held_result' })

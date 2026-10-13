@@ -28,7 +28,7 @@ export function behaviorIncidentDiagnostics(incidents: BehaviorDeadLetter[], sna
     const noAction = exact && !fault && !launch?.launchQuarantine && persisted.length <= 1
       && call.action === 'not_started' && call.outcome === 'preflight_failed'
       && /^[a-f0-9]{32}$/.test(incident.callId ?? '') && /^[a-f0-9]{40}$/.test(call.expected_head ?? '')
-      && ['failed', 'error', 'invalid', 'cancelled', 'canceled', 'timed_out', 'timeout'].includes(call.status.toLowerCase())
+      && ['failed', 'error', 'cancelled', 'canceled', 'timed_out', 'timeout'].includes(call.status.toLowerCase())
       && !call.head_sha && call.review_id == null && call.receipts == null && !call.review_comments
     const error = behaviorErrorMessage(fault ? launch?.launchError || incident.error : exact ? call.error || incident.error : incident.error)
     return { ...incident, error, diagnostic: fault ? diagnosticClassification('invalid_agent_result') : classifyBehaviorDiagnostic(error, {
