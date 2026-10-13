@@ -30,7 +30,8 @@ const moving = new Set<Channel>()
 const listeners = new Set<() => void>()
 const disclosurePadding = new WeakMap<HTMLElement, { top: number, bottom: number }>()
 const nativeDetails = new WeakSet<HTMLDetailsElement>()
-let retirementBoxes = new Map<HTMLElement, DOMRect>()
+interface RetirementGeometry { box: DOMRect, cellWidths?: number[] }
+let retirementGeometry = new Map<HTMLElement, RetirementGeometry>()
 let preference: MediaQueryList | undefined
 let frame = 0, previousTime = 0
 const bounded = (value: number) => Math.max(0, Math.min(1, value))
@@ -153,11 +154,13 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
   const active = document.activeElement
   const before = new Map([...root.querySelectorAll<HTMLElement>(selector)].map(element => [key(element), { element, box: element.getBoundingClientRect() }]))
   // Departures share the same pre-mutation geometry as surviving layout actors.
-  const previousBoxes = retirementBoxes
-  retirementBoxes = new Map(previousBoxes)
-  for (const { element, box } of before.values()) if (!retirementBoxes.has(element)) retirementBoxes.set(element, box)
+  const previousGeometry = retirementGeometry
+  retirementGeometry = new Map(previousGeometry)
+  for (const { element, box } of before.values()) if (!retirementGeometry.has(element)) retirementGeometry.set(element, {
+    box, cellWidths: element instanceof HTMLTableRowElement ? [...element.cells].map(cell => cell.getBoundingClientRect().width) : undefined,
+  })
   let result: T
-  try { result = change() } finally { retirementBoxes = previousBoxes }
+  try { result = change() } finally { retirementGeometry = previousGeometry }
   if (active instanceof HTMLElement && active.isConnected && root.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
   const after = [...root.querySelectorAll<HTMLElement>(selector)]
   // Remove all old layout offsets before measuring any new destination.
@@ -186,7 +189,8 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
 
 /** Logical removal is immediate; the inert visual has no IDs or live controls. */
 export function retire(element: HTMLElement): void {
-  const box = retirementBoxes.get(element) ?? element.getBoundingClientRect()
+  const presentedGeometry = retirementGeometry.get(element)
+  const box = presentedGeometry?.box ?? element.getBoundingClientRect()
   const opacity = Number(getComputedStyle(element).opacity)
   if (!box.width || !box.height || reducedMotion()) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
@@ -200,7 +204,7 @@ export function retire(element: HTMLElement): void {
   if (element instanceof HTMLTableRowElement) {
     const row = ghost as HTMLTableRowElement
     row.style.opacity = '1'
-    ;[...row.cells].forEach((cell, index) => { cell.style.width = `${element.cells[index].getBoundingClientRect().width}px` })
+    ;[...row.cells].forEach((cell, index) => { cell.style.width = `${presentedGeometry?.cellWidths?.[index] ?? element.cells[index].getBoundingClientRect().width}px` })
     ghost = element.closest('table')!.cloneNode(false) as HTMLTableElement
     const body = document.createElement('tbody'); body.append(row); ghost.append(body)
   }
