@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { behaviorErrorMessage, behaviorIncidentDiagnostics } from '../server/behavior-diagnostics'
 import type { LogEntry } from '../server/agent'
-import type { BehaviorDeadLetter } from '../server/db'
+import type { BehaviorDeadLetter, BehaviorLaunchClaim } from '../server/db'
 
 afterEach(() => vi.unstubAllEnvs())
 describe('behavior CLI diagnostics', () => {
@@ -47,6 +47,11 @@ describe('retained incident actionability', () => {
     prompt: '', session_id: null, started_at: '2026-10-13T14:08:00Z', time_elapsed: '4s', status: 'failed',
     action: 'not_started', outcome: 'preflight_failed', head_sha: null, expected_head: 'a'.repeat(40),
     response: null, error, review_id: null, receipts: null }
+  const launch: BehaviorLaunchClaim = { key: incident.behavior, target: incident.target, seenAt: incident.createdAt,
+    claimId: 'launch', leaseUntil: null, launchBehavior: 'pr_review', launchRepo: incident.repo!, launchPr: 18,
+    launchRequestedAt: call.started_at, launchExpectedHead: call.expected_head!, launchActor: incident.actor!,
+    launchSource: incident.source!, launchCorrelationId: incident.correlationId!, launchCallId: incident.callId,
+    launchError: null, launchQuarantine: null, launchQuarantineMayRun: false }
   it('shows a proven no-action head change as automatic without an active failure summary', () => {
     const result = behaviorIncidentDiagnostics([incident], { entries: [call], quarantined: [] })
     expect(result[0]).toMatchObject({ attemptCount: 3, diagnostic: { severity: 'info', code: 'head_changed' } })
@@ -70,5 +75,19 @@ describe('retained incident actionability', () => {
     const snapshot = { entries: [call], quarantined: [{ index: 1, id: 'e'.repeat(32), correlationId: incident.correlationId,
       repo: null, prId: null, behavior: null, sessionId: null, error: 'conflicting worker result' }] }
     expect(behaviorIncidentDiagnostics([incident], snapshot)[0]?.diagnostic).toEqual({ severity: 'warning', code: 'held_result' })
+  })
+  it('rejects a different validated call sharing the exact correlation', () => {
+    const snapshot = { entries: [call, { ...call, id: 'e'.repeat(32), status: 'running' }], quarantined: [] }
+    expect(behaviorIncidentDiagnostics([incident], snapshot)[0]?.diagnostic).toEqual({ severity: 'warning', code: 'held_result' })
+  })
+  it('keeps a persisted launch-head mismatch visible as a Poise contract fault', () => {
+    const result = behaviorIncidentDiagnostics([incident], { entries: [call], quarantined: [] }, [
+      { ...launch, launchExpectedHead: 'f'.repeat(40), launchError: 'launch expected head did not match' },
+    ])
+    expect(result[0]).toMatchObject({ error: 'launch expected head did not match', diagnostic: { severity: 'error', code: 'invalid_agent_result' } })
+  })
+  it.each(['invalid_result', 'unreadable'] as const)('never labels a persisted %s quarantine as automatic', (launchQuarantine) => {
+    const result = behaviorIncidentDiagnostics([incident], { entries: [call], quarantined: [] }, [{ ...launch, launchQuarantine }])
+    expect(result[0]?.diagnostic.severity).toBe(launchQuarantine === 'invalid_result' ? 'error' : 'warning')
   })
 })

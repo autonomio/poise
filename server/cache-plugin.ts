@@ -21,7 +21,7 @@ import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentRe
 import { listChatHistory, sendChat, saveAttachment, runDebate } from './chat'
 import { listDocs, readDoc, writeDoc, deleteDoc, newSlug, readAnnotations, writeAnnotations, getOrCreateChatSession, MAX_DOC_BYTES, MAX_ANNOTATIONS_BYTES, EditorConflictError } from './editor'
 import { handleSnippetApi } from './snippet-api'
-import { behaviorIncidentDiagnostics } from './behavior-diagnostics'
+import { getBehaviorDiagnosticIncidents } from './behaviors'
 import { setEnabled as setBehaviorEnabled, setSetting as setBehaviorSetting, setScratchpad as setBehaviorScratchpad, setReviewers as setBehaviorReviewers, getEnabledMap, getSettingMap, getScratchpadMap, getReviewers, getBehaviorsRuntimeHealth, isValidSetting, isValidReviewers, isPanelBehavior, getIssueRepositories, setIssueRepositories, isValidRepository, getIssueAuthors, setIssueAuthors, isValidAuthorList, isSkippableBehavior, isValidRepositoryList, getRepositorySkips, setRepositorySkips, MAX_SKIPPED_REPOSITORIES, admitReplay, ReplayRefusedError, startBehaviorsRuntime, stopBehaviorsRuntime, getResolveUnblockingLastFired, getMergePrsLastFired, getGreyCiLastFired, BEHAVIOR_KEYS, type BehaviorKey } from './behaviors'
 import { startReviewCheckoutPruning, stopReviewCheckoutPruning } from './review-checkout'
 import { ContentLaunchPendingError, getContentJobResponse, launchAndEnqueueContentJob, startContentFinalizer, stopContentFinalizer } from './content-jobs'
@@ -670,7 +670,7 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
               datastore: runtime.datastore,
               identity: runtime.identity,
               failures: runtime.failures,
-              deadLetters: behaviorIncidentDiagnostics(runtime.deadLetters, snapshot),
+              deadLetters: getBehaviorDiagnosticIncidents(snapshot),
             },
           })
         }

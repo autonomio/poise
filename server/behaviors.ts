@@ -67,7 +67,7 @@ import {
   type BehaviorLaunchClaim,
 } from './db'
 import { HttpError } from './http'
-import { behaviorErrorMessage } from './behavior-diagnostics'
+import { behaviorErrorMessage, behaviorIncidentDiagnostics } from './behavior-diagnostics'
 import { classifyBehaviorDiagnostic, diagnosticClassification, type DiagnosticClassification, type DiagnosticOptions } from '../src/behavior-failure-cause'
 import { recoverLegacyDatastore } from './legacy-datastore-recovery'
 import { resolveReviewCheckout } from './review-checkout'
@@ -4529,6 +4529,14 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
     identity,
     deadLetters: listBehaviorIncidents(),
   }
+}
+
+export function getBehaviorDiagnosticIncidents(snapshot: AgentLogSnapshot | null) {
+  const scoped = () => behaviorIncidentDiagnostics(listBehaviorDeadLetters(500), snapshot,
+    BEHAVIOR_KEYS.flatMap((behavior) => [...listBehaviorLaunchClaims(behavior), ...failedBehaviorLaunches(behavior)]))
+  if (behaviorOrganization.getStore() !== undefined) return scoped()
+  const organizations = readyOrganizations()
+  return organizations.length ? organizations.flatMap((org) => behaviorOrganization.run(org, scoped)) : scoped()
 }
 
 export function getBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {

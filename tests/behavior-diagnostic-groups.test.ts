@@ -112,4 +112,14 @@ describe('behavior diagnostic groups', () => {
     diagnostics.deadLetters[0]!.callId = 'unrelated-held-attempt'
     expect(behaviorDiagnosticGroups(diagnostics).map((group) => group.severity)).toEqual(['warning'])
   })
+  it.each([false, true])('prefers current held evidence over a persisted automatic failure with recovered=%s', (recovered) => {
+    const diagnostics = snapshot()
+    const error = 'Selected model is at capacity.'
+    diagnostics.failures.push({ behavior: 'approve-prs', target: 'org/repo#1', kind: 'worker',
+      consecutiveFailures: 1, lastFailureAt: '', nextRetryAt: '', error, callId: 'attempt', recovered,
+      diagnostic: { severity: 'info', code: 'provider_capacity' } })
+    diagnostics.deadLetters.push({ id: 'audit', behavior: 'approve-prs', target: 'org/repo#1', error,
+      createdAt: '', callId: 'attempt', diagnostic: { severity: 'warning', code: 'held_result' } })
+    expect(behaviorDiagnosticGroups(diagnostics)).toEqual([expect.objectContaining({ severity: 'warning', code: 'held_result' })])
+  })
 })

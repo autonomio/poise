@@ -39,17 +39,21 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
   ]) {
     if (error) add(classifyBehaviorDiagnostic(error), scope!, failureCause(error), error)
   }
-  const failureCauses = new Set<string>()
+  const failureCauses = new Map<string, DiagnosticClassification>()
   for (const failure of diagnostics.failures) {
     const error = failure.error ?? 'Failure cause unavailable'
-    const classification = failure.diagnostic ? diagnosticClassification(failure.diagnostic.code)
+    let classification = failure.diagnostic ? diagnosticClassification(failure.diagnostic.code)
       : classifyBehaviorDiagnostic(error, { held: failure.kind === 'worker' })
+    const cause = failureCause(error)
+    const stronger = diagnostics.deadLetters.find((letter) => letter.diagnostic && letter.behavior === failure.behavior
+      && !!failure.callId && letter.callId === failure.callId && failureCause(letter.error) === cause
+      && diagnosticClassification(letter.diagnostic.code).severity !== 'info')
+    if (classification.severity === 'info' && stronger?.diagnostic) classification = diagnosticClassification(stronger.diagnostic.code)
     const ref = targetRef(failure.target ?? '')
     const scope = (classification.code === 'github_access' ? ref.split('#')[0] : ref)
       || `${failure.org ?? ''} ${failure.behavior}`.trim()
-    const cause = failureCause(error)
-    if (failure.callId) failureCauses.add(JSON.stringify([failure.behavior, failure.callId, cause]))
-    if (failure.recovered === true) continue
+    if (failure.callId) failureCauses.set(JSON.stringify([failure.behavior, failure.callId, cause]), classification)
+    if (failure.recovered === true && !stronger) continue
     const message = classification.code === 'github_access'
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`
       : diagnosticMessage(classification.code, cause)
@@ -60,10 +64,11 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     const ref = targetRef(letter.target)
     const cause = failureCause(letter.error)
     // A retryable no-action attempt can also have an audit incident. Its
-    // classified failure already shows it; genuinely held incidents stay errors.
-    if (letter.callId && failureCauses.has(JSON.stringify([letter.behavior, letter.callId, cause]))) continue
+    // classified failure already shows it; stronger current evidence stays visible.
     const classification = letter.diagnostic ? diagnosticClassification(letter.diagnostic.code)
       : classifyBehaviorDiagnostic(letter.error, { held: true })
+    const existing = letter.callId ? failureCauses.get(JSON.stringify([letter.behavior, letter.callId, cause])) : undefined
+    if (existing && (!letter.diagnostic || (existing.code === classification.code && existing.severity === classification.severity))) continue
     add(classification, ref, diagnosticMessage(classification.code, cause),
       `${letter.behavior} ${letter.target}: ${cause} (${letter.attemptCount ?? 1} attempts)`)
   }

@@ -452,6 +452,7 @@ test('keeps the last-known runtime error visible alongside a later API outage', 
 
 for (const theme of ['light', 'dark']) {
   test(`renders distinct Poise faults, attention and automatic activity in ${theme} mode`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1040 })
     const state = await setup(page)
     state.diagnostics = { status: 'degraded', runtimeError: 'The behavior scheduler is no longer responding.', agentLogsError: null,
       datastore: { status: 'healthy', checkedAt: '', ageSeconds: 1, lastSuccessAt: '', error: null },
@@ -464,6 +465,7 @@ for (const theme of ['light', 'dark']) {
     }
     await page.addInitScript((value) => localStorage.setItem('poise-theme', value), theme)
     await page.goto('/')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
     await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
     const diagnostics = page.locator('#behavior-diagnostics')
     await expect(diagnostics.locator('[data-severity="error"]')).toHaveCount(1)

@@ -361,6 +361,24 @@ describe('global behavior settings API', () => {
     const unread = await (await fetch(`${base}/api/behaviors`)).json()
     expect(unread.diagnostics.deadLetters).toContainEqual(expect.objectContaining({ callId,
       diagnostic: { severity: 'warning', code: 'held_result' } }))
+    const secondTarget = `${target}:secondary`
+    const secondId = database!.claimSeenOwned('review-new-prs', secondTarget)!
+    expect(database!.markBehaviorLaunchIntentOwned({ key: 'review-new-prs', target: secondTarget, claimId: secondId,
+      launchBehavior: 'pr_review', repo: 'Legacy/same-repo', pr: 18, requestedAt: '2026-10-13T14:09:00Z',
+      expectedHead: 'b'.repeat(40), actor: 'review-bot', source: 'poise:review-new-prs', correlationId: secondId })).toBe(true)
+    const second = database!.listBehaviorLaunchClaims('review-new-prs').find((row) => row.target === secondTarget)!
+    database!.recordBehaviorDeadLetter(second, error, 'e'.repeat(32))
+    database!.quarantineBehaviorLaunchOwned('review-new-prs', target, claimId, 'invalid_result', 'launch contract mismatch', false)
+    behaviorLogs = [{ id: 'e'.repeat(32), model: 'test', prompt: '', time_elapsed: '4s', behavior: 'pr_review',
+      repo: 'Legacy/same-repo', pr_id: '18', actor: 'review-bot', source: 'poise:review-new-prs',
+      correlation_id: secondId, started_at: '2026-10-13T14:09:00Z', completed_at: '2026-10-13T14:09:04Z',
+      status: 'failed', action: 'not_started', outcome: 'preflight_failed', expected_head: 'b'.repeat(40),
+      head_sha: null, review_id: null, receipts: null, error }]
+    const separate = await (await fetch(`${base}/api/behaviors`)).json()
+    expect(separate.diagnostics.deadLetters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId, diagnostic: { severity: 'error', code: 'invalid_agent_result' } }),
+      expect.objectContaining({ callId: 'e'.repeat(32), diagnostic: { severity: 'info', code: 'head_changed' } }),
+    ]))
   })
 
   it('shows latest behavior activity across configured accounts', async () => {

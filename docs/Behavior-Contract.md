@@ -29,6 +29,11 @@ call, correlation, actor, repository, PR, behavior and source, with
 `not_started` / `preflight_failed`, a pinned expected head, and no executed head
 or review/posting receipts. Missing, conflicting or quarantined evidence stays
 visible under Needs attention. Classification never authorizes a retry.
+Distinct attempts are read before visual grouping, so a newer automatic event
+cannot hide an older held reviewer. Persisted launch contract and quarantine
+evidence overrides Caller no-action text; a matching correlation must identify
+exactly one Caller row. Stronger current incident evidence also overrides a
+cached automatic failure summary.
 
 If the browser cannot read `/api/behaviors`, it reports one request diagnostic
 and retains its last known snapshot. It does not infer agent-log, datastore or
