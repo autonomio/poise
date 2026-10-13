@@ -28,6 +28,7 @@ import { type Catalog, type ReviewerSlot, REVIEWER_SLOTS, loadCatalog } from './
 import {
   db,
   claimPrOperationOwned,
+  claimSeen,
   claimSeenOwned,
   claimSeenOwnedAs,
   clearSeenExceptLaunched,
@@ -242,8 +243,8 @@ async function withBehaviorProcessLock<T>(
   }, operation)
 }
 
-export type BehaviorKey = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs' | 'review-new-issues'
-export const BEHAVIOR_KEYS: BehaviorKey[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'review-new-issues']
+export type BehaviorKey = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs' | 'rerun-grey-ci' | 'rerun-grey-ci' | 'review-new-issues'
+export const BEHAVIOR_KEYS: BehaviorKey[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci', 'review-new-issues']
 
 let behaviorAbortController: AbortController | null = null
 const behaviorOperationSignal = new AsyncLocalStorage<AbortSignal>()
@@ -564,8 +565,8 @@ function noteArgs(key: BehaviorKey): string[] {
 // new ones are — those opened since the baseline are reviewed, the backlog the
 // baseline recorded never is.
 
-export type SkippableBehavior = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs'
-export const SKIPPABLE_BEHAVIORS: readonly SkippableBehavior[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs']
+export type SkippableBehavior = 'review-new-prs' | 'approve-prs' | 'resolve-unblocking' | 'merge-prs' | 'rerun-grey-ci'
+export const SKIPPABLE_BEHAVIORS: readonly SkippableBehavior[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci']
 // "Select all" across large accounts produces long lists; this bound keeps a
 // list inside the API's request body limit.
 export const MAX_SKIPPED_REPOSITORIES = 5000
@@ -574,6 +575,7 @@ const SKIPPABLE_LABELS: Record<SkippableBehavior, string> = {
   'approve-prs': 'Approve Pull Requests',
   'resolve-unblocking': 'Resolve Unblocking Conversations',
   'merge-prs': 'Merge Pull Requests',
+  'rerun-grey-ci': 'Rerun Grey CI',
 }
 
 export function isSkippableBehavior(key: string): key is SkippableBehavior {
@@ -1554,7 +1556,7 @@ async function listOpenPrsByAuthor(author: string): Promise<DatastorePr[]> {
     return pr
   })
   retireBehaviorDeadLettersForClosedPrs(seen, undefined, currentOrganization()?.login)
-  retireClosedTargetFailures(seen, ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs'])
+  retireClosedTargetFailures(seen, ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci'])
   return prs.filter((pr) => organizationOwns(pr.repo) && !ownPullRequestRefusal(author, `${pr.repo}#${pr.number}`, pr))
 }
 
@@ -3058,6 +3060,111 @@ async function tickMergePrs(): Promise<void> {
   }
 }
 
+// ── Completed grey CI recovery ─────────────────────────────────────────
+
+export function getGreyCiLastFired(): { at: string, target: string, url: string } | null {
+  if (behaviorOrganization.getStore() === undefined) {
+    const events = readyOrganizations().map((org) => behaviorOrganization.run(org, getGreyCiLastFired))
+      .filter((event): event is { at: string, target: string, url: string } => event !== null)
+    return events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0] ?? null
+  }
+  const raw = getMeta('behavior_rerun_grey_ci_last_fired')
+  if (raw === null) return null
+  try {
+    const event = objectValue(parseJson(raw, 'grey CI last triggered'), 'grey CI last triggered')
+    if (typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at))
+      || typeof event.target !== 'string' || typeof event.url !== 'string'
+      || !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/[1-9]\d*$/.test(event.url)) {
+      throw new Error('grey CI last triggered is malformed')
+    }
+    return { at: event.at, target: event.target, url: event.url }
+  } catch (error) {
+    console.error('[behaviors] grey CI last triggered could not be read:', error)
+    return null
+  }
+}
+
+async function tickRerunGreyCi(): Promise<void> {
+  const behavior = 'rerun-grey-ci' as const
+  if (!isEnabled(behavior)) return
+  const author = getMeta('me') || ''
+  if (!author) return
+  const prs = await listEligiblePrs(behavior, author)
+  const cursor = getMeta('behavior_rerun_grey_ci_cursor')
+  const start = (prs.findIndex((pr) => `${pr.repo}#${pr.number}` === cursor) + 1) % Math.max(prs.length, 1)
+  const ordered = [...prs.slice(start), ...prs.slice(0, start)]
+  const actor = configuredReviewer()
+  for (let offset = 0; offset < ordered.length; offset += MERGE_CANDIDATE_BATCH_SIZE) {
+    if (!isEnabled(behavior) || behaviorAborted()) return
+    const batch = ordered.slice(offset, offset + MERGE_CANDIDATE_BATCH_SIZE)
+    const last = batch[batch.length - 1]!
+    setMeta('behavior_rerun_grey_ci_cursor', `${last.repo}#${last.number}`)
+    const { stdout } = await runFile(GH_INTERFACE, ['--grey-ci-candidates', '--requests-json',
+      JSON.stringify(batch.map((pr) => ({ repository: pr.repo, number: pr.number }))), '--token-user', actor],
+    { timeoutMs: 30_000, maxOutputBytes: 4 * 1024 * 1024, signal: behaviorSignal() })
+    const packet = objectValue(parseJson(stdout, 'grey CI candidates'), 'grey CI candidates')
+    if (packet.action !== 'grey_ci_candidates' || packet.actor !== actor
+      || !Number.isSafeInteger(packet.graphql_cost) || Number(packet.graphql_cost) < 1
+      || !Array.isArray(packet.records) || packet.records.length !== batch.length) {
+      throw new Error('github-interface returned malformed grey CI batch evidence')
+    }
+    for (let index = 0; index < batch.length; index++) {
+      if (!isEnabled(behavior) || behaviorAborted()) return
+      const pr = batch[index]!
+      const target = `${pr.repo}#${pr.number}`
+      setMeta('behavior_rerun_grey_ci_cursor', target)
+      if (!stillEligible(behavior, pr) || !behaviorRetryDue(behavior, target)) continue
+      const row = objectValue(packet.records[index], 'grey CI candidate')
+      if (row.repository !== pr.repo || row.number !== pr.number || !Array.isArray(row.runs)
+        || !(row.error === null || typeof row.error === 'string')) throw new Error('malformed grey CI target evidence')
+      if (row.error !== null) { recordBehaviorFailure(behavior, 'operation', row.error, target); continue }
+      if (typeof row.head_sha !== 'string' || !SHA_PATTERN.test(row.head_sha)
+        || typeof row.author !== 'string') throw new Error('missing grey CI head or author evidence')
+      if (row.author.toLowerCase() !== author.toLowerCase()) continue
+      for (const value of row.runs) {
+        if (!isEnabled(behavior) || behaviorAborted()) return
+        const run = objectValue(value, 'grey CI workflow')
+        const runId = safeInteger(run.run_id, 'workflow run id')
+        const attempt = safeInteger(run.run_attempt, 'workflow attempt')
+        const workflowId = safeInteger(run.workflow_id, 'workflow id')
+        if (!runId || !attempt || !workflowId || run.status !== 'completed'
+          || !['cancelled', 'stale'].includes(String(run.conclusion))
+          || typeof run.event !== 'string' || !/^[a-z_]+$/.test(run.event)) throw new Error('unsafe grey CI workflow evidence')
+        const claimKey = `${operationKey(behavior)}:${actor.toLowerCase()}`
+        const claimTarget = `${target}:${row.head_sha}:${workflowId}:${run.event}`
+        if (hasSeen(claimKey, claimTarget)) continue
+        const operationId = claimPrOperationOwned(target, PR_OPERATION_EVALUATION_LEASE_MS)
+        if (!operationId) continue
+        try {
+          const [owner, name] = pr.repo.split('/', 2)
+          const cwd = join(GH_INTERFACE_CWD_ROOT, owner, name)
+          await mkdir(cwd, { recursive: true })
+          if (!isEnabled(behavior) || behaviorAborted() || !stillEligible(behavior, pr)
+            || configuredReviewer() !== actor || !claimSeen(claimKey, claimTarget)) continue
+          const { stdout: receipt } = await runFile(GH_INTERFACE, ['--rerun-grey-ci-if-ready', `#${pr.number}`,
+            '--run-id', String(runId), '--run-attempt', String(attempt), '--expected-head', row.head_sha,
+            '--author', author, '--token-user', actor],
+          { cwd, timeoutMs: 30_000, maxOutputBytes: 1024 * 1024, signal: behaviorSignal() })
+          const result = objectValue(parseJson(receipt, 'grey CI rerun'), 'grey CI rerun')
+          if (result.action !== 'rerun_grey_ci_if_ready' || result.repository !== pr.repo || result.pull_number !== pr.number
+            || result.head_sha !== row.head_sha || result.run_id !== runId || result.run_attempt !== attempt
+            || !['rerun_requested', 'not_ready', 'superseded'].includes(String(result.outcome))) throw new Error('malformed grey CI rerun receipt')
+          if (result.outcome === 'rerun_requested') {
+            setMeta('behavior_rerun_grey_ci_last_fired', JSON.stringify({ at: new Date().toISOString(), target,
+              url: `https://github.com/${pr.repo}/actions/runs/${runId}` }))
+          } else releaseSeen(claimKey, claimTarget)
+          clearBehaviorFailure(behavior, target)
+        } catch (error) {
+          // A missing receipt may follow an accepted write. Retain the durable
+          // claim across restarts; never automatically replay that ambiguity.
+          recordBehaviorFailure(behavior, 'worker', error, target, { held: true })
+          console.error(`[behaviors] grey CI rerun held for ${target}:`, error)
+        } finally { releasePrOperationOwned(operationId) }
+      }
+    }
+  }
+}
+
 // ── review-new-issues implementation ────────────────────────────────────
 //
 // Opt-in per repository. A new issue in a selected repository, opened by a
@@ -4210,6 +4317,15 @@ export async function runEnabledBehaviorsOnce(
     operations.push(runBehaviorCycle('merge-prs', async () => {
       return await withBehaviorProcessLock('merge-prs', async () => {
         await tickMergePrs()
+        return true
+      })
+    }))
+  }
+  if (isEnabled('rerun-grey-ci')
+    && (!options.skipBusy || !behaviorOperationTails.has(operationKey('rerun-grey-ci')))) {
+    operations.push(runBehaviorCycle('rerun-grey-ci', async () => {
+      return await withBehaviorProcessLock('rerun-grey-ci', async () => {
+        await tickRerunGreyCi()
         return true
       })
     }))
