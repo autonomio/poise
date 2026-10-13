@@ -1,3 +1,4 @@
+import { layout, retire } from './motion'
 /** Preserve semantic actors, focused controls, native disclosure and draft state. */
 function identity(node: Node): string | null {
   if (!(node instanceof Element)) return null
@@ -48,4 +49,9 @@ export function patchContent(element: Element, markup: string, onRemove?: (eleme
   const active = document.activeElement
   patchNode(element, next, onRemove)
   if (active instanceof HTMLElement && active.isConnected && element.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
+}
+
+/** Low-frequency collection changes; ordinary text/streaming patches stay direct. */
+export function patchInformation(element: HTMLElement, markup: string): void {
+  layout(element, () => patchContent(element, markup, retire))
 }

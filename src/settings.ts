@@ -1,5 +1,5 @@
 import { scrollToActor } from './motion'
-import { patchContent } from './dom-patch'
+import { patchContent, patchInformation } from './dom-patch'
 import { MODEL_CHECK_TIMEOUT_MS, modelRefreshSummary, type ModelRefreshReport } from './model-refresh'
 // General, Models and Accounts are direct destinations in the burger menu.
 // They share one panel and keep their drafts while moving between destinations.
@@ -225,7 +225,7 @@ function renderOrganizations(): void {
   const rendered = JSON.stringify([organizations, organizationAdding, waiting])
   if (organizationsRendered === rendered) return
   organizationsRendered = rendered
-  patchContent(list, organizations.map((org, index) => {
+  patchInformation(list, organizations.map((org, index) => {
     const paused = waiting[index]
     const resetTime = paused ? new Date(org.retryAt!).toLocaleTimeString([], {
       timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -347,7 +347,7 @@ function terminalBusy(): boolean {
 
 function renderAccounts(): void {
   const settings = getCachedSettings()
-  if (accountsEl && accounts) patchContent(accountsEl, accountsHtml(accounts, { me: settings.me, agentAccount: settings.agentAccount ?? '' }, terminalBusy()))
+  if (accountsEl && accounts) patchInformation(accountsEl, accountsHtml(accounts, { me: settings.me, agentAccount: settings.agentAccount ?? '' }, terminalBusy()))
   if (shellBtn) shellBtn.disabled = terminalBusy()
 }
 

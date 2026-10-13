@@ -1,4 +1,4 @@
-import { patchContent } from '../dom-patch'
+import { patchInformation } from '../dom-patch'
 // Poise Link in Settings → Accounts, and as the last step of first-run setup:
 // how to install it, approving the code it shows, and the computers paired
 // with this workspace. Pairing is the gateway's (src/gateway-client.ts).
@@ -150,7 +150,7 @@ export function poiseLinkSection(account: GatewayAccount, options: PoiseLinkOpti
   }
 
   const render = () => {
-    if (devices) patchContent(devicesEl, devicesHtml(devices))
+    if (devices) patchInformation(devicesEl, devicesHtml(devices))
   }
 
   const refresh = async (): Promise<void> => {

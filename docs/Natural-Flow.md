@@ -1,15 +1,85 @@
 # Natural flow
 
-Poise uses the Tactile spring selected in Eight-Characters: stiffness 180,
-damping 20 and mass 1. The pure presentation model in
-`gateway/src/motion-model.ts` supplies both the browser integrator and CSS
-curve. `src/motion.ts` owns live channels, retaining position and velocity
-when a destination changes. Completion belongs to the latest request.
+Poise uses the Tactile spring selected in Eight-Characters: stiffness **180**,
+damping **20**, mass **1**. `gateway/src/motion-model.ts` generates the CSS
+`linear()` curve and settling duration from the same integrator used by
+`src/motion.ts`. Control feedback is **100ms ease-out**. Hover intent,
+confirmation windows, acknowledgement lifetimes, deadlines and polling
+intervals belong to their operations.
 
-Archive reorders retained rows with that channel instead of independent
-700ms transitions and cleanup timers. Reduced motion removes animation and
-its delays. Preference changes, viewport resizing, printing and hiding the
-document settle active spatial channels; hidden scrolling is cancelled.
+## Ownership and geometry
 
-The model tests verify reversal momentum, actual settling and invalid input.
-Browser interaction coverage belongs alongside each controller integration.
+Each semantic actor has named channels. Retargeting retains position and
+velocity; an inactive channel restarts from presented geometry. Completion
+belongs to the latest request. Layout offsets compose through individual
+`translate`, preserving native full-bleed transforms. Fixed headers stay
+outside transformed entrance owners. Chat view entry fades because its
+console and full-bleed layout own their geometry separately. Ordinary entry
+travels 20px; local information uses 8px.
+
+Keyed reconciliation retains controls, drafts, selections, native details and
+active motion styles. Structural lists reveal new actors once and retire
+departed visuals inertly. Changed text and elapsed time remain immediate.
+Intrinsic disclosures animate height, padding and opacity and return to auto
+sizing. Fixed measurement clones are removed synchronously and never shrink
+the live document's native scroll bounds.
+
+Logical close, focus restoration, input submission, saves and cancellation
+occur immediately. Menu exit retains its departing words. Sliding panels
+declare their anchor direction. Sidebar dragging takes over from presented
+width. The console channel writes position and composer width together,
+without trailing CSS interpolation.
+
+## Lifecycle and stationary behavior
+
+Reduced motion removes spatial animation and feedback delays. Preference
+changes, resizing and printing settle geometry and release temporary styles.
+Detachment settles non-scroll channels. Hidden documents and view departure
+cancel scrolling at the presented reading position. Visible guided scrolling
+follows bounded live targets and yields to wheel, pointer, touch or keyboard
+input. Chat retains its existing near-bottom reading policy.
+
+Typing, IME composition, streaming, terminal output, native dragging, Writer
+source offsets/table editing/selection marks and account operations remain
+direct. Theme and typography apply directly. Keyboard option selection
+scrolls its own list immediately. Native dialogs retain native focus,
+cancellation and modality; supported browsers add CSS discrete visual
+transitions. Native file choosers, confirmations, OAuth navigation and the
+Poise Link desktop window remain stationary. Busy/error/selected states stay
+meaningful without decorative repeating animation.
+
+## Audited interaction coverage
+
+These identifiers cover the 102 interaction families audited on 13 October
+2026. They identify behaviors, not commits or independent slices.
+
+| Families | Owner and treatment |
+| --- | --- |
+| I001–I009, I101–I102 | View lifecycle and anchored controls; retained account/release banner controls; native configuration and reading policies. |
+| I010–I019 | Menu visibility/size channels and retained exits; settings/analytics collections; direct typography; delayed tooltip intent followed by restrained entry. |
+| I020–I041 | Chat sidebar/console/Memories channels; retained session/attachment/queue actors; intrinsic history/model/native details; keyed transcript disclosures; direct drafts/streaming/requests; native file preview. |
+| I042–I049 | Current retained cards across filters/lane changes and active edit drafts; shared live layout; intrinsic composers; native drag; inert departures. |
+| I050–I053 | Archive arrivals/reorders and retained cells/actions; latest-request filter/loading semantics. |
+| I054–I059 | Swarm retained grouped/detail/refusal actors; structural layout/native reasoning disclosure; bounded navigation; immediate elapsed/process text. |
+| I060–I065 | Behaviors retained table/repository controls; anchored picker/memory channels; native diagnostics; authoritative saves and confirmations. |
+| I066–I069 | Snippets retained rows, editor arrival/retirement and intrinsic import; immediate conflict/draft checks and Link standing. |
+| I070–I078 | Writer document/annotation/selection composers and retained response controls; bounded edit navigation; direct text/tables/marks/Writer-mode geometry. |
+| I079–I081 | Context Chat exits toward its left anchor; response controls persist; composer/resize input stays native. |
+| I082–I085 | JEV keyed session/question/results actors, structural builder layout and native distributions/details; immediate input/evaluation/conflict ownership. |
+| I086–I090 | Setup step entry/intrinsic content sizing and inert modal retirement; native device details; immediate account/terminal protocols; one finish cue. |
+| I091–I095 | Retained service account/device/admin actors; menu geometry follows terminal mounting; immediate output/admin writes; shared update/sign-in presentation tokens. |
+| I096–I098 | Gateway generated spring and feedback tokens; auto-refresh starting/updating pages stay stationary between refreshes. |
+| I099–I100 | Poise Link's native window/status replacement remains stationary; protocols are unchanged. |
+
+## Proof
+
+`tests/motion-model.test.ts` checks reversal momentum, settling, generated CSS
+and invalid numeric input. `tests/e2e/motion.spec.ts` exercises the reproduced
+application defects in Chromium and WebKit, including narrow layouts, themes,
+direct pointer input, reduced motion, resize and print.
+`tests/e2e/motion-runtime.spec.ts` bundles the actual runtime under the existing
+CSP and checks completion ownership, focused patches, background scroll
+cancellation and retirement opacity. Existing browser suites retain functional
+safeguards for drafts, native dialogs, submits, selection, authentication,
+service operations and asynchronous loading. The settlement helper waits for
+both runtime channels and native animations.

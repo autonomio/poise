@@ -1,5 +1,5 @@
 import { scrollToActor } from '../motion'
-import { patchContent } from '../dom-patch'
+import { patchContent, patchInformation } from '../dom-patch'
 import { jevApi, JevHttpError } from '../jev-client'
 import { emptyJevDraft, exampleJevDraft, parseJevDraft, requestFromDraft, draftFromRequest, type JevDraft } from '../jev-draft'
 import { validateJevRequest, type JevSession, type JevRun, type JevRequest } from '../jev-types'
@@ -62,7 +62,7 @@ export function createJevWorkspace(parent: HTMLElement, sidebar: HTMLElement, ha
   }
   function renderList() {
     list.hidden = entries.size === 0
-    patchContent(list, [...entries.values()].sort((a, b) => b.session.createdAt.localeCompare(a.session.createdAt)).map(e => `<div role="listitem" data-jev-id="${esc(e.session.id)}"><button type="button" class="jev-session-item ${visible && e.session.id === active ? 'active' : ''}" data-jev-id="${esc(e.session.id)}"><span>${esc(e.title)}</span><small>JEV · primitives</small></button></div>`).join(''))
+    patchInformation(list, [...entries.values()].sort((a, b) => b.session.createdAt.localeCompare(a.session.createdAt)).map(e => `<div role="listitem" data-jev-id="${esc(e.session.id)}"><button type="button" class="jev-session-item ${visible && e.session.id === active ? 'active' : ''}" data-jev-id="${esc(e.session.id)}"><span>${esc(e.title)}</span><small>JEV · primitives</small></button></div>`).join(''))
   }
   function controls() {
     const e = current(); if (!e) return

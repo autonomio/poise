@@ -1,4 +1,4 @@
-import { patchContent } from '../dom-patch'
+import { patchContent, patchInformation } from '../dom-patch'
 // Settings → Admin, for the gateway's admins only: everyone who has signed in,
 // how they get in, their workspace's state and image, and who may sign in.
 // The gateway does the work (src/gateway-client.ts); its apex /admin page has
@@ -130,11 +130,11 @@ export function adminSection(account: GatewayAccount): AdminSection {
     dockerEl.hidden = !view.dockerError
     dockerEl.textContent = view.dockerError ? `Docker Engine: ${view.dockerError}` : ''
     patchContent(diskEl, diskHtml(view))
-    patchContent(usersEl, view.users.length
+    patchInformation(usersEl, view.users.length
       ? view.users.map((user) => userHtml(user, account.handle, view.disk?.budget ?? 0)).join('')
       : '<div class="st-help st-help-info">Nobody has signed in yet.</div>')
     noteEl.textContent = `Admins (${view.admins.join(', ')}) may always sign in.${view.allowedOrgs.length ? ` Members of ${view.allowedOrgs.join(', ')} may sign in too.` : ''}`
-    patchContent(allowedEl, allowedHtml(view))
+    patchInformation(allowedEl, allowedHtml(view))
   }
 
   const refresh = async (): Promise<void> => {

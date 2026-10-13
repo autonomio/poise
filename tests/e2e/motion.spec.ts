@@ -41,7 +41,7 @@ for (const narrow of [false, true]) test(`session controls retain focus and draf
   await expect(page.locator('.chat-session-running')).toHaveCount(1)
   expect(await original!.evaluate(element => element.isConnected && document.activeElement === element)).toBe(true)
   await expect(input(page)).toHaveValue('Unsent draft')
-  await button.click()
+  await button.press('Enter')
   await expect(button).toHaveText('Sure?')
   expect(await original!.evaluate(element => document.activeElement === element)).toBe(true)
   expect(state.calls.filter(call => call.method === 'DELETE')).toHaveLength(0)
