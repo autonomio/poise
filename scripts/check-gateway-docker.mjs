@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const commands = [
@@ -7,7 +8,7 @@ const commands = [
   { command: 'npx', args: ['vitest', 'run', 'tests/docker.integration.test.ts'], cwd: `${root}gateway` },
 ]
 for (const { command, args, cwd } of commands) {
-  const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, POISE_GATEWAY_DOCKER_TESTS: '1' } })
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/local/bin:${process.env.PATH}`, POISE_GATEWAY_DOCKER_TESTS: '1' } })
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
