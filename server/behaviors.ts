@@ -28,7 +28,6 @@ import { type Catalog, type ReviewerSlot, REVIEWER_SLOTS, loadCatalog } from './
 import {
   db,
   claimPrOperationOwned,
-  claimSeen,
   claimSeenOwned,
   claimSeenOwnedAs,
   clearSeenExceptLaunched,
@@ -114,9 +113,9 @@ function organizationOwns(repoOrTarget: string): boolean {
 }
 
 function isGlobalPreference(key: string): boolean {
-  return /^behavior_(?:review_new_prs|approve_prs|resolve_unblocking|merge_prs|review_new_issues)_(?:enabled|setting|reviewers|scratchpad)$/.test(key)
+  return /^behavior_(?:review_new_prs|approve_prs|resolve_unblocking|merge_prs|rerun_grey_ci|review_new_issues)_(?:enabled|setting|reviewers|scratchpad)$/.test(key)
     || /^behavior_review_new_issues_(?:repos|authors|slot_since)$/.test(key)
-    || /^behavior_(?:review_new_prs|approve_prs|resolve_unblocking|merge_prs)_skip_repos$/.test(key)
+    || /^behavior_(?:review_new_prs|approve_prs|resolve_unblocking|merge_prs|rerun_grey_ci)_skip_repos$/.test(key)
 }
 
 function scopedMetaKey(key: string): string {
@@ -3084,6 +3083,8 @@ export function getGreyCiLastFired(): { at: string, target: string, url: string 
   }
 }
 
+const GREY_CI_INTENT_KEY = 'grey-ci-recovery'
+
 async function tickRerunGreyCi(): Promise<void> {
   const behavior = 'rerun-grey-ci' as const
   if (!isEnabled(behavior)) return
@@ -3119,8 +3120,19 @@ async function tickRerunGreyCi(): Promise<void> {
         || !(row.error === null || typeof row.error === 'string')) throw new Error('malformed grey CI target evidence')
       if (row.error !== null) { recordBehaviorFailure(behavior, 'operation', row.error, target); continue }
       if (typeof row.head_sha !== 'string' || !SHA_PATTERN.test(row.head_sha)
-        || typeof row.author !== 'string') throw new Error('missing grey CI head or author evidence')
-      if (row.author.toLowerCase() !== author.toLowerCase()) continue
+        || !(row.author === null || typeof row.author === 'string')) throw new Error('missing grey CI head or author evidence')
+      if (row.author === null || row.author.toLowerCase() !== author.toLowerCase()) continue
+      clearBehaviorFailure(behavior, target)
+      // Rehydrate every unconfirmed intent on this head, even when its CI is
+      // now green or running and discovery no longer returns a grey candidate.
+      const pending = db.prepare(`SELECT launch_source AS source, launch_error AS error FROM behavior_seen
+        WHERE key = ? AND launch_repo = ? AND launch_expected_head = ? AND claim_id <> ''`)
+        .all(GREY_CI_INTENT_KEY, pr.repo.toLowerCase(), row.head_sha) as Array<{ source: string, error: string | null }>
+      for (const intent of pending) {
+        const pendingTarget = `${target}:${intent.source}`
+        if (!readBehaviorFailure(behavior, pendingTarget)) recordBehaviorFailure(behavior, 'worker',
+          intent.error || 'Rerun intent has no confirmed receipt; automatic recovery is held', pendingTarget, { held: true })
+      }
       for (const value of row.runs) {
         if (!isEnabled(behavior) || behaviorAborted()) return
         const run = objectValue(value, 'grey CI workflow')
@@ -3130,9 +3142,12 @@ async function tickRerunGreyCi(): Promise<void> {
         if (!runId || !attempt || !workflowId || run.status !== 'completed'
           || !['cancelled', 'stale'].includes(String(run.conclusion))
           || typeof run.event !== 'string' || !/^[a-z_]+$/.test(run.event)) throw new Error('unsafe grey CI workflow evidence')
-        const claimKey = `${operationKey(behavior)}:${actor.toLowerCase()}`
-        const claimTarget = `${target}:${row.head_sha}:${workflowId}:${run.event}`
-        if (hasSeen(claimKey, claimTarget)) continue
+        const claimKey = GREY_CI_INTENT_KEY
+        const source = `workflow:${workflowId}:${run.event}:${row.head_sha}`
+        const failureTarget = `${target}:${source}`
+        const claimTarget = `${pr.repo.toLowerCase()}:${row.head_sha}:${workflowId}:${run.event}`
+        if (hasSeen(claimKey, claimTarget) || !behaviorRetryDue(behavior, failureTarget)) continue
+        const claimId = randomUUID()
         const operationId = claimPrOperationOwned(target, PR_OPERATION_EVALUATION_LEASE_MS)
         if (!operationId) continue
         try {
@@ -3140,7 +3155,15 @@ async function tickRerunGreyCi(): Promise<void> {
           const cwd = join(GH_INTERFACE_CWD_ROOT, owner, name)
           await mkdir(cwd, { recursive: true })
           if (!isEnabled(behavior) || behaviorAborted() || !stillEligible(behavior, pr)
-            || configuredReviewer() !== actor || !claimSeen(claimKey, claimTarget)) continue
+            || configuredReviewer() !== actor) continue
+          const claimed = db.transaction(() => {
+            if (!claimSeenOwnedAs(claimKey, claimTarget, claimId, PR_OPERATION_EVALUATION_LEASE_MS)) return false
+            db.prepare(`UPDATE behavior_seen SET launch_requested_at = ?, launch_repo = ?, launch_pr = ?,
+              launch_expected_head = ?, launch_actor = ?, launch_source = ? WHERE key = ? AND target = ? AND claim_id = ?`)
+              .run(new Date().toISOString(), pr.repo.toLowerCase(), pr.number, row.head_sha, actor, source, claimKey, claimTarget, claimId)
+            return true
+          })()
+          if (!claimed) continue
           const { stdout: receipt } = await runFile(GH_INTERFACE, ['--rerun-grey-ci-if-ready', `#${pr.number}`,
             '--run-id', String(runId), '--run-attempt', String(attempt), '--expected-head', row.head_sha,
             '--author', author, '--token-user', actor],
@@ -3148,16 +3171,21 @@ async function tickRerunGreyCi(): Promise<void> {
           const result = objectValue(parseJson(receipt, 'grey CI rerun'), 'grey CI rerun')
           if (result.action !== 'rerun_grey_ci_if_ready' || result.repository !== pr.repo || result.pull_number !== pr.number
             || result.head_sha !== row.head_sha || result.run_id !== runId || result.run_attempt !== attempt
-            || !['rerun_requested', 'not_ready', 'superseded'].includes(String(result.outcome))) throw new Error('malformed grey CI rerun receipt')
+            || !['rerun_requested', 'not_ready', 'superseded', 'read_failed'].includes(String(result.outcome))
+            || (result.outcome === 'read_failed' && (typeof result.error !== 'string' || !result.error))) throw new Error('malformed grey CI rerun receipt')
           if (result.outcome === 'rerun_requested') {
+            if (!completeSeenOwned(claimKey, claimTarget, claimId)) throw new Error('grey CI intent ownership changed before receipt')
             setMeta('behavior_rerun_grey_ci_last_fired', JSON.stringify({ at: new Date().toISOString(), target,
               url: `https://github.com/${pr.repo}/actions/runs/${runId}` }))
-          } else releaseSeen(claimKey, claimTarget)
-          clearBehaviorFailure(behavior, target)
+          } else if (!releaseSeenOwned(claimKey, claimTarget, claimId)) throw new Error('grey CI intent ownership changed before no-write receipt')
+          if (result.outcome === 'read_failed') {
+            recordBehaviorFailure(behavior, 'operation', result.error, failureTarget)
+          } else clearBehaviorFailure(behavior, failureTarget)
         } catch (error) {
           // A missing receipt may follow an accepted write. Retain the durable
           // claim across restarts; never automatically replay that ambiguity.
-          recordBehaviorFailure(behavior, 'worker', error, target, { held: true })
+          setBehaviorLaunchErrorOwned(claimKey, claimTarget, claimId, behaviorErrorMessage(error))
+          recordBehaviorFailure(behavior, 'worker', error, failureTarget, { held: true })
           console.error(`[behaviors] grey CI rerun held for ${target}:`, error)
         } finally { releasePrOperationOwned(operationId) }
       }

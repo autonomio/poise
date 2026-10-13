@@ -202,3 +202,11 @@ each kind of target, so the two cannot drift apart.
 
 A repository outside every ready account is refused the same way. When the
 facts cannot be read, the replay answers 502 and launches nothing.
+
+Grey CI recovery intents are shared by repository, workflow, event and head,
+independent of PR number or changes to the acting account. Intent is persisted
+before launch; a restart rehydrates unconfirmed requests as visible holds even
+if the workflow is now running or green. Diagnostics belong to each workflow,
+so a different successful rerun cannot clear an unresolved hold. A `read_failed`
+receipt proves no write occurred: its intent is released and the visible read
+failure retries with backoff. Errors after the write begins remain held.

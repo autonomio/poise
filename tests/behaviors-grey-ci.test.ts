@@ -16,6 +16,9 @@ const GREY_RUN = { run_id: 100, run_attempt: 2, workflow_id: 70, event: 'pull_re
 let root = ''
 let db: typeof import('../server/db')
 let runtime: typeof import('../server/behaviors')
+let greyRuns: Array<Record<string, unknown>> = []
+let errorRunIds = new Set<number>()
+let ghostNumbers = new Set<number>()
 let outcome = 'rerun_requested'
 let error: Error | null = null
 let healthError: Error | null = null
@@ -48,15 +51,17 @@ async function cli(command: string, args: string[], options: RunFileOptions) {
   if (command === 'github-interface' && args[0] === '--grey-ci-candidates') {
     if (batchGate) { batchGate.reached(); await batchGate.wait }
     const requests = JSON.parse(args[2]!) as Array<{ repository: string, number: number }>
-    return json({ action: 'grey_ci_candidates', actor: 'review-bot', graphql_cost: 1, records: requests.map((request) => ({
-      ...request, head_sha: HEAD, author: 'octocat', runs: greyNumbers === null || greyNumbers.has(request.number) ? [GREY_RUN] : [],
+    return json({ action: 'grey_ci_candidates', actor: args[args.indexOf('--token-user') + 1], graphql_cost: 1, records: requests.map((request) => ({
+      ...request, head_sha: HEAD, author: ghostNumbers.has(request.number) ? null : 'octocat', runs: greyNumbers === null || greyNumbers.has(request.number) ? greyRuns : [],
       error: unreadableNumbers.has(request.number) ? 'GitHub could not read this target' : null,
     })) })
   }
   if (command === 'github-interface' && args[0] === '--rerun-grey-ci-if-ready') {
     if (error) throw error
+    const runId = Number(args[args.indexOf('--run-id') + 1])
+    if (errorRunIds.has(runId)) throw new Error('rerun receipt lost')
     return json({ action: 'rerun_grey_ci_if_ready', repository: repo, pull_number: number, head_sha: HEAD,
-      outcome, run_id: 100, run_attempt: 2, ...response })
+      outcome, run_id: runId, run_attempt: 2, ...response })
   }
   throw new Error(`unexpected CLI: ${command} ${args.join(' ')}`)
 }
@@ -66,7 +71,7 @@ beforeEach(async () => {
   process.env.POISE_DB = join(root, 'cache.db')
   pulls = [pull()]
   outcome = 'rerun_requested'; error = null; healthError = null; response = {}; batchGate = null
-  greyNumbers = null; unreadableNumbers = new Set()
+  greyNumbers = null; unreadableNumbers = new Set(); greyRuns = [GREY_RUN]; errorRunIds = new Set(); ghostNumbers = new Set()
   mocks.runFile.mockReset().mockImplementation(cli)
   mocks.spawnDetached.mockReset()
   vi.spyOn(console, 'log').mockImplementation(() => undefined)
@@ -127,6 +132,50 @@ describe('Rerun Grey CI', () => {
     expect(runtime.getGreyCiLastFired()).toBeNull()
     outcome = 'rerun_requested'
     await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toHaveLength(2)
+  })
+  it('shares enable and repository skip settings across managed ready accounts', async () => {
+    for (const login of ['acme', 'beta']) db.db.prepare(`INSERT INTO organizations(login, datastore_path, managed, status, stage, indexed_user)
+      VALUES (?, ?, 1, 'ready', 'ready', 'octocat')`).run(login, join(root, `${login}.sqlite`))
+    await runtime.setEnabled('rerun-grey-ci', true)
+    runtime.withBehaviorOrganization('acme', () => runtime.setRepositorySkips('rerun-grey-ci', [REPO]))
+    expect(runtime.withBehaviorOrganization('beta', () => runtime.isEnabled('rerun-grey-ci'))).toBe(true)
+    expect(runtime.withBehaviorOrganization('beta', () => runtime.getRepositorySkips('rerun-grey-ci'))).toEqual([REPO])
+  })
+  it('deduplicates the same workflow/head across PRs and mutable actor settings', async () => {
+    enable(); pulls.push(pull(REPO, 8)); await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toHaveLength(1)
+    db.setMeta('agentAccount', 'new-review-bot'); await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toHaveLength(1)
+  })
+  it('preserves an ambiguous workflow hold when another workflow gets a valid receipt', async () => {
+    enable(); greyRuns.push({ ...GREY_RUN, run_id: 101, workflow_id: 71 }); errorRunIds.add(100)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(runtime.getGreyCiLastFired()?.url).toContain('/101')
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([expect.objectContaining({ error: 'rerun receipt lost' })])
+  })
+  it('rehydrates a crash between intent and receipt even when CI is no longer grey', async () => {
+    enable(); greyNumbers = new Set()
+    const marker = `${REPO}:${HEAD}:70:pull_request_review`
+    db.claimSeenOwnedAs('grey-ci-recovery', marker, 'crash-owner', 60_000)
+    db.db.prepare(`UPDATE behavior_seen SET launch_requested_at = ?, launch_repo = ?, launch_pr = 7,
+      launch_expected_head = ?, launch_source = ? WHERE key = 'grey-ci-recovery' AND target = ?`)
+      .run(new Date().toISOString(), REPO, HEAD, `workflow:70:pull_request_review:${HEAD}`, marker)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toEqual([])
+    expect(runtime.getBehaviorsRuntimeHealth().failures[0]?.error).toContain('no confirmed receipt')
+  })
+  it('skips a ghost author without abandoning another readable PR', async () => {
+    enable(); pulls.push(pull(REPO, 8)); ghostNumbers.add(7)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()[0]![1][1]).toBe('#8')
+  })
+  it('retries a proven no-write read failure after backoff', async () => {
+    enable(); outcome = 'read_failed'; response = { error: 'GitHub read unavailable' }
+    await runtime.runEnabledBehaviorsOnce()
+    expect(runtime.getBehaviorsRuntimeHealth().failures[0]?.error).toContain('read unavailable')
+    vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(61_000)
+    outcome = 'rerun_requested'; response = {}; await runtime.runEnabledBehaviorsOnce()
     expect(rerunCalls()).toHaveLength(2)
   })
   it('checks ten ordinary PRs with one batch call and no individual REST operations', async () => {

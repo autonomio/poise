@@ -101,6 +101,14 @@ includes `actor`, actual `graphql_cost`, and ordered records with `head_sha`,
 identity/head, completed cancelled/stale workflow state, exact attempt, all jobs
 and the latest replacement run before a POST to the workflow rerun endpoint.
 A failure, timeout, active or unknown job refuses recovery. Outcomes are
-`rerun_requested`, `not_ready` and `superseded`; the successful outcome means
+`rerun_requested`, `not_ready`, `superseded` and `read_failed`; the successful outcome means
 GitHub accepted a request, not that CI passed. Writes are never blindly retried.
 Poise owns the persistent once-per-workflow/head/event intent and ambiguity hold.
+
+Grey CI recovery intents are shared by repository, workflow, event and head,
+independent of PR number or changes to the acting account. Intent is persisted
+before launch; a restart rehydrates unconfirmed requests as visible holds even
+if the workflow is now running or green. Diagnostics belong to each workflow,
+so a different successful rerun cannot clear an unresolved hold. A `read_failed`
+receipt proves no write occurred: its intent is released and the visible read
+failure retries with backoff. Errors after the write begins remain held.

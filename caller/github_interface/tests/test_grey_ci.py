@@ -172,9 +172,19 @@ class TestGreyRerun(IsolatedAsyncioTestCase):
 
     async def test_incomplete_job_inventory_fails_visibly_without_a_write(self):
         self.client.get.side_effect = [WORKFLOW, {'jobs': [], 'total_count': 1}]
-        with self.assertRaisesRegex(RuntimeError, 'incomplete'):
-            await self.rerun()
+        result = await self.rerun()
+        self.assertEqual(result['outcome'], 'read_failed')
+        self.assertIn('incomplete', result['error'])
         self.client.post.assert_not_awaited()
+
+    async def test_read_failure_proves_no_write_but_a_write_error_remains_ambiguous(self):
+        self.client.get.side_effect = RuntimeError('read unavailable')
+        self.assertEqual((await self.rerun())['outcome'], 'read_failed')
+        self.client.post.assert_not_awaited()
+        self.client.get.side_effect = [WORKFLOW, {'jobs': [JOB], 'total_count': 1}, {'workflow_runs': [WORKFLOW]}]
+        self.client.post.side_effect = RuntimeError('write receipt lost')
+        with self.assertRaisesRegex(RuntimeError, 'write receipt lost'):
+            await self.rerun()
 
     async def test_missing_identity_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'token-user is required'):

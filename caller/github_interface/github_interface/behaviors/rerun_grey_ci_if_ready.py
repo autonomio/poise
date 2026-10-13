@@ -1,5 +1,7 @@
 from typing import Any
 
+import httpx
+
 from github_interface.atoms.pulls import get_pull
 from github_interface.behaviors.grey_ci_candidates import GREY_CONCLUSIONS
 from github_interface.client import GitHubClient
@@ -19,7 +21,8 @@ def eligible_run(run: dict[str, Any], run_id: int, attempt: int, head: str, numb
     return (run.get("id") == run_id and run.get("run_attempt") == attempt
             and run.get("head_sha") == head and run.get("status") == "completed"
             and run.get("conclusion") in GREY_CONCLUSIONS
-            and (not run.get("pull_requests") or any(pr.get("number") == number for pr in run["pull_requests"])))
+            and isinstance(run.get("pull_requests"), list)
+            and (not run["pull_requests"] or any(pr.get("number") == number for pr in run["pull_requests"])))
 
 
 async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
@@ -33,15 +36,27 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
     result = {"action": "rerun_grey_ci_if_ready", "repository": f"{owner}/{repo}",
               "pull_number": number, "head_sha": head, "run_id": run_id, "run_attempt": attempt,
               "outcome": "not_ready"}
+    try:
+        readiness = await preflight(client, owner, repo, number, head, author, run_id, attempt)
+    except (RuntimeError, httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+        return {**result, "outcome": "read_failed", "error": str(error)}
+    if readiness != "ready":
+        return {**result, "outcome": readiness}
+    await client.post(f"/repos/{owner}/{repo}/actions/runs/{run_id}/rerun")
+    return {**result, "outcome": "rerun_requested"}
+
+
+async def preflight(client: GitHubClient, owner: str, repo: str, number: int, head: str,
+                    author: str, run_id: int, attempt: int) -> str:
     pull = await get_pull(client, owner, repo, number)
     if (pull.get("head") or {}).get("sha") != head:
-        return {**result, "outcome": "superseded"}
+        return "superseded"
     if not eligible_pull(pull, head, author):
-        return result
+        return "not_ready"
     path = f"/repos/{owner}/{repo}/actions/runs/{run_id}"
     workflow = await client.get(path)
     if not eligible_run(workflow, run_id, attempt, head, number):
-        return result
+        return "not_ready"
     # Verify the exact attempt, including every matrix job, before rerunning
     # a whole workflow. Failures and active jobs are never swept into recovery.
     page = 1
@@ -63,15 +78,14 @@ async def run(client: GitHubClient, payload: dict[str, Any]) -> dict[str, Any]:
                        or job.get("status") != "completed"
                        or job.get("conclusion") not in {"success", "skipped", "neutral", *GREY_CONCLUSIONS}
                        for job in jobs):
-        return result
+        return "not_ready"
     # Changes between discovery and mutation refuse the operation, including
     # a manually started rerun of this same workflow.
     if not eligible_pull(await get_pull(client, owner, repo, number), head, author):
-        return {**result, "outcome": "superseded"}
+        return "superseded"
     latest = await client.get(f"/repos/{owner}/{repo}/actions/workflows/{workflow['workflow_id']}/runs",
                               params={"head_sha": head, "event": workflow["event"], "per_page": 1})
     current_runs = latest["workflow_runs"]
     if not current_runs or not eligible_run(current_runs[0], run_id, attempt, head, number):
-        return result
-    await client.post(f"{path}/rerun")
-    return {**result, "outcome": "rerun_requested"}
+        return "not_ready"
+    return "ready"
