@@ -63,8 +63,8 @@ function ghAccounts(account: ConnectedAccount, identities: GitHubIdentities): st
   }).join('')}</ul>` : ''
   const usable = (login: string) => held.some((gh) => gh.signedIn && sameLogin(gh.login, login))
   const missing = [
-    identities.me && !usable(identities.me) ? `Your GitHub account ${identities.me} is not signed in to gh.` : '',
-    identities.agentAccount && !usable(identities.agentAccount) ? `Your GitHub automation account ${identities.agentAccount} is not signed in to gh.` : '',
+    identities.me && !usable(identities.me) ? `Your GitHub account ${identities.me} is not signed in.` : '',
+    identities.agentAccount && !usable(identities.agentAccount) ? `Your GitHub automation account ${identities.agentAccount} is not signed in.` : '',
   ].filter(Boolean)
   return list + missing.map((text) => `<div class="st-help st-help-error st-gh-missing">${escapeHtml(text)}</div>`).join('')
 }

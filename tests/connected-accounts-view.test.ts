@@ -48,10 +48,10 @@ describe('the gh row', () => {
 
   it('says when your account or the agent account is not signed in to gh', () => {
     const html = accountsHtml([gh([held('octocat', true)])], { me: 'octocat', agentAccount: 'octo-agent' }, false)
-    expect(missing(html)).toEqual(['Your GitHub automation account octo-agent is not signed in to gh.'])
+    expect(missing(html)).toEqual(['Your GitHub automation account octo-agent is not signed in.'])
     expect(missing(accountsHtml([gh([])], { me: 'octocat', agentAccount: 'octo-agent' }, false))).toEqual([
-      'Your GitHub account octocat is not signed in to gh.',
-      'Your GitHub automation account octo-agent is not signed in to gh.',
+      'Your GitHub account octocat is not signed in.',
+      'Your GitHub automation account octo-agent is not signed in.',
     ])
   })
 
@@ -59,7 +59,7 @@ describe('the gh row', () => {
     const html = accountsHtml([gh([held('octocat', true), held('octo-agent', false, false)])], { me: 'octocat', agentAccount: 'octo-agent' }, false)
     expect(notes(html, 'octo-agent')).toBe('automation account')
     expect(html).toContain('HTTP 401: Bad credentials')
-    expect(missing(html)).toEqual(['Your GitHub automation account octo-agent is not signed in to gh.'])
+    expect(missing(html)).toEqual(['Your GitHub automation account octo-agent is not signed in.'])
   })
 
   it('says nothing about either account while gh\'s status is unknown, or when none is set', () => {

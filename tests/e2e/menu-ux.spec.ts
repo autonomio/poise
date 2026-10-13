@@ -50,6 +50,18 @@ async function attached(page: Page): Promise<void> {
   }).toBeLessThan(2)
 }
 
+async function settled(page: Page): Promise<void> {
+  await expect(page.locator('#menu-surface')).toHaveCSS('opacity', '1')
+  await page.locator('#menu-surface').evaluate(async (element) => {
+    // The width transition schedules a final height measurement. Wait for
+    // that frame too, so visual evidence shows the finished surface.
+    for (let i = 0; i < 3; i++) {
+      await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    }
+  })
+}
+
 test('opens Settings destinations directly on one frame and returns to the menu', async ({ page }) => {
   await workspace(page)
   await page.locator('#menu-toggle').click()
@@ -139,6 +151,7 @@ for (const theme of ['light', 'dark']) test(`fits every destination at a narrow 
   }, theme)
   await page.locator('#menu-toggle').click()
   await attached(page)
+  await settled(page)
   await page.screenshot({ path: info.outputPath(`${theme}-menu.png`) })
   for (const section of ['Analytics', 'General', 'Models', 'Accounts', 'Typography']) {
     await page.locator('#menu-popover').getByRole('button', { name: section, exact: true }).click()
@@ -155,6 +168,7 @@ for (const theme of ['light', 'dark']) test(`fits every destination at a narrow 
       const buttons = await panel.locator('[data-range]').evaluateAll((items) => items.map((item) => item.scrollWidth - item.clientWidth))
       expect(Math.max(...buttons)).toBeLessThanOrEqual(1)
     }
+    await settled(page)
     await page.screenshot({ path: info.outputPath(`${theme}-${section.toLowerCase()}.png`) })
     await panel.getByRole('button', { name: 'Back to menu' }).click()
   }

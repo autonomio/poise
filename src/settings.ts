@@ -491,6 +491,8 @@ function renderPlaces(data: ModelsResponse) {
         <label class="tp-label" ${helpAttributes(place.why)}>${escapeHtml(place.label)}</label>
         <div class="st-fixed-model"><code>${escapeHtml(place.model)}</code></div>
       </div>`).join('')
+  const fixedHeading = panelEl?.querySelector<HTMLElement>('.st-fixed-heading')
+  if (fixedHeading) fixedHeading.hidden = data.fixed.length === 0
   renderCatalogStatus(data)
 }
 
@@ -543,9 +545,13 @@ function renderPresets(presets: ModelPreset[]): void {
   const chosen = select.value
   select.innerHTML = presets.length
     ? presets.map((preset) => `<option value="${escapeHtml(preset.name)}">${escapeHtml(preset.name)}</option>`).join('')
-    : '<option value="">No saved configurations yet</option>'
+    : '<option value="">None saved</option>'
+  select.disabled = !presets.length
   if (presets.some((preset) => preset.name === chosen)) select.value = chosen
-  for (const button of panelEl!.querySelectorAll<HTMLButtonElement>('.st-preset-use, .st-preset-delete')) button.disabled = !presets.length
+  for (const button of panelEl!.querySelectorAll<HTMLButtonElement>('.st-preset-use, .st-preset-delete')) {
+    button.disabled = !presets.length
+    button.hidden = !presets.length
+  }
 }
 
 // One configuration action at a time: overlapping saves, uses and deletes could
@@ -908,7 +914,7 @@ function buildPanel(): HTMLElement {
             <button type="button" class="st-clear st-preset-delete">Delete</button>
           </div>
           <div class="st-row st-row-tight">
-            <input type="text" class="st-input st-preset-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Name for the choices below" aria-label="Configuration name" />
+            <input type="text" class="st-input st-preset-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Name" aria-label="Configuration name" />
             <button type="button" class="st-clear st-preset-save">Save current</button>
           </div>
 
@@ -917,7 +923,7 @@ function buildPanel(): HTMLElement {
         <div class="tp-group-label">Model choices</div>
         <div class="st-models"><div class="st-help st-help-info">Loading the catalog…</div></div>
 
-        <div class="tp-group-label" ${helpAttributes("These model choices are fixed by Caller.")}>Fixed models</div>
+        <div class="tp-group-label st-fixed-heading" ${helpAttributes("These model choices are fixed by Caller.")} hidden>Fixed models</div>
         <div class="st-models-fixed"></div>
 
         <div class="tp-group-label" ${helpAttributes("Models are checked daily at 07:00 in your time zone. Check now refreshes provider CLIs and the model list.")}>Model catalog</div>
