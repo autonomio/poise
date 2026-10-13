@@ -127,8 +127,9 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     const panel = openPanel()
     const wantedWidth = panel ? panel.classList.contains('st-terminal-open') ? 640 : 420 : 252
     surface.style.top = `${box.bottom - 1}px`
-    // Fixed-position offsets use the layout viewport, excluding its scrollbar.
-    surface.style.right = `${Math.max(0, document.documentElement.clientWidth - box.right)}px`
+    // Anchor by a measured coordinate: a reserved scrollbar gutter can make
+    // viewport-relative right offsets differ even when clientWidth is unchanged.
+    surface.style.left = `${box.right}px`
     surface.style.width = `${Math.min(wantedWidth, box.right - 12)}px`
     surface.style.height = `${panel ? Math.min(680, available) : Math.min(menu.scrollHeight + 2, available)}px`
     surface.style.maxHeight = `${available}px`

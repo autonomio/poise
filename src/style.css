@@ -1341,11 +1341,11 @@ tr:hover .review-btn { opacity: 1; }
   box-shadow: var(--e-2);
   overflow: hidden;
   transform-origin: top right;
-  transform: scale(.96, .92);
+  transform: translateX(-100%) scale(.96, .92);
   opacity: 0;
   transition: width 260ms var(--ease), height 260ms var(--ease), transform 220ms var(--ease), opacity 160ms ease;
 }
-#menu-surface.open { opacity: 1; transform: none; }
+#menu-surface.open { opacity: 1; transform: translateX(-100%); }
 #menu-surface[hidden], #menu-popover[hidden], #menu-surface .menu-panel:not(.open) { display: none; }
 #menu-popover {
   padding: var(--sp-2);
@@ -1431,7 +1431,8 @@ tr:hover .review-btn { opacity: 1; }
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
-  #menu-surface, #menu-surface .menu-panel { transition: none; animation: none; transform: none; }
+  #menu-surface, #menu-surface .menu-panel { transition: none; animation: none; }
+  #menu-surface { transform: translateX(-100%); }
 }
 
 .menu-item {
