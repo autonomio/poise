@@ -1082,6 +1082,8 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
       // Keep whatever was already picked if it survived into the real list.
       if (chosen && allRepos.includes(chosen)) repoSel.value = chosen
       else if (wantRepo && allRepos.includes(wantRepo)) repoSel.value = wantRepo
+    }).catch((error: unknown) => {
+      if (composer.isConnected) showError(`Could not load repositories — ${(error as Error).message}`)
     })
   }
 

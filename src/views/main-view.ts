@@ -768,16 +768,6 @@ async function refreshMainSoft() {
     const wasDone = done
     done = newTop.length < PAGE_SIZE
     loader.hidden = done
-    // When a refresh reopens paging — new rows arrived, so there is more to
-    // load again — the IntersectionObserver does not re-fire on its own: it
-    // reports state changes, and the sentinel never left the viewport. Without
-    // a nudge the loader spins forever and scrolling loads nothing.
-    if (wasDone && !done) {
-      requestAnimationFrame(() => {
-        if (mine === queryGeneration && sentinelNeedsFetch()) void fetchPage()
-      })
-    }
-
     if (next.length === 0) {
       tbody.innerHTML = ''
       table.hidden = true
@@ -799,6 +789,14 @@ async function refreshMainSoft() {
     loader.hidden = done
     updateCount()
     showLoadError(organizationErrors(pageData) || organizationErrors(countData) || (!countComplete ? 'Total count unavailable. Showing available results.' : ''))
+    // Schedule after the count settles, when finally can release `fetching`.
+    // Scheduling before that await would run into the paging guard and lose
+    // the only nudge when a previously finished archive has gained new rows.
+    if (wasDone && !done) {
+      requestAnimationFrame(() => {
+        if (mine === queryGeneration && sentinelNeedsFetch()) void fetchPage()
+      })
+    }
   } catch (err) {
     // A failing background refresh was completely invisible once the table had
     // rows: it froze on the last good page while the relative times kept

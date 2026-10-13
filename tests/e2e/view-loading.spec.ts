@@ -94,7 +94,8 @@ test('a late Current initialization cannot restart polling after navigation away
     await expect(page.locator('#tbody')).toContainText('Available GitHub issue')
     const before = state.currentReads
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
-    await expect.poll(() => state.currentReads).toBe(before)
+    await page.waitForTimeout(150) // Allow a wrongly reattached listener to issue its request.
+    expect(state.currentReads).toBe(before)
   } finally { repos.release() }
 })
 
@@ -116,4 +117,80 @@ test('Archive paints rows before its total-count response and reports a late cou
     await expect(page.locator('#view-main')).toContainText('Total count unavailable.')
     await expect(page.locator('#tbody')).toContainText('Available GitHub issue')
   } finally { count.release() }
+})
+
+test('Current paints GitHub lanes while its personal-card read remains pending', async ({ page }) => {
+  await setup(page)
+  const manual = deferred()
+  await page.route(/\/api\/current(?:\?.*)?$/, async (route) => {
+    await manual.promise
+    await route.fallback()
+  })
+  try {
+    await page.goto('/')
+    await expect(page.getByRole('link', { name: /Available GitHub issue/ })).toBeVisible({ timeout: 2000 })
+    manual.release()
+    await expect(page.getByRole('button', { name: 'Edit card: Available personal card', exact: true })).toBeVisible()
+  } finally { manual.release() }
+})
+
+test('a late repository failure is visible without discarding Current cards', async ({ page }) => {
+  await setup(page)
+  const repos = deferred()
+  await page.route(/\/api\/repos(?:\?.*)?$/, async (route) => {
+    await repos.promise
+    await route.fulfill({ status: 502, json: { error: 'Repository discovery unavailable' } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.getByRole('link', { name: /Available GitHub issue/ })).toBeVisible({ timeout: 2000 })
+    repos.release()
+    await expect(page.locator('#view-current')).toContainText('Could not load the repository list.')
+    await expect(page.getByRole('button', { name: 'Edit card: Available personal card', exact: true })).toBeVisible()
+  } finally { repos.release() }
+})
+
+test('Archive soft refresh paints updated rows while its count remains pending', async ({ page }) => {
+  await setup(page, 'main')
+  const count = deferred()
+  let refreshing = false
+  await page.route('**/api/gh', async (route) => {
+    if (!refreshing) return route.fallback()
+    const body = route.request().postDataJSON() as { count_only?: boolean }
+    if (!body.count_only) return route.fulfill({ json: { records: [{ ...issue, number: 8, title: 'Updated GitHub issue' }] } })
+    await count.promise
+    await route.fulfill({ json: { count: 2 } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#count')).toHaveText('1 / 1')
+    refreshing = true
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+    await expect(page.locator('#tbody')).toContainText('Updated GitHub issue', { timeout: 2000 })
+    count.release()
+    await expect(page.locator('#count')).toHaveText('2 / 2')
+  } finally { count.release() }
+})
+
+test('Archive ignores a count from the previous account filter', async ({ page }) => {
+  await setup(page, 'main')
+  const oldCount = deferred()
+  await page.route('**/api/gh', async (route) => {
+    const body = route.request().postDataJSON() as { count_only?: boolean, org?: string }
+    if (!body.count_only) return route.fallback()
+    if (body.org === 'beta') return route.fulfill({ json: { count: 42 } })
+    await oldCount.promise
+    await route.fulfill({ json: { count: 1 } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#tbody')).toContainText('Available GitHub issue', { timeout: 2000 })
+    await page.locator('#main-filters').getByLabel('Account filter').selectOption('beta')
+    await expect(page.locator('#count')).toHaveText('1 / 42')
+    const oldResponse = page.waitForResponse((response) => response.url().endsWith('/api/gh')
+      && response.request().postDataJSON().count_only && !response.request().postDataJSON().org)
+    oldCount.release()
+    await oldResponse
+    await expect(page.locator('#count')).toHaveText('1 / 42')
+  } finally { oldCount.release() }
 })
