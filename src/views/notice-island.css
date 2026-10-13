@@ -59,7 +59,7 @@
   white-space: nowrap;
   /* The arriving notice waits for the leaving one to be mostly gone, so the
      two never read on top of each other. */
-  transition: opacity var(--t-base) var(--ease) calc(var(--t-quick) / 2), transform var(--t-base) var(--ease) calc(var(--t-quick) / 2);
+  transition: opacity var(--flow-feedback) ease-out, transform var(--flow-settle) var(--flow-spring);
 }
 .ni-content.ni-arriving { opacity: 0; transform: translateY(6px); }
 .ni-content.ni-leaving {

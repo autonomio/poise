@@ -1,5 +1,5 @@
-// A persistent split pane. Collapse keeps the element mounted so its width
-// and contents can ease out; dragging follows the pointer without animation.
+import { cancelMotion, motionValue, spring } from '../motion'
+// Dragging takes over from the presented width, without resetting to a target.
 const WIDTH_KEY = 'poise-chat-sidebar-width'
 const STATE_KEY = 'poise-chat-sidebar'
 const DEFAULT_WIDTH = 260
@@ -23,6 +23,10 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
   let width = preferred
   let drag: { id: number, x: number, width: number } | null = null
   let collapsed = stored(STATE_KEY) === 'collapsed'
+  function writeWidth(pixels: number): void {
+    sidebar.style.flexBasis = `${Math.max(0, pixels)}px`
+    sidebar.style.width = `${Math.max(0, pixels)}px`
+  }
   const bounds = () => {
     const memories = view.querySelector<HTMLElement>('.chat-memories-pane')
     const occupied = memories && getComputedStyle(memories).position !== 'absolute' ? memories.getBoundingClientRect().width : 0
@@ -34,6 +38,7 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     const { min, max } = bounds()
     width = Math.round(Math.max(min, Math.min(max, next)))
     view.style.setProperty('--chat-sidebar-width', `${width}px`)
+    if (drag || !motionValue(sidebar, 'width')) writeWidth(collapsed ? 0 : width)
     handle.setAttribute('aria-valuemin', String(min))
     handle.setAttribute('aria-valuemax', String(max))
     handle.setAttribute('aria-valuenow', String(width))
@@ -51,6 +56,7 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     onLayout()
   }
   function setCollapsed(next: boolean): void {
+    const presented = sidebar.getBoundingClientRect().width
     cancelResize()
     collapsed = next
     if (collapsed && sidebar.contains(document.activeElement)) toggle.focus()
@@ -58,6 +64,8 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     view.classList.toggle('chat-sidebar-collapsed', collapsed)
     toggle.setAttribute('aria-pressed', String(!collapsed))
     toggle.setAttribute('aria-expanded', String(!collapsed))
+    spring(sidebar, 'width', { from: { width: presented }, to: () => ({ width: collapsed ? 0 : width }),
+      write: ({ width }) => { writeWidth(width); onLayout() }, complete: () => { writeWidth(collapsed ? 0 : width); cancelMotion(sidebar, 'width'); onLayout() } })
   }
   toggle.addEventListener('click', () => {
     setCollapsed(!collapsed)
@@ -68,6 +76,8 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     event.preventDefault()
     handle.focus({ preventScroll: true })
     drag = { id: event.pointerId, x: event.clientX, width: sidebar.getBoundingClientRect().width }
+    cancelMotion(sidebar, 'width')
+    writeWidth(drag.width)
     view.classList.add('chat-sidebar-resizing')
     handle.setPointerCapture(event.pointerId)
   })
@@ -94,9 +104,6 @@ export function attachChatSidebar(view: HTMLElement, onLayout: () => void): { ca
     resize(next)
     persist()
     onLayout()
-  })
-  sidebar.addEventListener('transitionend', event => {
-    if (event.target === sidebar) onLayout()
   })
   // One observer for the app-lifetime view: shrinking the window clamps the
   // pane without replacing its saved preferred width. Returning restores it.

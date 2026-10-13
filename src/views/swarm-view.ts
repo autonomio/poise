@@ -1,3 +1,5 @@
+import { layout, scrollToActor } from '../motion'
+import { patchContent } from '../dom-patch'
 import { mountOrganizationFilter, organizationUrl, getSelectedOrganization, setSelectedOrganization } from '../organizations'
 // Swarm — log of agent calls. Identical finished calls share a row: model, prompt
 // (truncated), status, time elapsed, response (View → expand row to
@@ -390,38 +392,6 @@ async function loadReasoning(id: string): Promise<void> {
   if (row) refreshRunDetail(row, entry)
 }
 
-// Patch only changed attributes/text. Keeping existing nodes preserves focus,
-// selection, open details, and scroll positions during the five-second tick.
-function patchNode(current: Node, next: Node): void {
-  if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
-    current.parentNode?.replaceChild(next.cloneNode(true), current)
-    return
-  }
-  if (current instanceof Element && next instanceof Element) {
-    for (const attr of [...current.attributes]) {
-      if (current instanceof HTMLDetailsElement && attr.name === 'open') continue
-      if (!next.hasAttribute(attr.name)) current.removeAttribute(attr.name)
-    }
-    for (const attr of [...next.attributes]) {
-      if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value)
-    }
-  } else if (current.nodeValue !== next.nodeValue) {
-    const selection = window.getSelection()
-    if (selection && !selection.isCollapsed && (selection.anchorNode === current || selection.focusNode === current)) return
-    current.nodeValue = next.nodeValue
-  }
-  const old = [...current.childNodes]
-  const fresh = [...next.childNodes]
-  fresh.forEach((child, index) => old[index] ? patchNode(old[index], child) : current.appendChild(child.cloneNode(true)))
-  old.slice(fresh.length).forEach((child) => child.parentNode?.removeChild(child))
-}
-
-function patchContent(element: Element, markup: string): void {
-  const next = element.cloneNode(false) as Element
-  next.innerHTML = markup
-  patchNode(element, next)
-}
-
 function modelCell(s: string): string {
   return `<span class="agent-model" title="${escapeHtml(s || '')}">${escapeHtml(s || '—')}</span>`
 }
@@ -776,6 +746,7 @@ function buildExpandRow(e: LogEntry): HTMLTableRowElement {
 
 // Stable keyed rows: unchanged rows are never detached or animated on refresh.
 function reconcileRows(nextRows: RunRow[]): void {
+  layout(bodyEl, () => {
   const main = new Map<string, HTMLTableRowElement>()
   const detail = new Map<string, HTMLTableRowElement>()
   const refusal = new Map<string, HTMLTableRowElement>()
@@ -807,6 +778,7 @@ function reconcileRows(nextRows: RunRow[]): void {
       place(expandedRow)
     }
   }
+  })
 }
 
 function render() {
@@ -1106,7 +1078,7 @@ export async function focusRow(repo: string, pr_id: string): Promise<void> {
 const highlightTimers = new WeakMap<HTMLTableRowElement, number>()
 
 function highlightRow(row: HTMLTableRowElement): void {
-  row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  scrollToActor(row, 'center')
   const previous = highlightTimers.get(row)
   if (previous !== undefined) window.clearTimeout(previous)
   // A second navigation to the same row starts its pulse again.

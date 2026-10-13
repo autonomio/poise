@@ -7,6 +7,8 @@
 // that opens a real GitHub issue via the proxy.
 
 import { getSettings } from '../config'
+import { layout, retire, reveal } from '../motion'
+import { patchContent } from '../dom-patch'
 import { CURRENT_FILTER_KEY, TIME_RANGES, isTimeRange, timeRangeWindow, type TimeRange } from '../time-range'
 import { mountOrganizationFilter, organizationPayload, organizationUrl, getSelectedOrganization, organizationErrors } from '../organizations'
 
@@ -457,7 +459,7 @@ function paintLiveItem(el: HTMLElement, item: LiveItem): void {
   // action strip; issue cards have no primary action — only the
   // tools row.
   const primary = item.is_pr === 1 ? reviewButton(item) : ''
-  el.innerHTML = `
+  patchContent(el, `
     <a class="card-link" href="${safeHttpsUrl(item.url)}" target="_blank" rel="noopener">
       <div class="card-text">${escapeHtml(item.title)}</div>
       <div class="card-meta">
@@ -474,7 +476,7 @@ function paintLiveItem(el: HTMLElement, item: LiveItem): void {
       tools: chatSessionButton(item),
       primary,
     })}
-  `
+  `)
 }
 
 // An open card editor is a child of its card, and renderAll empties every
@@ -572,95 +574,24 @@ function renderLiveLaneSnap(laneKey: 'issue' | 'pr') {
   laneCountEl(laneKey).textContent = String(items.length)
 }
 
-// FLIP — First, Last, Invert, Play. The single piece of motion in the
-// app that earns its time on screen. ~700ms with the standard ease so
-// it reads as a deliberate settling, not a glitch. No stagger — the
-// whole column shifts together so the eye locks onto the new ordering
-// rather than chasing individual cards.
-const FLIP_MS = 700
-
 function renderLiveLaneAnimated(laneKey: 'issue' | 'pr') {
   const list = laneListEl(laneKey)
-  const newItems = liveInLane(laneKey)
-
-  // 1. First — capture current bounding rects of every visible card
-  const firstRects = new Map<string, DOMRect>()
-  const existingEls = new Map<string, HTMLElement>()
-  for (const el of [...list.children] as HTMLElement[]) {
-    if (!el.classList.contains('card')) continue
-    const id = el.dataset.id
-    if (!id) continue
-    firstRects.set(id, el.getBoundingClientRect())
-    existingEls.set(id, el)
-  }
-
-  // 2. Last — reorder existing nodes + insert any new ones. Cards no
-  //    longer in newItems are dropped from the DOM (no leave animation
-  //    in v1; in practice the polling rarely sees a card disappear).
-  const newIds = new Set(newItems.map(prKey))
-  for (const [id, el] of existingEls) {
-    if (!newIds.has(id)) el.remove()
-  }
-  const fragment = document.createDocumentFragment()
-  for (const item of newItems) {
-    const idStr = prKey(item)
-    const existing = existingEls.get(idStr)
-    if (existing) {
-      // Refresh the contents before reusing the node — the element identity is
-      // what the FLIP needs, not its stale innards.
-      paintLiveItem(existing, item)
-      fragment.appendChild(existing)        // moved to its new index
-    } else {
-      const fresh = renderLiveItem(item)
-      fresh.classList.add('card-entering')   // CSS animation handles the fade-and-drop
-      // The keyframe uses `both`, so leaving the class on pins transform:none
-      // and the next FLIP cannot move the card. Take it off once it has played.
-      fresh.addEventListener('animationend', () => fresh.classList.remove('card-entering'), { once: true })
-      fragment.appendChild(fresh)
+  const items = liveInLane(laneKey)
+  layout(list, () => {
+    const existing = new Map([...list.querySelectorAll<HTMLElement>(':scope > .card')].map(el => [el.dataset.id!, el]))
+    const ids = new Set(items.map(prKey))
+    for (const [id, el] of existing) if (!ids.has(id)) retire(el)
+    list.querySelector('.lane-empty')?.remove()
+    let cursor = list.firstChild
+    for (const item of items) {
+      const el = existing.get(prKey(item)) ?? renderLiveItem(item)
+      if (existing.has(prKey(item))) paintLiveItem(el, item)
+      if (cursor !== el) list.insertBefore(el, cursor)
+      cursor = el.nextSibling
+      if (!existing.has(prKey(item))) reveal(el)
     }
-  }
-  list.appendChild(fragment)
-
-  // 3. Invert — for every card that existed before AND after, compute
-  //    the delta from old → new layout and apply the inverse transform
-  //    so the card LOOKS like it's still in its old position.
-  const movers: HTMLElement[] = []
-  for (const item of newItems) {
-    const cardEl = existingEls.get(prKey(item))
-    if (!cardEl) continue
-    const firstRect = firstRects.get(prKey(item))
-    if (!firstRect) continue
-    const lastRect = cardEl.getBoundingClientRect()
-    const dx = firstRect.left - lastRect.left
-    const dy = firstRect.top  - lastRect.top
-    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue   // didn't move
-    cardEl.style.transition = 'none'
-    cardEl.style.transform = `translate(${dx}px, ${dy}px)`
-    movers.push(cardEl)
-  }
-
-  // 4. Play — flush layout, then animate transform back to identity.
-  //    requestAnimationFrame guarantees the inverted position is painted
-  //    before the transition kicks in.
-  if (movers.length > 0) {
-    void list.offsetHeight   // force reflow so the transform is committed
-    requestAnimationFrame(() => {
-      for (const cardEl of movers) {
-        cardEl.style.transition = `transform ${FLIP_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`
-        cardEl.style.transform = ''
-      }
-      // Clean up inline styles after the animation finishes so they
-      // don't interfere with future renders.
-      window.setTimeout(() => {
-        for (const cardEl of movers) {
-          cardEl.style.transition = ''
-          cardEl.style.transform = ''
-        }
-      }, FLIP_MS + 50)
-    })
-  }
-
-  laneCountEl(laneKey).textContent = String(newItems.length)
+  }, ':scope > .card')
+  laneCountEl(laneKey).textContent = String(items.length)
 }
 
 // ── Data fetches ─────────────────────────────────────────────────────────────

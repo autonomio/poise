@@ -2,6 +2,8 @@
 [data-flow-enter], [data-flow-layout] {
   translate: calc(var(--flow-layout-x, 0px) + var(--flow-enter-x, 0px)) calc(var(--flow-layout-y, 0px) + var(--flow-enter-y, 0px));
 }
+[data-flow-retained][hidden] { display: block !important; pointer-events: none; }
+[data-flow-retiring] { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;

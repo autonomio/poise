@@ -1,4 +1,6 @@
 import { createJevWorkspace } from './jev-workspace'
+import { layout } from '../motion'
+import { patchContent } from '../dom-patch'
 import { parseSwitchCreation, RESERVED_SWITCHES, type ChatSwitches } from '../chat-switches'
 // Chat — one view for a full coding-agent conversation with any installed
 // agent, running as itself under a Poise-native interface. Sessions live on
@@ -552,7 +554,7 @@ function renderSidebar(): void {
   const html = sidebarHtml()
   if (html === lastSidebarHtml) return
   lastSidebarHtml = html
-  listEl.innerHTML = html
+  layout(listEl, () => patchContent(listEl, html))
 }
 
 function sidebarHtml(): string {

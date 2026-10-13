@@ -2,6 +2,7 @@
 
 import { midnightInZone, startOfWeekInZone } from '../config'
 import { layout } from '../motion'
+import { patchContent } from '../dom-patch'
 import { mountOrganizationFilter, organizationPayload, organizationErrors } from '../organizations'
 
 const STORAGE_KEY = 'poise-filters'
@@ -247,7 +248,7 @@ function paintRow(tr: HTMLTableRowElement, item: PrRow): void {
   const st = stateLabel(item)
   const actionHtml = pr ? reviewButtonHtml(item, st) : ''
 
-  tr.innerHTML = `
+  patchContent(tr, `
     <td><span class="type-toggle ${pr ? 'pr' : 'issue'}">${pr ? 'PR' : 'IS'}</span></td>
     <td class="title-cell"><a href="${safeHttpsUrl(item.html_url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a></td>
     <td class="last-cell">${lastCell(item)}</td>
@@ -256,7 +257,7 @@ function paintRow(tr: HTMLTableRowElement, item: PrRow): void {
     <td><span class="state ${st.cls}">${st.text}</span></td>
     <td><span class="date">${relativeDate(item.updated_at)}</span></td>
     <td class="action-cell">${actionHtml}</td>
-  `
+  `)
 }
 
 function updateCount() {

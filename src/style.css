@@ -97,10 +97,10 @@
   /* Motion — three canonical durations, all eased the same way. Quick is
      for hover/press, base is for state toggles, slow is for surfaces
      entering/leaving. Anything outside this triplet is a smell. */
-  --t-quick: 120ms;
-  --t-base:  180ms;
-  --t-slow:  250ms;
-  --ease:    cubic-bezier(0.2, 0, 0, 1);
+  --t-quick: var(--flow-feedback);
+  --t-base: var(--flow-feedback);
+  --t-slow: var(--flow-settle);
+  --ease: var(--flow-spring);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -208,15 +208,13 @@
   color: var(--text);
 }
 
-/* Honour reduced-motion: collapse every transition / animation to a
-   near-instant fade so the app stays feeling crisp without movement. */
+/* Reduced motion removes waits as well as movement. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    animation: none !important;
+    transition: none !important;
     scroll-behavior: auto !important;
   }
 }
@@ -1341,12 +1339,14 @@ tr:hover .review-btn { opacity: 1; }
   box-shadow: var(--e-2);
   overflow: hidden;
   transform-origin: top right;
-  transform: translateX(-100%) scale(.96, .92);
+  transform: translateX(-100%);
   opacity: 0;
-  transition: width 260ms var(--ease), height 260ms var(--ease), transform 220ms var(--ease), opacity 160ms ease;
+  transition: none;
 }
 #menu-surface.open { opacity: 1; transform: translateX(-100%); }
 #menu-surface[hidden], #menu-popover[hidden], #menu-surface .menu-panel:not(.open) { display: none; }
+#menu-surface [data-flow-retained] { display: flex !important; pointer-events: none; }
+#menu-popover[data-flow-retained] { display: block !important; }
 #menu-popover {
   padding: var(--sp-2);
   max-height: 100%;
@@ -1361,7 +1361,7 @@ tr:hover .review-btn { opacity: 1; }
   box-shadow: none;
   transition: none;
   background: transparent;
-  animation: menu-panel-enter 220ms var(--ease);
+  animation: none;
 }
 @keyframes menu-panel-enter {
   from { opacity: 0; transform: translateY(6px); }
@@ -5463,7 +5463,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: flex-basis .32s cubic-bezier(.22,1,.36,1), width .32s cubic-bezier(.22,1,.36,1), border-color .24s ease;
+  transition: border-color var(--flow-feedback) ease-out;
 }
 #view-chat.chat-sidebar-collapsed .chat-sidebar {
   flex-basis: 0;
@@ -5481,7 +5481,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
   padding: var(--sp-2);
   gap: 2px;
   overflow-y: auto;
-  transition: opacity var(--t-base) ease, transform .32s cubic-bezier(.22,1,.36,1);
+  transition: opacity var(--flow-feedback) ease-out;
 }
 .chat-sidebar-collapsed .chat-session-list { opacity: 0; transform: translateX(-8px); }
 .chat-sidebar-resize {
