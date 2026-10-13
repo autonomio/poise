@@ -15,6 +15,7 @@ export function patchNode(current: Node, next: Node, onRemove?: (element: HTMLEl
     const motionStyles = current instanceof HTMLElement && current.hasAttribute('data-motion-running')
       ? [...current.style].filter(name => name.startsWith('--flow-') || ['opacity', 'height', 'width', 'max-width', 'padding-top', 'padding-bottom', 'overflow', 'translate', 'transform'].includes(name)).map(name => [name, current.style.getPropertyValue(name)] as const) : []
     const protectedAttribute = (name: string) => name.startsWith('data-flow-') || name === 'data-motion-running'
+      || current.hasAttribute('data-flow-retained') && (name === 'hidden' || name === 'inert')
       || current instanceof HTMLDetailsElement && name === 'open'
     for (const attr of [...current.attributes]) if (!protectedAttribute(attr.name) && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name)
     for (const attr of [...next.attributes]) if (!protectedAttribute(attr.name) && current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value)

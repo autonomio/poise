@@ -215,14 +215,31 @@ test('question editors survive temporarily duplicated editable answer IDs', asyn
   const ids = page.getByRole('textbox', { name: 'Answer ID', exact: true })
   const original = await ids.first().inputValue()
   await ids.nth(1).fill(original)
-  await page.locator('.jev-builder [data-format="text"]').click()
+  await page.locator('.jev-builder [data-action="add-option"]').click()
   await expect(editors).toHaveCount(2)
   await expect(ids.nth(0)).toHaveValue(original)
   await expect(ids.nth(1)).toHaveValue(original)
   await ids.nth(1).fill('corrected')
-  await page.locator('.jev-builder [data-format="text"]').click()
+  await page.locator('.jev-builder [data-action="add-option"]').click()
   await expect(editors).toHaveCount(2)
   await expect(ids.nth(1)).toHaveValue('corrected')
+})
+
+test('closing question controls stay inert when the builder rerenders', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(() => {
+    const builder = window.Builder.createJevBuilder({ models: async () => [], changed: () => undefined, evaluate: () => undefined, preview: () => undefined, example: () => undefined, template: () => undefined })
+    builder.set(builder.draft); document.body.append(builder.el)
+    const question = builder.el.querySelector<HTMLDetailsElement>('.jev-question')!
+    const body = question.querySelector<HTMLElement>('.jev-question-body')!
+    question.querySelector<HTMLElement>('summary')!.click()
+    builder.el.querySelector<HTMLButtonElement>('[data-format="json"]')!.click()
+    const field = body.querySelector<HTMLInputElement>('[data-field="id"]')!
+    field.focus()
+    return { open: question.open, hidden: body.hidden, inert: body.inert, presented: !!body.getClientRects().length, focused: document.activeElement === field }
+  })
+  expect(result).toEqual({ open: false, hidden: true, inert: true, presented: true, focused: false })
+  await settled(page)
 })
 
 test('removing an earlier choice keeps the remaining edited options and controls', async ({ page }) => {
