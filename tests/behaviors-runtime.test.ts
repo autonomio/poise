@@ -2792,7 +2792,7 @@ describe('behavior launch claims', () => {
         behavior: 'approve-prs',
         target: launched.target,
         callId,
-        error: 'GitHub read timed out',
+        error,
       }),
     ])
 
@@ -2801,6 +2801,58 @@ describe('behavior launch claims', () => {
     await runtime.runEnabledBehaviorsOnce()
 
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+  })
+
+  it('rehydrates a truncated warning only from the exact Caller attempt, preserving its retry clock', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const launched = await launchApprovalBeforeCrash()
+    const error = 'codex review produced no submitted verdict: {"type":"item.completed","item":{"type":"error","message":"Code Mode disabled"}}\n'
+      + '{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}'
+    const call = agentLog({ id: 'e'.repeat(32), behavior: 'pr_approve',
+      started_at: new Date(Date.parse(launched.requestedAt) + 1_000).toISOString(),
+      status: 'failed', action: 'not_started', outcome: 'preflight_failed', error,
+      expected_head: launched.expectedHead, actor: launched.actor, source: launched.source, correlation_id: launched.correlationId })
+    agentLogs = [call]
+    const { database: db, behaviors: runtime } = await restartModules()
+    runtime.startBehaviorsRuntime()
+    await runtime.runEnabledBehaviorsOnce()
+    const key = `behavior_approve_prs_failure:${launched.target}`
+    const stored = JSON.parse(db.getMeta(key)!)
+    const { diagnostic: _diagnostic, ...legacy } = stored
+    legacy.error = error.slice(0, 120)
+    db.setMeta(key, JSON.stringify(legacy))
+    call.correlation_id = 'unrelated-attempt'
+    await runtime.runEnabledBehaviorsOnce()
+    expect(JSON.parse(db.getMeta(key)!)).toEqual(legacy)
+    call.correlation_id = launched.correlationId
+    await runtime.runEnabledBehaviorsOnce()
+    expect(JSON.parse(db.getMeta(key)!)).toEqual({ ...stored,
+      diagnostic: { severity: 'warning', code: 'provider_capacity' },
+      error: 'Selected model is at capacity. Please try a different model.' })
+  })
+
+  it('hides an old transient approval warning only after later authoritative completion, retaining held evidence and history', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const launched = await launchApprovalBeforeCrash()
+    const { database: db, behaviors: runtime } = launched
+    const key = `behavior_approve_prs_failure:${launched.target}`
+    db.setMeta(key, JSON.stringify({ kind: 'worker', consecutiveFailures: 1,
+      lastFailureAtMs: Date.now() - 1_000, nextRetryAtMs: Date.now() + 60_000,
+      error: 'Selected model is at capacity.', diagnostic: { severity: 'warning', code: 'provider_capacity' } }))
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toHaveLength(1)
+    const target = `${pr.repo}#${pr.number}@head=${NEXT_HEAD_SHA}`
+    const claimId = db.claimSeenOwned('approve-prs', target)!
+    expect(db.markBehaviorLaunchIntentOwned({ key: 'approve-prs', target, claimId,
+      launchBehavior: 'pr_approve', repo: pr.repo, pr: pr.number, requestedAt: new Date().toISOString(),
+      expectedHead: NEXT_HEAD_SHA, actor: launched.actor, source: launched.source, correlationId: claimId })).toBe(true)
+    expect(db.completeBehaviorLaunchOwned({ key: 'approve-prs', target, claimId,
+      action: 'approved', outcome: 'approved', completedAt: new Date().toISOString(), headSha: NEXT_HEAD_SHA })).toBe(true)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
+    expect(db.getMeta(key)).not.toBeNull()
+    db.db.prepare("UPDATE behavior_seen SET launch_quarantine = 'unreadable' WHERE key = 'approve-prs' AND target = ?").run(launched.target)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toHaveLength(1)
   })
 
   it.each(['review-new-prs', 'approve-prs'] as const)('holds an oversized %s packet across restart until the head changes', async (behavior) => {
