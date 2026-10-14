@@ -169,3 +169,26 @@ it('rejects a 304 without prior data and propagates conditional HTTP and process
     await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('HTTP 403')
   } finally { vi.useRealTimers() }
 })
+
+it('does not extend healthy repository freshness when another repository recovers later', async () => {
+  vi.useFakeTimers()
+  try {
+    mocks.repos.mockResolvedValue({ repos: ['acme/healthy', 'acme/offline'], errors: [] })
+    let unavailable = true
+    let healthyRun = 1
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === 'auth') return { stdout: 'selected-secret' }
+      if (args[1].includes('/offline/') && unavailable) throw new Error('temporarily unavailable')
+      return { stdout: response([run(args[1].includes('/healthy/') ? healthyRun : 1)]) }
+    })
+    await listActionRuns({ org: 'acme' })
+    vi.advanceTimersByTime(4 * 60_000)
+    unavailable = false
+    await listActionRuns({ org: 'acme' })
+    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(3)
+    healthyRun = 2
+    vi.advanceTimersByTime(60_000)
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ repo: 'acme/healthy', number: 2 }, { repo: 'acme/offline', number: 1 }] })
+    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(4)
+  } finally { vi.useRealTimers() }
+})

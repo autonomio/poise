@@ -20,6 +20,7 @@ interface Snapshot {
   records: ActionRun[]
   errors: OrganizationReadError[]
   warnings: string[]
+  expires?: number
 }
 interface RepositoryRead extends Snapshot { etag?: string }
 interface Cached<T> { expires: number, read: Promise<T> }
@@ -109,6 +110,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
   const errors = [...discovery.errors]
   const warnings: string[] = []
   let successfulReads = 0
+  let expires = Infinity
   // No history crawl, job reads or run polling. Healthy repositories stay cached
   // while unavailable ones recover, and unchanged reads use authenticated ETags.
   for (let i = 0; i < discovery.repos.length; i += 4) {
@@ -132,6 +134,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
           entry = next
         }
         const result = await entry.read
+        expires = Math.min(expires, entry.expires)
         records.push(...result.records)
         errors.push(...result.errors)
         warnings.push(...result.warnings)
@@ -143,7 +146,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
     }))
   }
   if (errors.length && successfulReads === 0) throw new HttpError(502, errors.map((entry) => entry.error).join('; '))
-  return { records, errors, warnings }
+  return { records, errors, warnings, expires }
 }
 
 export async function listActionRuns(body: Record<string, unknown>): Promise<{ status: number, body: unknown }> {
@@ -159,7 +162,7 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
     // Pending reads never expire. Pages/counts share a snapshot, and a transient
     // failure gets a one-minute backoff instead of poisoning the five-minute cache.
     const read = readSnapshot(me, org.login, failed).then((result) => {
-      entry.expires = Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS)
+      entry.expires = Math.min(Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS), result.expires ?? Infinity)
       return result
     }, (error: unknown) => {
       entry.expires = Date.now() + ERROR_TTL_MS
