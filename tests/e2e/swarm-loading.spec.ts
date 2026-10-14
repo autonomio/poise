@@ -140,3 +140,28 @@ test('switching accounts supersedes an older pending full-history read', async (
     await expect(page.locator('#swarm-stale')).toBeHidden()
   } finally { older.release() }
 })
+
+
+test('an empty-history refresh failure remains visible on re-entry while another read is pending', async ({ page }) => {
+  await ready(page)
+  const refresh = deferred()
+  let completeReads = 0
+  await page.route('**/api/agent-logs**', async route => {
+    if (new URL(route.request().url()).searchParams.has('limit')) return route.fulfill({ json: { logs: [], total: 0 } })
+    if (++completeReads === 1) return route.fulfill({ status: 502, json: { error: 'History unavailable' } })
+    await refresh.promise
+    await route.fulfill({ json: { logs: [] } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    await expect(page.locator('#swarm-empty')).toHaveText('No agent calls.')
+    await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+    await expect(page.locator('#swarm-empty')).toContainText('History unavailable')
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    await expect.poll(() => completeReads).toBe(2)
+    await expect(page.locator('#swarm-empty')).toContainText('History unavailable')
+    refresh.release()
+    await expect(page.locator('#swarm-empty')).toHaveText('No agent calls.')
+  } finally { refresh.release() }
+})

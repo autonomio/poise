@@ -803,7 +803,8 @@ function render() {
   const countEl = viewEl.querySelector<HTMLElement>('#swarm-count')!
   if (entries.length === 0) {
     table.hidden = true
-    empty.textContent = !lastLoadedAt ? 'Loading…' : quarantined.length > 0 ? 'No readable agent calls.' : 'No agent calls.'
+    empty.textContent = lastLoadError ? `Error: ${lastLoadError}`
+      : !lastLoadedAt ? 'Loading…' : quarantined.length > 0 ? 'No readable agent calls.' : 'No agent calls.'
     empty.hidden = false
     countEl.textContent = ''
     bodyEl.innerHTML = ''
