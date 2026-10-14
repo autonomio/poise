@@ -15,6 +15,27 @@ async function settings(page: Page, section: string) {
   await page.locator('#menu-popover').getByRole('button', { name: section, exact: true }).click()
 }
 
+test('cold startup and Settings stay usable before external font stylesheets respond', async ({ page }) => {
+  const fonts = deferred()
+  const starting = workspace(page, 'current', fonts.promise)
+  try {
+    await expect(page.getByRole('button', { name: 'Current', exact: true })).toBeVisible({ timeout: 3000 })
+    await starting
+    const styles = page.locator('link[rel="stylesheet"][href^="https://fonts.googleapis.com/"]')
+    await expect(styles).toHaveCount(2)
+    expect(await styles.evaluateAll(links => links.every(link => (link as HTMLLinkElement).media === 'print'))).toBe(true)
+    await settings(page, 'General')
+    const username = page.getByLabel('Your GitHub account', { exact: true })
+    await username.fill('draft-owner')
+    fonts.release()
+    await expect.poll(() => styles.evaluateAll(links => links.every(link => (link as HTMLLinkElement).media === 'all'))).toBe(true)
+    await expect(username).toHaveValue('draft-owner')
+    await page.getByRole('button', { name: 'Menu', exact: true }).click()
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    await expect(page.locator('#view-swarm')).toBeVisible()
+  } finally { fonts.release(); await starting }
+})
+
 const destinations = [
   ['Current', 'current', '/api/current'], ['Swarm', 'swarm', '/api/agent-logs'],
   ['Chat', 'chat', '/api/chat/sessions'], ['Archive', 'main', '/api/gh'],

@@ -36,6 +36,8 @@ and `deploy/restore.sh` back it up and restore it.
 
 Settings reads only the selected section's expensive data. Accounts shows each
 CLI result independently, with pending checks and failures named alongside it.
+External font stylesheets load after first paint; system fonts keep the app
+usable while typography is unavailable or still loading.
 Returning to Editor keeps the open document, draft, selection and undo history;
 its document picker refreshes in the background. Other views keep their cached
 content usable while a refresh runs, and leaving stops their visible-only work
