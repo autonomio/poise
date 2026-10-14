@@ -37,6 +37,7 @@ export interface AppSettings {
 let current: AppSettings = { org: '', me: '', timezone: '' }
 let loaded = false
 let savedRevision = 0
+let pendingSettings: { revision: number, promise: Promise<AppSettings> } | null = null
 
 // Whether the last read actually reached the server. A failed read used to be
 // indistinguishable from an empty one: `current` kept its blank defaults,
@@ -46,8 +47,18 @@ let savedRevision = 0
 let loadOk = false
 export function settingsLoadOk(): boolean { return loadOk }
 
-export async function loadSettings(): Promise<AppSettings> {
+export function loadSettings(): Promise<AppSettings> {
   const revision = savedRevision
+  if (pendingSettings?.revision === revision) return pendingSettings.promise
+  const promise = readSettings(revision)
+  const pending = { revision, promise }
+  pendingSettings = pending
+  const clear = () => { if (pendingSettings === pending) pendingSettings = null }
+  void promise.then(clear, clear)
+  return promise
+}
+
+async function readSettings(revision: number): Promise<AppSettings> {
   try {
     const res = await fetch('/api/settings')
     if (res.ok) {

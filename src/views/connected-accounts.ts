@@ -17,8 +17,8 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 }
 
-export async function fetchAccounts(): Promise<ConnectedAccount[]> {
-  const res = await fetch('/api/accounts', { cache: 'no-store' })
+export async function fetchAccounts(id?: AccountId): Promise<ConnectedAccount[]> {
+  const res = await fetch(id ? `/api/accounts?id=${id}` : '/api/accounts', { cache: 'no-store' })
   let data: { accounts?: unknown, error?: unknown } | null = null
   try { data = await res.json() } catch { /* reported below */ }
   if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`)

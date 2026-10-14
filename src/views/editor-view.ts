@@ -4795,6 +4795,9 @@ export async function initEditorView() {
     metaEl         = viewEl.querySelector<HTMLElement>('#editor-meta')
     attachHandlers()
   }
+  // The editor owns unsaved text, selection and undo history. A return only
+  // refreshes its picker; reopening the same file would replace that state.
+  if (currentSlug) { void fetchDocs(); return }
   await fetchDocs()
   let target: string | null = null
   try { target = localStorage.getItem(LAST_OPEN_KEY) } catch { /* ignore */ }

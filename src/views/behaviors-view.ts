@@ -1172,9 +1172,8 @@ export async function initBehaviorsView() {
     // re-snapshot, programmatic toggle) so the UI never drifts.
     window.addEventListener('poise:behaviors-changed', () => renderRows())
   }
-  // Fetch the server-provided owner map first so the very first paint
-  // shows the right username/avatar instead of a flash of "—".
-  await fetchBehaviorOwners()
+  // Cached rows and explicitly unknown first-load controls do not wait for
+  // the runtime read. Attach cleanup-owned work before the first await.
   renderDiagnostics()
   renderRows()
   // Subscribe to the wall-clock-aligned ticker so the relative-time
@@ -1184,4 +1183,6 @@ export async function initBehaviorsView() {
     window.addEventListener('poise:refresh-tick', onTick)
     tickListening = true
   }
+  await fetchBehaviorOwners()
+  if (!viewEl.hidden) { renderDiagnostics(); renderRows() }
 }

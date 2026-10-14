@@ -2123,8 +2123,8 @@ export async function initChatView(): Promise<void> {
   // A handoff may have opened the New session dialog while the list loaded;
   // auto-selecting would close it.
   if (!activeId && !quickSessionPromise && !composer.getDraft().text && order.length && dialogEl.hidden) await selectSession(order[0], true)
-  void jev.init(); jev.resume()
-  scheduleSelfPoll(0)
+  void jev.init()
+  if (!viewEl.hidden) { jev.resume(); scheduleSelfPoll(0) }
   queueRender()
 }
 

@@ -26,6 +26,13 @@ and `deploy/restore.sh` back it up and restore it.
 
 - **Current** — manual idea/concept/plan cards beside live issues and PRs.
 - **Swarm** — agent run status, live review activity, responses, and safe replay controls.
+
+Settings reads only the selected section's expensive data. Accounts shows each
+CLI result independently, with pending checks and failures named alongside it.
+Returning to Editor keeps the open document, draft, selection and undo history;
+its document picker refreshes in the background. Other views keep their cached
+content usable while a refresh runs, and leaving stops their visible-only work
+even when an earlier read has not finished.
 - **Chat** — native coding-agent sessions with streaming, tools, permissions and checkout-bound work.
 - **Archive** — searchable GitHub issue and PR history.
 - **Behaviors** — scheduled review, approval, unblocking, and issue-review automations.

@@ -23,6 +23,20 @@ afterAll(() => {
 })
 
 describe('settings cache', () => {
+  it('shares concurrent reads without letting an older read replace a later save', async () => {
+    const prior = { org: 'acme', me: 'octocat', timezone: 'UTC' }
+    let release!: (response: Response) => void
+    const request = vi.fn(() => new Promise<Response>(resolve => { release = resolve }))
+    vi.stubGlobal('fetch', request)
+    const first = config.loadSettings(), second = config.loadSettings()
+    expect(first).toBe(second)
+    expect(request).toHaveBeenCalledTimes(1)
+    config.setLocalSettings({ ...prior, me: 'new-owner' })
+    release(new Response(JSON.stringify(prior)))
+    await first
+    expect(config.getSettings().me).toBe('new-owner')
+  })
+
   it('loads valid server settings into the synchronous cache', async () => {
     const settings = { org: 'acme', me: 'octocat', timezone: 'Europe/Helsinki' }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
