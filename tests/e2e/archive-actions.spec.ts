@@ -97,3 +97,37 @@ test('empty Actions report no failures and account changes while hidden do not r
   await page.getByRole('button', { name: 'Archive', exact: true }).click()
   await expect.poll(() => reads).toBeGreaterThan(0)
 })
+
+
+test('returning to Archive resumes pagination after a hidden page finishes', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 })
+  await workspace(page, 'swarm')
+  let releaseInitial!: () => void
+  let releaseRefresh!: () => void
+  const initial = new Promise<void>(resolve => { releaseInitial = resolve })
+  const refresh = new Promise<void>(resolve => { releaseRefresh = resolve })
+  let firstPageReads = 0
+  await page.route('**/api/gh', async route => {
+    const body = route.request().postDataJSON() as { count_only?: boolean, offset: number }
+    if (body.count_only) return route.fulfill({ json: { count: 40 } })
+    if (body.offset === 0) {
+      firstPageReads++
+      await (firstPageReads === 1 ? initial : refresh)
+    }
+    return route.fulfill({ json: { records: Array.from({ length: 20 }, (_, i) => ({ ...failedRun, number: body.offset + i + 1 })) } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect.poll(() => firstPageReads).toBe(1)
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    releaseInitial()
+    await expect(page.locator('#tbody tr')).toHaveCount(20)
+    await expect(page.locator('#loader')).toBeHidden()
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect.poll(() => firstPageReads).toBe(2)
+    // Let the sentinel's entrance notification occur while refresh is pending.
+    await page.waitForTimeout(150)
+    releaseRefresh()
+    await expect(page.locator('#tbody tr')).toHaveCount(40)
+  } finally { releaseInitial(); releaseRefresh() }
+})

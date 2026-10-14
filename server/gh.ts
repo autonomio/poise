@@ -190,14 +190,14 @@ export function invalidateRepoListCache(): void {
 const REPO_LIST_TTL_MS = 5 * 60 * 1000
 
 async function discoverOrgRepos(org: Organization): Promise<string[]> {
-  const key = org.login.toLowerCase()
+  const me = getMeta('me') || ''
+  if (!me) throw new Error('Set your GitHub account in Settings → GitHub to list repositories')
+  const key = `${me.toLowerCase()}:${org.login.toLowerCase()}`
   const now = Date.now()
   const cached = repoListCache.get(key)
   if (cached && cached.expiry > now) return cached.repos
   const generation = repoCacheGeneration
   // Repositories are listed as the person: what they can see.
-  const me = getMeta('me') || ''
-  if (!me) throw new Error('Set your GitHub account in Settings → GitHub to list repositories')
   const { stdout } = await runFile(GH_INTERFACE, ['--view-repos', org.login, '--token-user', me], {
     timeoutMs: 30_000, maxOutputBytes: 32 * 1024 * 1024,
   })

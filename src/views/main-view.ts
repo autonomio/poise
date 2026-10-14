@@ -761,7 +761,6 @@ async function refreshMainSoft() {
     total = next.length
     items = next
     offset = items.length
-    const wasDone = done
     done = newTop.length < PAGE_SIZE
     loader.hidden = done
     if (next.length === 0) {
@@ -788,7 +787,7 @@ async function refreshMainSoft() {
     // Schedule after the count settles, when finally can release `fetching`.
     // Scheduling before that await would run into the paging guard and lose
     // the only nudge when a previously finished archive has gained new rows.
-    if (wasDone && !done) {
+    if (!done) {
       requestAnimationFrame(() => {
         if (mine === queryGeneration && !document.getElementById('view-main')!.hidden && sentinelNeedsFetch()) void fetchPage()
       })
