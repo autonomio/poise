@@ -135,12 +135,16 @@ export function cancelMotion(owner: HTMLElement, name: string): void {
 export function finishMotion(root?: HTMLElement, cancelScroll = document.hidden): void {
   // Scroll targets depend on the final geometry of panels and disclosures.
   const ordered = [...moving].sort((a, b) => Number(a.name === 'scroll') - Number(b.name === 'scroll') || (a.owner.contains(b.owner) ? 1 : b.owner.contains(a.owner) ? -1 : 0))
-  for (const channel of ordered) {
-    if (!channel.active) continue
-    if (root && channel.owner !== root && !root.contains(channel.owner)) continue
-    if (channel.options.valid && !channel.options.valid()) { cancelMotion(channel.owner, channel.name); continue }
-    if (channel.name === 'scroll' && (cancelScroll || !channel.owner.getClientRects().length)) { cancelMotion(channel.owner, channel.name); continue }
-    if (channel.owner.getClientRects().length) target(channel)
+  const samples = ordered.filter(channel => channel.active && (!root || channel.owner === root || root.contains(channel.owner)))
+    .map(channel => ({ channel, generation: channel.generation, valid: !channel.options.valid || channel.options.valid(), visible: !!channel.owner.getClientRects().length }))
+  for (const { channel, valid, visible } of samples) if (valid && visible && channel.name !== 'scroll') target(channel)
+  for (const { channel, generation, valid } of samples) {
+    if (!channel.active || channel.generation !== generation) continue
+    if (!valid) { cancelMotion(channel.owner, channel.name); continue }
+    if (channel.name === 'scroll') {
+      if (cancelScroll || !channel.owner.getClientRects().length) { cancelMotion(channel.owner, channel.name); continue }
+      target(channel)
+    }
     complete(channel)
   }
 }

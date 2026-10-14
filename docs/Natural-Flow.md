@@ -23,9 +23,11 @@ Keyed reconciliation retains controls, drafts, selections, native details and
 active motion styles. View entrances run once per mounted view; returning to
 cached content is immediate.
 Structural layout measures every destination before writing animation styles;
-frame visibility and target reads precede animation writes. Only actors whose
+frame visibility and target reads precede animation writes. View departure
+batches presentation reads before settling channels. Only actors whose
 old or new bounds intersect the viewport receive layout/entry motion. Clipped
 departures use the captured geometry without reading styles after each removal.
+Swarm builds each new row once and skips unchanged row markup on refresh.
 Structural lists reveal new actors once and retire
 departed visuals inertly. Changed text and elapsed time remain immediate.
 Batch departures use geometry captured before the layout mutation; retiring

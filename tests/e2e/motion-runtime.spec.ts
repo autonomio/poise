@@ -552,3 +552,22 @@ test('collection layout measures all destinations before animating visible actor
   expect(actors.moving).toBeLessThan(25)
   expect(layouts(after) - layouts(before)).toBeLessThan(10)
 })
+
+
+test('view departure batches presentation reads before completing rows', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium exposes the performance counters used by this regression.')
+  await runtime(page)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Performance.enable')
+  await page.evaluate(() => {
+    const root = document.createElement('div'); root.id = 'finish-batch'; root.style.cssText = 'position:fixed;top:0;left:0;width:240px'
+    root.innerHTML = '<div style="height:4px">Row</div>'.repeat(80); document.body.append(root)
+    for (const actor of root.children) window.Motion.reveal(actor as HTMLElement)
+  })
+  const before = await cdp.send('Performance.getMetrics')
+  await page.evaluate(() => window.Motion.finishMotion(document.getElementById('finish-batch')!, true))
+  const after = await cdp.send('Performance.getMetrics')
+  const styles = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'RecalcStyleCount')!.value
+  expect(styles(after) - styles(before)).toBeLessThan(10)
+  await expect(page.locator('#finish-batch [data-motion-running]')).toHaveCount(0)
+})

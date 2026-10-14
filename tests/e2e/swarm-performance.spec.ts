@@ -20,7 +20,7 @@ test('Swarm animates visible history without blocking navigation or replaying ca
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/agent-logs**', async route => {
-    if (++reads > 1) await held
+    if (++reads > 2) await held
     await route.fulfill({ json: { logs } })
   })
   const cdp = await page.context().newCDPSession(page)
@@ -42,6 +42,14 @@ test('Swarm animates visible history without blocking navigation or replaying ca
       return Math.max(0, ...durations)
     })
     console.log(`Swarm first mount: ${mounted}ms; longest main-thread task: ${worstTask}ms`)
+    expect(worstTask).toBeLessThan(350)
+    const firstRow = page.locator('#swarm-tbody > .agent-row').first()
+    const control = await firstRow.getByRole('button', { name: 'Toggle detail', exact: true }).elementHandle()
+    await control!.focus()
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/agent-logs')
+    await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+    await refreshed
+    expect(await control!.evaluate(element => element.isConnected && element === document.activeElement)).toBe(true)
     const moving = await page.locator('#swarm-tbody > [data-motion-running]').count()
     expect(moving).toBeLessThan(30)
     const navigation = await page.evaluate(() => new Promise<number>(resolve => {
