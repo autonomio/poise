@@ -829,7 +829,6 @@ function selectSection(panel: HTMLElement, tab: SettingsSection) {
   panel.querySelector<HTMLElement>('.st-footer')!.hidden = tab === 'accounts' || tab === 'admin'
   if (panel.classList.contains('open')) {
     if (tab === 'accounts') void loadAccounts()
-    else if (tab === 'models') void loadModels()
   }
   window.dispatchEvent(new CustomEvent('poise:settings-section-changed', { detail: { section: tab } }))
 }
