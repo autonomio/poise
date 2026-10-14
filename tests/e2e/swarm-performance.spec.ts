@@ -26,11 +26,22 @@ test('Swarm animates visible history without blocking navigation or replaying ca
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
   const before = await cdp.send('Performance.getMetrics')
+  const longTasks = await page.evaluateHandle(() => {
+    const durations: number[] = []
+    const observer = new PerformanceObserver(list => durations.push(...list.getEntries().map(entry => entry.duration)))
+    observer.observe({ entryTypes: ['longtask'] })
+    return { durations, observer }
+  })
   const started = Date.now()
   try {
     await page.getByRole('button', { name: 'Swarm', exact: true }).click()
     await expect(page.locator('#swarm-tbody > .agent-row')).toHaveCount(1300)
     const mounted = Date.now() - started
+    const worstTask = await longTasks.evaluate(({ durations, observer }) => {
+      durations.push(...observer.takeRecords().map(entry => entry.duration)); observer.disconnect()
+      return Math.max(0, ...durations)
+    })
+    console.log(`Swarm first mount: ${mounted}ms; longest main-thread task: ${worstTask}ms`)
     const moving = await page.locator('#swarm-tbody > [data-motion-running]').count()
     expect(moving).toBeLessThan(30)
     const navigation = await page.evaluate(() => new Promise<number>(resolve => {
