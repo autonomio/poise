@@ -17,6 +17,22 @@ async function runtime(page: Page): Promise<void> {
   await page.evaluate(() => window.Motion.initMotion())
 }
 
+test('a large shared DOM patch retains controls without scanning prior siblings', async ({ page }) => {
+  await runtime(page)
+  const result = await page.evaluate(() => {
+    const host = document.createElement('section')
+    const markup = (last: string) => Array.from({ length: 2000 }, (_, i) => `<div><button>${i === 1999 ? last : `Row ${i}`}</button></div>`).join('')
+    host.innerHTML = markup('Before'); document.body.append(host)
+    const button = host.querySelector('button')!; button.focus()
+    const start = performance.now()
+    window.Patch.patchContent(host, markup('After'))
+    return { elapsed: performance.now() - start, retained: button === host.querySelector('button'), focused: button === document.activeElement, last: host.lastElementChild!.textContent }
+  })
+  console.log(`Shared DOM patch, 2000 rows: ${result.elapsed.toFixed(1)}ms`)
+  expect(result).toMatchObject({ retained: true, focused: true, last: 'After' })
+  expect(result.elapsed).toBeLessThan(150)
+})
+
 test('motion retains momentum on reversal and settles only the latest completion', async ({ page }) => {
   await runtime(page)
   const result = await page.evaluate(async () => {

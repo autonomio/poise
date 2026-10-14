@@ -715,7 +715,7 @@ async function selectSession(id: string, restoring = false): Promise<void> {
   // animation frame must not attach itself to the newly selected draft.
   composerStateFor(e)
   queueRender()
-  if (switching) scheduleSelfPoll(0)
+  if (switching && !viewEl.hidden) scheduleSelfPoll(0)
   if (!e.loaded && !e.loading && !e.pending) await loadHistory(e)
   if (activeId === id && !viewEl.hidden && !memories.el.contains(document.activeElement)) composer.focus()
 }
@@ -2116,6 +2116,7 @@ export async function initChatView(): Promise<void> {
   void loadAgents()
   void loadSwitches().catch(() => undefined)
   await loadSessions()
+  if (viewEl.hidden) return
   const restoreActive = restoredSnapshot?.activeSessionId ?? null
   applyRestoredSnapshot()
   // The session that was on screen before a safe reload comes back first.
@@ -2123,8 +2124,8 @@ export async function initChatView(): Promise<void> {
   // A handoff may have opened the New session dialog while the list loaded;
   // auto-selecting would close it.
   if (!activeId && !quickSessionPromise && !composer.getDraft().text && order.length && dialogEl.hidden) await selectSession(order[0], true)
-  void jev.init()
-  if (!viewEl.hidden) { jev.resume(); scheduleSelfPoll(0) }
+  void jev.init(); jev.resume()
+  scheduleSelfPoll(0)
   queueRender()
 }
 
