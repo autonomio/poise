@@ -24,6 +24,7 @@ import { HttpError } from './http'
 import { getOrganizations, readyOrganizations, organizationArgs, type Organization } from './organizations'
 import { MAX_PROCESS_ARG_BYTES, runFile } from './process'
 import { agentAccount, requireAgentAccount } from './settings'
+import { invalidateActionRunCache, listActionRuns } from './action-runs'
 
 const CLI = 'github-datastore'
 const GH_INTERFACE = 'github-interface'
@@ -184,6 +185,7 @@ let repoCacheGeneration = 0
 export function invalidateRepoListCache(): void {
   repoCacheGeneration += 1
   repoListCache.clear()
+  invalidateActionRunCache()
 }
 const REPO_LIST_TTL_MS = 5 * 60 * 1000
 
@@ -484,6 +486,8 @@ async function fetchKind(itemType: 'pr' | 'issue', body: any, me: string, orgs: 
 export async function handleGhBody(body: any): Promise<{ status: number, body: unknown }> {
   const op = body?.operation
   const me = getMeta('me') || ''
+
+  if (op === 'actions') return listActionRuns(body)
 
   if (op === 'list') {
     const orgs = selectOrganizations(body.org)
