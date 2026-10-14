@@ -83,3 +83,17 @@ test('partial history and a failed refresh remain visible, and recovered failure
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
   await expect(page.locator('#tbody tr')).toHaveCount(0)
 })
+
+
+test('empty Actions report no failures and account changes while hidden do not read workflows', async ({ page }) => {
+  await workspace(page, 'main')
+  await expect(page.locator('#empty')).toHaveText('No failed workflow runs for the current filters.')
+  let reads = 0
+  await page.route('**/api/gh', route => { reads++; return route.fulfill({ json: { records: [], count: 0 } }) })
+  await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:organization-filter-changed')))
+  await page.waitForTimeout(150)
+  expect(reads).toBe(0)
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect.poll(() => reads).toBeGreaterThan(0)
+})

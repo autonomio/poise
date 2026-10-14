@@ -463,6 +463,12 @@ async function fetchPage(): Promise<void> {
     showLoadError(readMessages(pageData))
     loader.hidden = done
     appendRows(newItems)
+    if (items.length === 0) {
+      table.hidden = true
+      empty.textContent = typeFilter === 'action' && statusFilter === 'failed'
+        ? 'No failed workflow runs for the current filters.' : 'No results for the current filters.'
+      empty.hidden = false
+    }
     const countRes = await countRead
     const countData = countRes?.ok ? await countRes.json().catch(() => ({})) : {}
     if (mine !== queryGeneration) return
@@ -483,7 +489,7 @@ async function fetchPage(): Promise<void> {
       cancelPendingRetry()
       retryTimer = setTimeout(() => {
         retryTimer = null
-        if (mine === queryGeneration && !done) void fetchPage()
+        if (mine === queryGeneration && !done && !document.getElementById('view-main')!.hidden) void fetchPage()
       }, delay)
     }
   } finally {
@@ -690,7 +696,7 @@ export function initMainView() {
   sentinel.id = 'main-sentinel'
   table.parentElement!.appendChild(sentinel)
   observer = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting && !done && !fetching) fetchPage()
+    if (entries[0].isIntersecting && !done && !fetching && !document.getElementById('view-main')!.hidden) fetchPage()
   }, { rootMargin: '400px' })
   observer.observe(sentinel)
 

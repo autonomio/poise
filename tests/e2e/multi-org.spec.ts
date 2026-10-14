@@ -284,16 +284,17 @@ test('discards a background Archive response whose JSON arrives after switching 
   const filter = page.locator('#main-filters').getByLabel('Account filter')
   await filter.selectOption('acme')
   await expect(page.locator('#tbody .repo-name')).toHaveText(['same-repo'])
+  await expect(page.locator('#tbody .agent-org')).toHaveText('acme')
   await page.evaluate(() => {
     ;(window as typeof window & { holdArchive?: boolean }).holdArchive = true
     window.dispatchEvent(new Event('poise:refresh-tick'))
   })
   await expect.poll(() => page.evaluate(() => !!(window as typeof window & { archiveWaiting?: boolean }).archiveWaiting)).toBe(true)
   await filter.selectOption('beta')
-  await expect(page.locator('#tbody .repo-name')).toHaveText(['same-repo'])
+  await expect(page.locator('#tbody .agent-org')).toHaveText('beta')
   await page.evaluate(() => { (window as typeof window & { releaseArchive?: () => void }).releaseArchive?.() })
   await page.waitForTimeout(100)
-  await expect(page.locator('#tbody .repo-name')).toHaveText(['same-repo'])
+  await expect(page.locator('#tbody .agent-org')).toHaveText('beta')
 })
 
 
