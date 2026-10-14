@@ -47,7 +47,9 @@ let pendingSettings: { revision: number, promise: Promise<AppSettings> } | null 
 let loadOk = false
 export function settingsLoadOk(): boolean { return loadOk }
 
-export function loadSettings(): Promise<AppSettings> {
+export function loadSettings(options: { fresh?: boolean } = {}): Promise<AppSettings> {
+  // Post-write reads supersede any snapshot captured before that write.
+  if (options.fresh) savedRevision++
   const revision = savedRevision
   if (pendingSettings?.revision === revision) return pendingSettings.promise
   const promise = readSettings(revision)

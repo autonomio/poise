@@ -89,10 +89,10 @@ export function accountsHtml(accounts: ConnectedAccount[], identities: GitHubIde
     </div>`
   }).join('')
   return [
-    { label: 'AI accounts', entries: accounts.filter((account) => account.id !== 'gh') },
-    { label: 'GitHub accounts', entries: accounts.filter((account) => account.id === 'gh') },
+    { key: 'ai', label: 'AI accounts', entries: accounts.filter((account) => account.id !== 'gh') },
+    { key: 'github', label: 'GitHub accounts', entries: accounts.filter((account) => account.id === 'gh') },
   ].filter((group) => group.entries.length).map((group) => `
-    <section class="st-account-group" aria-label="${group.label}">
+    <section class="st-account-group" data-key="accounts-${group.key}" aria-label="${group.label}">
       <h3 class="tp-group-label">${group.label}</h3>
       ${rows(group.entries)}
     </section>`).join('')

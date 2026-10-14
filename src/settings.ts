@@ -358,13 +358,20 @@ function accountsStatus(text: string, failed = false): void {
   accountsStatusEl.className = `st-help st-help-${failed ? 'error' : 'info'} st-accounts-status`
 }
 
+function accountChecksStatus(text: string, failed = false): void {
+  const el = panelEl?.querySelector<HTMLElement>('.st-account-checks-status')
+  if (!el) return
+  el.textContent = text
+  el.className = `st-help st-help-${failed ? 'error' : 'info'} st-account-checks-status`
+}
+
 function loadAccounts(force = false): Promise<void> {
   if (!accountsEl) return Promise.resolve()
   if (!force && accountsLoading) return accountsLoading
   const generation = ++accountsGeneration
   const pending = new Set<string>(ACCOUNT_IDS)
   const errors: string[] = []
-  const status = () => accountsStatus([
+  const status = () => accountChecksStatus([
     pending.size ? `Checking ${[...pending].join(', ')}…` : '', ...errors,
   ].filter(Boolean).join(' '), errors.length > 0)
   status()
@@ -970,6 +977,7 @@ function buildPanel(): HTMLElement {
       <section class="st-tab" data-tab="accounts" hidden>
         <div class="st-terminal-slot"></div>
         <div class="st-accounts" aria-live="polite"></div>
+        <div class="st-help st-help-info st-account-checks-status" role="status"></div>
         <div class="st-help st-help-info st-accounts-status" role="status"></div>
 
         <div class="tp-group-label" ${helpAttributes("A shell in your workspace for connections the account buttons do not cover. Two terminals can run at once; an idle terminal closes after 15 minutes.")}>Terminal</div>

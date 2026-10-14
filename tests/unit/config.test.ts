@@ -23,6 +23,20 @@ afterAll(() => {
 })
 
 describe('settings cache', () => {
+  it('starts a fresh post-write read and rejects a pre-write snapshot arriving later', async () => {
+    const releases: Array<(response: Response) => void> = []
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { releases.push(resolve) })))
+    const previous = config.loadSettings()
+    const saved = config.loadSettings({ fresh: true })
+    expect(releases).toHaveLength(2)
+    const current = { org: 'acme', me: 'new-owner', timezone: 'Europe/Helsinki', models: { chat: { default: 'new', fallback: 'backup' } } }
+    releases[1](new Response(JSON.stringify(current)))
+    await saved
+    releases[0](new Response(JSON.stringify({ ...current, me: 'old-owner', timezone: 'UTC', models: {} })))
+    await previous
+    expect(config.getSettings()).toEqual(current)
+  })
+
   it('shares concurrent reads without letting an older read replace a later save', async () => {
     const prior = { org: 'acme', me: 'octocat', timezone: 'UTC' }
     let release!: (response: Response) => void

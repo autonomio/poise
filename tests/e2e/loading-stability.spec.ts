@@ -91,17 +91,17 @@ test('Settings isolates slow Models and account probes while retaining fast acco
     await page.getByRole('button', { name: 'Back to menu', exact: true }).click()
     await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
     await expect(page.locator('.st-account[data-account="codex"]')).toContainText('codex-user')
-    await expect(page.locator('.st-accounts-status')).toContainText('gh')
+    await expect(page.locator('.st-account-checks-status')).toContainText('gh')
     await expect(page.locator('.st-account[data-account="gh"]')).toHaveCount(0)
     expect(models).toBe(1)
     githubRead.release()
-    await expect(page.locator('.st-accounts-status')).toContainText('GitHub probe unavailable')
+    await expect(page.locator('.st-account-checks-status')).toContainText('GitHub probe unavailable')
     await expect(page.locator('.st-account[data-account="codex"]')).toContainText('codex-user')
     failed = false
     await page.getByRole('button', { name: 'Back to menu', exact: true }).click()
     await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
     await expect(page.locator('.st-account[data-account="gh"]')).toContainText('gh-user')
-    await expect(page.locator('.st-accounts-status')).toBeEmpty()
+    await expect(page.locator('.st-account-checks-status')).toBeEmpty()
   } finally { modelRead.release(); githubRead.release() }
 })
 
@@ -164,4 +164,61 @@ test('Editor retains its document actor and undo history while the picker refres
     await doc.click(); await doc.press('ControlOrMeta+z')
     await expect(doc).not.toContainText('kept')
   } finally { picker.release() }
+})
+
+test('a GitHub account control keeps focus when a later AI group arrives', async ({ page }) => {
+  await workspace(page); await settled(page)
+  const ai = deferred()
+  await page.route('**/api/accounts**', async route => {
+    const id = new URL(route.request().url()).searchParams.get('id')!
+    if (id !== 'gh') await ai.promise
+    await route.fulfill({ json: { accounts: [{ id, installed: true, version: '1.2.3', signedIn: true, identity: `${id}-user`, detail: null, login: { label: 'login' } }] } })
+  })
+  try {
+    await settings(page, 'Accounts')
+    const button = page.getByRole('button', { name: 'Reconnect GitHub', exact: true })
+    await expect(button).toBeVisible()
+    const actor = await button.elementHandle(); await actor!.focus()
+    ai.release()
+    await expect(page.locator('.st-account[data-account="codex"]')).toBeVisible()
+    await expect(page.locator('.st-account-checks-status')).toBeEmpty()
+    expect(await actor!.evaluate(el => el.isConnected && el === document.activeElement)).toBe(true)
+  } finally { ai.release() }
+})
+
+test('later account checks cannot erase a terminal-opening failure', async ({ page }) => {
+  await workspace(page); await settled(page)
+  const github = deferred()
+  await page.route('**/*terminal-panel*.js', route => route.abort())
+  await page.route('**/api/accounts**', async route => {
+    const id = new URL(route.request().url()).searchParams.get('id')!
+    if (id === 'gh') await github.promise
+    await route.fulfill({ json: { accounts: [{ id, installed: true, version: '1.2.3', signedIn: true, identity: `${id}-user`, detail: null, login: { label: 'login' } }] } })
+  })
+  try {
+    await settings(page, 'Accounts')
+    await page.getByRole('button', { name: 'Reconnect Codex', exact: true }).click()
+    await expect(page.locator('.st-accounts-status')).toContainText('Could not open the terminal')
+    github.release()
+    await expect(page.locator('.st-account-checks-status')).toBeEmpty()
+    await expect(page.locator('.st-accounts-status')).toContainText('Could not open the terminal')
+  } finally { github.release() }
+})
+
+test('cached Editor annotation hit targets are redrawn after a hidden resize', async ({ page }) => {
+  await workspace(page); await settled(page)
+  const version = 'e'.repeat(64)
+  const annotation = { id: 'ann-1', session_id: 'ann-1', range: { start_line: 0, start_offset: 0, end_line: 0, end_offset: 8 }, snippet: 'Original', comment: 'Read this note', created_at: '2026-10-14T08:00:00Z', updated_at: '2026-10-14T08:00:00Z' }
+  await page.route('**/api/editor/docs', route => route.fulfill({ json: { docs: [{ slug: 'notes', title: 'Notes', updatedAt: annotation.updated_at, size: 23 }] } }))
+  await page.route('**/api/editor/doc/notes', route => route.fulfill({ json: { slug: 'notes', content: 'Original annotated text', version } }))
+  await page.route('**/api/editor/doc/notes/annotations', route => route.fulfill({ json: { annotations: [annotation], version } }))
+  await page.getByRole('button', { name: 'Editor', exact: true }).click()
+  const mark = page.locator('.annotation-mark').first()
+  await expect(mark).toBeVisible()
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await page.setViewportSize({ width: 1000, height: 700 })
+  await page.getByRole('button', { name: 'Editor', exact: true }).click()
+  await expect(mark).toBeVisible()
+  await mark.click()
+  await expect(page.locator('.editor-annotation-text')).toHaveValue('Read this note')
 })
