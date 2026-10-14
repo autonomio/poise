@@ -142,7 +142,7 @@ export function finishMotion(root?: HTMLElement, cancelScroll = document.hidden)
     if (!channel.active || channel.generation !== generation) continue
     if (!valid) { cancelMotion(channel.owner, channel.name); continue }
     if (channel.name === 'scroll') {
-      if (cancelScroll || !channel.owner.getClientRects().length) { cancelMotion(channel.owner, channel.name); continue }
+      if (cancelScroll || channel.options.valid && !channel.options.valid() || !channel.owner.getClientRects().length) { cancelMotion(channel.owner, channel.name); continue }
       target(channel)
     }
     complete(channel)
@@ -185,8 +185,15 @@ function retirementClip(parent: Element | null, cache = new Map<Element, ClipBou
 }
 
 export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope > *', key: (element: HTMLElement) => string | HTMLElement = element => element): T {
-  if (reducedMotion() || !root.getClientRects().length) return change()
   const active = document.activeElement
+  const restoreFocus = () => {
+    if (active instanceof HTMLElement && active.isConnected && root.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
+  }
+  if (reducedMotion() || !root.getClientRects().length) {
+    const result = change()
+    restoreFocus()
+    return result
+  }
   const before = new Map([...root.querySelectorAll<HTMLElement>(selector)].map(element => [key(element), { element, box: element.getBoundingClientRect() }]))
   // Departures share the same pre-mutation geometry as surviving layout actors.
   const previousGeometry = retirementGeometry
@@ -197,7 +204,7 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
   })
   let result: T
   try { result = change() } finally { retirementGeometry = previousGeometry }
-  if (active instanceof HTMLElement && active.isConnected && root.contains(active) && document.activeElement !== active) active.focus({ preventScroll: true })
+  restoreFocus()
   const after = [...root.querySelectorAll<HTMLElement>(selector)]
   // Remove all old layout offsets before measuring any new destination.
   for (const element of after) { element.style.removeProperty('--flow-layout-x'); element.style.removeProperty('--flow-layout-y') }

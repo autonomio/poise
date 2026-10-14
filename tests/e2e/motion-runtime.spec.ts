@@ -571,3 +571,20 @@ test('view departure batches presentation reads before completing rows', async (
   expect(styles(after) - styles(before)).toBeLessThan(10)
   await expect(page.locator('#finish-batch [data-motion-running]')).toHaveCount(0)
 })
+
+
+for (const reduced of [false, true]) test(`retained table controls preserve focus with reduced motion ${reduced}`, async ({ page }) => {
+  if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' })
+  await runtime(page)
+  const focused = await page.evaluate(() => {
+    const table = document.createElement('table'); table.style.cssText = 'position:fixed;top:0;left:0'
+    table.innerHTML = '<tbody><tr><td><button>Retained control</button></td></tr></tbody>'; document.body.append(table)
+    const body = table.tBodies[0], row = body.rows[0], button = row.querySelector('button')!
+    button.focus()
+    window.Motion.layout(body, () => {
+      const fragment = document.createDocumentFragment(); fragment.append(row); body.append(fragment)
+    })
+    return document.activeElement === button && button.isConnected
+  })
+  expect(focused).toBe(true)
+})
