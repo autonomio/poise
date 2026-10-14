@@ -535,7 +535,13 @@ test('animation frames batch geometry reads before writing row styles', async ({
   const before = await cdp.send('Performance.getMetrics')
   await page.evaluate(() => new Promise<void>(resolve => {
     let frames = 0
-    const sample = () => ++frames === 12 ? resolve() : requestAnimationFrame(sample)
+    const sample = () => {
+      if (++frames < 12) { requestAnimationFrame(sample); return }
+      // Stop at the sampled boundary; CDP delivery time must not count extra
+      // animation frames when other browser tests keep the runner busy.
+      window.Motion.finishMotion(document.getElementById('frame-batch')!)
+      resolve()
+    }
     requestAnimationFrame(sample)
   }))
   const after = await cdp.send('Performance.getMetrics')
