@@ -39,7 +39,7 @@ for (const width of [1280, 1920]) {
 }
 
 test('outcomes, issue history and persistent filters remain selectable', async ({ page }) => {
-  await workspace(page, 'swarm')
+  await workspace(page, 'swarm', { preserveOnReload: true })
   await page.route('**/api/gh', route => {
     const body = route.request().postDataJSON() as Record<string, unknown>
     const action = body.operation === 'actions'
