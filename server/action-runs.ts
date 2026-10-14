@@ -38,6 +38,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
   })).stdout.trim()
   if (!token) throw new Error(`No GitHub credential for ${me}`)
   const records: ActionRun[] = []
+  let successfulReads = 0
   const errors = [...discovery.errors]
   const warnings: string[] = []
   // One bounded request per repository; no history crawl, job reads or run polling.
@@ -69,6 +70,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
           }
         })
         records.push(...runs)
+        successfulReads++
         if (data.total_count > runs.length) warnings.push(`${repo}: showing the latest ${runs.length} of ${data.total_count} ${failed ? 'failed ' : ''}runs. Open GitHub for older runs.`)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -76,7 +78,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
       }
     }))
   }
-  if (errors.length && !records.length) throw new HttpError(502, errors.map((entry) => entry.error).join('; '))
+  if (errors.length && successfulReads === 0) throw new HttpError(502, errors.map((entry) => entry.error).join('; '))
   return { records, errors, warnings }
 }
 

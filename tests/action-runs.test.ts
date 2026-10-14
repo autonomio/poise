@@ -97,4 +97,17 @@ describe('Archive workflow snapshots', () => {
     await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('malformed workflow inventory')
     await expect(listActionRuns({ org: 'outside' })).rejects.toThrow('not configured')
   })
+
+  it('retains a healthy empty repository when another repository is unavailable', async () => {
+    mocks.repos.mockResolvedValue({ repos: ['acme/healthy', 'acme/offline'], errors: [] })
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === 'auth') return { stdout: 'selected-secret' }
+      if (args[1].includes('/offline/')) throw new Error('repository unavailable')
+      return { stdout: JSON.stringify({ workflow_runs: [], total_count: 0 }) }
+    })
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({
+      records: [], errors: [{ org: 'acme', error: 'acme/offline: repository unavailable' }],
+    })
+    expect((await listActionRuns({ org: 'acme', count_only: true })).body).toMatchObject({ count: 0 })
+  })
 })
