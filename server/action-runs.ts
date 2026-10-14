@@ -56,9 +56,19 @@ function toActionRun(value: unknown, repo: string): ActionRun {
 async function readRepository(repo: string, token: string, failed: boolean, previous?: RepositoryRead): Promise<RepositoryRead> {
   const args = ['api', `repos/${repo}/actions/runs?per_page=100${failed ? '&status=failure' : ''}`, '--method', 'GET', '--include']
   if (previous?.etag) args.push('--header', `If-None-Match: ${previous.etag}`)
-  const { stdout } = await runFile('gh', args, {
-    env: { ...credentialEnv, GH_HOST: 'github.com', GH_TOKEN: token }, timeoutMs: 30_000, maxOutputBytes: 8 * 1024 * 1024,
-  })
+  let stdout: string
+  try {
+    stdout = (await runFile('gh', args, {
+      env: { ...credentialEnv, GH_HOST: 'github.com', GH_TOKEN: token }, timeoutMs: 30_000, maxOutputBytes: 8 * 1024 * 1024,
+    })).stdout
+  } catch (error) {
+    // gh exits 1 on HTTP 304. Accept only that complete conditional response;
+    // network failures, timeouts and every other HTTP error still propagate.
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 1
+      || !('stdout' in error) || typeof error.stdout !== 'string'
+      || !previous?.etag || !/^HTTP\/\S+ 304\b/.test(error.stdout)) throw error
+    stdout = error.stdout
+  }
   const separator = /\r?\n\r?\n/.exec(stdout)
   if (!separator) throw new Error('GitHub returned no HTTP response headers')
   const headers = stdout.slice(0, separator.index)
@@ -108,8 +118,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
         let entry = repositoryCache.get(key)
         if (!entry || entry.expires <= Date.now()) {
           const previous = entry?.last
-          const next: RepositoryCache = { expires: Infinity, read: Promise.resolve({ records: [], errors: [], warnings: [] }) }
-          next.read = readRepository(repo, token, failed, previous).then((result) => {
+          const read = readRepository(repo, token, failed, previous).then((result) => {
             next.last = result
             next.expires = Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS)
             return result
@@ -118,6 +127,7 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
             next.expires = Date.now() + ERROR_TTL_MS
             throw error
           })
+          const next: RepositoryCache = { expires: Infinity, read }
           repositoryCache.set(key, next)
           entry = next
         }
@@ -148,14 +158,14 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
     if (existing && existing.expires > Date.now()) return existing.read
     // Pending reads never expire. Pages/counts share a snapshot, and a transient
     // failure gets a one-minute backoff instead of poisoning the five-minute cache.
-    const entry: Cached<Snapshot> = { expires: Infinity, read: Promise.resolve({ records: [], errors: [], warnings: [] }) }
-    entry.read = readSnapshot(me, org.login, failed).then((result) => {
+    const read = readSnapshot(me, org.login, failed).then((result) => {
       entry.expires = Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS)
       return result
     }, (error: unknown) => {
       entry.expires = Date.now() + ERROR_TTL_MS
       throw error
     })
+    const entry: Cached<Snapshot> = { expires: Infinity, read }
     cache.set(key, entry)
     return entry.read
   }))

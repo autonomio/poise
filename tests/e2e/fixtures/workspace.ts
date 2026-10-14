@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 
-export async function workspace(page: Page, view = 'current', fontResponse?: Promise<void>): Promise<void> {
+export async function workspace(page: Page, view = 'current', fontResponse?: Promise<void>, options: { preserveOnReload?: boolean } = {}): Promise<void> {
   await page.addInitScript(({ view, preserveOnReload }) => {
     if (preserveOnReload && sessionStorage.getItem('poise-workspace-initialized')) return
     localStorage.clear()

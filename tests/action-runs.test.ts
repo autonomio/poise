@@ -125,7 +125,7 @@ it('uses ETags after expiry and recovers unavailable repositories without reread
     mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
       if (args[0] === 'auth') return { stdout: 'selected-secret' }
       if (args[1].includes('/offline/') && unavailable) throw new Error('temporarily unavailable')
-      if (args.includes('--header')) return { stdout: 'HTTP/2.0 304 Not Modified\r\n\r\n' }
+      if (args.includes('--header')) throw Object.assign(new Error('gh: HTTP 304'), { code: 1, stdout: 'HTTP/2.0 304 Not Modified\r\n\r\n' })
       return { stdout: response() }
     })
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ repo: 'acme/healthy' }] })
@@ -149,5 +149,23 @@ it('recovers total transient failure after one minute and retains valid runs alo
     mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response([run(), { id: 2 }, run(3, 'success')]) }))
     vi.advanceTimersByTime(60_000)
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ number: 1 }], errors: [{ org: 'acme', error: 'acme/site: malformed workflow run 2' }] })
+  } finally { vi.useRealTimers() }
+})
+
+
+it('rejects a 304 without prior data and propagates conditional HTTP and process failures', async () => {
+  vi.useFakeTimers()
+  try {
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : 'HTTP/2.0 304 Not Modified\r\n\r\n' }))
+    await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('304 without a cached')
+    invalidateActionRunCache()
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response() }))
+    await listActionRuns({ org: 'acme' })
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === 'auth') return { stdout: 'selected-secret' }
+      throw Object.assign(new Error('HTTP 403'), { code: 1, stdout: 'HTTP/2.0 403 Forbidden\r\n\r\n' })
+    })
+    vi.advanceTimersByTime(5 * 60_000)
+    await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('HTTP 403')
   } finally { vi.useRealTimers() }
 })
