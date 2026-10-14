@@ -117,6 +117,8 @@ test('a late Behaviors read cannot restart hidden polling and its cached state a
     await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
     await expect(page.locator('#behaviors-tbody > tr')).not.toHaveCount(0)
     await expect(page.locator('input[data-behavior="review-new-prs"]')).toBeDisabled()
+    await expect(page.getByLabel('Reviewers for review-new-prs')).toBeDisabled()
+    await expect(page.getByLabel('Edit memory for review-new-prs')).toBeDisabled()
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
     const received = page.waitForResponse('**/api/behaviors')
     first.release(); await (await received).finished()
@@ -127,6 +129,8 @@ test('a late Behaviors read cannot restart hidden polling and its cached state a
     await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
     await expect.poll(() => reads).toBe(2)
     await expect(page.locator('input[data-behavior="review-new-prs"]')).toBeChecked()
+    await expect(page.getByLabel('Reviewers for review-new-prs')).toBeEnabled()
+    await expect(page.getByLabel('Edit memory for review-new-prs')).toBeEnabled()
     await expect(page.locator('tr[data-behavior="review-new-prs"]')).toContainText('cached-agent')
   } finally { first.release(); second.release() }
 })

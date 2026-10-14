@@ -26,13 +26,6 @@ and `deploy/restore.sh` back it up and restore it.
 
 - **Current** — manual idea/concept/plan cards beside live issues and PRs.
 - **Swarm** — agent run status, live review activity, responses, and safe replay controls.
-
-Settings reads only the selected section's expensive data. Accounts shows each
-CLI result independently, with pending checks and failures named alongside it.
-Returning to Editor keeps the open document, draft, selection and undo history;
-its document picker refreshes in the background. Other views keep their cached
-content usable while a refresh runs, and leaving stops their visible-only work
-even when an earlier read has not finished.
 - **Chat** — native coding-agent sessions with streaming, tools, permissions and checkout-bound work.
 - **Archive** — searchable GitHub issue and PR history.
 - **Behaviors** — scheduled review, approval, unblocking, and issue-review automations.
@@ -40,6 +33,13 @@ even when an earlier read has not finished.
 - **Editor** — atomic Markdown storage, annotations, and agent-backed chat.
 - **Analytics** — headline numbers for Current's time ranges, from the burger menu: issues opened and closed, pull requests merged, lines changed and time to merge, and per merged pull request the comments, median lines and completed behavior reviews and approvals. See [Analytics](docs/Analytics.md).
 - **Notifications** — what needs you, one thing at a time at the top of the page: a failed behavior, a sign-in or a Chat waiting for you, and your pull requests once they are ready to merge, again every 15 minutes until merged or silenced. See [Notifications](docs/Notifications.md).
+
+Settings reads only the selected section's expensive data. Accounts shows each
+CLI result independently, with pending checks and failures named alongside it.
+Returning to Editor keeps the open document, draft, selection and undo history;
+its document picker refreshes in the background. Other views keep their cached
+content usable while a refresh runs, and leaving stops their visible-only work
+even when an earlier read has not finished.
 
 ## Requirements
 
