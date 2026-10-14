@@ -102,3 +102,9 @@ cancellation and retirement opacity. Existing browser suites retain functional
 safeguards for drafts, native dialogs, submits, selection, authentication,
 service operations and asynchronous loading. The settlement helper waits for
 both runtime channels and native animations.
+
+`tests/e2e/swarm-performance.spec.ts` retains 1,300 distinct calls while checking
+viewport-bounded motion, navigation during a held refresh, cached return and
+filtering. Chromium performance counters guard against per-row synchronous
+layout and style recalculation; other motion semantics remain covered by the
+runtime and interaction suites.

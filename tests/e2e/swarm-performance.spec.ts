@@ -57,6 +57,8 @@ test('Swarm animates visible history without blocking navigation or replaying ca
     const after = await cdp.send('Performance.getMetrics')
     const layouts = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'LayoutCount')!.value
     const count = layouts(after) - layouts(before)
+    const styles = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'RecalcStyleCount')!.value
+    expect(styles(after) - styles(before)).toBeLessThan(300)
     console.log(`Swarm 1300 calls: mounted=${mounted}ms; navigation=${navigation.toFixed(1)}ms; layouts=${count}; moving=${moving}`)
     expect(count).toBeLessThan(200)
   } finally { release() }
