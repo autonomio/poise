@@ -506,7 +506,8 @@ test('reordered results retain each question’s native distribution state', asy
   expect(result).toEqual([{ question: 'Second', open: true, retained: false }, { question: 'First', open: false, retained: true }])
 })
 
-test('animation frames batch geometry reads before writing row styles', async ({ page }) => {
+test('animation frames batch geometry reads before writing row styles', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium exposes the performance counters used by this regression.')
   await runtime(page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
@@ -524,9 +525,12 @@ test('animation frames batch geometry reads before writing row styles', async ({
   const after = await cdp.send('Performance.getMetrics')
   const layouts = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'LayoutCount')!.value
   expect(layouts(after) - layouts(before)).toBeLessThan(25)
+  const styles = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'RecalcStyleCount')!.value
+  expect(styles(after) - styles(before)).toBeLessThan(25)
 })
 
-test('collection layout measures all destinations before animating visible actors', async ({ page }) => {
+test('collection layout measures all destinations before animating visible actors', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium exposes the performance counters used by this regression.')
   await runtime(page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')

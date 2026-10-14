@@ -12,7 +12,8 @@ const logs = Array.from({ length: 1300 }, (_, index) => ({
   outcome: 'approved', response: 'available', error: '',
 }))
 
-test('Swarm animates visible history without blocking navigation or replaying cached entry', async ({ page }) => {
+test('Swarm animates visible history without blocking navigation or replaying cached entry', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium exposes the performance counters used by this regression.')
   await workspace(page)
   await settled(page)
   let reads = 0

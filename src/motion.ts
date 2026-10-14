@@ -201,7 +201,10 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
   const inViewport = (box: DOMRect) => box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth
   for (const { element, box: next } of destinations) {
     const previous = before.get(key(element))
-    if (!inViewport(next) && (!previous || !inViewport(previous.box))) { if (element.hasAttribute('data-motion-running')) finishMotion(element); continue }
+    if (!inViewport(next) && (!previous || !inViewport(previous.box))) {
+      if (element.hasAttribute('data-motion-running')) finishMotion(element)
+      continue
+    }
     if (!previous) { reveal(element, { distance: MOTION.information }); continue }
     if (!previous.box.width || !previous.box.height) continue
     if (previous.element !== element) throw new Error('Motion layout requires retained semantic actor identity.')
@@ -226,10 +229,13 @@ export function retire(element: HTMLElement): void {
   const presentedGeometry = retirementGeometry.get(element)
   const box = presentedGeometry?.box ?? element.getBoundingClientRect()
   const clip = presentedGeometry?.clip ?? retirementClip(element.parentElement)
+  // Clipped rows already have pre-mutation geometry. Reading their styles
+  // after each preceding removal would force the whole table to lay out again.
+  if (!box.width || !box.height || clip.right <= clip.left || clip.bottom <= clip.top || box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom || reducedMotion()) { finishMotion(element); element.remove(); return }
   let opacity = Number(getComputedStyle(element).opacity)
   // The body still composites the fixed visual; intermediate ancestors no longer do.
   for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity)
-  if (!box.width || !box.height || !opacity || clip.right <= clip.left || clip.bottom <= clip.top || box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom || reducedMotion()) { finishMotion(element); element.remove(); return }
+  if (!opacity) { finishMotion(element); element.remove(); return }
   let ghost = element.cloneNode(true) as HTMLElement
   const descendants = [...element.querySelectorAll<HTMLElement>('*')]
   const copies = [...ghost.querySelectorAll<HTMLElement>('*')]
