@@ -127,7 +127,7 @@ test('swapping a notice during entrance keeps its presented position', async ({ 
 
 for (const narrow of [false, true]) test(`session controls retain focus and drafts through updates (${narrow ? 'narrow dark' : 'desktop light'})`, async ({ page }) => {
   if (narrow) await page.setViewportSize({ width: 640, height: 740 })
-  await page.addInitScript(dark => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat'); if (dark) localStorage.setItem('poise-theme', 'dark') }, narrow)
+  await page.addInitScript(dark => { localStorage.clear(); localStorage.setItem('poise-view', 'chat'); if (dark) localStorage.setItem('poise-theme', 'dark') }, narrow)
   const record = session(), state = makeState([record])
   await installRoutes(page, state)
   const socket = await installSocket(page, state)
@@ -149,7 +149,7 @@ for (const narrow of [false, true]) test(`session controls retain focus and draf
 })
 
 test('pointer takeover uses the moving sidebar width and releases the spring', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat'); localStorage.setItem('poise-chat-sidebar', 'collapsed') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat'); localStorage.setItem('poise-chat-sidebar', 'collapsed') })
   await installRoutes(page, makeState([session()]))
   await installSocket(page)
   await page.goto('/')
@@ -174,7 +174,7 @@ test('pointer takeover uses the moving sidebar width and releases the spring', a
 })
 
 test('a delayed session deletion cannot flash outside a collapsed sidebar fade', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   const state = makeState([session(), session({ id: 's2', title: 'Remaining session' })])
   await installRoutes(page, state); await installSocket(page)
   let releaseDelete!: () => void, requested = false
@@ -208,7 +208,7 @@ test('a delayed session deletion cannot flash outside a collapsed sidebar fade',
 })
 
 test('a delayed session deletion cannot reveal a row scrolled above its list', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   const state = makeState(Array.from({ length: 40 }, (_, index) => session({ id: `s${index + 1}`, title: `Session ${index + 1}` })))
   await installRoutes(page, state); await installSocket(page)
   let releaseDelete!: () => void, requested = false
@@ -241,7 +241,7 @@ test('a delayed session deletion cannot reveal a row scrolled above its list', a
 })
 
 test('a model menu lands once and keeps its catalogue visible', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   await installRoutes(page, makeState([])); await installSocket(page)
   await page.goto('/')
   await page.locator('.chat-default-model').click()
@@ -251,7 +251,7 @@ test('a model menu lands once and keeps its catalogue visible', async ({ page })
 })
 
 test('the final streamed response updates while selected text stays selected', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   await installRoutes(page, makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'go', attachments: [], mentions: [] } })] }))
   const socket = await installSocket(page)
   await page.goto('/'); await socket.subscribed('s1'); socket.seq = 1
@@ -271,7 +271,7 @@ test('the final streamed response updates while selected text stays selected', a
 })
 
 test('draft typing resizes immediately without a delayed height transition', async ({ page }) => {
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'chat') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-view', 'chat') })
   await installRoutes(page, makeState([session()])); await installSocket(page)
   await page.goto('/'); await settled(page)
   const measurements = await input(page).evaluate(async element => {
@@ -314,7 +314,10 @@ test('repeated Archive reorders retain actors and have no stale cleanup jump', a
   await workspace(page, 'main')
   let order = [1, 2, 3]
   await page.route('**/api/gh', route => route.fulfill({ json: { records: order.map(number => ({ repo: 'acme/app', number, kind: 'pr', title: `Motion row ${number}`, url: `https://github.com/acme/app/pull/${number}`, author: 'octocat', state: 'open', owner_login: null, owner_avatar: null, updated_at: '2026-10-13T10:00:00Z', merged_at: null })), count: order.length, errors: [] } }))
-  await page.evaluate(() => localStorage.setItem('poise-view', 'main'))
+  await page.evaluate(() => {
+    localStorage.setItem('poise-view', 'main')
+    localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' }))
+  })
   await page.reload()
   await expect(page.locator('#tbody > tr')).toHaveCount(3)
   await settled(page)
