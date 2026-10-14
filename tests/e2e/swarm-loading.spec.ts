@@ -8,8 +8,8 @@ function deferred() {
   return { promise, release }
 }
 
-function history(org = 'acme') {
-  return Array.from({ length: 60 }, (_, index) => ({
+function history(org = 'acme', length = 60) {
+  return Array.from({ length }, (_, index) => ({
     id: `${org}-${index}`, repo: `${org}/project`, pr_id: String(index + 1), actor: 'review-bot',
     model: 'opus', behavior: 'pr_review', session_id: null, prompt: `${org} run ${index + 1}`,
     started_at: '2026-10-14T08:00:00Z', completed_at: '2026-10-14T08:01:00Z',
@@ -45,6 +45,42 @@ test('Swarm paints recent calls before the complete history arrives and retains 
     await page.locator('#swarm-search').fill('acme run 60')
     await expect(page.locator(rows)).toHaveCount(1)
     await expect(page.locator(rows)).toContainText('#60')
+  } finally { older.release() }
+})
+
+test('Swarm completes a large history without blocking the preview controls', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium exposes the long-task observer used by this regression.')
+  await ready(page)
+  const older = deferred(), logs = history('acme', 1300)
+  await page.route('**/api/agent-logs**', async route => {
+    if (new URL(route.request().url()).searchParams.has('limit')) return route.fulfill({ json: { logs: logs.slice(0, 50), total: logs.length } })
+    await older.promise
+    await route.fulfill({ json: { logs } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    await expect(page.locator(rows)).toHaveCount(50)
+    await settled(page)
+    const control = await page.locator(rows).first().getByRole('button', { name: 'Toggle detail' }).elementHandle()
+    await control!.focus()
+    const tasks = await page.evaluateHandle(() => {
+      const durations: number[] = []
+      const observer = new PerformanceObserver(list => durations.push(...list.getEntries().map(entry => entry.duration)))
+      observer.observe({ entryTypes: ['longtask'] })
+      return { durations, observer }
+    })
+    older.release()
+    await expect(page.locator(rows)).toHaveCount(1300)
+    const worstTask = await tasks.evaluate(({ durations, observer }) => {
+      durations.push(...observer.takeRecords().map(entry => entry.duration)); observer.disconnect()
+      return Math.max(0, ...durations)
+    })
+    console.log(`Swarm preview to 1300 calls: longest main-thread task ${worstTask}ms`)
+    expect(worstTask).toBeLessThan(350)
+    expect(await control!.evaluate(element => element.isConnected && document.activeElement === element)).toBe(true)
+    await page.locator('#swarm-search').fill('acme run 1300')
+    await expect(page.locator(rows)).toHaveCount(1)
+    await expect(page.locator(rows)).toContainText('#1300')
   } finally { older.release() }
 })
 

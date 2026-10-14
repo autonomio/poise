@@ -689,6 +689,7 @@ function mainRowInnerHTML(e: LogEntry, group?: RunGroup): string {
 }
 
 const mainRowMarkup = new WeakMap<HTMLTableRowElement, string>()
+const preparedRows = new WeakMap<LogEntry, HTMLTableRowElement>()
 
 function buildMainRow(e: LogEntry, markup: string): HTMLTableRowElement {
   const tr = document.createElement('tr')
@@ -698,6 +699,21 @@ function buildMainRow(e: LogEntry, markup: string): HTMLTableRowElement {
   tr.innerHTML = markup
   mainRowMarkup.set(tr, markup)
   return tr
+}
+
+async function prepareRows(list: LogEntry[], current: () => boolean): Promise<void> {
+  const retained = new Set([...bodyEl.children].map(row => (row as HTMLElement).dataset.id))
+  const missing = list.filter(entry => !retained.has(entry.id))
+  if (missing.length <= 100) return
+  // Parsing a full history's cells in the layout mutation made its first
+  // mount one long task. Prepare detached rows while the preview stays usable.
+  for (let start = 0; start < missing.length; start += 50) {
+    if (!current()) return
+    for (const entry of missing.slice(start, start + 50)) {
+      preparedRows.set(entry, buildMainRow(entry, mainRowInnerHTML(entry)))
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+  }
 }
 
 function setExpandContent(tr: HTMLTableRowElement, id: string) {
@@ -769,7 +785,7 @@ function reconcileRows(nextRows: RunRow[]): void {
   }
   for (const { entry, group, repeat } of nextRows) {
     const markup = mainRowInnerHTML(entry, group)
-    const row = main.get(entry.id) || buildMainRow(entry, markup)
+    const row = main.get(entry.id) || preparedRows.get(entry) || buildMainRow(entry, markup)
     row.classList.toggle('agent-repeat-row', !!repeat)
     row.dataset.callId = entry.response ? entry.id : ''
     if (mainRowMarkup.get(row) !== markup) {
@@ -1184,7 +1200,9 @@ async function readLogFeed(org: string, recent = false): Promise<LogFeed> {
   return res.json()
 }
 
-function applyLogFeed(data: LogFeed): void {
+async function applyLogFeed(data: LogFeed, current: () => boolean): Promise<void> {
+  await prepareRows(data.logs || [], current)
+  if (!current()) return
   entries = data.logs || []
   incompleteTotal = typeof data.total === 'number' && data.total > entries.length ? data.total : null
   loadingHistory = incompleteTotal !== null
@@ -1211,12 +1229,12 @@ function pollOnce(): Promise<void> {
       if (!lastLoadedAt) {
         const recent = await readLogFeed(org, true)
         if (!current()) return
-        applyLogFeed(recent)
-        if (incompleteTotal === null) return
+        await applyLogFeed(recent, current)
+        if (!current() || incompleteTotal === null) return
       }
       const data = await readLogFeed(org)
       if (!current()) return
-      applyLogFeed(data)
+      await applyLogFeed(data, current)
     } catch (err) {
       if (!current()) return
       loadingHistory = false
