@@ -12,6 +12,10 @@ vi.mock('../server/gh', () => ({
 }))
 import { invalidateActionRunCache, listActionRuns } from '../server/action-runs'
 
+function response(runs: unknown[] = [run()], total = runs.length): string {
+  return 'HTTP/2.0 200 OK\r\nETag: "snapshot"\r\n\r\n' + JSON.stringify({ workflow_runs: runs, total_count: total })
+}
+
 function run(id = 1, conclusion: string | null = 'failure') {
   return { id, name: 'Deploy', display_title: 'Deploy after merge', html_url: `https://github.com/acme/site/actions/runs/${id}`,
     actor: { login: 'octocat' }, status: conclusion ? 'completed' : 'in_progress', conclusion,
@@ -24,7 +28,7 @@ beforeEach(() => {
   mocks.me = 'octocat'
   mocks.runFile.mockReset()
   mocks.repos.mockReset().mockImplementation(async (org: string) => ({ repos: [`${org}/site`], errors: [] }))
-  mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : JSON.stringify({ workflow_runs: [run()], total_count: 1 }) }))
+  mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response() }))
 })
 
 describe('Archive workflow snapshots', () => {
@@ -40,8 +44,8 @@ describe('Archive workflow snapshots', () => {
     await listActionRuns({ org: 'beta', q: 'deploy', updated_since: '2026-10-01', offset: 1, limit: 20 })
     const api = mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')
     expect(api.map(([, args]) => args)).toEqual([
-      ['api', 'repos/acme/site/actions/runs?per_page=100&status=failure', '--method', 'GET'],
-      ['api', 'repos/beta/site/actions/runs?per_page=100&status=failure', '--method', 'GET'],
+      ['api', 'repos/acme/site/actions/runs?per_page=100&status=failure', '--method', 'GET', '--include'],
+      ['api', 'repos/beta/site/actions/runs?per_page=100&status=failure', '--method', 'GET', '--include'],
     ])
     expect(mocks.repos).toHaveBeenCalledTimes(2)
     expect(mocks.runFile.mock.calls[0][1]).toEqual(['auth', 'token', '--hostname', 'github.com', '--user', 'octocat'])
@@ -63,7 +67,7 @@ describe('Archive workflow snapshots', () => {
   })
 
   it('includes active runs in Any and filters branch and dates without new reads', async () => {
-    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : JSON.stringify({ workflow_runs: [run(2, null)], total_count: 1 }) }))
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response([run(2, null)]) }))
     const result = await listActionRuns({ org: 'acme', record_state: 'all', q: 'main' })
     expect(result.body).toMatchObject({ records: [{ state: 'in_progress' }] })
     expect((await listActionRuns({ org: 'acme', record_state: 'all', updated_until: '2026-10-13' })).body).toMatchObject({ records: [] })
@@ -71,7 +75,7 @@ describe('Archive workflow snapshots', () => {
   })
 
   it('makes truncated history explicit', async () => {
-    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : JSON.stringify({ workflow_runs: [run()], total_count: 130 }) }))
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response([run()], 130) }))
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ warnings: ['acme/site: showing the latest 1 of 130 failed runs. Open GitHub for older runs.'] })
   })
 
@@ -79,7 +83,7 @@ describe('Archive workflow snapshots', () => {
     mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
       if (args[0] === 'auth') return { stdout: 'selected-secret' }
       if (args[1].includes('beta/')) throw new Error('denied selected-secret')
-      return { stdout: JSON.stringify({ workflow_runs: [run()], total_count: 1 }) }
+      return { stdout: response() }
     })
     const result = await listActionRuns({})
     expect(result.body).toMatchObject({ records: [{ repo: 'acme/site' }], errors: [{ org: 'beta', error: 'beta/site: denied ***' }] })
@@ -93,7 +97,7 @@ describe('Archive workflow snapshots', () => {
     await expect(listActionRuns({})).rejects.toThrow('Set your GitHub account')
     expect(mocks.runFile).not.toHaveBeenCalled()
     mocks.me = 'octocat'
-    mocks.runFile.mockResolvedValue({ stdout: '{}' })
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : 'HTTP/2.0 200 OK\n\n{}' }))
     await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('malformed workflow inventory')
     await expect(listActionRuns({ org: 'outside' })).rejects.toThrow('not configured')
   })
@@ -103,11 +107,47 @@ describe('Archive workflow snapshots', () => {
     mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
       if (args[0] === 'auth') return { stdout: 'selected-secret' }
       if (args[1].includes('/offline/')) throw new Error('repository unavailable')
-      return { stdout: JSON.stringify({ workflow_runs: [], total_count: 0 }) }
+      return { stdout: response([]) }
     })
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({
       records: [], errors: [{ org: 'acme', error: 'acme/offline: repository unavailable' }],
     })
     expect((await listActionRuns({ org: 'acme', count_only: true })).body).toMatchObject({ count: 0 })
   })
+})
+
+
+it('uses ETags after expiry and recovers unavailable repositories without rereading healthy ones', async () => {
+  vi.useFakeTimers()
+  try {
+    mocks.repos.mockResolvedValue({ repos: ['acme/healthy', 'acme/offline'], errors: [] })
+    let unavailable = true
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === 'auth') return { stdout: 'selected-secret' }
+      if (args[1].includes('/offline/') && unavailable) throw new Error('temporarily unavailable')
+      if (args.includes('--header')) return { stdout: 'HTTP/2.0 304 Not Modified\r\n\r\n' }
+      return { stdout: response() }
+    })
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ repo: 'acme/healthy' }] })
+    unavailable = false
+    vi.advanceTimersByTime(60_000)
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ repo: 'acme/healthy' }, { repo: 'acme/offline' }], errors: [] })
+    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(3)
+    vi.advanceTimersByTime(5 * 60_000)
+    await listActionRuns({ org: 'acme' })
+    const conditional = mocks.runFile.mock.calls.filter(([, args]) => args.includes('--header'))
+    expect(conditional).toHaveLength(2)
+    expect(conditional[0][1]).toContain('If-None-Match: "snapshot"')
+  } finally { vi.useRealTimers() }
+})
+
+it('recovers total transient failure after one minute and retains valid runs alongside malformed or changed entries', async () => {
+  vi.useFakeTimers()
+  try {
+    mocks.runFile.mockRejectedValue(new Error('network offline'))
+    await expect(listActionRuns({ org: 'acme' })).rejects.toThrow('network offline')
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response([run(), { id: 2 }, run(3, 'success')]) }))
+    vi.advanceTimersByTime(60_000)
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ number: 1 }], errors: [{ org: 'acme', error: 'acme/site: malformed workflow run 2' }] })
+  } finally { vi.useRealTimers() }
 })

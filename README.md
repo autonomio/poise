@@ -720,3 +720,7 @@ available in GitHub. Workflow reads happen only while Actions is open, share a
 five-minute cache across pages, counts, search, date and account filters, and make
 one API request per discovered repository per outcome per cache interval.
 Repository discovery uses the existing cache; no workflow jobs or logs are polled.
+Healthy workflow snapshots expire five minutes after their reads complete;
+unavailable or partial reads retry after one minute, reusing healthy repositories.
+Expired reads send authenticated ETags: unchanged `304` responses reuse the
+verified snapshot and do not consume GitHub's primary REST rate limit.

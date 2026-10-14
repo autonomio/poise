@@ -21,13 +21,71 @@ interface Snapshot {
   errors: OrganizationReadError[]
   warnings: string[]
 }
+interface RepositoryRead extends Snapshot { etag?: string }
+interface Cached<T> { expires: number, read: Promise<T> }
+interface RepositoryCache extends Cached<RepositoryRead> { last?: RepositoryRead }
 
 const TTL_MS = 5 * 60_000
-const cache = new Map<string, { expires: number, read: Promise<Snapshot> }>()
-export function invalidateActionRunCache(): void { cache.clear() }
+const ERROR_TTL_MS = 60_000
+const cache = new Map<string, Cached<Snapshot>>()
+const repositoryCache = new Map<string, RepositoryCache>()
+export function invalidateActionRunCache(): void { cache.clear(); repositoryCache.clear() }
 const credentialEnv = {
   GH_HOST: undefined, GH_TOKEN: undefined, GITHUB_TOKEN: undefined,
   GH_ENTERPRISE_TOKEN: undefined, GITHUB_ENTERPRISE_TOKEN: undefined,
+}
+
+function toActionRun(value: unknown, repo: string): ActionRun {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed workflow run')
+  const run = value as Record<string, unknown>
+  if (!Number.isSafeInteger(run.id) || Number(run.id) < 1 || typeof run.html_url !== 'string'
+    || typeof run.status !== 'string' || typeof run.updated_at !== 'string' || typeof run.name !== 'string') {
+    throw new Error(`malformed workflow run ${Number.isSafeInteger(run.id) ? run.id : '(unknown ID)'}`)
+  }
+  const actor = run.actor as { login?: string } | null
+  return {
+    kind: 'action', repo, number: run.id as number,
+    title: `${run.name}${typeof run.display_title === 'string' && run.display_title !== run.name ? ` · ${run.display_title}` : ''}`,
+    url: run.html_url, author: typeof actor?.login === 'string' ? actor.login : '',
+    state: typeof run.conclusion === 'string' ? run.conclusion : run.status,
+    updated_at: run.updated_at, branch: typeof run.head_branch === 'string' ? run.head_branch : '',
+    event: typeof run.event === 'string' ? run.event : '',
+  }
+}
+
+async function readRepository(repo: string, token: string, failed: boolean, previous?: RepositoryRead): Promise<RepositoryRead> {
+  const args = ['api', `repos/${repo}/actions/runs?per_page=100${failed ? '&status=failure' : ''}`, '--method', 'GET', '--include']
+  if (previous?.etag) args.push('--header', `If-None-Match: ${previous.etag}`)
+  const { stdout } = await runFile('gh', args, {
+    env: { ...credentialEnv, GH_HOST: 'github.com', GH_TOKEN: token }, timeoutMs: 30_000, maxOutputBytes: 8 * 1024 * 1024,
+  })
+  const separator = /\r?\n\r?\n/.exec(stdout)
+  if (!separator) throw new Error('GitHub returned no HTTP response headers')
+  const headers = stdout.slice(0, separator.index)
+  const status = /^HTTP\/\S+ (\d{3})\b/.exec(headers)?.[1]
+  if (status === '304') {
+    if (!previous?.etag) throw new Error('GitHub returned 304 without a cached workflow inventory')
+    return previous
+  }
+  if (status !== '200') throw new Error(`GitHub workflow read returned HTTP ${status || 'unknown'}`)
+  const data = JSON.parse(stdout.slice(separator.index + separator[0].length))
+  if (!Array.isArray(data.workflow_runs) || !Number.isSafeInteger(data.total_count) || data.total_count < 0) {
+    throw new Error('GitHub returned malformed workflow inventory')
+  }
+  const records: ActionRun[] = []
+  const errors: OrganizationReadError[] = []
+  for (const value of data.workflow_runs) {
+    try {
+      const run = toActionRun(value, repo)
+      // A rerun can change conclusion while GitHub builds the response.
+      if (!failed || run.state === 'failure') records.push(run)
+    } catch (error) {
+      errors.push({ org: repo.split('/')[0], error: `${repo}: ${error instanceof Error ? error.message : String(error)}` })
+    }
+  }
+  const warnings = data.total_count > data.workflow_runs.length
+    ? [`${repo}: showing the latest ${data.workflow_runs.length} of ${data.total_count} ${failed ? 'failed ' : ''}runs. Open GitHub for older runs.`] : []
+  return { records, errors, warnings, etag: /^etag:\s*(.+)$/im.exec(headers)?.[1].trim() }
 }
 
 async function readSnapshot(me: string, org: string, failed: boolean): Promise<Snapshot> {
@@ -38,40 +96,36 @@ async function readSnapshot(me: string, org: string, failed: boolean): Promise<S
   })).stdout.trim()
   if (!token) throw new Error(`No GitHub credential for ${me}`)
   const records: ActionRun[] = []
-  let successfulReads = 0
   const errors = [...discovery.errors]
   const warnings: string[] = []
-  // One bounded request per repository; no history crawl, job reads or run polling.
+  let successfulReads = 0
+  // No history crawl, job reads or run polling. Healthy repositories stay cached
+  // while unavailable ones recover, and unchanged reads use authenticated ETags.
   for (let i = 0; i < discovery.repos.length; i += 4) {
     await Promise.all(discovery.repos.slice(i, i + 4).map(async (repo) => {
       try {
-        const { stdout } = await runFile('gh', [
-          'api', `repos/${repo}/actions/runs?per_page=100${failed ? '&status=failure' : ''}`,
-          '--method', 'GET',
-        ], { env: { ...credentialEnv, GH_HOST: 'github.com', GH_TOKEN: token }, timeoutMs: 30_000, maxOutputBytes: 8 * 1024 * 1024 })
-        const data = JSON.parse(stdout)
-        if (!Array.isArray(data.workflow_runs) || !Number.isSafeInteger(data.total_count) || data.total_count < 0) {
-          throw new Error('GitHub returned malformed workflow inventory')
+        const key = `${me.toLowerCase()}:${repo.toLowerCase()}:${failed}`
+        let entry = repositoryCache.get(key)
+        if (!entry || entry.expires <= Date.now()) {
+          const previous = entry?.last
+          const next: RepositoryCache = { expires: Infinity, read: Promise.resolve({ records: [], errors: [], warnings: [] }) }
+          next.read = readRepository(repo, token, failed, previous).then((result) => {
+            next.last = result
+            next.expires = Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS)
+            return result
+          }, (error: unknown) => {
+            next.last = previous
+            next.expires = Date.now() + ERROR_TTL_MS
+            throw error
+          })
+          repositoryCache.set(key, next)
+          entry = next
         }
-        const runs: ActionRun[] = data.workflow_runs.map((run: Record<string, unknown>) => {
-          const actor = run.actor as { login?: string } | null
-          if (!Number.isSafeInteger(run.id) || typeof run.html_url !== 'string'
-            || typeof run.status !== 'string' || typeof run.updated_at !== 'string'
-            || typeof run.name !== 'string' || (failed && run.conclusion !== 'failure')) {
-            throw new Error('GitHub returned malformed workflow run')
-          }
-          return {
-            kind: 'action', repo, number: run.id as number,
-            title: `${run.name}${typeof run.display_title === 'string' && run.display_title !== run.name ? ` · ${run.display_title}` : ''}`,
-            url: run.html_url, author: actor?.login || '',
-            state: typeof run.conclusion === 'string' ? run.conclusion : run.status,
-            updated_at: run.updated_at, branch: typeof run.head_branch === 'string' ? run.head_branch : '',
-            event: typeof run.event === 'string' ? run.event : '',
-          }
-        })
-        records.push(...runs)
+        const result = await entry.read
+        records.push(...result.records)
+        errors.push(...result.errors)
+        warnings.push(...result.warnings)
         successfulReads++
-        if (data.total_count > runs.length) warnings.push(`${repo}: showing the latest ${runs.length} of ${data.total_count} ${failed ? 'failed ' : ''}runs. Open GitHub for older runs.`)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         errors.push({ org: repo.split('/')[0], error: `${repo}: ${message.split(token).join('***')}` })
@@ -92,10 +146,18 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
     const key = `${me.toLowerCase()}:${org.login.toLowerCase()}:${failed}`
     const existing = cache.get(key)
     if (existing && existing.expires > Date.now()) return existing.read
-    // Store the in-flight read too: the page and its count share every API call.
-    const read = readSnapshot(me, org.login, failed)
-    cache.set(key, { expires: Date.now() + TTL_MS, read })
-    return read
+    // Pending reads never expire. Pages/counts share a snapshot, and a transient
+    // failure gets a one-minute backoff instead of poisoning the five-minute cache.
+    const entry: Cached<Snapshot> = { expires: Infinity, read: Promise.resolve({ records: [], errors: [], warnings: [] }) }
+    entry.read = readSnapshot(me, org.login, failed).then((result) => {
+      entry.expires = Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS)
+      return result
+    }, (error: unknown) => {
+      entry.expires = Date.now() + ERROR_TTL_MS
+      throw error
+    })
+    cache.set(key, entry)
+    return entry.read
   }))
   const errors: OrganizationReadError[] = []
   const warnings: string[] = []
