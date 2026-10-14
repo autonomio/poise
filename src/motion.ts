@@ -71,16 +71,23 @@ function complete(channel: Channel): void {
 function tick(now: number): void {
   const elapsed = Math.min(Math.max(0, (now - previousTime) / 1000), .032)
   previousTime = now
-  for (const channel of [...moving]) {
-    if (!channel.active) continue
-    if (channel.options.valid && !channel.options.valid()) { cancelMotion(channel.owner, channel.name); continue }
-    if (!channel.owner.isConnected || !channel.owner.getClientRects().length) {
+  // Read visibility and live targets before any channel writes animation styles.
+  // Interleaving these phases forces one synchronous layout per moving row.
+  const samples = [...moving].map(channel => {
+    const valid = !channel.options.valid || channel.options.valid()
+    const visible = channel.owner.isConnected && !!channel.owner.getClientRects().length
+    if (valid && visible && now >= channel.start) target(channel)
+    return { channel, valid, visible, generation: channel.generation }
+  })
+  for (const { channel, valid, visible, generation } of samples) {
+    if (!channel.active || channel.generation !== generation) continue
+    if (!valid) { cancelMotion(channel.owner, channel.name); continue }
+    if (!visible) {
       if (channel.name === 'scroll') cancelMotion(channel.owner, channel.name)
       else complete(channel)
       continue
     }
     if (now < channel.start) continue
-    target(channel)
     let resting = true
     for (const key of Object.keys(channel.target)) {
       const next = integrate(channel.value[key], channel.velocity[key], channel.target[key], elapsed)
@@ -174,6 +181,7 @@ function retirementClip(parent: Element | null, cache = new Map<Element, ClipBou
 }
 
 export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope > *', key: (element: HTMLElement) => string | HTMLElement = element => element): T {
+  if (reducedMotion() || !root.getClientRects().length) return change()
   const active = document.activeElement
   const before = new Map([...root.querySelectorAll<HTMLElement>(selector)].map(element => [key(element), { element, box: element.getBoundingClientRect() }]))
   // Departures share the same pre-mutation geometry as surviving layout actors.
@@ -189,12 +197,14 @@ export function layout<T>(root: HTMLElement, change: () => T, selector = ':scope
   const after = [...root.querySelectorAll<HTMLElement>(selector)]
   // Remove all old layout offsets before measuring any new destination.
   for (const element of after) { element.style.removeProperty('--flow-layout-x'); element.style.removeProperty('--flow-layout-y') }
-  for (const element of after) {
+  const destinations = after.map(element => ({ element, box: element.getBoundingClientRect() }))
+  const inViewport = (box: DOMRect) => box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth
+  for (const { element, box: next } of destinations) {
     const previous = before.get(key(element))
+    if (!inViewport(next) && (!previous || !inViewport(previous.box))) { if (element.hasAttribute('data-motion-running')) finishMotion(element); continue }
     if (!previous) { reveal(element, { distance: MOTION.information }); continue }
     if (!previous.box.width || !previous.box.height) continue
     if (previous.element !== element) throw new Error('Motion layout requires retained semantic actor identity.')
-    const next = element.getBoundingClientRect()
     if (!next.width || !next.height) continue
     const x = previous.box.left - next.left, y = previous.box.top - next.top
     if (Math.abs(x) < .5 && Math.abs(y) < .5 && !motionValue(element, 'layout')) continue

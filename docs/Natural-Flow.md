@@ -20,7 +20,11 @@ Each motion actor owns its offsets; children never inherit an ancestor's
 entry or layout offset into their own translation.
 
 Keyed reconciliation retains controls, drafts, selections, native details and
-active motion styles. Structural lists reveal new actors once and retire
+active motion styles. View entrances run once per mounted view; returning to cached content is immediate.
+Structural layout measures every destination before writing animation styles;
+frame visibility and target reads precede animation writes. Only actors whose
+old or new bounds intersect the viewport receive layout/entry motion.
+Structural lists reveal new actors once and retire
 departed visuals inertly. Changed text and elapsed time remain immediate.
 Batch departures use geometry captured before the layout mutation; retiring
 descendants retain their presented translations and transforms. Retiring
