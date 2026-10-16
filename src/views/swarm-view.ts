@@ -666,10 +666,10 @@ function hasDetail(e: LogEntry): boolean {
   return !!e.response || !!e.error || !!e.progress
 }
 
-interface MainRowState { open: boolean, group: string, started: string, elapsed: string, replay: string, stop: string }
+interface MainRowState { open: boolean, group: string, status: string, started: string, elapsed: string, replay: string, stop: string }
 
 function mainRowState(e: LogEntry, group?: RunGroup): MainRowState {
-  return { open: expanded.has(e.id), group: groupButton(group), started: startedRel(e), elapsed: elapsedText(e), replay: replayCell(e), stop: stopCell(e) }
+  return { open: expanded.has(e.id), group: groupButton(group), status: statusCell(e), started: startedRel(e), elapsed: elapsedText(e), replay: replayCell(e), stop: stopCell(e) }
 }
 
 function mainRowInnerHTML(e: LogEntry, state: MainRowState): string {
@@ -685,7 +685,7 @@ function mainRowInnerHTML(e: LogEntry, state: MainRowState): string {
     <td>${behaviorCell(e.behavior)}</td>
     <td class="org-cell">${orgCell(e)}</td>
     <td class="repo-cell">${repoCell(e)}</td>
-    <td class="agent-status-cell">${statusCell(e)}</td>
+    <td class="agent-status-cell">${state.status}</td>
     <td class="started-cell"><span class="date">${escapeHtml(state.started)}</span></td>
     <td class="elapsed-cell"><span class="date">${escapeHtml(state.elapsed)}</span></td>
     <td class="replay-cell">${state.replay}</td>
@@ -796,6 +796,7 @@ function reconcileRows(nextRows: RunRow[]): void {
     // Detached rows already have their static cells. Rebuild only if grouping,
     // disclosure, action buttons or the clock changed, then consume the cache.
     const reusable = prepared && prepared.state.open === state.open && prepared.state.group === state.group
+      && prepared.state.status === state.status
       && prepared.state.started === state.started && prepared.state.elapsed === state.elapsed
       && prepared.state.replay === state.replay && prepared.state.stop === state.stop
     const markup = reusable ? mainRowMarkup.get(prepared.row)! : mainRowInnerHTML(entry, state)
