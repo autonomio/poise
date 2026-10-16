@@ -840,7 +840,7 @@ td a:hover {
   height: 5px;
   border-radius: var(--r-pill);
   background: var(--text-tertiary);
-  animation: pulse 1s ease-in-out infinite;
+  animation: none;
 }
 
 .loader span:nth-child(2) { animation-delay: 0.15s; }
@@ -6717,6 +6717,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
 #main-filters .range-picker { flex: 0 0 auto; }
 #main-filters .range-picker[hidden] { display: none; }
 #main-filters .range-picker button { white-space: nowrap; flex-shrink: 0; }
+#loader span { animation: pulse 1s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .loader span { animation: none; }
+  #loader span { animation: none; }
 }
