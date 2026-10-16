@@ -384,7 +384,7 @@ test('a persistently failing later page retries that page and stops after its re
   await expect(page.locator('#tbody tr')).toHaveCount(20)
 })
 
-test('adding a type preserves a selected fresh source's scheduled recovery', async ({ page }) => {
+test('adding a type preserves scheduled recovery for another selected source', async ({ page }) => {
   await workspace(page, 'swarm')
   let reads = 0
   await page.route('**/api/gh', route => {
