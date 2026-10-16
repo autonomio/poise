@@ -185,7 +185,7 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
       entry.last = result
       if (cache.get(key) === entry) setMeta(`archive-actions:${key}`, JSON.stringify({ ...result, expires: entry.expires }))
       return result
-    }, (error: unknown) => {
+    }).catch((error: unknown) => {
       entry.expires = Date.now() + ERROR_TTL_MS
       entry.pending = false
       entry.error = error instanceof Error ? error.message : String(error)
@@ -197,9 +197,13 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
     return entry
   })
   const results = body.snapshot === true
-    ? entries.map((entry): PromiseSettledResult<Snapshot> => entry.error
-      ? { status: 'fulfilled', value: { records: entry.last?.records ?? [], errors: [{ org: '', error: entry.error }], warnings: entry.last?.warnings ?? [] } }
-      : { status: 'fulfilled', value: entry.last ?? { records: [], errors: [], warnings: [] } })
+    ? entries.map((entry): PromiseSettledResult<Snapshot> => {
+      if (entry.error) {
+        if (!entry.last) return { status: 'rejected', reason: new Error(entry.error) }
+        return { status: 'fulfilled', value: { records: entry.last.records, errors: [{ org: '', error: entry.error }], warnings: entry.last.warnings } }
+      }
+      return { status: 'fulfilled', value: entry.last ?? { records: [], errors: [], warnings: [] } }
+    })
     : await Promise.allSettled(entries.map((entry) => entry.read))
   const pending = entries.some((entry) => entry.pending)
   const errors: OrganizationReadError[] = []

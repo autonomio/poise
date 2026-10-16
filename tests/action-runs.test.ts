@@ -259,3 +259,17 @@ it('retains the complete warm snapshot until every refreshed repository settles'
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ number: 2 }, { number: 2 }], pending: false })
   } finally { release(); vi.useRealTimers() }
 })
+
+
+it('rejects a completely failed cold snapshot so the browser retries, then recovers after cache backoff', async () => {
+  vi.useFakeTimers()
+  mocks.runFile.mockRejectedValue(new Error('network offline'))
+  try {
+    expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ pending: true })
+    await vi.waitFor(async () => { await expect(listActionRuns({ org: 'acme', snapshot: true })).rejects.toThrow('network offline') })
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => ({ stdout: args[0] === 'auth' ? 'selected-secret' : response() }))
+    vi.advanceTimersByTime(60_000)
+    await listActionRuns({ org: 'acme', snapshot: true })
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ kind: 'action', number: 1 }], pending: false })
+  } finally { vi.useRealTimers() }
+})
