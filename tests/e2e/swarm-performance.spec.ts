@@ -16,13 +16,16 @@ test('Swarm animates visible history without blocking navigation or replaying ca
   test.skip(browserName !== 'chromium', 'Chromium exposes the performance counters used by this regression.')
   await workspace(page)
   await settled(page)
-  let reads = 0
+  let holdReads = false
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/agent-logs**', async route => {
-    if (++reads > 2) await held
+    if (holdReads) await held
     await route.fulfill({ json: { logs } })
   })
+  // Background consumers may read the same endpoint before Swarm opens.
+  // They must not advance the mock into holding the refresh under test.
+  await page.evaluate(() => Promise.all([fetch('/api/agent-logs'), fetch('/api/agent-logs')]))
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
   const before = await cdp.send('Performance.getMetrics')
@@ -52,6 +55,7 @@ test('Swarm animates visible history without blocking navigation or replaying ca
     expect(await control!.evaluate(element => element.isConnected && element === document.activeElement)).toBe(true)
     const moving = await page.locator('#swarm-tbody > [data-motion-running]').count()
     expect(moving).toBeLessThan(30)
+    holdReads = true
     const navigation = await page.evaluate(() => new Promise<number>(resolve => {
       requestAnimationFrame(() => {
         const start = performance.now()

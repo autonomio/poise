@@ -666,22 +666,28 @@ function hasDetail(e: LogEntry): boolean {
   return !!e.response || !!e.error || !!e.progress
 }
 
-function mainRowInnerHTML(e: LogEntry, group?: RunGroup): string {
-  const isOpen = expanded.has(e.id)
+interface MainRowState { open: boolean, group: string, started: string, elapsed: string }
+
+function mainRowState(e: LogEntry, group?: RunGroup): MainRowState {
+  return { open: expanded.has(e.id), group: groupButton(group), started: startedRel(e), elapsed: elapsedText(e) }
+}
+
+function mainRowInnerHTML(e: LogEntry, state: MainRowState): string {
+  const isOpen = state.open
   const btn = hasDetail(e)
     ? `<button class="expand-btn${isOpen ? ' open' : ''}" aria-expanded="${isOpen}"`
       + ` title="${isOpen ? 'Hide detail' : (e.progress ? 'View activity' : e.response ? 'View response' : 'View error')}"`
       + ` aria-label="Toggle detail">${CHEV_SVG}</button>`
     : ''
   return `
-    <td class="group-cell">${groupButton(group)}</td>
+    <td class="group-cell">${state.group}</td>
     <td>${modelCell(e.recovery_model ? `${e.model} → ${e.recovery_model}` : e.model)}</td>
     <td>${behaviorCell(e.behavior)}</td>
     <td class="org-cell">${orgCell(e)}</td>
     <td class="repo-cell">${repoCell(e)}</td>
     <td class="agent-status-cell">${statusCell(e)}</td>
-    <td class="started-cell"><span class="date">${escapeHtml(startedRel(e))}</span></td>
-    <td class="elapsed-cell"><span class="date">${escapeHtml(elapsedText(e))}</span></td>
+    <td class="started-cell"><span class="date">${escapeHtml(state.started)}</span></td>
+    <td class="elapsed-cell"><span class="date">${escapeHtml(state.elapsed)}</span></td>
     <td class="replay-cell">${replayCell(e)}</td>
     <td class="stop-cell">${stopCell(e)}</td>
     <td class="action-cell">${btn}</td>
@@ -689,7 +695,7 @@ function mainRowInnerHTML(e: LogEntry, group?: RunGroup): string {
 }
 
 const mainRowMarkup = new WeakMap<HTMLTableRowElement, string>()
-const preparedRows = new WeakMap<LogEntry, HTMLTableRowElement>()
+const preparedRows = new WeakMap<LogEntry, { row: HTMLTableRowElement, state: MainRowState }>()
 
 function buildMainRow(e: LogEntry, markup: string): HTMLTableRowElement {
   const tr = document.createElement('tr')
@@ -710,7 +716,8 @@ async function prepareRows(list: LogEntry[], current: () => boolean): Promise<vo
   for (let start = 0; start < missing.length; start += 50) {
     if (!current()) return
     for (const entry of missing.slice(start, start + 50)) {
-      preparedRows.set(entry, buildMainRow(entry, mainRowInnerHTML(entry)))
+      const state = mainRowState(entry)
+      preparedRows.set(entry, { row: buildMainRow(entry, mainRowInnerHTML(entry, state)), state })
     }
     await new Promise<void>(resolve => setTimeout(resolve, 0))
   }
@@ -784,8 +791,15 @@ function reconcileRows(nextRows: RunRow[]): void {
     cursor = row.nextSibling
   }
   for (const { entry, group, repeat } of nextRows) {
-    const markup = mainRowInnerHTML(entry, group)
-    const row = main.get(entry.id) || preparedRows.get(entry) || buildMainRow(entry, markup)
+    const state = mainRowState(entry, group)
+    const prepared = preparedRows.get(entry)
+    // Detached rows already have their static cells. Rebuild only if grouping,
+    // disclosure or the clock changed during preparation, then consume the cache.
+    const reusable = prepared && prepared.state.open === state.open && prepared.state.group === state.group
+      && prepared.state.started === state.started && prepared.state.elapsed === state.elapsed
+    const markup = reusable ? mainRowMarkup.get(prepared.row)! : mainRowInnerHTML(entry, state)
+    const row = main.get(entry.id) || prepared?.row || buildMainRow(entry, markup)
+    preparedRows.delete(entry)
     row.classList.toggle('agent-repeat-row', !!repeat)
     row.dataset.callId = entry.response ? entry.id : ''
     if (mainRowMarkup.get(row) !== markup) {
