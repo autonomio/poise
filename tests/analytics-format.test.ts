@@ -89,8 +89,8 @@ describe('Analytics wording', () => {
 
 describe('merge-time trends', () => {
   it('makes faster, slower and unchanged comparisons explicit', () => {
-    expect(mergeTimeTrend(50, 100)).toEqual({ direction: 'good', text: '↓ 50%', description: '50% faster versus the preceding 7-day average' })
-    expect(mergeTimeTrend(150, 100)).toEqual({ direction: 'bad', text: '↑ 50%', description: '50% slower versus the preceding 7-day average' })
+    expect(mergeTimeTrend(50, 100)).toEqual({ direction: 'good', caption: 'Faster vs 7-day average', text: '↓ 50%', description: '50% faster versus the preceding 7-day average' })
+    expect(mergeTimeTrend(150, 100)).toEqual({ direction: 'bad', caption: 'Slower vs 7-day average', text: '↑ 50%', description: '50% slower versus the preceding 7-day average' })
     expect(mergeTimeTrend(100, 100)?.text).toBe('→ 0%')
     expect(mergeTimeTrend(100, 100)?.direction).toBe('neutral')
   })

@@ -93,7 +93,7 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(panel.locator('.analytics-group').last().locator('.analytics-label').nth(3)).toHaveText('Median time')
   await expect(mergeTrend(page)).toHaveClass(/good/)
   await expect(mergeTrend(page)).toContainText('↓ 50%')
-  await expect(mergeTrend(page)).toHaveAccessibleName('50% faster versus the preceding 7-day average')
+  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('50% faster versus the preceding 7-day average')
   await expect(panel).toContainText('7-day rolling average: 2d 6h · 8 PRs')
   await expect(panel).toContainText('From 3 of 4 pull requests')
   await expect(panel.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Opened$/ }) }).locator('.analytics-trend')).toContainText('↑ 600%')
@@ -142,7 +142,7 @@ test('reads both periods for the selected account and shows slower merges in red
   ])
   await expect(mergeTrend(page)).toHaveClass(/bad/)
   await expect(mergeTrend(page)).toContainText('↑ 200%')
-  await expect(mergeTrend(page)).toContainText('200% slower')
+  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('200% slower versus the preceding 7-day average')
 })
 
 test('names an empty baseline instead of inventing a trend', async ({ page }) => {

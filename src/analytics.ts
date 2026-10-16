@@ -56,7 +56,7 @@ function renderReport(panel: HTMLElement, report: AnalyticsReport, baseline: Ana
           <div class="analytics-tile">
             <dt class="analytics-label"${tile.note ? ` data-help="${escapeHtml(tile.note)}" tabindex="0"` : ''}>${escapeHtml(tile.label)}</dt>
             <dd class="analytics-value">${escapeHtml(tile.value)}</dd>
-            ${tile.trend ? `<dd class="analytics-trend ${tile.trend.direction}" aria-label="${escapeHtml(tile.trend.description)}">${escapeHtml(tile.trend.text)}<span>${escapeHtml(tile.trend.description)}</span></dd>` : ''}
+            ${tile.trend ? `<dd class="analytics-trend ${tile.trend.direction}"><span role="img" aria-label="${escapeHtml(tile.trend.description)}">${escapeHtml(tile.trend.text)}</span><span aria-hidden="true">${escapeHtml(tile.trend.caption)}</span></dd>` : ''}
             ${tile.comparison ? `<dd class="analytics-note">${escapeHtml(tile.comparison)}</dd>` : ''}
           </div>`).join('')}
       </dl>

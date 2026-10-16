@@ -20,7 +20,7 @@ export interface AnalyticsTile {
   value: string
   /** A line under the value that says what it is made of. */
   note?: string
-  trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string }
+  trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string, caption: string }
   comparison?: string
 }
 
@@ -68,7 +68,10 @@ function metricTrend(current: number | null, baseline: number | null, duration =
     : percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
   const movement = duration ? delta < 0 ? 'faster' : 'slower' : delta < 0 ? 'below' : 'above'
   const description = delta === 0 ? 'Unchanged' : `${change} ${movement}`
-  return { direction, text: `${delta < 0 ? '↓' : delta > 0 ? '↑' : '→'} ${delta === 0 ? '0%' : change}`, description: `${description} versus the preceding 7-day average` }
+  const caption = delta === 0 ? 'Same as 7-day average' : duration
+    ? `${delta < 0 ? 'Faster' : 'Slower'} vs 7-day average`
+    : `${delta < 0 ? 'Below' : 'Above'} 7-day daily average`
+  return { direction, caption, text: `${delta < 0 ? '↓' : delta > 0 ? '↑' : '→'} ${delta === 0 ? '0%' : change}`, description: `${description} versus the preceding 7-day average` }
 }
 
 export function mergeTimeTrend(current: number | null, baseline: number | null): AnalyticsTile['trend'] {
