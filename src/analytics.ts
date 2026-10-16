@@ -24,9 +24,9 @@ function buildPanel(): HTMLElement {
     <div class="tp-header"><span class="tp-title" data-help="Counts your work on the selected day. Per-PR numbers cover pull requests merged that day." tabindex="0">Analytics</span></div>
     <div class="tp-body">
       <nav class="analytics-day" aria-label="Analytics day">
-        <button type="button" data-day="-1" aria-label="Previous day">←</button>
+        <button type="button" class="analytics-day-step" data-day="-1" aria-label="Previous day">←</button>
         <span class="analytics-date" aria-live="polite"></span>
-        <button type="button" data-day="1" aria-label="Next day">→</button>
+        <button type="button" class="analytics-day-step" data-day="1" aria-label="Next day">→</button>
       </nav>
       <p class="analytics-status st-help" role="status" hidden></p>
       <div class="analytics-groups" aria-live="polite"></div>
@@ -56,7 +56,7 @@ function renderReport(panel: HTMLElement, report: AnalyticsReport, baseline: Ana
           <div class="analytics-tile">
             <dt class="analytics-label"${tile.note ? ` data-help="${escapeHtml(tile.note)}" tabindex="0"` : ''}>${escapeHtml(tile.label)}</dt>
             <dd class="analytics-value">${escapeHtml(tile.value)}</dd>
-            ${tile.trend ? `<dd class="analytics-trend ${tile.trend.direction}"><span role="img" aria-label="${escapeHtml(tile.trend.description)}">${escapeHtml(tile.trend.text)}</span><span aria-hidden="true">${escapeHtml(tile.trend.caption)}</span></dd>` : ''}
+            ${tile.trend ? `<dd class="analytics-trend ${tile.trend.direction}"><span role="img" aria-label="${escapeHtml(tile.trend.description)}">${escapeHtml(tile.trend.text)}</span><span class="analytics-trend-caption" aria-hidden="true">${escapeHtml(tile.trend.caption)}</span></dd>` : ''}
             ${tile.comparison ? `<dd class="analytics-note">${escapeHtml(tile.comparison)}</dd>` : ''}
           </div>`).join('')}
       </dl>
