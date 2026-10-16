@@ -205,14 +205,20 @@ it('returns cold and progressive snapshots without waiting for the slowest repos
     return { stdout: response() }
   })
   try {
+    let legacyComplete = false
+    const legacy = listActionRuns({ org: 'acme' }).then(result => { legacyComplete = true; return result })
     const start = performance.now()
     expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ pending: true })
-    expect(performance.now() - start).toBeLessThan(100)
+    const elapsed = performance.now() - start
+    expect(elapsed).toBeLessThan(100)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(legacyComplete).toBe(false)
+    console.log(`Archive snapshot: ${elapsed.toFixed(1)}ms; legacy read still blocked after 200ms`) 
     await vi.waitFor(async () => {
       expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ repo: 'acme/fast' }], pending: true })
     })
     release()
-    const complete = await listActionRuns({ org: 'acme' })
+    const complete = await legacy
     expect(complete.body).toMatchObject({ records: [{ repo: 'acme/fast' }, { repo: 'acme/slow' }], pending: false })
     expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(2)
   } finally { release() }

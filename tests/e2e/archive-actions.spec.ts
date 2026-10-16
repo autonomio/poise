@@ -155,6 +155,7 @@ test('type toggles combine independently, retain rows and persist without includ
   await expect(page.locator('#tbody tr')).toHaveCount(2)
   await expect(page.locator('[data-filter="action"]')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('[data-filter="pr"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('#count')).toHaveText('2 / 2')
   const reads = prReads
   await page.getByRole('button', { name: 'PR', exact: true }).click()
   await expect(page.locator('#tbody tr')).toHaveCount(1)
@@ -216,4 +217,30 @@ for (const width of [390, 768, 1280]) test(`Any/Open controls fit completely at 
     })).toBe(true)
   }
   await page.screenshot({ path: `test-results/archive-filters-${width}.png` })
+})
+
+
+test('history pagination proceeds while its full count is pending', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 })
+  await workspace(page, 'swarm')
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const offsets: number[] = []
+  await page.route('**/api/gh', async route => {
+    const body = route.request().postDataJSON() as { operation: string, count_only?: boolean, offset?: number }
+    if (body.operation === 'actions') return route.fulfill({ json: { records: [], count: 0 } })
+    if (body.count_only) { await held; return route.fulfill({ json: { count: 21 } }) }
+    const offset = body.offset ?? 0
+    offsets.push(offset)
+    const records = Array.from({ length: offset === 0 ? 20 : offset === 20 ? 1 : 0 }, (_, i) => ({ ...pullRequest, number: offset + i + 1 }))
+    return route.fulfill({ json: { records } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await page.getByRole('button', { name: 'PR', exact: true }).click()
+    await expect(page.locator('#tbody tr')).toHaveCount(21)
+    expect(offsets).toEqual([0, 20])
+    release()
+    await expect(page.locator('#count')).toHaveText('21 / 21')
+  } finally { release() }
 })
