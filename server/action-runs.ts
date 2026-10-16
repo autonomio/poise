@@ -178,7 +178,7 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
     const previous = existing?.last
     const entry: SnapshotCache = { expires: Infinity, pending: true, last: previous, read: Promise.resolve({ records: [], errors: [], warnings: [] }) }
     entry.read = readSnapshot(me, org.login, failed, (snapshot) => {
-      entry.last = snapshot
+      if (!previous) entry.last = snapshot
     }).then((result) => {
       entry.expires = Math.min(Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS), result.expires ?? Infinity)
       entry.pending = false

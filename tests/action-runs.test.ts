@@ -213,7 +213,7 @@ it('returns cold and progressive snapshots without waiting for the slowest repos
     expect(elapsed).toBeLessThan(100)
     await new Promise(resolve => setTimeout(resolve, 200))
     expect(legacyComplete).toBe(false)
-    console.log(`Archive snapshot: ${elapsed.toFixed(1)}ms; legacy read still blocked after 200ms`) 
+    console.log(`Archive snapshot: ${elapsed.toFixed(1)}ms; legacy read still blocked after 200ms`)
     await vi.waitFor(async () => {
       expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ repo: 'acme/fast' }], pending: true })
     })
@@ -235,4 +235,27 @@ it('serves a persisted snapshot immediately while an expired refresh is held', a
   try {
     expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ title: 'Retained run' }], pending: true })
   } finally { release(); await listActionRuns({ org: 'acme' }) }
+})
+
+
+it('retains the complete warm snapshot until every refreshed repository settles', async () => {
+  vi.useFakeTimers()
+  mocks.repos.mockResolvedValue({ repos: ['acme/fast', 'acme/slow'], errors: [] })
+  await listActionRuns({ org: 'acme' })
+  vi.advanceTimersByTime(5 * 60_000)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+    if (args[0] === 'auth') return { stdout: 'selected-secret' }
+    if (args[1].includes('/slow/')) await held
+    return { stdout: response([run(2)]) }
+  })
+  try {
+    const before = await listActionRuns({ org: 'acme', snapshot: true })
+    expect(before.body).toMatchObject({ records: [{ repo: 'acme/fast', number: 1 }, { repo: 'acme/slow', number: 1 }], count: 2, pending: true })
+    await vi.waitFor(() => expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(4))
+    expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ number: 1 }, { number: 1 }], count: 2, pending: true })
+    release()
+    expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ number: 2 }, { number: 2 }], pending: false })
+  } finally { release(); vi.useRealTimers() }
 })

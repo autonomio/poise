@@ -244,3 +244,22 @@ test('history pagination proceeds while its full count is pending', async ({ pag
     await expect(page.locator('#count')).toHaveText('21 / 21')
   } finally { release() }
 })
+
+
+test('paging preserves an already completed full-history count', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 300 })
+  await workspace(page, 'swarm')
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as { operation: string, count_only?: boolean, offset?: number }
+    if (body.operation === 'actions') return route.fulfill({ json: { records: [], count: 0 } })
+    if (body.count_only) return route.fulfill({ json: { count: 21 } })
+    const offset = body.offset ?? 0
+    return route.fulfill({ json: { records: Array.from({ length: offset === 0 ? 20 : offset === 20 ? 1 : 0 }, (_, i) => ({ ...pullRequest, number: offset + i + 1 })) } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#count')).toHaveText('20 / 21')
+  await page.locator('#main-sentinel').evaluate(element => element.scrollIntoView())
+  await expect(page.locator('#tbody tr')).toHaveCount(21)
+  await expect(page.locator('#count')).toHaveText('21 / 21')
+})
