@@ -183,7 +183,7 @@ export async function listActionRuns(body: Record<string, unknown>): Promise<{ s
       entry.expires = Math.min(Date.now() + (result.errors.length ? ERROR_TTL_MS : TTL_MS), result.expires ?? Infinity)
       entry.pending = false
       entry.last = result
-      setMeta(`archive-actions:${key}`, JSON.stringify({ ...result, expires: entry.expires }))
+      if (cache.get(key) === entry) setMeta(`archive-actions:${key}`, JSON.stringify({ ...result, expires: entry.expires }))
       return result
     }, (error: unknown) => {
       entry.expires = Date.now() + ERROR_TTL_MS

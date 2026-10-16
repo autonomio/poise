@@ -1,6 +1,6 @@
 // Main table view — reads through /api/gh from the unified /github API.
 
-import { midnightInZone, startOfWeekInZone } from '../config'
+import { getSettings, getOrganizations, midnightInZone, startOfWeekInZone } from '../config'
 import { layout, retire } from '../motion'
 import { patchContent } from '../dom-patch'
 import { mountOrganizationFilter, organizationPayload, organizationErrors } from '../organizations'
@@ -388,7 +388,7 @@ function selectedSources(): SourceState[] {
       ...(win.until ? { updated_until: win.until } : {}),
       ...(searchQuery ? { q: searchQuery } : {}),
     }
-    const key = JSON.stringify(payload)
+    const key = JSON.stringify([getSettings().me, getOrganizations().filter(org => org.status === 'ready').map(org => org.login), payload])
     let source = sources.get(key)
     if (!source) {
       source = { type, payload, rows: [], total: 0, partial: true, done: false, fetching: false,
@@ -407,8 +407,10 @@ function mainVisible(): boolean { return !document.getElementById('view-main')!.
 
 function paintSources(): void {
   const selected = selectedSources()
-  items = [...new Map(selected.flatMap(source => source.rows).map(item => [rowKey(item), item])).values()]
+  const next = [...new Map(selected.flatMap(source => source.rows).map(item => [rowKey(item), item])).values()]
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+  const rowsChanged = next.length !== items.length || next.some((row, index) => row !== items[index])
+  items = next
   total = selected.reduce((sum, source) => sum + source.total, 0)
   partialResults = selected.some(source => source.partial || source.pending)
   fetching = selected.some(source => source.fetching || source.pending)
@@ -418,7 +420,7 @@ function paintSources(): void {
   if (items.length) {
     table.hidden = false
     empty.hidden = true
-    applyMainFlip(items)
+    if (rowsChanged) applyMainFlip(items)
   } else {
     tbody.replaceChildren()
     table.hidden = true
@@ -456,7 +458,7 @@ async function readCount(source: SourceState, revision: number): Promise<void> {
   try {
     const data = await postRead({ ...source.payload, count_only: true })
     if (source.revision !== revision) return
-    source.partial = typeof data.count !== 'number' || !!organizationErrors(data)
+    source.partial = typeof data.count !== 'number' || !!organizationErrors(data) || source.error.startsWith('Some GitHub accounts')
     source.countError = readMessages(data) || (source.partial ? 'Total count unavailable. Showing available results.' : '')
     if (typeof data.count === 'number') source.total = data.count
     if (!source.partial && source.rows.length >= source.total) source.done = true
@@ -486,8 +488,8 @@ async function readSource(source: SourceState, refresh = false): Promise<void> {
     source.loaded = true
     source.loadedAt = Date.now()
     source.pending = data.pending === true
-    source.partial = source.pending || typeof data.count !== 'number' || !!organizationErrors(data)
-    source.total = typeof data.count === 'number' ? data.count : source.rows.length
+    source.partial = source.pending || !!organizationErrors(data) || (typeof data.count !== 'number' && (offset === 0 || source.partial))
+    source.total = typeof data.count === 'number' ? data.count : offset === 0 ? source.rows.length : Math.max(source.total, source.rows.length)
     source.done = !source.pending && (rows.length < limit || (!source.partial && source.rows.length >= source.total))
     source.error = readMessages(data)
     if (offset === 0) source.countError = ''
@@ -700,11 +702,7 @@ async function refreshMainSoft() {
   await Promise.all(selectedSources().map(source => readSource(source, true)))
 }
 
-// Called by the idle timer at the user-chosen cadence (1m / 5m).
-// Soft-refreshes the visible top so the table updates feel like a
-// settling rather than a cold rebuild. Filter / search changes still go
-// through resetAndFetch (which clears + refetches) because the user
-// initiated the change and expects a hard reset.
+// Refresh the selected sources at the user-chosen cadence (1m / 5m).
 export function refreshMainView() {
   if (!initialized) return
   refreshMainSoft()
