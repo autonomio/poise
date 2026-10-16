@@ -55,7 +55,8 @@ merges. The figure is the percentage change against the baseline, with plain
 text stating faster or slower. An unchanged mean shows a neutral arrow and
 0%. A zero baseline uses the duration increase instead of dividing by zero.
 No merges in either period means no directional comparison; an empty
-baseline is explicitly labelled. Account read errors remain visible.
+baseline is explicitly labelled. Account read errors remain visible, and
+comparative arrows are withheld while either period has partial account data.
 
 ## When a number is missing
 

@@ -68,7 +68,7 @@ function value(page: Page, label: string) {
   return page.locator('#analytics-panel .analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: new RegExp(`^${label}$`) }) }).locator('.analytics-value')
 }
 
-test('opens Today with a seven-day comparison and navigates days without changing Current', async ({ page }) => {
+test('opens Today with a seven-day comparison and navigates days without changing Current', async ({ page }, info) => {
   const state = await workspace(page)
   await page.goto('/')
   await expect(page.locator('#current-time-picker [data-time="week"]')).toHaveClass(/active/)
@@ -91,6 +91,7 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(panel.locator('.analytics-trend')).toHaveAccessibleName('50% faster versus the preceding 7-day average')
   await expect(panel).toContainText('7-day rolling average: 2d 6h · 8 PRs')
   await expect(panel).toContainText('From 3 of 4 pull requests')
+  await page.screenshot({ path: info.outputPath('analytics-day-trend.png') })
   expect(state.reads).toEqual([
     { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: null },
     { since: '2026-10-02T00:00:00.000Z', until: '2026-10-09T00:00:00.000Z', org: null },
@@ -169,4 +170,31 @@ test('says when the numbers could not be read instead of showing old ones', asyn
   await expect(page.locator('#analytics-panel .analytics-tile')).toHaveCount(0)
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await expect(page.locator('#analytics-panel')).not.toHaveClass(/open/)
+})
+
+test('a slow old date cannot overwrite the latest date or its trend', async ({ page }) => {
+  await workspace(page)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/analytics?**', async route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('since') === '2026-10-08T00:00:00.000Z' && url.searchParams.get('until') === '2026-10-09T00:00:00.000Z') {
+      await held
+      await route.fulfill({ json: report(99) })
+    } else await route.fallback()
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  await expect(value(page, 'Merged')).toHaveText('4')
+  const panel = page.locator('#analytics-panel')
+  await panel.getByRole('button', { name: 'Previous day' }).click()
+  await panel.getByRole('button', { name: 'Previous day' }).click()
+  await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
+  await expect(value(page, 'Merged')).toHaveText('4')
+  const response = page.waitForResponse(res => new URL(res.url()).searchParams.get('since') === '2026-10-08T00:00:00.000Z')
+  release()
+  await response
+  await expect(panel.locator('.analytics-groups')).not.toHaveAttribute('aria-busy', 'true')
+  await expect(value(page, 'Merged')).toHaveText('4')
+  await expect(panel.locator('.analytics-trend.good')).toContainText('↓ 50%')
 })

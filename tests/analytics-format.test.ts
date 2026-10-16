@@ -99,5 +99,13 @@ describe('merge-time trends', () => {
     expect(mergeTimeTrend(100, null)).toBeUndefined()
     expect(mergeTimeTrend(3_600_000, 0)?.text).toBe('↑ 1h')
     expect(mergeTimeTrend(0, 0)?.text).toBe('→ 0%')
+    expect(mergeTimeTrend(100.001, 100)?.text).toBe('↑ <0.1%')
   })
+})
+
+it('withholds comparative claims when an account is missing from either period', () => {
+  const partial = report()
+  partial.errors = [{ org: 'beta', error: 'offline' }]
+  expect(tile(buildGroups(partial, report()), 'Time to merge').trend).toBeUndefined()
+  expect(tile(buildGroups(report(), partial), 'Time to merge').trend).toBeUndefined()
 })
