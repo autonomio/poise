@@ -6,6 +6,8 @@ import { organizationErrors, organizationUrl } from './organizations'
 
 let panelEl: HTMLElement | null = null
 let dayOffset = 0
+let dayAnchor = new Date()
+let midnightTimer: ReturnType<typeof setTimeout> | undefined
 // Each read is numbered so a slow answer for an earlier range or account
 // never replaces the one for what is selected now.
 let readGeneration = 0
@@ -32,7 +34,7 @@ function buildPanel(): HTMLElement {
   panel.querySelector('.analytics-day')!.addEventListener('click', (e) => {
     const button = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-day]')
     if (!button || button.disabled) return
-    dayOffset = Math.min(0, dayOffset + Number(button.dataset.day))
+    dayOffset += Number(button.dataset.day)
     void readAnalytics()
   })
   return panel
@@ -67,9 +69,9 @@ async function readAnalytics(): Promise<void> {
   if (!panel) return
   const generation = ++readGeneration
   const groups = panel.querySelector<HTMLElement>('.analytics-groups')!
-  const day = analyticsDay(dayOffset)
+  const day = analyticsDay(dayOffset, dayAnchor)
   panel.querySelector('.analytics-date')!.textContent = day.label
-  panel.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = dayOffset === 0
+  panel.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
   // With numbers on screen, dimming them says enough: a line above them
   // would push the panel down and back up on every switch.
   if (!groups.childElementCount) showStatus(panel, 'Reading…')
@@ -126,10 +128,21 @@ export function initAnalytics(): void {
   window.addEventListener('poise:organization-filter-changed', onOrganizationChanged)
 }
 
+function scheduleMidnightRead(): void {
+  clearTimeout(midnightTimer)
+  const delay = Date.parse(analyticsDay(0).until) - Date.now()
+  midnightTimer = setTimeout(() => {
+    void readAnalytics()
+    scheduleMidnightRead()
+  }, delay + 10)
+}
+
 export function openAnalyticsPanel(): void {
   if (!panelEl) return
   window.dispatchEvent(new CustomEvent('poise:panel-opening', { detail: { id: panelEl.id } }))
   dayOffset = 0
+  dayAnchor = new Date()
+  scheduleMidnightRead()
   panelEl.removeAttribute('inert')
   panelEl.removeAttribute('aria-hidden')
   panelEl.classList.add('open')
@@ -141,6 +154,7 @@ export function closeAnalyticsPanel(): void {
   if (!panelEl) return
   if (panelEl.contains(document.activeElement)) (document.activeElement as HTMLElement | null)?.blur()
   readGeneration++
+  clearTimeout(midnightTimer)
   panelEl.classList.remove('open')
   markPanelClosed(panelEl)
   document.removeEventListener('keydown', onAnalyticsKeydown)

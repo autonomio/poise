@@ -212,7 +212,7 @@ if (typeof window !== 'undefined') window.addEventListener('poise:refresh-rate-c
 
 // The first instant of "today + dayOffset" in the configured zone. A date
 // can start at 01:00 when DST skips midnight, or repeat midnight on rollback.
-export function midnightInZone(dayOffset: number = 0): Date {
+export function midnightInZone(dayOffset: number = 0, anchor = new Date()): Date {
   const calendar = new Intl.DateTimeFormat('en-CA', {
     timeZone: effectiveTimezone(), year: 'numeric', month: '2-digit', day: '2-digit',
   })
@@ -221,7 +221,7 @@ export function midnightInZone(dayOffset: number = 0): Date {
     const part = (name: string) => Number(parts.find((item) => item.type === name)!.value)
     return Date.UTC(part('year'), part('month') - 1, part('day'))
   }
-  const target = localDate(Date.now()) + dayOffset * 86_400_000
+  const target = localDate(anchor.getTime()) + dayOffset * 86_400_000
   // All IANA offsets fit inside this bracket. Searching dates instead of
   // offsets finds the first valid instant even when midnight does not exist.
   let before = target - 36 * 3_600_000

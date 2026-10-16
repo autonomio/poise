@@ -10,7 +10,8 @@ The panel opens on Today. The arrows move one calendar day backward or
 forward; Next day is disabled on Today. Yesterday is named, and older days
 show a date including the year. Days start at midnight in the timezone from
 Settings → General, including daylight-saving transitions. Analytics does
-not change Current's filters.
+not change Current's filters. The selected calendar date stays fixed across
+midnight; labels and forward navigation refresh when the local day changes.
 
 ## What it counts
 

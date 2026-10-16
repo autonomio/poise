@@ -206,3 +206,17 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await expect(value(page, 'Merged')).toHaveText('4')
   await expect(mergeTrend(page)).toContainText('↓ 50%')
 })
+
+test('retains the selected calendar date when navigating across midnight', async ({ page }) => {
+  const state = await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const panel = page.locator('#analytics-panel')
+  await panel.getByRole('button', { name: 'Previous day' }).click()
+  await panel.getByRole('button', { name: 'Previous day' }).click()
+  await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
+  await page.clock.setFixedTime(new Date('2026-10-10T00:01:00Z'))
+  await panel.getByRole('button', { name: 'Previous day' }).click()
+  await expect(panel.locator('.analytics-date')).toHaveText('6 Oct 2026')
+  await expect.poll(() => state.reads.at(-2)?.since).toBe('2026-10-06T00:00:00.000Z')
+})
