@@ -27,6 +27,8 @@ frame visibility and target reads precede animation writes. View departure
 batches presentation reads before settling channels. Only actors whose
 old or new bounds intersect the viewport receive layout/entry motion. Clipped
 departures use the captured geometry without reading styles after each removal.
+Spatial offsets are non-inherited CSS properties: an actor moves its subtree
+without recalculating every descendant's styles on each animation frame.
 Swarm prepares large histories in detached batches and reuses their cell markup
 when grouping, disclosure, action buttons and displayed times remain unchanged. Each prepared
 row is consumed on insertion; later refreshes still recompute current values
