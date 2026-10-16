@@ -364,6 +364,8 @@ test('retained unchanged rows refresh their displayed age without replacing the 
 
 
 test('a persistently failing later page retries that page and stops after its retry budget', async ({ page }) => {
+  // Keep the wall-clock refresh outside this retry window.
+  await page.clock.setFixedTime(new Date('2026-10-14T08:00:01Z'))
   await page.setViewportSize({ width: 1280, height: 1400 })
   await workspace(page, 'swarm')
   let firstPages = 0, failedPages = 0
