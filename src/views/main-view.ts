@@ -481,6 +481,8 @@ function retainUnchangedRows(previous: PrRow[], incoming: PrRow[]): PrRow[] {
 
 async function readSource(source: SourceState, refresh = false): Promise<void> {
   if (source.fetching || (!refresh && source.done)) return
+  if (source.timer) clearTimeout(source.timer)
+  source.timer = undefined
   source.fetching = true
   const revision = refresh || !source.loaded ? ++source.revision : source.revision
   const limit = refresh ? Math.max(PAGE_SIZE, source.rows.length) : PAGE_SIZE
@@ -523,7 +525,7 @@ async function readSource(source: SourceState, refresh = false): Promise<void> {
 }
 
 async function fetchPage(): Promise<void> {
-  await Promise.all(selectedSources().filter(source => !source.pending && !source.timer).map(source => readSource(source)))
+  await Promise.all(selectedSources().filter(source => !source.pending && !source.timer && source.failures === 0).map(source => readSource(source)))
 }
 
 function resetAndFetch() {
@@ -532,6 +534,9 @@ function resetAndFetch() {
   for (const source of selectedSources()) {
     if (!source.loaded || source.pending || Date.now() - source.loadedAt > 60_000) void readSource(source, source.loaded)
   }
+  requestAnimationFrame(() => {
+    if (mainVisible() && sentinelNeedsFetch()) void fetchPage()
+  })
 }
 
 // `active` is a class, which tells a screen reader nothing about which filter
@@ -665,8 +670,11 @@ export function initMainView() {
   // on its first visit of a session and never again.
   if (initialized) {
     startMainTimer()
-    if (organizationDirty) { organizationDirty = false; resetAndFetch() }
-    else { paintSources(); void refreshMainSoft() }
+    requestAnimationFrame(() => {
+      if (!mainVisible()) return
+      if (organizationDirty) { organizationDirty = false; resetAndFetch() }
+      else { paintSources(); void refreshMainSoft() }
+    })
     return
   }
   initialized = true

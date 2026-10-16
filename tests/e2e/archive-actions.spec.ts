@@ -263,3 +263,82 @@ test('paging preserves an already completed full-history count', async ({ page }
   await expect(page.locator('#tbody tr')).toHaveCount(21)
   await expect(page.locator('#count')).toHaveText('21 / 21')
 })
+
+test('re-enabling an unfinished cached source resumes paging without another observer entrance', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 })
+  await workspace(page, 'swarm')
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const offsets: number[] = []
+  await page.route('**/api/gh', async route => {
+    const body = route.request().postDataJSON() as { operation: string, count_only?: boolean, offset?: number }
+    if (body.operation === 'actions') return route.fulfill({ json: { records: [failedRun], count: 1 } })
+    if (body.count_only) return route.fulfill({ json: { count: 21 } })
+    const offset = body.offset ?? 0
+    offsets.push(offset)
+    if (!offset) await held
+    return route.fulfill({ json: { records: Array.from({ length: offset === 0 ? 20 : 1 }, (_, i) => ({ ...pullRequest, number: offset + i + 1 })) } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await page.getByRole('button', { name: 'PR', exact: true }).click()
+    await expect.poll(() => offsets.length).toBe(1)
+    await page.getByRole('button', { name: 'PR', exact: true }).click()
+    const finished = page.waitForResponse(response => response.url().endsWith('/api/gh') && response.request().postDataJSON().record_type === 'pull_request' && !response.request().postDataJSON().count_only)
+    release()
+    await (await finished).finished()
+    await page.getByRole('button', { name: 'PR', exact: true }).click()
+    await expect(page.locator('#tbody tr')).toHaveCount(22)
+    expect(offsets).toEqual([0, 20])
+  } finally { release() }
+})
+
+test('healthy-source pagination cannot restart an exhausted failed source', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 300 })
+  await workspace(page, 'swarm')
+  let actionsReads = 0
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as { operation: string, count_only?: boolean, offset?: number }
+    if (body.operation === 'actions') { actionsReads++; return route.fulfill({ status: 502, json: { error: 'Actions offline' } }) }
+    if (body.count_only) return route.fulfill({ json: { count: 60 } })
+    const offset = body.offset ?? 0
+    return route.fulfill({ json: { records: Array.from({ length: 20 }, (_, i) => ({ ...pullRequest, number: offset + i + 1 })) } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect(page.locator('#main-load-error')).toContainText('Github 502')
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#count')).toContainText('20')
+  while (actionsReads < 5) {
+    const response = page.waitForResponse(response => response.url().endsWith('/api/gh') && response.request().postDataJSON().operation === 'actions')
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+    await (await response).finished()
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)))
+  }
+  await page.setViewportSize({ width: 1280, height: 2400 })
+  await expect(page.locator('#tbody tr')).toHaveCount(60)
+  await page.waitForTimeout(100)
+  expect(actionsReads).toBe(5)
+})
+
+test('changing GitHub identity cannot reuse another identity\'s cached outcome', async ({ page }) => {
+  await workspace(page, 'swarm')
+  let me = 'octocat'
+  await page.route('**/api/settings', route => {
+    if (route.request().method() === 'POST') me = route.request().postDataJSON().me
+    return route.fulfill({ json: { org: 'acme', me, agentAccount: 'octo-agent', timezone: 'UTC', models: {} } })
+  })
+  await page.route('**/api/gh', route => route.fulfill({ json: { records: [{ ...failedRun, title: `${me} workflow` }], count: 1 } }))
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await page.locator('[data-action-status="all"]').click()
+  await expect(page.locator('#tbody')).toContainText('octocat workflow')
+  await page.locator('[data-action-status="failed"]').click()
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
+  await page.locator('[data-settings="general"]').click()
+  await page.getByLabel('Your GitHub account', { exact: true }).fill('new-owner')
+  await page.locator('.st-save').click()
+  await expect(page.locator('.st-status')).toHaveText('Saved.')
+  await page.keyboard.press('Escape')
+  await page.locator('[data-action-status="all"]').click()
+  await expect(page.locator('#tbody')).toContainText('new-owner workflow')
+  await expect(page.locator('#tbody')).not.toContainText('octocat workflow')
+})
