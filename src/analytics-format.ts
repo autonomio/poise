@@ -10,6 +10,7 @@ export interface AnalyticsReport {
     lines: { total: number | null, median: number | null, counted: number }
     behaviors: { perPr: number | null, approvals: number, reviews: number, changesRequested: number }
     averageTimeToMergeMs: number | null
+    medianTimeToMergeMs: number | null
   }
   errors: Array<{ org: string, error: string }>
 }
@@ -19,6 +20,8 @@ export interface AnalyticsTile {
   value: string
   /** A line under the value that says what it is made of. */
   note?: string
+  trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string }
+  comparison?: string
 }
 
 export interface AnalyticsGroup {
@@ -55,7 +58,19 @@ function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`
 }
 
-export function analyticsGroups(report: AnalyticsReport): AnalyticsGroup[] {
+export function mergeTimeTrend(current: number | null, baseline: number | null): AnalyticsTile['trend'] {
+  if (current === null || baseline === null) return undefined
+  const delta = current - baseline
+  const direction = delta < 0 ? 'good' : delta > 0 ? 'bad' : 'neutral'
+  const percent = baseline === 0 ? 0 : Math.abs(delta / baseline * 100)
+  const change = baseline === 0
+    ? formatDuration(Math.abs(delta))
+    : percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
+  const description = delta === 0 ? 'Unchanged' : `${change} ${delta < 0 ? 'faster' : 'slower'}`
+  return { direction, text: `${delta < 0 ? '↓' : delta > 0 ? '↑' : '→'} ${delta === 0 ? '0%' : change}`, description: `${description} versus the preceding 7-day average` }
+}
+
+export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport): AnalyticsGroup[] {
   const pr = report.pullRequests
   const { lines, behaviors } = pr
   const none = pr.merged === 0
@@ -81,7 +96,11 @@ export function analyticsGroups(report: AnalyticsReport): AnalyticsGroup[] {
       tiles: [
         { label: 'Merged', value: formatCount(pr.merged) },
         { label: 'Lines changed', value: linesTotal },
-        { label: 'Time to merge', value: formatDuration(pr.averageTimeToMergeMs), note: 'Average, from opened to merged' },
+        {
+          label: 'Time to merge', value: formatDuration(pr.averageTimeToMergeMs), note: 'Average, from opened to merged',
+          trend: report.errors.length || baseline.errors.length ? undefined : mergeTimeTrend(pr.averageTimeToMergeMs, baseline.pullRequests.averageTimeToMergeMs),
+          comparison: `7-day rolling average: ${formatDuration(baseline.pullRequests.averageTimeToMergeMs)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}${baseline.pullRequests.merged ? '' : ' · No baseline'}`,
+        },
       ],
       note: linesNote,
     },
@@ -99,6 +118,7 @@ export function analyticsGroups(report: AnalyticsReport): AnalyticsGroup[] {
             plural(behaviors.changesRequested, 'change request', 'change requests'),
           ].join(' · '),
         },
+        { label: 'Median time', value: formatDuration(pr.medianTimeToMergeMs), note: 'Median, from opened to merged' },
       ],
       note: none ? 'No pull requests were merged in this range.' : undefined,
     },

@@ -231,12 +231,15 @@ export function midnightInZone(dayOffset: number = 0): Date {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date())
   const [y, m, d] = ymd.split('-').map(Number)
-  // Probe the offset at noon of the target day so DST transitions near midnight
-  // can't accidentally pick the wrong side of the jump.
-  const noonProbe = new Date(Date.UTC(y, m - 1, d + dayOffset, 12, 0, 0))
-  const offsetMin = tzOffsetMin(tz, noonProbe)
   const wallMidUtc = Date.UTC(y, m - 1, d + dayOffset, 0, 0, 0)
-  return new Date(wallMidUtc - offsetMin * 60000)
+  // Resolve the offset at midnight itself; noon may be across a DST change.
+  let midnight = new Date(wallMidUtc)
+  for (let i = 0; i < 3; i++) {
+    const resolved = new Date(wallMidUtc - tzOffsetMin(tz, midnight) * 60000)
+    if (resolved.getTime() === midnight.getTime()) break
+    midnight = resolved
+  }
+  return midnight
 }
 
 // Most recent Monday 00:00 in the configured zone (today if today is Monday).

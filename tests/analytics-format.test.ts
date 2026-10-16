@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyticsGroups, formatDuration, formatRate, type AnalyticsReport } from '../src/analytics-format'
+import { analyticsGroups as buildGroups, mergeTimeTrend, formatDuration, formatRate, type AnalyticsReport } from '../src/analytics-format'
 
 // What the Analytics panel says (src/analytics-format.ts).
 
@@ -13,11 +13,14 @@ function report(pullRequests: Partial<AnalyticsReport['pullRequests']> = {}): An
       lines: { total: 12_345, median: 180.5, counted: 4 },
       behaviors: { perPr: 1.5, approvals: 1, reviews: 4, changesRequested: 1 },
       averageTimeToMergeMs: (26 * 60 + 5) * 60_000,
+      medianTimeToMergeMs: 5 * 3_600_000,
       ...pullRequests,
     },
     errors: [],
   }
 }
+
+function analyticsGroups(value: AnalyticsReport) { return buildGroups(value, report()) }
 
 function tile(groups: ReturnType<typeof analyticsGroups>, label: string) {
   return groups.flatMap((group) => group.tiles).find((t) => t.label === label)!
@@ -47,7 +50,7 @@ describe('Analytics wording', () => {
     expect(groups.map((group) => group.tiles.map((t) => [t.label, t.value]))).toEqual([
       [['Opened', '1,204'], ['Closed', '1']],
       [['Merged', '4'], ['Lines changed', '12,345'], ['Time to merge', '1d 2h']],
-      [['Comments', '2.3'], ['Median lines', '181'], ['Behaviors', '1.5']],
+      [['Comments', '2.3'], ['Median lines', '181'], ['Behaviors', '1.5'], ['Median time', '5h']],
     ])
     expect(tile(groups, 'Behaviors').note).toBe('1 approval · 4 reviews · 1 change request')
     expect(groups.every((group) => !group.note)).toBe(true)
@@ -73,11 +76,28 @@ describe('Analytics wording', () => {
       lines: { total: null, median: null, counted: 0 },
       behaviors: { perPr: null, approvals: 0, reviews: 0, changesRequested: 0 },
       averageTimeToMergeMs: null,
+      medianTimeToMergeMs: null,
     }))
     expect(tile(groups, 'Lines changed').value).toBe('0')
     expect(tile(groups, 'Comments').value).toBe('—')
     expect(tile(groups, 'Behaviors').note).toBeUndefined()
     expect(groups[1].note).toBeUndefined()
     expect(groups[2].note).toBe('No pull requests were merged in this range.')
+  })
+})
+
+
+describe('merge-time trends', () => {
+  it('makes faster, slower and unchanged comparisons explicit', () => {
+    expect(mergeTimeTrend(50, 100)).toEqual({ direction: 'good', text: '↓ 50%', description: '50% faster versus the preceding 7-day average' })
+    expect(mergeTimeTrend(150, 100)).toEqual({ direction: 'bad', text: '↑ 50%', description: '50% slower versus the preceding 7-day average' })
+    expect(mergeTimeTrend(100, 100)?.text).toBe('→ 0%')
+    expect(mergeTimeTrend(100, 100)?.direction).toBe('neutral')
+  })
+  it('does not invent percentages without data or with a zero baseline', () => {
+    expect(mergeTimeTrend(null, 100)).toBeUndefined()
+    expect(mergeTimeTrend(100, null)).toBeUndefined()
+    expect(mergeTimeTrend(3_600_000, 0)?.text).toBe('↑ 1h')
+    expect(mergeTimeTrend(0, 0)?.text).toBe('→ 0%')
   })
 })
