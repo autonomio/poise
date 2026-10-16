@@ -109,3 +109,17 @@ it('withholds comparative claims when an account is missing from either period',
   expect(tile(buildGroups(partial, report()), 'Time to merge').trend).toBeUndefined()
   expect(tile(buildGroups(report(), partial), 'Time to merge').trend).toBeUndefined()
 })
+
+it('compares headline event counts against seven-day daily averages, including zero days', () => {
+  const day = report({ merged: 4, lines: { total: 700, median: 175, counted: 4 } })
+  day.issues = { opened: 7, closed: 0 }
+  const week = report({ merged: 14, lines: { total: 2450, median: 175, counted: 14 } })
+  week.issues = { opened: 14, closed: 7 }
+  const groups = buildGroups(day, week)
+  expect(tile(groups, 'Opened').trend).toMatchObject({ direction: 'good', text: '↑ 250%' })
+  expect(tile(groups, 'Closed').trend).toMatchObject({ direction: 'bad', text: '↓ 100%' })
+  expect(tile(groups, 'Merged').comparison).toBe('7-day daily average: 2.0')
+  expect(tile(groups, 'Lines changed').trend).toMatchObject({ direction: 'good', text: '↑ 100%' })
+  week.pullRequests.lines.counted = 10
+  expect(tile(buildGroups(day, week), 'Lines changed').trend).toBeUndefined()
+})

@@ -58,22 +58,34 @@ function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`
 }
 
-export function mergeTimeTrend(current: number | null, baseline: number | null): AnalyticsTile['trend'] {
+function metricTrend(current: number | null, baseline: number | null, duration = false): AnalyticsTile['trend'] {
   if (current === null || baseline === null) return undefined
   const delta = current - baseline
-  const direction = delta < 0 ? 'good' : delta > 0 ? 'bad' : 'neutral'
+  const direction = delta === 0 ? 'neutral' : (duration ? delta < 0 : delta > 0) ? 'good' : 'bad'
   const percent = baseline === 0 ? 0 : Math.abs(delta / baseline * 100)
   const change = baseline === 0
-    ? formatDuration(Math.abs(delta))
+    ? duration ? formatDuration(Math.abs(delta)) : formatRate(Math.abs(delta))
     : percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
-  const description = delta === 0 ? 'Unchanged' : `${change} ${delta < 0 ? 'faster' : 'slower'}`
+  const movement = duration ? delta < 0 ? 'faster' : 'slower' : delta < 0 ? 'below' : 'above'
+  const description = delta === 0 ? 'Unchanged' : `${change} ${movement}`
   return { direction, text: `${delta < 0 ? '↓' : delta > 0 ? '↑' : '→'} ${delta === 0 ? '0%' : change}`, description: `${description} versus the preceding 7-day average` }
+}
+
+export function mergeTimeTrend(current: number | null, baseline: number | null): AnalyticsTile['trend'] {
+  return metricTrend(current, baseline, true)
 }
 
 export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport): AnalyticsGroup[] {
   const pr = report.pullRequests
   const { lines, behaviors } = pr
   const none = pr.merged === 0
+  const complete = !report.errors.length && !baseline.errors.length
+  const dailyCount = (label: string, current: number | null, previous: number | null): AnalyticsTile => ({
+    label,
+    value: current === null ? UNKNOWN : formatCount(current),
+    trend: complete ? metricTrend(current, previous === null ? null : previous / 7) : undefined,
+    comparison: `7-day daily average: ${formatRate(previous === null ? null : previous / 7)}`,
+  })
 
   // Zero merged pull requests changed zero lines; merged ones nobody has
   // sized yet changed an unknown number.
@@ -87,18 +99,21 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
     {
       label: 'Issues',
       tiles: [
-        { label: 'Opened', value: formatCount(report.issues.opened) },
-        { label: 'Closed', value: formatCount(report.issues.closed) },
+        dailyCount('Opened', report.issues.opened, baseline.issues.opened),
+        dailyCount('Closed', report.issues.closed, baseline.issues.closed),
       ],
     },
     {
       label: 'Pull requests',
       tiles: [
-        { label: 'Merged', value: formatCount(pr.merged) },
-        { label: 'Lines changed', value: linesTotal },
+        dailyCount('Merged', pr.merged, baseline.pullRequests.merged),
+        { ...dailyCount('Lines changed', none ? 0 : lines.total, baseline.pullRequests.merged === 0 ? 0 : baseline.pullRequests.lines.total), value: linesTotal,
+          trend: complete && lines.counted === pr.merged && baseline.pullRequests.lines.counted === baseline.pullRequests.merged
+            ? metricTrend(none ? 0 : lines.total, baseline.pullRequests.merged === 0 ? 0 : baseline.pullRequests.lines.total === null ? null : baseline.pullRequests.lines.total / 7) : undefined,
+        },
         {
           label: 'Time to merge', value: formatDuration(pr.averageTimeToMergeMs), note: 'Average, from opened to merged',
-          trend: report.errors.length || baseline.errors.length ? undefined : mergeTimeTrend(pr.averageTimeToMergeMs, baseline.pullRequests.averageTimeToMergeMs),
+          trend: !complete ? undefined : mergeTimeTrend(pr.averageTimeToMergeMs, baseline.pullRequests.averageTimeToMergeMs),
           comparison: `7-day rolling average: ${formatDuration(baseline.pullRequests.averageTimeToMergeMs)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}${baseline.pullRequests.merged ? '' : ' · No baseline'}`,
         },
       ],

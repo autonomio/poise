@@ -43,7 +43,12 @@ launch that failed or never finished counts nothing. Resolving conversations
 is not recorded per pull request, so it is not counted. Issue reviews
 comment on issues, not pull requests, and are not counted either.
 
-## Merge-time trend
+## Seven-day trends
+
+Opened, Closed, Merged and Lines changed compare the day's totals with the
+preceding seven complete calendar days' daily averages, including zero days.
+An upward green arrow means increased activity; a downward red arrow means
+less activity. Partial line-size coverage withholds its comparison arrow.
 
 Time to merge shows the selected day's mean alongside the preceding seven
 complete calendar days' rolling mean and merged PR count. Both means are

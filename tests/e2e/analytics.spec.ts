@@ -64,6 +64,10 @@ async function openAnalytics(page: Page) {
   await expect(page.locator('#analytics-panel')).toHaveClass(/open/)
 }
 
+function mergeTrend(page: Page) {
+  return page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Time to merge$/ }) }).locator('.analytics-trend')
+}
+
 function value(page: Page, label: string) {
   return page.locator('#analytics-panel .analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: new RegExp(`^${label}$`) }) }).locator('.analytics-value')
 }
@@ -87,10 +91,13 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(value(page, 'Behaviors')).toHaveText('2.0')
   await expect(value(page, 'Median time')).toHaveText('6h')
   await expect(panel.locator('.analytics-group').last().locator('.analytics-label').nth(3)).toHaveText('Median time')
-  await expect(panel.locator('.analytics-trend.good')).toContainText('↓ 50%')
-  await expect(panel.locator('.analytics-trend')).toHaveAccessibleName('50% faster versus the preceding 7-day average')
+  await expect(mergeTrend(page)).toHaveClass(/good/)
+  await expect(mergeTrend(page)).toContainText('↓ 50%')
+  await expect(mergeTrend(page)).toHaveAccessibleName('50% faster versus the preceding 7-day average')
   await expect(panel).toContainText('7-day rolling average: 2d 6h · 8 PRs')
   await expect(panel).toContainText('From 3 of 4 pull requests')
+  await expect(panel.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Opened$/ }) }).locator('.analytics-trend')).toContainText('↑ 600%')
+  await expect(panel).toContainText('7-day daily average: 1.7')
   await page.screenshot({ path: info.outputPath('analytics-day-trend.png') })
   expect(state.reads).toEqual([
     { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: null },
@@ -102,7 +109,7 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(panel.getByRole('button', { name: 'Next day' })).toBeEnabled()
   await expect(value(page, 'Merged')).toHaveText('0')
   await expect(value(page, 'Median time')).toHaveText('—')
-  await expect(panel.locator('.analytics-trend')).toHaveCount(0)
+  await expect(mergeTrend(page)).toHaveCount(0)
   await expect(panel).toContainText('No pull requests were merged in this range.')
   await panel.getByRole('button', { name: 'Previous day' }).click()
   await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
@@ -133,8 +140,9 @@ test('reads both periods for the selected account and shows slower merges in red
     { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: 'beta' },
     { since: '2026-10-02T00:00:00.000Z', until: '2026-10-09T00:00:00.000Z', org: 'beta' },
   ])
-  await expect(page.locator('.analytics-trend.bad')).toContainText('↑ 200%')
-  await expect(page.locator('.analytics-trend')).toContainText('200% slower')
+  await expect(mergeTrend(page)).toHaveClass(/bad/)
+  await expect(mergeTrend(page)).toContainText('↑ 200%')
+  await expect(mergeTrend(page)).toContainText('200% slower')
 })
 
 test('names an empty baseline instead of inventing a trend', async ({ page }) => {
@@ -143,7 +151,7 @@ test('names an empty baseline instead of inventing a trend', async ({ page }) =>
   await page.goto('/')
   await openAnalytics(page)
   await expect(value(page, 'Time to merge')).toHaveText('1d 3h')
-  await expect(page.locator('.analytics-trend')).toHaveCount(0)
+  await expect(mergeTrend(page)).toHaveCount(0)
   await expect(page.locator('#analytics-panel')).toContainText('7-day rolling average: — · 0 PRs · No baseline')
 })
 
@@ -196,5 +204,5 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await response
   await expect(panel.locator('.analytics-groups')).not.toHaveAttribute('aria-busy', 'true')
   await expect(value(page, 'Merged')).toHaveText('4')
-  await expect(panel.locator('.analytics-trend.good')).toContainText('↓ 50%')
+  await expect(mergeTrend(page)).toContainText('↓ 50%')
 })
