@@ -361,3 +361,43 @@ test('retained unchanged rows refresh their displayed age without replacing the 
   await expect(date).toHaveText('2m')
   expect(await row!.evaluate(element => element.isConnected && element === document.querySelector('#tbody tr'))).toBe(true)
 })
+
+
+test('a persistently failing later page retries that page and stops after its retry budget', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 })
+  await workspace(page, 'swarm')
+  let firstPages = 0, failedPages = 0
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as { operation: string, count_only?: boolean, offset?: number }
+    if (body.operation === 'actions') return route.fulfill({ json: { records: [], count: 0 } })
+    if (body.count_only) return route.fulfill({ json: { count: 40 } })
+    if (body.offset) { failedPages++; return route.fulfill({ status: 502, json: { error: 'Later page unavailable' } }) }
+    firstPages++
+    return route.fulfill({ json: { records: Array.from({ length: 20 }, (_, i) => ({ ...pullRequest, number: i + 1 })) } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect.poll(() => failedPages, { timeout: 22_000 }).toBe(5)
+  await page.waitForTimeout(1200)
+  expect(failedPages).toBe(5)
+  expect(firstPages).toBe(1)
+  await expect(page.locator('#tbody tr')).toHaveCount(20)
+})
+
+test('adding a type preserves a selected fresh source's scheduled recovery', async ({ page }) => {
+  await workspace(page, 'swarm')
+  let reads = 0
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as { operation: string }
+    if (body.operation !== 'actions') return route.fulfill({ json: { records: [pullRequest], count: 1 } })
+    if (++reads === 2) return route.fulfill({ status: 502, json: { error: 'Temporary failure' } })
+    return route.fulfill({ json: { records: [{ ...failedRun, title: reads > 2 ? 'Recovered workflow' : failedRun.title }], count: 1 } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect(page.locator('#tbody')).toContainText(failedRun.title)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+  await expect(page.locator('#main-load-error')).toContainText('Github 502')
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#tbody')).toContainText('Recovered workflow', { timeout: 4000 })
+  expect(reads).toBe(3)
+})

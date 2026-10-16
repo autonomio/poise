@@ -370,6 +370,7 @@ interface SourceState {
   loadedAt: number
   revision: number
   failures: number
+  retryRefresh: boolean
   timer?: ReturnType<typeof setTimeout>
 }
 
@@ -392,7 +393,7 @@ function selectedSources(): SourceState[] {
     let source = sources.get(key)
     if (!source) {
       source = { type, payload, rows: [], total: 0, partial: true, done: false, fetching: false,
-        loaded: false, pending: false, error: '', countError: '', loadedAt: 0, revision: 0, failures: 0 }
+        loaded: false, pending: false, error: '', countError: '', loadedAt: 0, revision: 0, failures: 0, retryRefresh: false }
       sources.set(key, source)
     }
     return source
@@ -451,12 +452,12 @@ function cancelPendingRetry(): void {
   }
 }
 
-function scheduleRead(source: SourceState, delay: number): void {
+function scheduleRead(source: SourceState, delay: number, refresh: boolean): void {
   if (source.timer) clearTimeout(source.timer)
   if (!mainVisible() || !selectedSources().includes(source)) return
   source.timer = setTimeout(() => {
     source.timer = undefined
-    if (mainVisible() && selectedSources().includes(source)) void readSource(source, true)
+    if (mainVisible() && selectedSources().includes(source)) void readSource(source, refresh)
   }, delay)
 }
 
@@ -519,11 +520,12 @@ async function readSource(source: SourceState, refresh = false): Promise<void> {
     // Full-history counts start only after the bounded page is painted. They
     // never hold the paging lock, and are read once per query/refresh.
     if (source.type !== 'action' && (offset === 0)) void readCount(source, revision)
-    if (source.pending) scheduleRead(source, 250)
+    if (source.pending) scheduleRead(source, 250, true)
   } catch (error) {
     source.error = `${source.loaded ? 'Not updating —' : 'Could not load:'} ${(error as Error).message}`
     source.pending = false
-    if (++source.failures <= 4) scheduleRead(source, Math.min(30_000, 1000 * 2 ** (source.failures - 1)))
+    source.retryRefresh = refresh
+    if (++source.failures <= 4) scheduleRead(source, Math.min(30_000, 1000 * 2 ** (source.failures - 1)), refresh)
   } finally {
     source.fetching = false
     if (mainVisible()) {
@@ -540,10 +542,19 @@ async function fetchPage(): Promise<void> {
 }
 
 function resetAndFetch() {
-  cancelPendingRetry()
+  const selected = selectedSources()
+  for (const source of sources.values()) {
+    if (!selected.includes(source) && source.timer) {
+      clearTimeout(source.timer)
+      source.timer = undefined
+    }
+  }
   paintSources()
-  for (const source of selectedSources()) {
-    if (!source.loaded || source.pending || Date.now() - source.loadedAt > 60_000) void readSource(source, source.loaded)
+  for (const source of selected) {
+    if (source.timer) continue
+    if (source.failures > 0) {
+      if (source.failures <= 4) scheduleRead(source, Math.min(30_000, 1000 * 2 ** (source.failures - 1)), source.retryRefresh)
+    } else if (!source.loaded || source.pending || Date.now() - source.loadedAt > 60_000) void readSource(source, source.loaded)
   }
   requestAnimationFrame(() => {
     if (mainVisible() && sentinelNeedsFetch()) void fetchPage()
