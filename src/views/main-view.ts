@@ -377,7 +377,7 @@ interface SourceState {
 // history count cannot hold another source's first paint or subsequent pages.
 const sources = new Map<string, SourceState>()
 function selectedSources(): SourceState[] {
-  return [...typeFilters].map((type) => {
+  const selected = [...typeFilters].map((type) => {
     const win = timeWindow()
     const payload = {
       operation: type === 'action' ? 'actions' : 'list', ...organizationPayload(),
@@ -393,14 +393,15 @@ function selectedSources(): SourceState[] {
     if (!source) {
       source = { type, payload, rows: [], total: 0, partial: true, done: false, fetching: false,
         loaded: false, pending: false, error: '', countError: '', loadedAt: 0, revision: 0, failures: 0 }
-      if (sources.size >= 24) {
-        const oldest = [...sources].find(([, entry]) => !entry.fetching && !entry.timer)
-        if (oldest) sources.delete(oldest[0])
-      }
       sources.set(key, source)
     }
     return source
   })
+  for (const [key, source] of sources) {
+    if (sources.size <= 24) break
+    if (!selected.includes(source) && !source.fetching && !source.timer) sources.delete(key)
+  }
+  return selected
 }
 
 function mainVisible(): boolean { return !document.getElementById('view-main')!.hidden }
@@ -470,6 +471,14 @@ async function readCount(source: SourceState, revision: number): Promise<void> {
   if (mainVisible()) paintSources()
 }
 
+function retainUnchangedRows(previous: PrRow[], incoming: PrRow[]): PrRow[] {
+  const existing = new Map(previous.map(row => [rowKey(row), row]))
+  return incoming.map(row => {
+    const old = existing.get(rowKey(row))
+    return old && Object.entries(row).every(([key, value]) => old[key as keyof PrRow] === value) ? old : row
+  })
+}
+
 async function readSource(source: SourceState, refresh = false): Promise<void> {
   if (source.fetching || (!refresh && source.done)) return
   source.fetching = true
@@ -479,7 +488,7 @@ async function readSource(source: SourceState, refresh = false): Promise<void> {
   if (mainVisible()) paintSources()
   try {
     const data = await postRead({ ...source.payload, limit, offset })
-    const rows: PrRow[] = (data.records as GhRecord[] || []).map(recordToRow)
+    const rows = retainUnchangedRows(source.rows, (data.records as GhRecord[] || []).map(recordToRow))
     // Actions is a bounded snapshot: replace it on refresh so recovered runs
     // disappear. History refreshes retain the already paged tail.
     const tail = refresh && source.type !== 'action'
