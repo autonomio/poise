@@ -666,10 +666,10 @@ function hasDetail(e: LogEntry): boolean {
   return !!e.response || !!e.error || !!e.progress
 }
 
-interface MainRowState { open: boolean, group: string, started: string, elapsed: string }
+interface MainRowState { open: boolean, group: string, started: string, elapsed: string, replay: string, stop: string }
 
 function mainRowState(e: LogEntry, group?: RunGroup): MainRowState {
-  return { open: expanded.has(e.id), group: groupButton(group), started: startedRel(e), elapsed: elapsedText(e) }
+  return { open: expanded.has(e.id), group: groupButton(group), started: startedRel(e), elapsed: elapsedText(e), replay: replayCell(e), stop: stopCell(e) }
 }
 
 function mainRowInnerHTML(e: LogEntry, state: MainRowState): string {
@@ -688,8 +688,8 @@ function mainRowInnerHTML(e: LogEntry, state: MainRowState): string {
     <td class="agent-status-cell">${statusCell(e)}</td>
     <td class="started-cell"><span class="date">${escapeHtml(state.started)}</span></td>
     <td class="elapsed-cell"><span class="date">${escapeHtml(state.elapsed)}</span></td>
-    <td class="replay-cell">${replayCell(e)}</td>
-    <td class="stop-cell">${stopCell(e)}</td>
+    <td class="replay-cell">${state.replay}</td>
+    <td class="stop-cell">${state.stop}</td>
     <td class="action-cell">${btn}</td>
   `
 }
@@ -794,9 +794,10 @@ function reconcileRows(nextRows: RunRow[]): void {
     const state = mainRowState(entry, group)
     const prepared = preparedRows.get(entry)
     // Detached rows already have their static cells. Rebuild only if grouping,
-    // disclosure or the clock changed during preparation, then consume the cache.
+    // disclosure, action buttons or the clock changed, then consume the cache.
     const reusable = prepared && prepared.state.open === state.open && prepared.state.group === state.group
       && prepared.state.started === state.started && prepared.state.elapsed === state.elapsed
+      && prepared.state.replay === state.replay && prepared.state.stop === state.stop
     const markup = reusable ? mainRowMarkup.get(prepared.row)! : mainRowInnerHTML(entry, state)
     const row = main.get(entry.id) || prepared?.row || buildMainRow(entry, markup)
     preparedRows.delete(entry)

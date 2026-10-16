@@ -86,3 +86,36 @@ test('Swarm animates visible history without blocking navigation or replaying ca
     expect(count).toBeLessThan(200)
   } finally { release() }
 })
+
+
+test('a filtered prepared row reflects replay completion before it is revealed', async ({ page }) => {
+  await workspace(page)
+  await settled(page)
+  const history = logs.map(entry => ({ ...entry, behavior: 'pr_review' }))
+  let completeHistory = false
+  await page.route('**/api/agent-logs**', route => route.fulfill({ json: { logs: completeHistory ? history : history.slice(0, 1) } }))
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/agent-replay', async route => {
+    await held
+    await route.fulfill({ status: 409, json: { error: 'Replay refused for this test.' } })
+  })
+  try {
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    const row = page.locator('#swarm-tbody > .agent-row[data-id="perf-0"]')
+    const replay = row.getByRole('button', { name: 'Replay this run' })
+    await replay.click()
+    await expect(replay).toBeDisabled()
+    await page.locator('#swarm-search').fill('1300')
+    await expect(row).toHaveCount(0)
+    completeHistory = true
+    await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+    await expect(page.locator('#swarm-tbody > .agent-row[data-id="perf-1299"]')).toBeVisible()
+    const response = page.waitForResponse(res => new URL(res.url()).pathname === '/api/agent-replay')
+    release()
+    await (await response).finished()
+    await page.locator('#swarm-search').fill('')
+    await expect(replay).toBeEnabled()
+    await expect(page.locator('#swarm-tbody > .agent-refusal-row').getByRole('alert')).toHaveText('Replay refused for this test.')
+  } finally { release() }
+})

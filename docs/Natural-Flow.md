@@ -28,7 +28,7 @@ batches presentation reads before settling channels. Only actors whose
 old or new bounds intersect the viewport receive layout/entry motion. Clipped
 departures use the captured geometry without reading styles after each removal.
 Swarm prepares large histories in detached batches and reuses their cell markup
-when grouping, disclosure and displayed times remain unchanged. Each prepared
+when grouping, disclosure, action buttons and displayed times remain unchanged. Each prepared
 row is consumed on insertion; later refreshes still recompute current values
 and skip unchanged row markup.
 Structural lists reveal new actors once and retire
