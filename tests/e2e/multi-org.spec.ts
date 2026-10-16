@@ -220,6 +220,7 @@ for (const status of ['initializing', 'ready'] as const) {
 
 
 test('continues Archive pagination when an organization is missing only from the count', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 300 })
   await setup(page, [organization('acme'), organization('beta')])
   const records = Array.from({ length: 25 }, (_, i) => ({ ...record('acme'), number: i + 1, title: `Issue ${i + 1}`, url: `https://github.com/acme/same-repo/issues/${i + 1}` }))
   await page.route('**/api/gh', async (route) => {
