@@ -422,6 +422,17 @@ function paintSources(): void {
     table.hidden = false
     empty.hidden = true
     if (rowsChanged) applyMainFlip(items)
+    else {
+      const byKey = new Map(items.map(item => [rowKey(item), item]))
+      for (const row of tbody.rows) {
+        const item = byKey.get(row.dataset.key || '')
+        const date = row.querySelector('.date')
+        if (item && date) {
+          const text = relativeDate(item.updated_at)
+          if (date.textContent !== text) date.textContent = text
+        }
+      }
+    }
   } else {
     tbody.replaceChildren()
     table.hidden = true

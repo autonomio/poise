@@ -346,3 +346,18 @@ test('changing GitHub identity cannot reuse another identity\'s cached outcome',
   await expect(page.locator('#tbody')).toContainText('new-owner workflow')
   await expect(page.locator('#tbody')).not.toContainText('octocat workflow')
 })
+
+
+test('retained unchanged rows refresh their displayed age without replacing the row', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-14T08:01:00Z'))
+  await workspace(page, 'swarm')
+  await page.route('**/api/gh', route => route.fulfill({ json: { records: [failedRun], count: 1 } }))
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  const date = page.locator('#tbody .date')
+  await expect(date).toHaveText('1m')
+  const row = await page.locator('#tbody tr').elementHandle()
+  await page.clock.setFixedTime(new Date('2026-10-14T08:02:00Z'))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
+  await expect(date).toHaveText('2m')
+  expect(await row!.evaluate(element => element.isConnected && element === document.querySelector('#tbody tr'))).toBe(true)
+})
