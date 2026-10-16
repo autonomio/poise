@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ runFile: vi.fn(), repos: vi.fn(), me: 'octocat', orgs: [{ login: 'acme' }, { login: 'beta' }] }))
+const mocks = vi.hoisted(() => ({ runFile: vi.fn(), repos: vi.fn(), meta: new Map<string, string>(), me: 'octocat', orgs: [{ login: 'acme' }, { login: 'beta' }] }))
 vi.mock('../server/process', () => ({ runFile: mocks.runFile }))
-vi.mock('../server/db', () => ({ getMeta: () => mocks.me }))
+vi.mock('../server/db', () => ({ getMeta: (key: string) => key === 'me' ? mocks.me : mocks.meta.get(key), setMeta: (key: string, value: string) => { mocks.meta.set(key, value) } }))
 vi.mock('../server/gh', () => ({
   listOrganizationsRepos: mocks.repos,
   selectOrganizations: (org?: string) => {
@@ -25,6 +25,7 @@ function run(id = 1, conclusion: string | null = 'failure') {
 beforeEach(() => {
   vi.useRealTimers()
   invalidateActionRunCache()
+  mocks.meta.clear()
   mocks.me = 'octocat'
   mocks.runFile.mockReset()
   mocks.repos.mockReset().mockImplementation(async (org: string) => ({ repos: [`${org}/site`], errors: [] }))
@@ -191,4 +192,41 @@ it('does not extend healthy repository freshness when another repository recover
     expect((await listActionRuns({ org: 'acme' })).body).toMatchObject({ records: [{ repo: 'acme/healthy', number: 2 }, { repo: 'acme/offline', number: 1 }] })
     expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(4)
   } finally { vi.useRealTimers() }
+})
+
+
+it('returns cold and progressive snapshots without waiting for the slowest repository', async () => {
+  mocks.repos.mockResolvedValue({ repos: ['acme/fast', 'acme/slow'], errors: [] })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+    if (args[0] === 'auth') return { stdout: 'selected-secret' }
+    if (args[1].includes('/slow/')) await held
+    return { stdout: response() }
+  })
+  try {
+    const start = performance.now()
+    expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ pending: true })
+    expect(performance.now() - start).toBeLessThan(100)
+    await vi.waitFor(async () => {
+      expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ repo: 'acme/fast' }], pending: true })
+    })
+    release()
+    const complete = await listActionRuns({ org: 'acme' })
+    expect(complete.body).toMatchObject({ records: [{ repo: 'acme/fast' }, { repo: 'acme/slow' }], pending: false })
+    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === 'api')).toHaveLength(2)
+  } finally { release() }
+})
+
+it('serves a persisted snapshot immediately while an expired refresh is held', async () => {
+  mocks.meta.set('archive-actions:octocat:acme:true', JSON.stringify({ records: [{
+    kind: 'action', repo: 'acme/site', number: 1, title: 'Retained run', url: 'https://github.com/acme/site/actions/runs/1',
+    state: 'failure', author: 'octocat', updated_at: '2026-10-14T08:00:00Z', branch: 'main', event: 'push',
+  }], errors: [], warnings: [], expires: 0 }))
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  mocks.repos.mockImplementation(async () => { await held; return { repos: [], errors: [] } })
+  try {
+    expect((await listActionRuns({ org: 'acme', snapshot: true })).body).toMatchObject({ records: [{ title: 'Retained run' }], pending: true })
+  } finally { release(); await listActionRuns({ org: 'acme' }) }
 })

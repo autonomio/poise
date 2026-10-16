@@ -24,7 +24,7 @@ async function setup(page: Page, initial = [organization('acme')], me = 'octocat
     partial: false,
   }
   await page.clock.setFixedTime(new Date('2026-10-01T08:00:10Z'))
-  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ type: 'both', status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'main') })
+  await page.addInitScript(() => { localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ types: ['issue'], status: 'all', time: 'all' })); localStorage.setItem('poise-view', 'main') })
   await page.route(/https:\/\/(?:rsms\.me|fonts\.googleapis\.com|fonts\.gstatic\.com|github\.com)\//, (route) => route.abort())
   await page.route('**/api/**', async (route) => {
     const request = route.request()

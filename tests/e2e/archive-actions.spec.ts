@@ -16,13 +16,13 @@ for (const width of [1280, 1920]) {
     await page.route('**/api/gh', route => {
       const body = route.request().postDataJSON() as Record<string, unknown>
       requests.push(body)
-      return route.fulfill({ json: body.count_only ? { count: 1 } : { records: [failedRun] } })
+      return route.fulfill({ json: body.count_only ? { count: 1 } : { records: [failedRun], count: 1 } })
     })
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
     await expect(page.locator('#tbody')).toContainText('Deploy · Release after merge')
     expect(requests.every(body => body.operation === 'actions' && body.record_state === 'failed')).toBe(true)
     await expect(page.locator('#filter-type [data-filter="action"]')).toHaveClass('active')
-    await expect(page.locator('#filter-status [data-status="failed"]')).toHaveClass('active')
+    await expect(page.locator('#filter-action-status [data-action-status="failed"]')).toHaveClass('active')
     await expect(page.locator('#tbody .agent-org')).toHaveText('acme')
     await expect(page.locator('#tbody .repo-name')).toHaveText('site')
     await expect(page.locator('#tbody .repo-name')).toHaveAttribute('title', 'acme/site')
@@ -45,18 +45,20 @@ test('outcomes, issue history and persistent filters remain selectable', async (
     const action = body.operation === 'actions'
     const records = action ? [{ ...failedRun, state: body.record_state === 'all' ? 'success' : 'failure' }]
       : [{ ...failedRun, kind: 'issue', state: 'open', title: 'Issue history', url: 'https://github.com/acme/site/issues/42', owner_login: null, owner_avatar: null, merged_at: null }]
-    return route.fulfill({ json: body.count_only ? { count: 1 } : { records } })
+    return route.fulfill({ json: body.count_only ? { count: 1 } : { records, count: records.length } })
   })
   await page.getByRole('button', { name: 'Archive', exact: true }).click()
-  await page.locator('#filter-status [data-status="all"]').click()
+  await page.locator('#filter-action-status [data-action-status="all"]').click()
   await expect(page.locator('#tbody .agent-status.ok')).toHaveText('Success')
   await page.locator('#filter-type [data-filter="issue"]').click()
+  await page.locator('#filter-type [data-filter="action"]').click()
   await expect(page.locator('#tbody')).toContainText('Issue history')
   await expect(page.locator('#table .col-owner')).toHaveText('Owner')
-  await expect(page.locator('#filter-status [data-status="failed"]')).toBeHidden()
+  await expect(page.locator('#filter-action-status [data-action-status="failed"]')).toBeHidden()
   await page.reload()
   await expect(page.locator('#tbody')).toContainText('Issue history')
   await page.locator('#filter-type [data-filter="action"]').click()
+  await page.locator('#filter-action-status [data-action-status="failed"]').click()
   await expect(page.locator('#tbody .agent-status.bad')).toHaveText('Failure')
 })
 
@@ -68,7 +70,7 @@ test('partial history and a failed refresh remain visible, and recovered failure
     if (failed) return route.fulfill({ status: 502, json: { error: 'Actions offline' } })
     const body = route.request().postDataJSON() as Record<string, unknown>
     return route.fulfill({ json: {
-      ...(body.count_only ? { count: recovered ? 0 : 1 } : { records: recovered ? [] : [failedRun] }),
+      ...(body.count_only ? { count: recovered ? 0 : 1 } : { records: recovered ? [] : [failedRun], count: recovered ? 0 : 1 }),
       warnings: ['acme/site: showing the latest 100 of 130 failed runs. Open GitHub for older runs.'],
     } })
   })
@@ -114,7 +116,7 @@ test('returning to Archive resumes pagination after a hidden page finishes', asy
       firstPageReads++
       await (firstPageReads === 1 ? initial : refresh)
     }
-    return route.fulfill({ json: { records: Array.from({ length: 20 }, (_, i) => ({ ...failedRun, number: body.offset + i + 1 })) } })
+    return route.fulfill({ json: { count: 40, records: Array.from({ length: 20 }, (_, i) => ({ ...failedRun, number: body.offset + i + 1 })) } })
   })
   try {
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
@@ -130,4 +132,88 @@ test('returning to Archive resumes pagination after a hidden page finishes', asy
     releaseRefresh()
     await expect(page.locator('#tbody tr')).toHaveCount(40)
   } finally { releaseInitial(); releaseRefresh() }
+})
+
+const pullRequest = { ...failedRun, kind: 'pr', number: 9, title: 'A pull request',
+  url: 'https://github.com/acme/site/pull/9', state: 'open', owner_login: null, owner_avatar: null, merged_at: null }
+
+test('type toggles combine independently, retain rows and persist without including issues in PR', async ({ page }) => {
+  await workspace(page, 'swarm', undefined, { preserveOnReload: true })
+  let prReads = 0
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    const action = body.operation === 'actions'
+    if (!action) {
+      expect(body.record_type).toBe('pull_request')
+      prReads++
+    }
+    return route.fulfill({ json: { records: [action ? failedRun : pullRequest], count: 1 } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect(page.locator('#tbody tr')).toHaveCount(1)
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#tbody tr')).toHaveCount(2)
+  await expect(page.locator('[data-filter="action"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('[data-filter="pr"]')).toHaveAttribute('aria-pressed', 'true')
+  const reads = prReads
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#tbody tr')).toHaveCount(1)
+  const elapsed = await page.evaluate(() => new Promise<number>(resolve => {
+    const start = performance.now()
+    document.querySelector<HTMLButtonElement>('[data-filter="pr"]')!.click()
+    requestAnimationFrame(() => resolve(performance.now() - start))
+  }))
+  await expect(page.locator('#tbody tr')).toHaveCount(2)
+  expect(prReads).toBe(reads)
+  expect(elapsed).toBeLessThan(200)
+  console.log(`Archive cached PR toggle: ${elapsed.toFixed(1)}ms; no new request`)
+  await page.reload()
+  await expect(page.locator('[data-filter="action"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('[data-filter="pr"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('#tbody tr')).toHaveCount(2)
+})
+
+test('a pending Actions scan does not delay PR paint and its loader actually animates', async ({ page }) => {
+  await workspace(page, 'swarm')
+  let pending = true
+  await page.route('**/api/gh', route => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    const action = body.operation === 'actions'
+    return route.fulfill({ json: { records: action ? pending ? [] : [failedRun] : [pullRequest], count: 1, pending: action && pending } })
+  })
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect(page.locator('#loader')).toBeVisible()
+  const times = await page.locator('#loader span').first().evaluate(async element => {
+    const animation = element.getAnimations()[0]
+    if (!animation) return []
+    const before = Number(animation.currentTime)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    return [before, Number(animation.currentTime)]
+  })
+  expect(times).toHaveLength(2)
+  expect(times[1]).toBeGreaterThan(times[0])
+  const start = Date.now()
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#tbody')).toContainText('A pull request', { timeout: 1000 })
+  console.log(`Archive PR paint with Actions pending: ${Date.now() - start}ms`)
+  await expect(page.locator('#loader')).toBeVisible()
+  pending = false
+  await expect(page.locator('#tbody tr')).toHaveCount(2)
+  await expect(page.locator('#loader')).toBeHidden()
+})
+
+for (const width of [390, 768, 1280]) test(`Any/Open controls fit completely at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  await workspace(page, 'main')
+  await page.getByRole('button', { name: 'PR', exact: true }).click()
+  await expect(page.locator('#filter-status')).toBeVisible()
+  for (const status of ['all', 'open']) {
+    const button = page.locator(`#filter-status [data-status="${status}"]`)
+    await expect(button).toBeVisible()
+    expect(await button.evaluate(element => {
+      const box = element.getBoundingClientRect(), parent = element.parentElement!.getBoundingClientRect()
+      return element.scrollWidth <= element.clientWidth && box.left >= parent.left && box.right <= parent.right + 1 && box.right <= innerWidth
+    })).toBe(true)
+  }
+  await page.screenshot({ path: `test-results/archive-filters-${width}.png` })
 })
