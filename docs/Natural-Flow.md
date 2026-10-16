@@ -29,7 +29,9 @@ old or new bounds intersect the viewport receive layout/entry motion. Clipped
 departures use the captured geometry without reading styles after each removal.
 Spatial offsets are non-inherited CSS properties: an actor moves its subtree
 without recalculating every descendant's styles on each animation frame.
-Swarm prepares large histories in detached batches and reuses their cell markup
+Swarm prepares large histories in detached batches and inserts at most 200 new
+rows per reconciliation, yielding between additions while retaining existing controls.
+Its loading count includes rows still being prepared. It reuses cell markup
 when grouping, disclosure, action buttons and displayed times remain unchanged. Each prepared
 row is consumed on insertion; later refreshes still recompute current values
 and skip unchanged row markup.

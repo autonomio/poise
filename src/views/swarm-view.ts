@@ -707,7 +707,7 @@ function buildMainRow(e: LogEntry, markup: string): HTMLTableRowElement {
   return tr
 }
 
-async function prepareRows(list: LogEntry[], current: () => boolean): Promise<void> {
+async function prepareRows(list: LogEntry[], current: () => boolean, progress: (ready: LogEntry[]) => void): Promise<void> {
   const retained = new Set([...bodyEl.children].map(row => (row as HTMLElement).dataset.id))
   const missing = list.filter(entry => !retained.has(entry.id))
   if (missing.length <= 100) return
@@ -718,7 +718,11 @@ async function prepareRows(list: LogEntry[], current: () => boolean): Promise<vo
     for (const entry of missing.slice(start, start + 50)) {
       const state = mainRowState(entry)
       preparedRows.set(entry, { row: buildMainRow(entry, mainRowInnerHTML(entry, state)), state })
+      retained.add(entry.id)
     }
+    // Inserting the complete detached history still makes style and table
+    // layout one long task. Reconcile bounded additions before yielding.
+    if ((start + 50) % 200 === 0 && start + 50 < missing.length) progress(list.filter(entry => retained.has(entry.id)))
     await new Promise<void>(resolve => setTimeout(resolve, 0))
   }
 }
@@ -1217,21 +1221,25 @@ async function readLogFeed(org: string, recent = false): Promise<LogFeed> {
 }
 
 async function applyLogFeed(data: LogFeed, current: () => boolean): Promise<void> {
-  await prepareRows(data.logs || [], current)
+  const logs = data.logs || []
+  const apply = (ready: LogEntry[], total = data.total) => {
+    entries = ready
+    incompleteTotal = typeof total === 'number' && total > entries.length ? total : null
+    loadingHistory = incompleteTotal !== null
+    lastLoadError = null
+    quarantined = Array.isArray(data.quarantined) ? data.quarantined : []
+    lastLoadedAt = Date.now()
+    render()
+    renderStaleBanner()
+  }
+  await prepareRows(logs, current, ready => apply(ready, Math.max(data.total ?? 0, logs.length)))
   if (!current()) return
-  entries = data.logs || []
-  incompleteTotal = typeof data.total === 'number' && data.total > entries.length ? data.total : null
-  loadingHistory = incompleteTotal !== null
-  lastLoadError = null
-  quarantined = Array.isArray(data.quarantined) ? data.quarantined : []
-  lastLoadedAt = Date.now()
-  render()
+  apply(logs)
   for (const entry of entries) {
     const state = expanded.get(entry.id)
     if (state) void loadReasoning(entry.id)
     if (state && !state.loading && state.body === null && entry.response) void loadResponse(entry.id, true)
   }
-  renderStaleBanner()
 }
 
 function pollOnce(): Promise<void> {
