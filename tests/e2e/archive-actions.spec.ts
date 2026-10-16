@@ -122,8 +122,12 @@ test('returning to Archive resumes pagination after a hidden page finishes', asy
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
     await expect.poll(() => firstPageReads).toBe(1)
     await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    const hiddenPage = page.waitForResponse(response => response.url().endsWith('/api/gh') && response.request().postDataJSON().offset === 0 && !response.request().postDataJSON().count_only)
     releaseInitial()
-    await expect(page.locator('#tbody tr')).toHaveCount(20)
+    await (await hiddenPage).finished()
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    // Hidden views retain the response without spending layout work painting it.
+    await expect(page.locator('#tbody tr')).toHaveCount(0)
     await expect(page.locator('#loader')).toBeHidden()
     await page.getByRole('button', { name: 'Archive', exact: true }).click()
     await expect.poll(() => firstPageReads).toBe(2)
