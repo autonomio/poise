@@ -122,4 +122,5 @@ it('compares headline event counts against seven-day daily averages, including z
   expect(tile(groups, 'Lines changed').trend).toMatchObject({ direction: 'good', text: '↑ 100%' })
   week.pullRequests.lines.counted = 10
   expect(tile(buildGroups(day, week), 'Lines changed').trend).toBeUndefined()
+  expect(tile(buildGroups(day, week), 'Lines changed').comparison).toBe('7-day daily average: —')
 })

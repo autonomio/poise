@@ -49,7 +49,8 @@ comment on issues, not pull requests, and are not counted either.
 Opened, Closed, Merged and Lines changed compare the day's totals with the
 preceding seven complete calendar days' daily averages, including zero days.
 An upward green arrow means increased activity; a downward red arrow means
-less activity. Partial line-size coverage withholds its comparison arrow.
+less activity. Partial line-size coverage withholds its comparison arrow; incomplete baseline
+coverage also shows an unknown daily line average.
 
 Time to merge shows the selected day's mean alongside the preceding seven
 complete calendar days' rolling mean and merged PR count. Both means are

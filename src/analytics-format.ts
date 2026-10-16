@@ -107,7 +107,7 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
       label: 'Pull requests',
       tiles: [
         dailyCount('Merged', pr.merged, baseline.pullRequests.merged),
-        { ...dailyCount('Lines changed', none ? 0 : lines.total, baseline.pullRequests.merged === 0 ? 0 : baseline.pullRequests.lines.total), value: linesTotal,
+        { ...dailyCount('Lines changed', none ? 0 : lines.total, baseline.pullRequests.lines.counted < baseline.pullRequests.merged ? null : baseline.pullRequests.merged === 0 ? 0 : baseline.pullRequests.lines.total), value: linesTotal,
           trend: complete && lines.counted === pr.merged && baseline.pullRequests.lines.counted === baseline.pullRequests.merged
             ? metricTrend(none ? 0 : lines.total, baseline.pullRequests.merged === 0 ? 0 : baseline.pullRequests.lines.total === null ? null : baseline.pullRequests.lines.total / 7) : undefined,
         },
