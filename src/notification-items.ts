@@ -53,6 +53,8 @@ const NOTICE_LOOK: Record<NoticeKind, { group: ItemGroup, tone: ItemTone, icon: 
   datastore_sync_failing: { group: 'needs', tone: 'amber', icon: 'sync', source: 'GitHub data' },
   pr_ready: { group: 'ready', tone: 'green', icon: 'merge', source: 'GitHub' },
   chat_turn_finished: { group: 'ready', tone: 'teal', icon: 'check', source: 'Chat' },
+  github_quota_warning: { group: 'needs', tone: 'amber', icon: 'held', source: 'GitHub API' },
+  github_quota_exhausted: { group: 'faults', tone: 'red', icon: 'fault', source: 'GitHub API' },
 }
 
 // Colour says who can correct a condition (src/behavior-failure-cause.ts):
