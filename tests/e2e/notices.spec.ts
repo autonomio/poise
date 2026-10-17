@@ -131,8 +131,10 @@ test('docks beside the page on a wide window, covering nothing in any view', asy
   await workspace(page, [WAITING])
   await page.goto('/')
   await openRail(page)
+  await expand(page, WAITING.id)
   await settled(page)
   await expect(page.locator('body')).toHaveClass(/notifications-docked/)
+  await page.screenshot({ path: test.info().outputPath('notification-rail-docked.png') })
   const box = (await rail(page).boundingBox())!
   // Flush with the window's right edge, as the full-width control bar is.
   const bar = (await page.locator('.view:not([hidden]) .view-header').boundingBox())!
