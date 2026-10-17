@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { BEHAVIORS } from '../../src/behaviors'
 
-async function workspace(page: Page) {
+async function workspace(page: Page, longSettings = false) {
   const reads: URL[] = []
   const state = { fail: false, reads, filteredRuns: 4, heldToday: null as Promise<void> | null }
   await page.clock.setFixedTime(new Date('2026-10-17T12:00:00Z'))
@@ -24,7 +24,9 @@ async function workspace(page: Page) {
       ])) } })
     }
     if (url.pathname === '/api/behaviors') return route.fulfill({ json: Object.fromEntries(BEHAVIORS.map(({ key }) => [key,
-      { owner: 'review-bot', enabled: true, setting: 'p2', reviewers: 1, scratchpad: '', skipRepos: [], repos: [], authors: [], lastTriggered: null },
+      { owner: 'review-bot', enabled: true, setting: 'p2', reviewers: 1, scratchpad: '',
+        skipRepos: longSettings && key === 'review-new-prs' ? Array.from({ length: 236 }, (_, i) => `acme/repo-${i}`) : [],
+        repos: [], authors: [], lastTriggered: null },
     ])) })
     if (url.pathname === '/api/settings') return route.fulfill({ json: { org: 'acme', me: 'octocat', timezone: 'Asia/Kolkata', models: {} } })
     if (url.pathname === '/api/workspace') return route.fulfill({ json: { mode: 'local' } })
@@ -88,7 +90,7 @@ test('keeps the selected period when an earlier metrics read finishes later', as
 })
 
 test('keeps columns spaced and single-line across desktop and narrow viewports in both themes', async ({ page }, info) => {
-  await workspace(page)
+  await workspace(page, true)
   await page.goto('/')
   await expect(page.locator('#behaviors-tbody tr')).toHaveCount(6)
   await expect(page.locator('#behaviors-tbody tr').first().locator('.behavior-metric')).toHaveText(['120', '240.5', '95%'])
@@ -98,14 +100,19 @@ test('keeps columns spaced and single-line across desktop and narrow viewports i
       const table = main.querySelector('table')!
       const reviewers = table.querySelector<HTMLElement>('.col-reviewers')!.getBoundingClientRect()
       const memory = table.querySelector<HTMLElement>('.col-memory')!.getBoundingClientRect()
+      const setting = table.querySelector<HTMLElement>('.behavior-triggers-btn')!
+      const style = getComputedStyle(setting)
       return { left: main.getBoundingClientRect().left, width: main.clientWidth, tableWidth: table.clientWidth,
         reviewerGap: memory.left - reviewers.left,
+        settingLabel: setting.querySelector('span')!.getBoundingClientRect().width,
+        settingSpace: setting.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
         pageWidth: document.querySelector('.view:not([hidden]) .view-header')!.getBoundingClientRect().width,
         cells: [...table.querySelectorAll('tbody tr:first-child td')].map((cell) => cell.getBoundingClientRect().height) }
     })
     expect(geometry.left).toBeCloseTo(24, 0)
     expect(geometry.width).toBeCloseTo(geometry.pageWidth - 48, 0)
     expect(geometry.reviewerGap).toBeGreaterThanOrEqual(90)
+    expect(geometry.settingLabel).toBeLessThanOrEqual(geometry.settingSpace)
     expect(new Set(geometry.cells).size).toBe(1)
     if (width >= 1600) expect(geometry.tableWidth).toBeLessThanOrEqual(geometry.width)
     await page.screenshot({ path: info.outputPath(`behaviors-${width}-light.png`), animations: 'disabled' })
