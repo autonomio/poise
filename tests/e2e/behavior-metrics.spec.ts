@@ -68,6 +68,7 @@ test('keeps columns spaced and single-line across desktop and narrow viewports i
   await workspace(page)
   await page.goto('/')
   await expect(page.locator('#behaviors-tbody tr')).toHaveCount(6)
+  await expect(page.locator('#behaviors-tbody tr').first().locator('.behavior-metric')).toHaveText(['120', '240.5', '95%'])
   for (const width of [1920, 1600, 1280, 768, 390]) {
     await page.setViewportSize({ width, height: 900 })
     const geometry = await page.locator('#view-behaviors main').evaluate((main) => {

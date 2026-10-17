@@ -3174,7 +3174,7 @@ tr:hover .stop-btn { opacity: 1; }
 /* Fixed control budgets preserve spacing; the behavior name takes the rest.
    Narrow windows scroll the table rather than compressing its controls. */
 #view-behaviors main {
-  margin-inline: calc(50% - var(--page-w, 100vw) / 2 + 24px);
+  margin-inline: calc(50% - var(--page-w, calc(100vw - var(--scrollbar-w, 0px))) / 2 + 24px);
   overflow-x: auto;
 }
 #behaviors-table { min-width: 1500px; }
