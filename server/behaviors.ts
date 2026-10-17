@@ -1,6 +1,6 @@
 import { prepareModelClis } from './provider-clis'
 import { BehaviorDeadline } from './behavior-deadline'
-import { startDirectBehaviorRun, finishDirectBehaviorRun } from './behavior-metrics'
+import { startDirectBehaviorRun, finishDirectBehaviorRun, discardDirectBehaviorRun } from './behavior-metrics'
 import { CLI_UPDATE_TIMEOUT_MS } from '../scripts/provider-cli-updates.mjs'
 import { releaseBackgroundPaused, trackReleaseBackground } from './release-background'
 // Server-side behavior runtime. Lives with the Poise HTTP server
@@ -2902,7 +2902,8 @@ async function tickResolveUnblocking(): Promise<void> {
         if (!isEnabled('resolve-unblocking') || !stillEligible('resolve-unblocking', pr)) return
         runId = startDirectBehaviorRun('resolve-unblocking')
         const result = await resolveNonblockingIfReady(pr.repo, pr.number)
-        finishDirectBehaviorRun(runId, true)
+        if (result.resolved_count > 0) finishDirectBehaviorRun(runId, true)
+        else discardDirectBehaviorRun(runId)
         runId = null
         checked = true
         if (result.superseded) {

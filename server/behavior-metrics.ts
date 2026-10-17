@@ -28,11 +28,78 @@ export function finishDirectBehaviorRun(id: string, success: boolean): void {
   activeDirectRuns.delete(id)
 }
 
+export function discardDirectBehaviorRun(id: string): void {
+  db.prepare('DELETE FROM behavior_runs WHERE id = ?').run(id)
+  activeDirectRuns.delete(id)
+}
+
 const AGENT_BEHAVIORS = {
   'review-new-prs': 'pr_review', 'approve-prs': 'pr_approve', 'review-new-issues': 'issue_review',
 } as const
 const FAILURE = new Set(['invalid', 'failed', 'error', 'cancelled', 'canceled', 'timed_out', 'timeout'])
 const SUCCESS = new Set(['completed', 'superseded'])
+
+interface DirectSummary {
+  behavior: BehaviorKey
+  totalRuns: number
+  durationMs: number
+  unknownDurations: number
+  finished: number
+  failed: number
+}
+interface DirectWindow {
+  summaries: DirectSummary[]
+  running: (Run & { id: string })[]
+}
+let directRevision: number | null = null
+const directWindows = new Map<string, DirectWindow>()
+
+function readDirectMetrics(window: AnalyticsWindow, now = Date.now()): Map<BehaviorKey, BehaviorMetrics> {
+  // A durable revision catches writes from this connection and other processes.
+  // Unchanged refreshes reuse aggregates; live elapsed time is added below.
+  const { revision } = db.prepare('SELECT revision FROM behavior_runs_revision WHERE id = 1').get() as { revision: number }
+  if (revision !== directRevision) {
+    directWindows.clear()
+    directRevision = revision
+  }
+  const key = JSON.stringify(window)
+  let cached = directWindows.get(key)
+  if (!cached) {
+    const bounds = ["unixepoch(started_at, 'subsec') IS NOT NULL"]
+    const params: number[] = []
+    if (window.since) { bounds.push("unixepoch(started_at, 'subsec') >= ?"); params.push(Date.parse(window.since) / 1000) }
+    if (window.until) { bounds.push("unixepoch(started_at, 'subsec') < ?"); params.push(Date.parse(window.until) / 1000) }
+    const where = bounds.join(' AND ')
+    const duration = "round((unixepoch(completed_at, 'subsec') - unixepoch(started_at, 'subsec')) * 1000)"
+    const failures = [...FAILURE].map((status) => `'${status}'`).join(', ')
+    const terminal = [...SUCCESS, ...FAILURE].map((status) => `'${status}'`).join(', ')
+    cached = {
+      summaries: db.prepare(`SELECT behavior, count(*) AS totalRuns,
+        sum(CASE WHEN ${duration} >= 0 THEN ${duration} ELSE 0 END) AS durationMs,
+        sum(CASE WHEN ${duration} >= 0 THEN 0 ELSE 1 END) AS unknownDurations,
+        sum(status IN (${terminal})) AS finished, sum(status IN (${failures})) AS failed
+        FROM behavior_runs WHERE ${where} GROUP BY behavior`).all(...params) as DirectSummary[],
+      running: db.prepare(`SELECT id, behavior, started_at AS startedAt, completed_at AS completedAt, status
+        FROM behavior_runs WHERE status = 'running' AND ${where}`).all(...params) as DirectWindow['running'],
+    }
+    // Arbitrary API windows must not retain an unbounded number of aggregates.
+    if (directWindows.size >= 8) directWindows.delete(directWindows.keys().next().value!)
+    directWindows.set(key, cached)
+  }
+  return new Map(cached.summaries.map((summary) => {
+    let { durationMs, unknownDurations } = summary
+    for (const run of cached.running) {
+      if (run.behavior !== summary.behavior || run.completedAt || !activeDirectRuns.has(run.id)) continue
+      const elapsed = now - Date.parse(run.startedAt)
+      if (elapsed >= 0) { durationMs += elapsed; unknownDurations-- }
+    }
+    return [summary.behavior, {
+      totalRuns: summary.totalRuns,
+      durationMinutes: unknownDurations ? null : durationMs / 60_000,
+      successRate: summary.finished ? (summary.finished - summary.failed) / summary.finished * 100 : null,
+    }]
+  }))
+}
 
 export function computeBehaviorMetrics(runs: Run[], window: AnalyticsWindow, now = Date.now()): BehaviorMetrics {
   const selected = runs.filter((run) => {
@@ -61,9 +128,7 @@ export function computeBehaviorMetrics(runs: Run[], window: AnalyticsWindow, now
 }
 
 export function readBehaviorMetrics(logs: LogEntry[], window: AnalyticsWindow, error: string | null): BehaviorMetricsReport {
-  const direct = (db.prepare('SELECT id, behavior, started_at AS startedAt, completed_at AS completedAt, status FROM behavior_runs')
-    .all() as (Run & { id: string })[])
-    .map((run) => run.status === 'running' && !activeDirectRuns.has(run.id) ? { ...run, status: 'interrupted' } : run)
+  const direct = readDirectMetrics(window)
   const behaviors = Object.fromEntries(BEHAVIOR_KEYS.map((key) => {
     if (key in AGENT_BEHAVIORS) {
       if (error) return [key, null]
@@ -73,7 +138,7 @@ export function readBehaviorMetrics(logs: LogEntry[], window: AnalyticsWindow, e
           completedAt: log.completed_at ?? null, status: log.status }))
       return [key, computeBehaviorMetrics(runs, window)]
     }
-    return [key, computeBehaviorMetrics(direct.filter((run) => run.behavior === key), window)]
+    return [key, direct.get(key) ?? { totalRuns: 0, durationMinutes: 0, successRate: null }]
   })) as BehaviorMetricsReport['behaviors']
   return { behaviors, error }
 }

@@ -247,6 +247,8 @@ Agent metrics use only automatic runs with the matching behavior and Poise
 source. Missing or quarantined logs show unavailable metrics, never zero.
 Resolution, merge, and grey-CI metrics count direct mutation attempts recorded
 in the local run ledger since tracking was introduced; earlier history is
-unavailable. Eligibility checks are excluded. Safe no-write receipts count
-as successful executions; errors count as failures. Unknown durations show
-a dash. Narrow windows scroll the table without compressing its controls.
+unavailable. Eligibility checks and resolution polls that change no conversations
+are excluded. Safe no-write merge/rerun receipts count as successful executions;
+errors count as failures. Unknown durations show a dash. The ledger uses indexed
+time windows and cached database aggregates; unchanged refreshes do not scan its
+history. Narrow windows scroll the table without compressing its controls.
