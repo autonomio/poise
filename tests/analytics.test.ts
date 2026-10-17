@@ -325,6 +325,14 @@ describe('reading what Current shows', () => {
     expect(report.agentAccount).toBe('robot')
   })
 
+  it('counts a first review on a pull request whose author account was deleted', async () => {
+    const orphan = seed({ ...pr(1, '2026-10-05T00:00:00Z', null), author: null as unknown as string }, 'pr', true)
+    review(orphan, 'robot', 'COMMENTED', '2026-10-05T00:00:30Z')
+    const deleted = seed(pr(2, '2026-10-05T00:00:00Z', null), 'pr', true)
+    review(deleted, null, 'APPROVED', '2026-10-05T00:02:00Z')
+    expect((await readAnalytics(WEEK)).pullRequests.firstReview).toEqual({ count: 2, medianMs: 75_000 })
+  })
+
   it('reads only the selected account, including all history for unbounded windows', async () => {
     data()
     expect((await readAnalytics({ since: null, until: null }, 'BETA')).pullRequests.merged).toBe(0)

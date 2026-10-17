@@ -201,10 +201,12 @@ async function readOrganization(org: Organization, me: string, window: Analytics
           }
           return `SELECT ${user ? 'item_ref' : ref} FROM ${user ? 'user_items' : view}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''}`
         })
-        // A pending review is not submitted, and an author's own review is a reply.
+        // A pending review is not submitted, and an author's own review is a
+        // reply. A review counts unless it is known to be the author's: a
+        // deleted account leaves either login NULL.
         const details = kind === 'pr' ? `pr_ref, comments_count, review_comments_count, additions, deletions,
           (SELECT min(r.submitted_at) FROM reviews r WHERE r.item_id = pr_ref AND r.submitted_at IS NOT NULL
-            AND r.state <> 'PENDING' AND (r.author_login IS NULL OR lower(r.author_login) <> lower(author))) AS first_review_at`
+            AND r.state <> 'PENDING' AND (r.author_login IS NULL OR author IS NULL OR lower(r.author_login) <> lower(author))) AS first_review_at`
           : '0 AS comments_count'
         const rows = db.prepare<string[], DatastoreRecord>(`
           SELECT repo, number, status, author, updated_at, created_at, closed_at, title, url, ${details}
