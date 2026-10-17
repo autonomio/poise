@@ -3,7 +3,7 @@ import { BEHAVIORS } from '../../src/behaviors'
 
 async function workspace(page: Page) {
   const reads: URL[] = []
-  const state = { fail: false, reads }
+  const state = { fail: false, reads, filteredRuns: 4, heldToday: null as Promise<void> | null }
   await page.clock.setFixedTime(new Date('2026-10-17T12:00:00Z'))
   await page.addInitScript(() => {
     localStorage.clear()
@@ -17,8 +17,10 @@ async function workspace(page: Page) {
       state.reads.push(url)
       if (state.fail) return route.fulfill({ status: 502, json: { error: 'Run history unavailable' } })
       const filtered = url.searchParams.has('since')
+      const totalRuns = filtered ? state.filteredRuns : 120
+      if (url.searchParams.get('since') === '2026-10-16T18:30:00.000Z' && state.heldToday) await state.heldToday
       return route.fulfill({ json: { error: null, behaviors: Object.fromEntries(BEHAVIORS.map(({ key }) => [key,
-        { totalRuns: filtered ? 4 : 120, durationMinutes: filtered ? 8.5 : 240.5, successRate: filtered ? 75 : 95 },
+        { totalRuns, durationMinutes: filtered ? 8.5 : 240.5, successRate: filtered ? 75 : 95 },
       ])) } })
     }
     if (url.pathname === '/api/behaviors') return route.fulfill({ json: Object.fromEntries(BEHAVIORS.map(({ key }) => [key,
@@ -62,6 +64,27 @@ test('filters the entire metrics section in the configured timezone without chan
   await page.locator('#behaviors-time-picker [data-time="today"]').click()
   await expect(row.locator('.behavior-metric')).toHaveText(['—', '—', '—'])
   await expect(page.locator('#behavior-metrics-error')).toHaveText('Run history unavailable')
+})
+
+test('keeps the selected period when an earlier metrics read finishes later', async ({ page }) => {
+  const state = await workspace(page)
+  let release!: () => void
+  state.heldToday = new Promise<void>((resolve) => { release = resolve })
+  await page.goto('/')
+  const metrics = page.locator('#behaviors-tbody tr').first().locator('.behavior-metric')
+  await expect(metrics).toHaveText(['120', '240.5', '95%'])
+  try {
+    await page.locator('#behaviors-time-picker [data-time="today"]').click()
+    await expect.poll(() => state.reads.at(-1)?.searchParams.get('since')).toBe('2026-10-16T18:30:00.000Z')
+    state.filteredRuns = 8
+    await page.locator('#behaviors-time-picker [data-time="yesterday"]').click()
+    await expect(metrics).toHaveText(['8', '8.5', '75%'])
+    const answered = page.waitForResponse((response) => new URL(response.url()).searchParams.get('since') === '2026-10-16T18:30:00.000Z')
+    release()
+    await (await answered).finished()
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await expect(metrics).toHaveText(['8', '8.5', '75%'])
+  } finally { release() }
 })
 
 test('keeps columns spaced and single-line across desktop and narrow viewports in both themes', async ({ page }, info) => {
