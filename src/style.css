@@ -1092,7 +1092,10 @@ tr:hover .review-btn { opacity: 1; }
    A grey line with a light wash carries the year; the latest period is the
    one blue mark. The SVG stretches to the tile, so marks that must stay
    round are positioned over it in percent. */
-.analytics-history { --history-line: var(--n5); position: relative; margin: var(--sp-3) 0 0; }
+/* A tile is a column, so its chart sits on the row's common floor whether
+   or not the figure above it has a trend line. */
+.analytics-tile:has(> .analytics-history) { display: flex; flex-direction: column; }
+.analytics-history { --history-line: var(--n5); position: relative; margin: auto 0 0; padding-top: var(--sp-3); }
 [data-theme="dark"] .analytics-history { --history-line: var(--n4); }
 .analytics-history-max {
   display: block;

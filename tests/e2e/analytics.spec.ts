@@ -208,6 +208,9 @@ test('draws each headline figure\'s past year by 7-day period, ending at the sel
   const plots = topline.locator('.analytics-history-plot')
   await expect(plots).toHaveCount(5)
   await expect(topline.locator('.analytics-history-latest')).toHaveCount(5)
+  // The charts share one floor even where a figure above has no trend line.
+  await expect(topline.locator('.analytics-tile').filter({ hasText: 'Lines changed' }).locator('.analytics-trend')).toHaveCount(0)
+  expect(new Set(await plots.evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().bottom)))).size).toBe(1)
   for (const plot of await plots.all()) await expect(plot.locator('.analytics-history-line')).toHaveAttribute('d', /^M[\d.]+ [\d.]+ L/)
   // Weeks without a merge leave time to merge unknown, not zero.
   await expect(topline.locator('.analytics-history[data-series="Time to merge"] .analytics-history-line')).toHaveAttribute('d', / M/)
