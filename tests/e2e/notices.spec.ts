@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { BehaviorDiagnostics } from '../../src/behaviors'
 import type { Notice } from '../../src/notices'
-import { settled } from './fixtures/motion'
+import { freeze, resume, settled } from './fixtures/motion'
 
 // The notification rail (src/views/notification-rail.ts): the bell and its
 // count, the rail docked beside the page or floating over it, entries that
@@ -119,6 +119,9 @@ test('counts what needs the person on the bell and lists it by who acts', async 
 
   await rail(page).getByRole('button', { name: /^Ready/ }).click()
   await expect(rail(page).locator('.nr-card')).toHaveCount(1)
+  // Every filter survives the list being drawn again.
+  await expect(rail(page).locator('.nr-picker button')).toHaveText(['All3', 'Needs you2', 'Faults0', 'Ready1', 'Automatic0'])
+  await expect(rail(page).getByRole('button', { name: 'Ready, 1' })).toHaveAttribute('aria-pressed', 'true')
   await rail(page).getByRole('button', { name: /^All/ }).click()
   await expect(rail(page).locator('.nr-card')).toHaveCount(3)
 })
@@ -131,7 +134,9 @@ test('docks beside the page on a wide window, covering nothing in any view', asy
   await settled(page)
   await expect(page.locator('body')).toHaveClass(/notifications-docked/)
   const box = (await rail(page).boundingBox())!
-  expect(Math.round(box.x + box.width)).toBe(1600 - (await page.evaluate(() => window.innerWidth - document.documentElement.clientWidth)))
+  // Flush with the window's right edge, as the full-width control bar is.
+  const bar = (await page.locator('.view:not([hidden]) .view-header').boundingBox())!
+  expect(Math.abs(box.x + box.width - (bar.x + bar.width))).toBeLessThan(1)
   for (const [view, selector] of [['Current', '.kanban'], ['Swarm', '#view-swarm main'], ['Chat', '.chat-layout'], ['Archive', '#view-main main'], ['Behaviors', '#view-behaviors main'], ['Snippets', '#view-snippets'], ['Editor', '#view-editor']] as const) {
     await page.locator('#top-nav').getByRole('button', { name: view, exact: true }).click()
     const content = page.locator(selector).first()
@@ -165,7 +170,8 @@ test('floats over a narrower window, closes on a click outside or Escape, and ne
   await openRail(page)
   await expand(page, WAITING.id)
   const overflow = await page.evaluate(() => ({ page: document.documentElement.scrollWidth - document.documentElement.clientWidth, rail: (() => { const el = document.querySelector<HTMLElement>('#notification-rail .nr-body')!; return el.scrollWidth - el.clientWidth })() }))
-  expect(overflow).toEqual({ page: 0, rail: 0 })
+  expect(overflow.page).toBeLessThanOrEqual(0)
+  expect(overflow.rail).toBeLessThanOrEqual(0)
   await page.screenshot({ path: test.info().outputPath('notification-rail-narrow.png') })
 })
 
@@ -386,6 +392,29 @@ test('shows a notice that arrives while the rail is closed as a card that tucks 
   await expect(toast).toHaveCount(0)
 })
 
+test('keeps at most three arrival cards, tucking each extra one away once', async ({ page }) => {
+  const state = await workspace(page, [])
+  await page.goto('/')
+  await expect(bell(page)).toHaveAccessibleName('Notifications')
+  const arrival = (n: number): Notice => ({ ...WAITING, id: `arrival-${n}`, title: `Arrival ${n}`, since: iso(10 + n), due: iso(10 + n) })
+  const staying = page.locator('.nr-toast:not([data-leaving="true"]) .nr-toast-title')
+  const going = page.locator('.nr-toast[data-leaving="true"] .nr-toast-title')
+  // Held mid-flight, a card tucking into the bell is not tucked again.
+  await freeze(page)
+  state.notices = [1, 2, 3, 4].map(arrival)
+  await reread(page)
+  await expect(staying).toHaveText(['Arrival 4', 'Arrival 3', 'Arrival 2'])
+  await expect(going).toHaveText(['Arrival 1'])
+  state.notices = [1, 2, 3, 4, 5].map(arrival)
+  await reread(page)
+  await expect(staying).toHaveText(['Arrival 5', 'Arrival 4', 'Arrival 3'])
+  await expect(going).toHaveText(['Arrival 2', 'Arrival 1'])
+  await resume(page)
+  await settled(page)
+  await expect(page.locator('.nr-toast .nr-toast-title')).toHaveText(['Arrival 5', 'Arrival 4', 'Arrival 3'])
+  await expect(bell(page)).toHaveAccessibleName('Notifications, 5 open')
+})
+
 test('shows a failed behavior and its diagnostic as one entry, and counts it on its Behaviors row', async ({ page }) => {
   await workspace(page, [HELD], { diagnostics: diagnostics({ deadLetters: [
     { id: 'letter', behavior: 'review-new-prs', target: 'acme/api#9', error: 'The reviewer stopped before posting.', createdAt: iso(2), attemptCount: 3, callId: HELD_CALL },
@@ -438,7 +467,7 @@ test('turns notices off and on from Settings, keeping Behaviors’ activity in t
   // Turning them on announces nothing that stood meanwhile.
   await expect(page.locator('.nr-toast')).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Menu' }).click()
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await openRail(page)
   await expand(page, WAITING.id)
   await card(page, WAITING.id).getByRole('button', { name: 'Dismiss' }).click()
