@@ -108,9 +108,9 @@ test('keeps columns spaced and single-line across desktop and narrow viewports i
     expect(geometry.reviewerGap).toBeGreaterThanOrEqual(90)
     expect(new Set(geometry.cells).size).toBe(1)
     if (width >= 1600) expect(geometry.tableWidth).toBeLessThanOrEqual(geometry.width)
-    await page.screenshot({ path: info.outputPath(`behaviors-${width}-light.png`) })
+    await page.screenshot({ path: info.outputPath(`behaviors-${width}-light.png`), animations: 'disabled' })
   }
   await page.setViewportSize({ width: 1600, height: 900 })
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
-  await page.screenshot({ path: info.outputPath('behaviors-1600-dark.png') })
+  await page.screenshot({ path: info.outputPath('behaviors-1600-dark.png'), animations: 'disabled' })
 })
