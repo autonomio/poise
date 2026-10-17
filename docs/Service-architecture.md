@@ -347,7 +347,7 @@ computer.
   `POISE_DRAIN_TIMEOUT`, and stops with one message naming each that is
   missing or invalid; any `POISE_MODE` other than `service` is an error.
 
-**Storage.** Everything lives under `~/.poise` in the home volume:
+**Storage.** State and temporary work live in the home volume:
 - Chat workspaces in `~/.poise/chat` (`POISE_CHAT_ROOT`).
 - Snippets in `~/.poise/snippets/poise.yml`.
 - Caller's data in `~/.poise/agent-interface` (`AGENT_INTERFACE_DATA_DIR`).

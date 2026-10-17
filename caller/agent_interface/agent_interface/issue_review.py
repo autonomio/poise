@@ -19,6 +19,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from threading import current_thread, main_thread
@@ -334,7 +335,9 @@ def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None
                             return None
     else:
         try:
-            args = ["lsof", "-a", "-u", str(os.getuid()), "-Fpn"]
+            # GUI/launchd environments often omit macOS's system sbin path.
+            lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+            args = [lsof, "-a", "-u", str(os.getuid()), "-Fpn"]
             if not require_complete:
                 args += ["-d", "cwd"]
             done = subprocess.run(args,

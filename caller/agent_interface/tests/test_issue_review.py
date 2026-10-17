@@ -475,8 +475,9 @@ class TestProcessesAndErrors(TestCase):
                 script = ("import subprocess; "
                           f"p = subprocess.Popen(['sleep', '60'], cwd={str(scratch)!r}, start_new_session=True); "
                           "print(p.pid)")
-                done = issue_review.supervise([sys.executable, "-c", script], input="", cwd=checkout,
-                                              timeout=30, env=os.environ.copy(), provider=None, cleanup_root=root)
+                with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+                    done = issue_review.supervise([sys.executable, "-c", script], input="", cwd=checkout,
+                                                  timeout=30, env=os.environ.copy(), provider=None, cleanup_root=root)
                 pid = int(done.stdout.strip())
                 self.assertIsNone(other.poll())
                 deadline = time.time() + 10
