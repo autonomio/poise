@@ -421,8 +421,12 @@ test('shows the standard loader with no old values on initial load, day/account 
   try {
     await pending()
     await loaded('4')
+    const quotaTop = () => panel.locator('.github-quota-section').evaluate((section) => (section as HTMLElement).offsetTop)
+    const settledTop = await quotaTop()
     await panel.getByRole('button', { name: 'Previous day' }).click()
     await pending()
+    // GitHub holds its place while the day loads instead of jumping up.
+    expect(await quotaTop()).toBe(settledTop)
     await page.screenshot({ path: info.outputPath('analytics-loading.png') })
     await loaded('0')
     await page.locator('#analytics-filters').getByLabel('Account filter').selectOption('beta')

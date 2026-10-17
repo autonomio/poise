@@ -121,13 +121,19 @@ function renderReport(report: AnalyticsReport, baseline: AnalyticsReport): void 
 async function readAnalytics(): Promise<void> {
   const generation = ++readGeneration
   const groups = viewEl.querySelector<HTMLElement>('.analytics-groups')!
+  const quota = viewEl.querySelector<HTMLElement>('.github-quota-section')!
   const day = analyticsDay(dayOffset, dayAnchor)
   viewEl.querySelector('.analytics-date')!.textContent = day.label
   viewEl.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
+  // The emptied sections keep their space while the next day loads, so
+  // GitHub below does not jump up under the loader and back down after.
+  const quotaTop = quota.offsetTop
+  groups.style.minHeight = ''
   groups.replaceChildren()
   showStatus('')
   viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = false
   groups.setAttribute('aria-busy', 'true')
+  groups.style.minHeight = `${Math.max(0, quotaTop - quota.offsetTop)}px`
   const read = async (since: string, until: string): Promise<AnalyticsReport> => {
     const query = new URLSearchParams({ since, until })
     const res = await fetch(organizationUrl(`/api/analytics?${query}`))
@@ -152,6 +158,7 @@ async function readAnalytics(): Promise<void> {
     if (generation === readGeneration) {
       viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
       groups.removeAttribute('aria-busy')
+      groups.style.minHeight = ''
     }
   }
 }
