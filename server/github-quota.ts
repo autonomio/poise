@@ -11,7 +11,7 @@ const RESOURCES = { core: 'REST API', graphql: 'GraphQL', search: 'Search', code
 const PREFIX = 'github-quota:'
 interface Sample { at: number, used: number, reset: number }
 interface Snapshot { checkedAt: number, buckets: GithubQuotaBucket[], error: string | null }
-const cache = new Map<string, Snapshot>()
+const cache = new Map<string, { snapshot: Snapshot, expiresAt: number }>()
 const pending = new Map<string, Promise<Snapshot>>()
 
 /** Poisson tail P(requests before reset >= remaining), conditional on a
@@ -65,20 +65,22 @@ function configuredAccounts(): Array<Pick<GithubQuotaAccount, 'login' | 'roles'>
   const accounts = new Map<string, Pick<GithubQuotaAccount, 'login' | 'roles'>>()
   for (const [name, role] of [[me, 'user'], [agentAccount, 'automation']] as const) {
     if (!name) continue
-    const login = name.toLowerCase()
-    const account = accounts.get(login) ?? { login, roles: [] }
+    const key = name.toLowerCase()
+    const account = accounts.get(key) ?? { login: name, roles: [] }
     account.roles.push(role)
-    accounts.set(login, account)
+    accounts.set(key, account)
   }
   return [...accounts.values()]
 }
 
 async function readAccount(login: string): Promise<Snapshot> {
-  const cached = cache.get(login)
-  if (cached && Date.now() - cached.checkedAt < QUOTA_INTERVAL_MS
-    && cached.buckets.every((bucket) => Date.parse(bucket.resetAt) > Date.now() || bucket.limit === 0)) return cached
-  const active = pending.get(login)
+  const key = login.toLowerCase()
+  const cached = cache.get(key)
+  if (cached && Date.now() < cached.expiresAt
+    && cached.snapshot.buckets.every((bucket) => Date.parse(bucket.resetAt) > Date.now() || bucket.limit === 0)) return cached.snapshot
+  const active = pending.get(key)
   if (active) return active
+  const startedAt = Date.now()
   const read = (async (): Promise<Snapshot> => {
     let token: string
     try {
@@ -94,18 +96,18 @@ async function readAccount(login: string): Promise<Snapshot> {
         env: { ...GH_STORED_ACCOUNTS_ENV, GH_HOST: 'github.com', GH_TOKEN: token }, timeoutMs: 10_000, maxOutputBytes: 256 * 1024,
       })
       const now = Date.now()
-      return { checkedAt: now, buckets: quotaBuckets(JSON.parse(result.stdout), login, now), error: null }
+      return { checkedAt: now, buckets: quotaBuckets(JSON.parse(result.stdout), key, now), error: null }
     } catch {
       // Neither the credential command nor HTTP stderr may expose a token.
       return { checkedAt: Date.now(), buckets: [], error: `GitHub API quota could not be read for ${login}. It will be checked again shortly.` }
     }
   })()
-  pending.set(login, read)
+  pending.set(key, read)
   try {
     const snapshot = await read
-    cache.set(login, snapshot)
+    cache.set(key, { snapshot, expiresAt: startedAt + QUOTA_INTERVAL_MS })
     return snapshot
-  } finally { pending.delete(login) }
+  } finally { pending.delete(key) }
 }
 
 export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()): void {
@@ -115,7 +117,7 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
     for (const bucket of account.buckets) {
       if (bucket.limit === 0 || Date.parse(bucket.resetAt) <= now || !bucket.riskPercent) continue
       const exhausted = bucket.remaining === 0
-      const key = `${PREFIX}${account.login}:${bucket.resource}:${Date.parse(bucket.resetAt)}:${exhausted ? 'error' : 'warning'}`
+      const key = `${PREFIX}${account.login.toLowerCase()}:${bucket.resource}:${Date.parse(bucket.resetAt)}:${exhausted ? 'error' : 'warning'}`
       standing.add(key)
       const title = exhausted ? `GitHub ${bucket.label} quota exhausted for ${account.login}` : `GitHub ${bucket.label} quota may run out for ${account.login}`
       const body = `${account.roles.join(' + ')} account · ${bucket.used.toLocaleString('en-US')} of ${bucket.limit.toLocaleString('en-US')} used. ${exhausted ? 'Requests are blocked.' : `${bucket.riskPercent}% estimated risk before reset at the observed usage rate.`} Resets ${bucket.resetAt}.`
@@ -130,7 +132,7 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
   for (const alert of openAlerts({ now })) {
     if (!alert.dedupeKey.startsWith(PREFIX) || standing.has(alert.dedupeKey)) continue
     const [, login, resource, reset] = alert.dedupeKey.split(':')
-    const account = accounts.find((entry) => entry.login === login)
+    const account = accounts.find((entry) => entry.login.toLowerCase() === login)
     const bucket = account?.buckets.find((entry) => entry.resource === resource)
     const known = !account?.error && bucket && (bucket.riskPercent !== null || bucket.limit === 0 || Date.parse(bucket.resetAt) !== Number(reset))
     if (!account || known || Number(reset) <= now) resolveAlert(alert.dedupeKey, now)

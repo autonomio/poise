@@ -88,14 +88,20 @@ describe('identity-scoped reads', () => {
   it('pins each request to its stored credential and shares concurrent/cache reads', async () => {
     database.setMeta('me', 'Octocat')
     database.setMeta('agentAccount', 'octo-agent')
+    const credentials = new Map([['Octocat', 'token-user'], ['octo-agent', 'token-automation']])
     mocks.runFile.mockImplementation(async (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-      if (args[0] === 'auth') return { stdout: `token-${args.at(-1)}` }
-      expect(options.env.GH_TOKEN).toMatch(/^token-(octocat|octo-agent)$/)
+      if (args[0] === 'auth') {
+        const token = credentials.get(args.at(-1)!)
+        if (!token) throw new Error('Stored account not found with this casing')
+        return { stdout: token }
+      }
+      expect(options.env.GH_TOKEN).toMatch(/^token-(user|automation)$/)
       return { stdout: JSON.stringify(payload()) }
     })
     const [first, second] = await Promise.all([quota.readGithubQuota(), quota.readGithubQuota()])
     expect(first).toEqual(second)
-    expect(first.accounts.map((account) => [account.login, account.roles])).toEqual([['octocat', ['user']], ['octo-agent', ['automation']]])
+    expect(first.accounts.map((account) => [account.login, account.roles])).toEqual([['Octocat', ['user']], ['octo-agent', ['automation']]])
+    expect(first.accounts.every((account) => account.error === null)).toBe(true)
     expect(mocks.runFile).toHaveBeenCalledTimes(4)
     expect(mocks.runFile.mock.calls[0][2].env).toMatchObject({ GH_TOKEN: undefined, GITHUB_TOKEN: undefined, GH_ENTERPRISE_TOKEN: undefined })
     await quota.readGithubQuota()
@@ -104,6 +110,19 @@ describe('identity-scoped reads', () => {
     const shared = await quota.readGithubQuota()
     expect(shared.accounts).toHaveLength(1)
     expect(shared.accounts[0].roles).toEqual(['user', 'automation'])
+    expect(mocks.runFile).toHaveBeenCalledTimes(4)
+  })
+
+  it('expires the cache from request start so CLI latency does not skip the next tick', async () => {
+    database.setMeta('me', 'Octocat')
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      vi.setSystemTime(Date.now() + 100)
+      return { stdout: args[0] === 'auth' ? 'test-token' : JSON.stringify(payload()) }
+    })
+    await quota.readGithubQuota()
+    expect(Date.now()).toBe(T0 + 200)
+    vi.setSystemTime(T0 + 15_000)
+    await quota.readGithubQuota()
     expect(mocks.runFile).toHaveBeenCalledTimes(4)
   })
 
