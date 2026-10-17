@@ -115,9 +115,9 @@ function historyMarkup(label: string, all: HistorySeries[] | null): string {
   const series = all.find((s) => s.label === label)
   if (!series) return ''
   const chart = historyChart(series.values)
-  const latest = chart.points.at(-1)
+  const latest = chart.points[chart.points.length - 1]
   const at = (point: { x: number, y: number }) => `left: ${point.x}%; top: ${point.y}%`
-  const summary = `${series.label}, the past year by 7-day period: latest ${series.format(series.values.at(-1) ?? null)}, highest ${series.format(chart.max)}. Arrow keys move between periods.`
+  const summary = `${series.label}, the past year by 7-day period: latest ${series.format(series.values[series.values.length - 1] ?? null)}, highest ${series.format(chart.max)}. Arrow keys move between periods.`
   return `<dd class="analytics-history" data-series="${escapeHtml(series.label)}">
     <span class="analytics-history-max">${chart.max === null ? '' : `Max ${escapeHtml(series.format(chart.max))}`}</span>
     <div class="analytics-history-plot" tabindex="0" role="img" aria-label="${escapeHtml(summary)}">
