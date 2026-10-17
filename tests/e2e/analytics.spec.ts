@@ -307,6 +307,16 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
   expect(new Set(await lefts(view.getByRole('region', { name: 'Productivity' }), '.analytics-tile')).size).toBe(2)
   await expect(view.locator('.analytics-history-line')).toHaveCount(5)
   await page.screenshot({ path: info.outputPath(`analytics-narrow-${theme}.png`), fullPage: true })
+  // A readout wider than a right-column chart stays on the page.
+  const closed = view.locator('.analytics-history[data-series="Issues closed"] .analytics-history-plot')
+  const plot = (await closed.boundingBox())!
+  await page.mouse.move(plot.x + plot.width - 1, plot.y + plot.height / 2)
+  const tip = (await closed.locator('.analytics-history-tip').boundingBox())!
+  const main = (await view.locator('main').boundingBox())!
+  expect(tip.width).toBeGreaterThan(plot.width)
+  expect(tip.x).toBeGreaterThanOrEqual(main.x - 1)
+  expect(tip.x + tip.width).toBeLessThanOrEqual(main.x + main.width + 1)
+  await page.mouse.move(0, 0)
   // The year's table scrolls in its own box instead of widening the page.
   await view.getByText('The past year as a table').click()
   await expect(view.locator('.analytics-history-table tbody tr')).toHaveCount(52)

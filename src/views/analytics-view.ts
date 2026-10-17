@@ -210,9 +210,19 @@ function showCursor(label: string, index: number): void {
   const detail = document.createElement('span')
   detail.textContent = `${series.detail(data.periods[i])} · ${periodLabel(data.periods[i], effectiveTimezone())}`
   tip.replaceChildren(value, detail)
-  // Keep the readout inside the tile while the cursor nears either edge.
-  const width = plot.clientWidth
-  tip.style.left = `${Math.max(0, Math.min(width - tip.offsetWidth, x / 100 * width - tip.offsetWidth / 2))}px`
+  // Centre the readout on the cursor but keep it on the page: a chart in the
+  // right column of a narrow page is narrower than its readout. Only a
+  // readout wider than the page itself wraps.
+  const page = viewEl.querySelector('main')!.getBoundingClientRect()
+  const box = plot.getBoundingClientRect()
+  tip.style.whiteSpace = ''
+  tip.style.width = ''
+  if (tip.offsetWidth > page.width) {
+    tip.style.whiteSpace = 'normal'
+    tip.style.width = `${page.width}px`
+  }
+  const left = Math.max(page.left, Math.min(page.right - tip.offsetWidth, box.left + x / 100 * box.width - tip.offsetWidth / 2))
+  tip.style.left = `${left - box.left}px`
 }
 
 function hideCursor(label: string): void {
