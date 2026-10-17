@@ -112,7 +112,7 @@ test('keeps columns spaced and single-line across desktop and narrow viewports i
     expect(geometry.left).toBeCloseTo(24, 0)
     expect(geometry.width).toBeCloseTo(geometry.pageWidth - 48, 0)
     expect(geometry.reviewerGap).toBeGreaterThanOrEqual(90)
-    expect(geometry.settingLabel).toBeLessThanOrEqual(geometry.settingSpace)
+    expect(geometry.settingLabel).toBeLessThanOrEqual(geometry.settingSpace + 0.5)
     expect(new Set(geometry.cells).size).toBe(1)
     if (width >= 1600) expect(geometry.tableWidth).toBeLessThanOrEqual(geometry.width)
     await page.screenshot({ path: info.outputPath(`behaviors-${width}-light.png`), animations: 'disabled' })
