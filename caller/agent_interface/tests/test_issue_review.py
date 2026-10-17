@@ -464,6 +464,35 @@ class TestInterface(TestCase):
 
 
 class TestProcessesAndErrors(TestCase):
+    def test_owned_scratch_leftovers_stop_without_touching_an_unrelated_process(self):
+        with tempfile.TemporaryDirectory() as work, tempfile.TemporaryDirectory() as unrelated:
+            root = Path(work)
+            checkout, scratch = root / "repo", root / "tmp"
+            checkout.mkdir()
+            scratch.mkdir()
+            other = subprocess.Popen(["sleep", "60"], cwd=unrelated)
+            try:
+                script = ("import subprocess; "
+                          f"p = subprocess.Popen(['sleep', '60'], cwd={str(scratch)!r}, start_new_session=True); "
+                          "print(p.pid)")
+                done = issue_review.supervise([sys.executable, "-c", script], input="", cwd=checkout,
+                                              timeout=30, env=os.environ.copy(), provider=None, cleanup_root=root)
+                pid = int(done.stdout.strip())
+                self.assertIsNone(other.poll())
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+                else:
+                    os.kill(pid, 9)
+                    self.fail("a detached process in owned scratch outlived its review")
+            finally:
+                other.terminate()
+                other.wait(timeout=10)
+
     def test_stale_cleanup_removes_only_inactive_owned_run_directories(self):
         with tempfile.TemporaryDirectory() as work, patch.object(issue_review, "WORK_ROOT", Path(work)):
             stale = Path(work) / ("a" * 32)
