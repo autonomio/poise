@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BEHAVIORS, type BehaviorKey } from '../src/behaviors'
+import { BEHAVIOR_KEYS, type BehaviorKey } from '../src/behavior-types'
 import type { BehaviorMetrics, BehaviorMetricsReport } from '../src/behavior-metrics'
 import type { LogEntry } from './agent'
 import type { AnalyticsWindow } from './analytics'
@@ -64,7 +64,7 @@ export function readBehaviorMetrics(logs: LogEntry[], window: AnalyticsWindow, e
   const direct = (db.prepare('SELECT id, behavior, started_at AS startedAt, completed_at AS completedAt, status FROM behavior_runs')
     .all() as (Run & { id: string })[])
     .map((run) => run.status === 'running' && !activeDirectRuns.has(run.id) ? { ...run, status: 'interrupted' } : run)
-  const behaviors = Object.fromEntries(BEHAVIORS.map(({ key }) => {
+  const behaviors = Object.fromEntries(BEHAVIOR_KEYS.map((key) => {
     if (key in AGENT_BEHAVIORS) {
       if (error) return [key, null]
       const behavior = AGENT_BEHAVIORS[key as keyof typeof AGENT_BEHAVIORS]

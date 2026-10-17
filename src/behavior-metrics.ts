@@ -1,4 +1,4 @@
-import type { BehaviorKey } from './behaviors'
+import type { BehaviorKey } from './behavior-types'
 
 export interface BehaviorMetrics {
   totalRuns: number
