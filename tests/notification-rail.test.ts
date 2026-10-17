@@ -64,6 +64,19 @@ describe('an entry', () => {
   })
 })
 
+describe('where an entry comes from', () => {
+  it('names its source and scope once', () => {
+    const [runtime] = notificationItems([], {
+      status: 'degraded', runtimeError: 'The behavior scheduler is no longer responding.', agentLogsError: null,
+      datastore: { status: 'healthy', checkedAt: '', ageSeconds: 1, lastSuccessAt: '', error: null },
+      identity: { status: 'valid', actor: 'bit-mis', error: null }, failures: [], deadLetters: [],
+    }, T0)
+    expect(itemHtml(runtime, false, T0)).toContain('<span class="nr-card-meta">Behaviors</span>')
+    const held = item(notice('h', { kind: 'behavior_held', target: { swarm: 'call' }, subject: { behavior: 'review-new-prs', target: 'acme/api#9' } }))
+    expect(itemHtml(held, false, T0)).toContain('<span class="nr-card-meta">Behaviors · acme/api#9</span>')
+  })
+})
+
 describe('how old an entry reads', () => {
   it('goes from now through minutes and hours to days', () => {
     expect(ago(iso(0), T0 + 30_000)).toBe('now')

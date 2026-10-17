@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { settled } from './fixtures/motion'
 import type { Organization } from '../../src/config'
 import type { BehaviorDiagnostics } from '../../src/behaviors'
 
@@ -491,9 +492,11 @@ for (const theme of ['light', 'dark']) {
     await automatic.locator('.nr-card-head').click()
     await expect(automatic.locator('.nr-history')).toBeVisible()
     await expect(automatic.locator('.nr-card')).toHaveAttribute('data-tone', 'slate')
+    await settled(page)
     await page.screenshot({ path: test.info().outputPath(`behavior-activity-${theme}.png`) })
     await page.setViewportSize({ width: 390, height: 844 })
     await expect(rail).toBeVisible()
+    await settled(page)
     const width = await rail.locator('.nr-body').evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }))
     expect(width.scroll).toBeLessThanOrEqual(width.client)
     await page.screenshot({ path: test.info().outputPath(`behavior-activity-${theme}-narrow.png`) })

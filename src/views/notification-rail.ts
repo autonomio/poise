@@ -115,7 +115,8 @@ const icon = (name: ItemIcon) => `<svg width="12" height="12" viewBox="0 0 12 12
 /** One entry as the rail lays it out; `opened` says whether it is expanded. */
 export function itemHtml(item: NotificationItem, opened: boolean, now: number): string {
   const id = `nr-details-${slug(item.id)}`
-  const meta = [item.source, item.scope, item.meta].filter(Boolean).map((part) => escapeHtml(part!)).join(' · ')
+  // A Poise-wide condition's scope can repeat its source: "Behaviors · Behaviors".
+  const meta = [item.source, item.scope === item.source ? null : item.scope, item.meta].filter(Boolean).map((part) => escapeHtml(part!)).join(' · ')
   const when = item.when && Number.isFinite(Date.parse(item.when)) ? `<time datetime="${escapeHtml(item.when)}">${ago(item.when, now)}</time>` : ''
   const history = item.details.length
     ? `<ol class="nr-history">${item.details.map((entry) => `<li>${entry.at && Number.isFinite(Date.parse(entry.at)) ? `<time datetime="${escapeHtml(entry.at)}">${clock(entry.at)}</time>` : ''}<span>${escapeHtml(entry.detail)}</span></li>`).join('')}</ol>`
