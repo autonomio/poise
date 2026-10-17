@@ -421,9 +421,12 @@ test('shows a failed behavior and its diagnostic as one entry, and counts it on 
     { id: 'other', behavior: 'approve-prs', target: 'acme/web#3', error: 'Approval worker returned no verdict.', createdAt: iso(3), attemptCount: 1, diagnostic: { severity: 'error', code: 'invalid_agent_result' } },
   ] }) })
   await page.goto('/')
+  // Until Behaviors' diagnostics are read, the bell counts the notice alone;
+  // opening the rail reads them.
+  await expect(bell(page)).toHaveAccessibleName('Notifications, 1 open')
+  await openRail(page)
   await expect(bell(page)).toHaveAccessibleName('Notifications, 2 open')
   await expect(bell(page).locator('.nr-badge')).toHaveAttribute('data-tone', 'red')
-  await openRail(page)
   await expect(rail(page).locator('.nr-card')).toHaveCount(2)
   const held = card(page, HELD.id)
   await expect(held.locator('.nr-card-body')).toHaveText('The review outcome needs verification before retry.')
@@ -447,12 +450,26 @@ test('shows a failed behavior and its diagnostic as one entry, and counts it on 
   await expect(rail(page).locator('.nr-card')).toHaveCount(2)
 })
 
+test('counts Behaviors’ diagnostics on the bell once the page has settled, with one read and the rail closed', async ({ page }) => {
+  await workspace(page, [WAITING], { diagnostics: diagnostics({ agentLogsError: 'agent-interface --logs exited with status 1' }) })
+  let reads = 0
+  page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/behaviors') reads += 1 })
+  await page.goto('/')
+  await expect(bell(page)).toHaveAccessibleName('Notifications, 1 open')
+  expect(reads).toBe(0)
+  await expect(bell(page)).toHaveAccessibleName('Notifications, 2 open', { timeout: 20_000 })
+  expect(reads).toBe(1)
+  await expect(rail(page)).toBeHidden()
+})
+
 test('turns notices off and on from Settings, keeping Behaviors’ activity in the rail', async ({ page }) => {
   const state = await workspace(page, [WAITING], { diagnostics: diagnostics({ agentLogsError: 'agent-interface --logs exited with status 1' }) })
   await page.goto('/')
+  await openRail(page)
   await expect(bell(page)).toHaveAccessibleName('Notifications, 2 open')
+  await rail(page).getByRole('button', { name: 'Close notifications' }).click()
 
-  await page.getByRole('button', { name: 'Menu' }).click()
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.getByRole('button', { name: 'General', exact: true }).click()
   const picker = page.locator('#settings-panel').getByRole('group', { name: 'Notifications', exact: true })
   await expect(picker.getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true')
