@@ -3,7 +3,8 @@ import { releaseLine } from './release'
 import type { SettingsSection } from './settings'
 import { cancelMotion, motionValue, reveal, spring } from './motion'
 
-type ViewName = 'current' | 'swarm' | 'chat' | 'main' | 'behaviors' | 'snippets' | 'editor'
+// Analytics is a view too, reached from the burger menu rather than the nav.
+type ViewName = 'current' | 'swarm' | 'chat' | 'main' | 'behaviors' | 'snippets' | 'editor' | 'analytics'
 
 const VIEW_KEY = 'poise-view'
 
@@ -40,7 +41,7 @@ function loadView(): ViewName {
       localStorage.setItem(VIEW_KEY, 'current')
       return 'current'
     }
-    if (v === 'current' || v === 'swarm' || v === 'chat' || v === 'main' || v === 'behaviors' || v === 'snippets' || v === 'editor') return v
+    if (v === 'current' || v === 'swarm' || v === 'chat' || v === 'main' || v === 'behaviors' || v === 'snippets' || v === 'editor' || v === 'analytics') return v
   } catch { /* ignore */ }
   return 'current'
 }
@@ -50,7 +51,6 @@ export interface MenuCallbacks {
   onSelectView: (view: ViewName) => void
   onOpenTypography: () => void
   onOpenSettings: (section: SettingsSection) => void
-  onOpenAnalytics: () => void
   /** Close whatever panel is open, through its own close path. The burger
    *  used to strip the `open` class off the panels directly, which skipped
    *  the close functions and left them focusable and announced while
@@ -58,7 +58,7 @@ export interface MenuCallbacks {
   onClosePanels: () => void
 }
 
-const PANEL_IDS = ['typo-panel', 'settings-panel', 'analytics-panel']
+const PANEL_IDS = ['typo-panel', 'settings-panel']
 const ICON_BACK = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m8.5 3-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
 export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) => void; currentView: () => ViewName } {
@@ -260,10 +260,23 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     queuePosition()
   }, { passive: true })
 
+  const analyticsItem = menu.querySelector<HTMLButtonElement>('[data-action="analytics"]')!
   function setActiveItem(): void {
     nav.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === current))
+    // No nav item lights up on Analytics, so its menu entry says where you are.
+    analyticsItem.classList.toggle('active', current === 'analytics')
+    if (current === 'analytics') analyticsItem.setAttribute('aria-current', 'page')
+    else analyticsItem.removeAttribute('aria-current')
   }
   setActiveItem()
+
+  function select(view: ViewName): void {
+    if (view === current) return
+    current = view
+    saveView(current)
+    setActiveItem()
+    callbacks.onSelectView(current)
+  }
 
   const releaseEl = menu.querySelector<HTMLElement>('.menu-release')!
   const releaseDivider = menu.querySelector<HTMLElement>('.menu-release-divider')!
@@ -307,11 +320,7 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
   })
   nav.addEventListener('click', (event) => {
     const next = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-view]')?.dataset.view as ViewName | undefined
-    if (!next || next === current) return
-    current = next
-    saveView(current)
-    setActiveItem()
-    callbacks.onSelectView(current)
+    if (next) select(next)
   })
   menu.addEventListener('click', (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]')
@@ -321,7 +330,13 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     callbacks.onClosePanels()
     if (button.dataset.action === 'settings') callbacks.onOpenSettings(button.dataset.settings as SettingsSection)
     else if (button.dataset.action === 'typography') callbacks.onOpenTypography()
-    else if (button.dataset.action === 'analytics') callbacks.onOpenAnalytics()
+    else if (button.dataset.action === 'analytics') {
+      select('analytics')
+      // Closing the menu returns focus to the burger, which first has to move
+      // into the new view's header: inside the view just hidden it cannot
+      // take focus.
+      mountGlobalControls()
+    }
     syncSurface()
     openPanel()?.querySelector<HTMLElement>('.tp-title')?.focus({ preventScroll: true })
   })
