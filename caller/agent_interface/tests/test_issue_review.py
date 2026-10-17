@@ -575,7 +575,7 @@ class TestProcessesAndErrors(TestCase):
             own.mkdir()
             (own / "cwd").symlink_to(Path(work), target_is_directory=True)
             (own / "fd").mkdir()
-            (own / "environ").write_bytes(f"TMPDIR={root}\0".encode())
+            (own / "environ").write_bytes(f"TMPDIR={root.resolve()}\0".encode())
             foreign = Mock()
             foreign.name = "1"
             foreign.stat.return_value.st_uid = os.getuid() + 1
