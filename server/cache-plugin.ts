@@ -700,7 +700,7 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
         const behaviorMatch = url.match(/^\/api\/behaviors\/([a-z0-9-]+)(?:\?|$)/)
         if (behaviorMatch && req.method === 'POST') {
           const key = behaviorMatch[1] as BehaviorKey
-          if (!(BEHAVIOR_KEYS as string[]).includes(key)) {
+          if (!BEHAVIOR_KEYS.includes(key)) {
             return json(res, 400, { error: 'unknown behavior: ' + key })
           }
           try {
