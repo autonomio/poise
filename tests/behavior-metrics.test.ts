@@ -54,4 +54,11 @@ describe('behavior run metrics', () => {
     expect(report.behaviors['review-new-prs']).toBeNull()
     expect(report.behaviors['merge-prs']).toMatchObject({ totalRuns: 2, successRate: 50 })
   })
+
+  it('keeps interrupted direct attempts unknown instead of extending their duration forever', () => {
+    db.prepare('INSERT INTO behavior_runs(id, behavior, started_at) VALUES (?, ?, ?)')
+      .run('previous-process', 'merge-prs', '2026-10-17T10:00:00Z')
+    expect(readBehaviorMetrics([], window, null).behaviors['merge-prs'])
+      .toEqual({ totalRuns: 1, durationMinutes: null, successRate: null })
+  })
 })
