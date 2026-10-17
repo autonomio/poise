@@ -91,6 +91,14 @@ db.exec(`
     PRIMARY KEY (key, target)
   );
 
+  CREATE TABLE IF NOT EXISTS behavior_runs (
+    id TEXT PRIMARY KEY,
+    behavior TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running'
+  );
+
   CREATE TABLE IF NOT EXISTS behavior_dead_letters (
     id TEXT PRIMARY KEY,
     behavior TEXT NOT NULL,
