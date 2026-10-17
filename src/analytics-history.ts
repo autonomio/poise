@@ -62,7 +62,7 @@ export function historySeries(history: AnalyticsHistory): HistorySeries[] {
   ]
 }
 
-/** "26 Sep – 2 Oct 2026": the period's first and last calendar day in the timezone. */
+/** "2 Oct – 8 Oct 2026": the period's first and last calendar day in the timezone. */
 export function periodLabel(period: Pick<AnalyticsPeriod, 'since' | 'until'>, timeZone: string): string {
   const day = (at: number, year: boolean) => new Intl.DateTimeFormat('en-GB', { timeZone, day: 'numeric', month: 'short', ...(year ? { year: 'numeric' } : {}) }).format(at)
   const first = Date.parse(period.since)

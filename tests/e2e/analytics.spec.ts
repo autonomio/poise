@@ -232,7 +232,7 @@ test('draws each headline figure\'s past year by 7-day period, ending at the sel
   await expect(tip.locator('span')).toHaveText('8 merged · 2 Oct – 8 Oct 2026')
   await page.keyboard.press('ArrowLeft')
   await expect(tip.locator('strong')).toHaveText('1.0/day')
-  await expect(tip.locator('span')).toHaveText('7 merged · 25 Sep – 1 Oct 2026')
+  await expect(tip.locator('span')).toHaveText(/^7 merged · 25 Sept? – 1 Oct 2026$/)
   await page.keyboard.press('Home')
   await expect(tip.locator('span')).toHaveText('0 merged · 10 Oct – 16 Oct 2025')
 

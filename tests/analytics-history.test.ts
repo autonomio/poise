@@ -36,7 +36,8 @@ describe('the periods', () => {
   })
 
   it('names a period by its first and last day, with the year once unless it crosses one', () => {
-    expect(periodLabel({ since: '2026-09-26T00:00:00.000Z', until: '2026-10-03T00:00:00.000Z' }, 'UTC')).toBe('26 Sep – 2 Oct 2026')
+    // ICU data names September "Sep" or "Sept" in en-GB, depending on its version.
+    expect(periodLabel({ since: '2026-09-26T00:00:00.000Z', until: '2026-10-03T00:00:00.000Z' }, 'UTC')).toMatch(/^26 Sept? – 2 Oct 2026$/)
     expect(periodLabel({ since: '2025-12-29T00:00:00.000Z', until: '2026-01-05T00:00:00.000Z' }, 'UTC')).toBe('29 Dec 2025 – 4 Jan 2026')
     expect(periodLabel({ since: '2026-10-18T21:00:00.000Z', until: '2026-10-25T22:00:00.000Z' }, 'Europe/Helsinki')).toBe('19 Oct – 25 Oct 2026')
   })
