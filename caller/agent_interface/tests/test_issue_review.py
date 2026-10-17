@@ -127,7 +127,7 @@ class TestIssueReviewRun(IssueReviewCase):
                         env=env, text=True,
                     ).strip()
                     scratch = Path(directory)
-                    self.assertTrue(scratch.is_relative_to(issue_review.WORK_ROOT))
+                    self.assertTrue(scratch.resolve().is_relative_to(issue_review.WORK_ROOT.resolve()))
                     (scratch / "virtualenv-artifact").write_bytes(b"dependency files")
                     self.assertIn(f"$TMPDIR ({scratch.parent})", kwargs["input"])
                     made.append(scratch)
