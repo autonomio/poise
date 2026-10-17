@@ -11,11 +11,11 @@
 [data-tone="teal"]  { --nr-tone: var(--a2); }
 [data-tone="slate"] { --nr-tone: var(--a8); }
 
-/* Docked, the page ends where the rail begins. Full-width views size to
+/* Docked, the page ends where the rail begins: full-width views size to
    --page-w instead of the window (style.css). */
-body { --page-w: calc(100vw - var(--rail-w, 0px)); }
 body.notifications-docked:not(.editor-writer-mode) {
   --rail-w: 440px;
+  --page-w: calc(100vw - var(--scrollbar-w, 0px) - var(--rail-w));
   padding-right: var(--rail-w);
 }
 body.notifications-docked:not(.editor-writer-mode) #behavior-memory-panel { right: var(--rail-w); }

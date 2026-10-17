@@ -207,6 +207,9 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
   }
 
   function applyDock(): void {
+    // The page a docked rail leaves is the window less the reserved scrollbar
+    // gutter, which 100vw counts (notification-rail.css).
+    document.documentElement.style.setProperty('--scrollbar-w', `${Math.max(0, window.innerWidth - document.documentElement.clientWidth)}px`)
     const docked = dockedNow()
     document.body.classList.toggle('notifications-docked', docked)
     rail.classList.toggle('is-docked', docked)
@@ -232,7 +235,7 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     const folds = group.key === 'auto' && filter === 'all' && scoped().some((item) => item.group !== 'auto')
     if (!folds) return `<section class="nr-group" data-group="${group.key}" aria-label="${group.label}"><h3 class="nr-group-label">${label}</h3>${cards}</section>`
     return `<section class="nr-group" data-group="${group.key}" aria-label="${group.label}">`
-      + `<h3 class="nr-group-label"><button type="button" class="nr-fold" data-action="fold" aria-expanded="${automaticOpen}" aria-controls="nr-automatic">${label}<span class="nr-chev">${ICON_DOWN}</span></button></h3>`
+      + `<h3 class="nr-group-label"><button type="button" class="nr-fold" data-action="fold" aria-expanded="${automaticOpen}" aria-controls="nr-automatic" aria-label="${group.label}, ${list.length}">${label}<span class="nr-chev">${ICON_DOWN}</span></button></h3>`
       + `<div class="nr-fold-items" id="nr-automatic"${automaticOpen ? '' : ' hidden'}>${cards}</div></section>`
   }
 
@@ -243,7 +246,7 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     count.textContent = counts.open ? `${counts.open} open` : ''
     const options: [Filter, string, number][] = [['all', 'All', list.length], ...GROUPS.map((group): [Filter, string, number] => [group.key, group.short, counts[group.key]])]
     patchContent(filters, `<div class="range-picker nr-picker" role="group" aria-label="Show">${options.map(([key, label, n]) =>
-      `<button type="button" data-action="filter" data-filter="${key}" class="${filter === key ? 'active' : ''}${n ? '' : ' is-empty'}" aria-pressed="${filter === key}">${label}<span class="nr-picker-count">${n}</span></button>`).join('')}</div>`
+      `<button type="button" data-action="filter" data-filter="${key}" class="${filter === key ? 'active' : ''}${n ? '' : ' is-empty'}" aria-pressed="${filter === key}" aria-label="${label}, ${n}">${label}<span class="nr-picker-count">${n}</span></button>`).join('')}</div>`
       + (behavior ? `<span class="nr-tag">${escapeHtml(BEHAVIORS.find((entry) => entry.key === behavior)?.label ?? behavior)}<button type="button" data-action="all-behaviors" aria-label="Show every notification">${ICON_CLOSE}</button></span>` : ''))
     const shown = filter === 'all' ? list : list.filter((item) => item.group === filter)
     const sections = GROUPS.map((group) => ({ group, entries: shown.filter((item) => item.group === group.key) }))
@@ -328,6 +331,8 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     if (!notice) return
     if (toast) dropToast(toast)
     if (action === 'open' && notice.target) {
+      // Floating, the rail covers part of where the person is going.
+      if (opened && !dockedNow()) setOpen(false)
       actions.open(notice.target)
       void feed.dismiss(notice.id)
     }
