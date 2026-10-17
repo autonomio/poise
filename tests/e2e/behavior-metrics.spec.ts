@@ -99,11 +99,12 @@ test('keeps columns spaced and single-line across desktop and narrow viewports i
       const reviewers = table.querySelector<HTMLElement>('.col-reviewers')!.getBoundingClientRect()
       const memory = table.querySelector<HTMLElement>('.col-memory')!.getBoundingClientRect()
       return { left: main.getBoundingClientRect().left, width: main.clientWidth, tableWidth: table.clientWidth,
-        reviewerGap: memory.left - reviewers.left, pageWidth: document.documentElement.clientWidth,
+        reviewerGap: memory.left - reviewers.left,
+        pageWidth: document.querySelector('.view:not([hidden]) .view-header')!.getBoundingClientRect().width,
         cells: [...table.querySelectorAll('tbody tr:first-child td')].map((cell) => cell.getBoundingClientRect().height) }
     })
     expect(geometry.left).toBeCloseTo(24, 0)
-    expect(geometry.width).toBeGreaterThan(geometry.pageWidth - 60)
+    expect(geometry.width).toBeCloseTo(geometry.pageWidth - 48, 0)
     expect(geometry.reviewerGap).toBeGreaterThanOrEqual(90)
     expect(new Set(geometry.cells).size).toBe(1)
     if (width >= 1600) expect(geometry.tableWidth).toBeLessThanOrEqual(geometry.width)
