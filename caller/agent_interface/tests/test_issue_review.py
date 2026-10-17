@@ -66,7 +66,7 @@ def agent_writes(review: dict | str | None, code: int = 0, stdout: str = ""):
     """A provider that does its work and leaves its review next to the checkout."""
     runs = []
 
-    def supervise(args, *, input, cwd, timeout, env, provider):
+    def supervise(args, *, input, cwd, timeout, env, provider, cleanup_root=None):
         runs.append({"args": args, "input": input, "cwd": cwd, "provider": provider})
         if review is not None:
             (Path(cwd).parent / "review.json").write_text(review if isinstance(review, str) else json.dumps(review))

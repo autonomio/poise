@@ -183,7 +183,7 @@ def prompt(target: str, repo: str, checkout: dict, data: dict, output: Path, act
         f"({checkout['branch']} at {checkout['head_sha']}): read anything, build, run the tests, "
         "use git history and GitHub as you see fit.\n\n"
         "Keep all throwaway files, dependency environments, downloads and test artifacts in "
-        f"$TMPDIR ({output.parent / 'tmp'}), not in shared /tmp. Caller removes this run's "
+        f"$TMPDIR ({output.parent.resolve() / 'tmp'}), not in shared /tmp. Caller removes this run's "
         "temporary directory after the review; repository access and tool permissions are unchanged.\n\n"
         f"Do not post to GitHub yourself. When you are done, write your comments to {output} as JSON "
         '{"comments": [{"issue": "owner/repo#number", "body": "markdown"}]} — at most one comment per issue, '
@@ -245,7 +245,8 @@ def command(model: Model, text: str, checkout: Path, work: Path, seconds: float)
     raise AgentPreflightError(f"{model.provider} cannot run an issue review")
 
 
-def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: dict, provider: str) -> subprocess.CompletedProcess:
+def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: dict, provider: str,
+              cleanup_root: Path | None = None) -> subprocess.CompletedProcess:
     """Run the provider in its own process group, record its activity, and
     leave nothing of that group running afterwards."""
     # Wall-clock too: a monotonic clock stands still while the machine sleeps,
@@ -274,7 +275,7 @@ def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: di
                         os.killpg(process.pid, signal.SIGKILL)
                     except (ProcessLookupError, PermissionError):
                         pass
-                    stop_leftovers(cwd.parent)
+                    stop_leftovers(cwd if cleanup_root is None else cleanup_root)
                     stdout.seek(0)
                     stderr.seek(0)
                     return subprocess.CompletedProcess(args, process.returncode, stdout.read(), stderr.read())
@@ -289,7 +290,7 @@ def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: di
             try:
                 if not completed:
                     _stop_process_group(process)
-                    stop_leftovers(cwd.parent)
+                    stop_leftovers(cwd if cleanup_root is None else cleanup_root)
             finally:
                 if previous is not None:
                     signal.signal(signal.SIGTERM, previous)
@@ -317,7 +318,12 @@ def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None
                     # A process may have exited between enumeration and read.
                     # An existing unreadable process cannot prove the run idle.
                     if require_complete and entry.exists():
-                        return None
+                        try:
+                            state = (entry / "stat").read_text().rpartition(") ")[2].split()[0]
+                        except (OSError, IndexError):
+                            return None
+                        if state != "Z":
+                            return None
     else:
         if require_complete:
             # cwd alone cannot rule out live scratch users on this platform.
@@ -415,7 +421,7 @@ def review(model: Model, repo: str, number: int, data: dict, actor: str, note: s
     seconds = review_budget.timeout(TIMEOUT_SECONDS, reserve=POST_RESERVE_SECONDS)
     args, stdin, env = command(model, text, checkout, work, seconds)
     try:
-        done = supervise(args, input=stdin, cwd=checkout, timeout=seconds, env=env, provider=model.provider)
+        done = supervise(args, input=stdin, cwd=checkout, timeout=seconds, env=env, provider=model.provider, cleanup_root=work)
     except subprocess.TimeoutExpired as error:
         raise review_budget.ReviewLimitError("Issue review reached its time limit; needs attention", "review_budget_exhausted") from error
     if done.returncode:
