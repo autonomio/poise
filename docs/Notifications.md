@@ -124,9 +124,11 @@ and arrival cards are hidden in the Editor's writer mode.
 Reading Behaviors' diagnostics runs `agent-interface --logs` on the server, so
 the page reads them only:
 
-- when it loads;
-- while the rail is open, on each refresh tick;
+- once, 15 seconds after it loads, unless something below has read them first;
+- when the rail opens, and while it is open, on each refresh tick;
 - whenever Behaviors refreshes on screen.
+
+Until that first read, the bell counts only notices.
 
 ## Turning them off
 

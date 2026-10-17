@@ -1,5 +1,5 @@
-import { cancelMotion, disclosure, retire, scrollToActor, spring, watchPanel } from '../motion'
-import { patchContent, patchInformation } from '../dom-patch'
+import { cancelMotion, disclosure, layout, retire, scrollToActor, spring, watchPanel } from '../motion'
+import { patchContent } from '../dom-patch'
 import { BEHAVIORS, getBehaviorDiagnostics, refreshState } from '../behaviors'
 import { effectiveTimezone } from '../config'
 import {
@@ -37,6 +37,9 @@ export const DOCK_MIN_WIDTH = 1400
 const TOAST_MS = 6000
 const TOAST_HOVER_MS = 2500
 const TOAST_LIMIT = 3
+/** Behaviors' diagnostics cost an agent-log read on the server: the page reads
+ *  them once it has settled, unless the rail or Behaviors reads them first. */
+const FIRST_READ_DELAY_MS = 15_000
 const PREFERENCE_KEY = 'poise-notification-rail'
 
 type Filter = 'all' | ItemGroup
@@ -48,7 +51,7 @@ export interface RailActions {
 }
 
 export interface NotificationRail {
-  /** Reads Behaviors' diagnostics once, so the bell counts them from the start. */
+  /** Reads Behaviors' diagnostics once the page has settled, so the bell counts them. */
   start(): void
 }
 
@@ -133,6 +136,9 @@ export function itemHtml(item: NotificationItem, opened: boolean, now: number): 
     + '</article>'
 }
 
+// A card on its way out: tucking into the bell, or put away.
+const leaving = (toast: HTMLElement) => toast.dataset.leaving === 'true'
+
 function readPreference(): { docked: boolean, open: boolean } {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(PREFERENCE_KEY) ?? 'null')
@@ -208,8 +214,11 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
 
   function applyDock(): void {
     // The page a docked rail leaves is the window less the reserved scrollbar
-    // gutter, which 100vw counts (notification-rail.css).
-    document.documentElement.style.setProperty('--scrollbar-w', `${Math.max(0, window.innerWidth - document.documentElement.clientWidth)}px`)
+    // gutter, which 100vw counts (notification-rail.css). The fixed control bar
+    // spans exactly what fixed layers get; clientWidth can miss the gutter.
+    const bar = document.querySelector<HTMLElement>('.view:not([hidden]) .view-header')
+    const gutter = bar ? window.innerWidth - bar.getBoundingClientRect().width : window.innerWidth - document.documentElement.clientWidth
+    document.documentElement.style.setProperty('--scrollbar-w', `${Math.max(0, Math.round(gutter))}px`)
     const docked = dockedNow()
     document.body.classList.toggle('notifications-docked', docked)
     rail.classList.toggle('is-docked', docked)
@@ -233,8 +242,8 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     const cards = list.map((item) => itemHtml(item, expanded.has(item.id), now)).join('')
     // Automatic recovery stays folded behind its count while anything else is listed.
     const folds = group.key === 'auto' && filter === 'all' && scoped().some((item) => item.group !== 'auto')
-    if (!folds) return `<section class="nr-group" data-group="${group.key}" aria-label="${group.label}"><h3 class="nr-group-label">${label}</h3>${cards}</section>`
-    return `<section class="nr-group" data-group="${group.key}" aria-label="${group.label}">`
+    if (!folds) return `<section class="nr-group" data-key="group-${group.key}" data-group="${group.key}" aria-label="${group.label}"><h3 class="nr-group-label">${label}</h3>${cards}</section>`
+    return `<section class="nr-group" data-key="group-${group.key}" data-group="${group.key}" aria-label="${group.label}">`
       + `<h3 class="nr-group-label"><button type="button" class="nr-fold" data-action="fold" aria-expanded="${automaticOpen}" aria-controls="nr-automatic" aria-label="${group.label}, ${list.length}">${label}<span class="nr-chev">${ICON_DOWN}</span></button></h3>`
       + `<div class="nr-fold-items" id="nr-automatic"${automaticOpen ? '' : ' hidden'}>${cards}</div></section>`
   }
@@ -246,13 +255,19 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     count.textContent = counts.open ? `${counts.open} open` : ''
     const options: [Filter, string, number][] = [['all', 'All', list.length], ...GROUPS.map((group): [Filter, string, number] => [group.key, group.short, counts[group.key]])]
     patchContent(filters, `<div class="range-picker nr-picker" role="group" aria-label="Show">${options.map(([key, label, n]) =>
-      `<button type="button" data-action="filter" data-filter="${key}" class="${filter === key ? 'active' : ''}${n ? '' : ' is-empty'}" aria-pressed="${filter === key}" aria-label="${label}, ${n}">${label}<span class="nr-picker-count">${n}</span></button>`).join('')}</div>`
+      `<button type="button" data-key="filter-${key}" data-action="filter" data-filter="${key}" class="${filter === key ? 'active' : ''}${n ? '' : ' is-empty'}" aria-pressed="${filter === key}" aria-label="${label}, ${n}">${label}<span class="nr-picker-count">${n}</span></button>`).join('')}</div>`
       + (behavior ? `<span class="nr-tag">${escapeHtml(BEHAVIORS.find((entry) => entry.key === behavior)?.label ?? behavior)}<button type="button" data-action="all-behaviors" aria-label="Show every notification">${ICON_CLOSE}</button></span>` : ''))
     const shown = filter === 'all' ? list : list.filter((item) => item.group === filter)
     const sections = GROUPS.map((group) => ({ group, entries: shown.filter((item) => item.group === group.key) }))
       .filter(({ entries }) => entries.length)
       .map(({ group, entries }) => groupHtml(group, entries, now)).join('')
-    patchInformation(body, sections || emptyHtml())
+    const staying = new Set(shown.map((item) => item.id))
+    // An entry leaves from where it was shown, though it sits inside its group,
+    // and an entry that moves to another group arrives there afresh.
+    layout(body, () => {
+      for (const card of [...body.querySelectorAll<HTMLElement>('.nr-card')]) if (!staying.has(card.dataset.id!)) retire(card)
+      patchContent(body, sections || emptyHtml(), retire)
+    }, '.nr-card, .nr-group-label, .nr-empty')
   }
 
   function emptyHtml(): string {
@@ -267,7 +282,7 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     renderBell()
     if (opened) renderRail()
     for (const toast of [...toasts.children] as HTMLElement[]) {
-      if (!toast.dataset.leaving && !items.some((item) => item.id === toast.dataset.id)) dropToast(toast)
+      if (!leaving(toast) && !items.some((item) => item.id === toast.dataset.id)) dropToast(toast)
     }
     for (const listener of itemListeners) listener()
   }
@@ -296,6 +311,9 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
   function setOpen(next: boolean, focus: 'rail' | 'bell' | null = null): void {
     if (opened !== next) {
       opened = next
+      // watchPanel sets this too, but only once its observer runs: the rail
+      // must take focus now.
+      rail.inert = !next
       rail.classList.toggle('open', next)
       if (next) {
         renderRail()
@@ -354,7 +372,7 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     spring(toast, 'entry', { from: { opacity: 0, x: 28 }, to: { opacity: 1, x: 0 },
       write: ({ opacity, x }) => { toast.style.opacity = String(Math.max(0, Math.min(1, opacity))); toast.style.translate = `${x}px 0` },
       complete: () => { toast.style.opacity = ''; toast.style.translate = ''; cancelMotion(toast, 'entry') } })
-    const live = [...toasts.children].filter((child) => !(child as HTMLElement).dataset.leaving) as HTMLElement[]
+    const live = ([...toasts.children] as HTMLElement[]).filter((child) => !leaving(child))
     for (const old of live.slice(TOAST_LIMIT)) tuck(old)
     const wait = (ms: number) => { window.clearTimeout(toastTimers.get(toast)); toastTimers.set(toast, window.setTimeout(() => tuck(toast), ms)) }
     const hold = () => window.clearTimeout(toastTimers.get(toast))
@@ -367,8 +385,8 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
 
   // Into the bell, which says once more that something is waiting.
   function tuck(toast: HTMLElement): void {
-    if (toast.dataset.leaving) return
-    toast.dataset.leaving = ''
+    if (leaving(toast)) return
+    toast.dataset.leaving = 'true'
     toast.inert = true
     window.clearTimeout(toastTimers.get(toast))
     toastTimers.delete(toast)
@@ -393,8 +411,8 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
 
   // Put away, or no longer standing: it leaves where it is.
   function dropToast(toast: HTMLElement): void {
-    if (toast.dataset.leaving) return
-    toast.dataset.leaving = ''
+    if (leaving(toast)) return
+    toast.dataset.leaving = 'true'
     window.clearTimeout(toastTimers.get(toast))
     toastTimers.delete(toast)
     const hadFocus = toast.contains(document.activeElement)
@@ -440,7 +458,7 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
   toasts.addEventListener('click', (event) => {
     const button = (event.target as Element).closest<HTMLButtonElement>('button[data-action]')
     const toast = button?.closest<HTMLElement>('.nr-toast')
-    if (!button || !toast || toast.dataset.leaving) return
+    if (!button || !toast || leaving(toast)) return
     const id = toast.dataset.id!
     if (button.dataset.action === 'show') {
       dropToast(toast)
@@ -493,6 +511,10 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
   if (preference.open && preference.docked && window.innerWidth >= DOCK_MIN_WIDTH) setOpen(true)
   else applyDock()
 
-  return { start: () => { void refreshDiagnostics() } }
+  return {
+    start: () => {
+      window.setTimeout(() => { if (!getBehaviorDiagnostics()) void refreshDiagnostics() }, FIRST_READ_DELAY_MS)
+    },
+  }
 }
 
