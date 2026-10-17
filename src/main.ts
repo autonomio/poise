@@ -146,6 +146,8 @@ const menu = initMenu({
   onSelectView: (v) => showView(v),
   onOpenTypography: () => toggleTypographyPanel(),
   onOpenSettings: (section) => openSettingsAt(section),
+  // Leaving first makes even a repeat choice arrive afresh, on Today.
+  onOpenAnalytics: () => { stopAnalyticsRefresh(); menu.switchTo('analytics') },
   onClosePanels: () => { closeTypographyPanel(); closeSettingsPanel() },
 })
 

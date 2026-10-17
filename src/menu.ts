@@ -51,6 +51,8 @@ export interface MenuCallbacks {
   onSelectView: (view: ViewName) => void
   onOpenTypography: () => void
   onOpenSettings: (section: SettingsSection) => void
+  /** Show the Analytics view, opening on Today even while it already shows. */
+  onOpenAnalytics: () => void
   /** Close whatever panel is open, through its own close path. The burger
    *  used to strip the `open` class off the panels directly, which skipped
    *  the close functions and left them focusable and announced while
@@ -270,14 +272,6 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
   }
   setActiveItem()
 
-  function select(view: ViewName): void {
-    if (view === current) return
-    current = view
-    saveView(current)
-    setActiveItem()
-    callbacks.onSelectView(current)
-  }
-
   const releaseEl = menu.querySelector<HTMLElement>('.menu-release')!
   const releaseDivider = menu.querySelector<HTMLElement>('.menu-release-divider')!
   async function showRelease(): Promise<void> {
@@ -320,7 +314,11 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
   })
   nav.addEventListener('click', (event) => {
     const next = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-view]')?.dataset.view as ViewName | undefined
-    if (next) select(next)
+    if (!next || next === current) return
+    current = next
+    saveView(current)
+    setActiveItem()
+    callbacks.onSelectView(current)
   })
   menu.addEventListener('click', (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]')
@@ -331,7 +329,7 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     if (button.dataset.action === 'settings') callbacks.onOpenSettings(button.dataset.settings as SettingsSection)
     else if (button.dataset.action === 'typography') callbacks.onOpenTypography()
     else if (button.dataset.action === 'analytics') {
-      select('analytics')
+      callbacks.onOpenAnalytics()
       // Closing the menu returns focus to the burger, which first has to move
       // into the new view's header: inside the view just hidden it cannot
       // take focus.

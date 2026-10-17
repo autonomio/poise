@@ -132,6 +132,24 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(page.locator('#menu-popover [data-action="analytics"]')).not.toHaveAttribute('aria-current', 'page')
 })
 
+test('choosing Analytics again from the menu returns to Today', async ({ page }) => {
+  const state = await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const view = page.locator('#view-analytics')
+  await view.getByRole('button', { name: 'Previous day' }).click()
+  await expect(view.locator('.analytics-date')).toHaveText('Yesterday')
+  await expect(value(page, 'Pull requests merged')).toHaveText('0')
+  await openAnalytics(page)
+  await expect(view.locator('.analytics-date')).toHaveText('Today')
+  await expect(view.getByRole('button', { name: 'Next day' })).toBeDisabled()
+  await expect(value(page, 'Pull requests merged')).toHaveText('4')
+  await expect.poll(() => state.reads.slice(-2)).toEqual([
+    { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: null },
+    { since: '2026-10-02T00:00:00.000Z', until: '2026-10-09T00:00:00.000Z', org: null },
+  ])
+})
+
 test('keeps the topline on one row beside a docked notification rail', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await workspace(page)
