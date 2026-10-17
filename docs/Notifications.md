@@ -76,8 +76,8 @@ faults group and turn the bell red.
 Each account/budget/reset condition alerts once. Continuing warnings update
 their numbers without undoing a dismissal or issuing another arrival. A
 warning clears when risk returns to zero, exhaustion replaces it, the window
-resets, or the account is removed. Failed quota reads retain known alerts until
-reset; they do not claim recovery. Notifications off stops background quota
+resets, or the account is removed. Failed reads and insufficient observations
+retain known alerts until reset; they do not claim recovery. Notifications off stops background quota
 reads and new quota alerts. Opening Analytics can still read quota.
 
 ## Pull requests ready to merge

@@ -129,9 +129,11 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
   }
   for (const alert of openAlerts({ now })) {
     if (!alert.dedupeKey.startsWith(PREFIX) || standing.has(alert.dedupeKey)) continue
-    const [, login, , reset] = alert.dedupeKey.split(':')
+    const [, login, resource, reset] = alert.dedupeKey.split(':')
     const account = accounts.find((entry) => entry.login === login)
-    if (!account || !account.error || Number(reset) <= now) resolveAlert(alert.dedupeKey, now)
+    const bucket = account?.buckets.find((entry) => entry.resource === resource)
+    const known = !account?.error && bucket && (bucket.riskPercent !== null || bucket.limit === 0 || Date.parse(bucket.resetAt) !== Number(reset))
+    if (!account || known || Number(reset) <= now) resolveAlert(alert.dedupeKey, now)
   }
 }
 
