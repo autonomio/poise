@@ -132,6 +132,23 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(page.locator('#menu-popover [data-action="analytics"]')).not.toHaveAttribute('aria-current', 'page')
 })
 
+test('keeps the topline on one row beside a docked notification rail', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await workspace(page)
+  await page.addInitScript(() => localStorage.setItem('poise-notification-rail', JSON.stringify({ docked: true, open: true })))
+  await page.route('**/api/github-quota', (route) => route.fulfill({ json: quotaReport() }))
+  await page.goto('/')
+  await expect(page.locator('body')).toHaveClass(/notifications-docked/)
+  await openAnalytics(page)
+  const topline = page.getByRole('region', { name: 'Productivity' })
+  await expect(topline.locator('.analytics-tile')).toHaveCount(5)
+  const main = (await page.locator('#view-analytics main').boundingBox())!
+  const rail = (await page.getByRole('complementary', { name: 'Notifications' }).boundingBox())!
+  expect(main.x + main.width).toBeLessThanOrEqual(rail.x + 1)
+  const tops = await topline.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => Math.round(tile.getBoundingClientRect().top)))
+  expect(new Set(tops).size).toBe(1)
+})
+
 test('stops reading quota once another view is chosen', async ({ page }) => {
   await workspace(page)
   await page.route('**/api/github-quota', (route) => route.fulfill({ json: quotaReport() }))

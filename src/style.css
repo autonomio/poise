@@ -1046,7 +1046,9 @@ tr:hover .review-btn { opacity: 1; }
   .analytics-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .github-quota-account { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-@container analytics (min-width: 960px) {
+/* 880px keeps the topline on one row beside a docked notification rail on a
+   1440px window. */
+@container analytics (min-width: 880px) {
   .analytics-tiles,
   .github-quota-account { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .github-quota-identity { grid-column: auto; }
