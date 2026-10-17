@@ -373,8 +373,10 @@ export function mountNotificationRail(feed: NoticeFeed, actions: RailActions): N
     spring(toast, 'entry', { from: { opacity: 0, x: 28 }, to: { opacity: 1, x: 0 },
       write: ({ opacity, x }) => { toast.style.opacity = String(Math.max(0, Math.min(1, opacity))); toast.style.translate = `${x}px 0` },
       complete: () => { toast.style.opacity = ''; toast.style.translate = ''; cancelMotion(toast, 'entry') } })
+    // Beyond three, the oldest tuck away, but never one the person is using:
+    // it goes once focus and pointer have left it.
     const live = ([...toasts.children] as HTMLElement[]).filter((child) => !leaving(child))
-    for (const old of live.slice(TOAST_LIMIT)) tuck(old)
+    for (const old of live.slice(TOAST_LIMIT)) if (!old.contains(document.activeElement) && !old.matches(':hover')) tuck(old)
     const wait = (ms: number) => { window.clearTimeout(toastTimers.get(toast)); toastTimers.set(toast, window.setTimeout(() => tuck(toast), ms)) }
     const hold = () => window.clearTimeout(toastTimers.get(toast))
     toast.addEventListener('pointerenter', hold)

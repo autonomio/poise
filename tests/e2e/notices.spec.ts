@@ -417,6 +417,22 @@ test('keeps at most three arrival cards, tucking each extra one away once', asyn
   await expect(bell(page)).toHaveAccessibleName('Notifications, 5 open')
 })
 
+test('never tucks away an arrival card the person is using', async ({ page }) => {
+  const state = await workspace(page, [])
+  await page.goto('/')
+  await expect(bell(page)).toHaveAccessibleName('Notifications')
+  const arrival = (n: number): Notice => ({ ...WAITING, id: `arrival-${n}`, title: `Arrival ${n}`, since: iso(10 + n), due: iso(10 + n) })
+  state.notices = [arrival(1)]
+  await reread(page)
+  const first = page.locator('.nr-toast').filter({ hasText: 'Arrival 1' })
+  await first.getByRole('button', { name: 'Show' }).focus()
+  state.notices = [1, 2, 3, 4].map(arrival)
+  await reread(page)
+  await expect(page.locator('.nr-toast')).toHaveCount(4)
+  await expect(first).not.toHaveAttribute('data-leaving', 'true')
+  await expect(first.getByRole('button', { name: 'Show' })).toBeFocused()
+})
+
 test('shows a failed behavior and its diagnostic as one entry, and counts it on its Behaviors row', async ({ page }) => {
   await workspace(page, [HELD], { diagnostics: diagnostics({ deadLetters: [
     { id: 'letter', behavior: 'review-new-prs', target: 'acme/api#9', error: 'The reviewer stopped before posting.', createdAt: iso(2), attemptCount: 3, callId: HELD_CALL },
