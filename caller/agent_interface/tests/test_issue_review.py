@@ -110,6 +110,34 @@ class IssueReviewCase(TestCase):
 
 
 class TestIssueReviewRun(IssueReviewCase):
+    def test_provider_temporary_files_are_owned_and_removed_after_success_or_failure(self):
+        for code in (0, 1):
+            with self.subTest(code=code):
+                with agent_interface.db() as conn:
+                    conn.execute("delete from calls")
+                made = []
+                writes = agent_writes({"comments": [{"issue": "#452", "body": "One."}]}, code=code)
+
+                def supervise(args, **kwargs):
+                    env = kwargs["env"]
+                    self.assertEqual(env["TMPDIR"], env["TMP"])
+                    self.assertEqual(env["TMPDIR"], env["TEMP"])
+                    directory = subprocess.check_output(
+                        [sys.executable, "-c", "import tempfile; print(tempfile.mkdtemp())"],
+                        env=env, text=True,
+                    ).strip()
+                    scratch = Path(directory)
+                    self.assertTrue(scratch.is_relative_to(issue_review.WORK_ROOT))
+                    (scratch / "virtualenv-artifact").write_bytes(b"dependency files")
+                    self.assertIn(f"$TMPDIR ({scratch.parent})", kwargs["input"])
+                    made.append(scratch)
+                    return writes(args, **kwargs)
+
+                row, _ = self.run_review(FakeGitHub(), supervise, expect_exit=bool(code))
+                self.assertEqual(row["status"], "failed" if code else "completed")
+                self.assertEqual(len(made), 1)
+                self.assertFalse(made[0].exists())
+
     def test_reviews_with_full_access_and_posts_one_comment_per_issue_as_the_actor(self):
         github = FakeGitHub()
         supervise = agent_writes({"comments": [
@@ -336,6 +364,16 @@ class TestSubIssuesReviewedOnce(IssueReviewCase):
 
 
 class TestFullAccessCommands(TestCase):
+    def test_every_provider_inherits_only_its_own_temporary_directory(self):
+        for identity in ["opus-5-max", "gpt-6-astra-ultra", "grok-4.6-xhigh", "gemini-3.8-flash-high", "muse-spark-1.3-contributor-max"]:
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as work:
+                with patch.dict(os.environ, {"TMPDIR": "/shared-temp", "TMP": "/shared-temp", "TEMP": "/shared-temp"}):
+                    _, _, env = issue_review.command(CATALOG.resolve(identity), "review this", Path(work) / "repo", Path(work), 600)
+                    scratch = Path(work) / "tmp"
+                    self.assertTrue(scratch.is_dir())
+                    self.assertEqual({env[key] for key in ("TMPDIR", "TMP", "TEMP")}, {str(scratch.resolve())})
+                    self.assertEqual(os.environ["TMPDIR"], "/shared-temp")
+
     def command(self, identity):
         with tempfile.TemporaryDirectory() as work, patch.dict(os.environ, {"OPENAI_API_KEY": "k", "CODEX_API_KEY": "k"}):
             args, stdin, env = issue_review.command(CATALOG.resolve(identity), "review this", Path(work) / "repo", Path(work), 600)
@@ -426,6 +464,52 @@ class TestInterface(TestCase):
 
 
 class TestProcessesAndErrors(TestCase):
+    def test_stale_cleanup_removes_only_inactive_owned_run_directories(self):
+        with tempfile.TemporaryDirectory() as work, patch.object(issue_review, "WORK_ROOT", Path(work)):
+            stale = Path(work) / ("a" * 32)
+            fresh = Path(work) / ("b" * 32)
+            unknown = Path(work) / "user-files"
+            outside = Path(work) / "outside"
+            for directory in [stale, fresh, unknown, outside]:
+                directory.mkdir()
+                (directory / "artifact").write_text("keep unless owned and abandoned")
+            link = Path(work) / ("c" * 32)
+            link.symlink_to(outside, target_is_directory=True)
+            old = time.time() - issue_review.STALE_RUN_SECONDS - 60
+            for directory in [stale, unknown, outside]:
+                os.utime(directory, (old, old))
+            with patch.object(issue_review, "_cwd_pids", return_value=[]):
+                issue_review.sweep()
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(unknown.exists())
+            self.assertTrue(link.is_symlink())
+            self.assertTrue((outside / "artifact").exists())
+
+    def test_stale_cleanup_preserves_a_live_worker_and_unknown_process_evidence(self):
+        with tempfile.TemporaryDirectory() as work, patch.object(issue_review, "WORK_ROOT", Path(work)):
+            active = Path(work) / ("d" * 32)
+            active.mkdir()
+            old = time.time() - issue_review.STALE_RUN_SECONDS - 60
+            os.utime(active, (old, old))
+            process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=active)
+            try:
+                issue_review.sweep()
+                self.assertTrue(active.exists())
+                self.assertIsNone(process.poll())
+            finally:
+                process.terminate()
+                process.wait(timeout=10)
+            with patch.object(issue_review, "_cwd_pids", return_value=None):
+                issue_review.sweep()
+            self.assertTrue(active.exists())
+
+    def test_failed_cleanup_is_visible_without_failing_the_review(self):
+        with patch.object(issue_review.shutil, "rmtree", side_effect=OSError("busy")), \
+                self.assertLogs(issue_review.logger, level="WARNING") as captured:
+            issue_review.cleanup(Path("owned-run"))
+        self.assertIn("Could not remove issue-review workspace owned-run: busy", captured.output[0])
+
     def test_a_provider_error_is_its_message_not_its_output(self):
         stdout = "\n".join([
             json.dumps({"type": "item.completed", "item": {"type": "command_execution", "aggregated_output": "SECRET=abc"}}),

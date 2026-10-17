@@ -12,6 +12,7 @@ comments are all the agent account's.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -37,7 +38,7 @@ TIMEOUT_SECONDS = 3600
 POST_RESERVE_SECONDS = 120
 MAX_PACKET_BYTES = 1_500_000
 MAX_COMMENT_CHARS = 60_000
-STALE_RUN_SECONDS = 2 * 24 * 3600
+STALE_RUN_SECONDS = 2 * TIMEOUT_SECONDS
 LEFTOVER_GRACE_SECONDS = 3
 WORK_ROOT = Path(os.getenv("AGENT_INTERFACE_WORK_DIR") or Path.home() / ".cache" / "agent-interface" / "issue-review")
 REF_RE = re.compile(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)")
@@ -45,6 +46,7 @@ URL_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/is
 # What post() leaves at the very end of every comment it makes. A marker
 # earlier in a body is a quote of someone else's.
 MARKER_RE = re.compile(r"<!-- agent-interface issue-review call=([0-9a-f]{32}) -->\s*\Z")
+logger = logging.getLogger(__name__)
 
 
 class InvalidReview(RuntimeError):
@@ -180,6 +182,9 @@ def prompt(target: str, repo: str, checkout: dict, data: dict, output: Path, act
         f"You run unattended with full access. The current directory is a fresh clone of {repo} "
         f"({checkout['branch']} at {checkout['head_sha']}): read anything, build, run the tests, "
         "use git history and GitHub as you see fit.\n\n"
+        "Keep all throwaway files, dependency environments, downloads and test artifacts in "
+        f"$TMPDIR ({output.parent / 'tmp'}), not in shared /tmp. Caller removes this run's "
+        "temporary directory after the review; repository access and tool permissions are unchanged.\n\n"
         f"Do not post to GitHub yourself. When you are done, write your comments to {output} as JSON "
         '{"comments": [{"issue": "owner/repo#number", "body": "markdown"}]} — at most one comment per issue, '
         f"each under {MAX_COMMENT_CHARS} characters, only for {', '.join(places)}. Caller posts them as {actor}.\n\n"
@@ -190,6 +195,9 @@ def prompt(target: str, repo: str, checkout: dict, data: dict, output: Path, act
 def command(model: Model, text: str, checkout: Path, work: Path, seconds: float) -> tuple[list[str], str, dict]:
     """The provider's own CLI with full access — no allowlist, no sandbox."""
     env = os.environ.copy()
+    scratch = work.resolve() / "tmp"
+    scratch.mkdir(mode=0o700, exist_ok=True)
+    env.update({key: str(scratch) for key in ("TMPDIR", "TMP", "TEMP")})
     if model.provider == "claude":
         settings = json.dumps({"env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(review_budget.OUTPUT_TOKENS)}})
         return [
@@ -266,7 +274,7 @@ def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: di
                         os.killpg(process.pid, signal.SIGKILL)
                     except (ProcessLookupError, PermissionError):
                         pass
-                    stop_leftovers(cwd)
+                    stop_leftovers(cwd.parent)
                     stdout.seek(0)
                     stderr.seek(0)
                     return subprocess.CompletedProcess(args, process.returncode, stdout.read(), stderr.read())
@@ -281,24 +289,39 @@ def supervise(args: list[str], *, input: str, cwd: Path, timeout: float, env: di
             try:
                 if not completed:
                     _stop_process_group(process)
-                    stop_leftovers(cwd)
+                    stop_leftovers(cwd.parent)
             finally:
                 if previous is not None:
                     signal.signal(signal.SIGTERM, previous)
 
 
-def _cwd_pids(root: Path) -> list[int]:
+def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None:
     """Processes whose working directory is inside `root`, this one excepted."""
     prefix, found = str(root.resolve()), []
     proc = Path("/proc")
     if proc.is_dir():
         for entry in proc.iterdir():
-            if entry.name.isdigit():
+            if entry.name.isdigit() and int(entry.name) != os.getpid():
                 try:
                     found.append((int(entry.name), os.readlink(entry / "cwd")))
+                    if require_complete:
+                        # A detached process may have left the checkout but
+                        # still use this run's temporary files or environment.
+                        environment = (entry / "environ").read_bytes()
+                        handles = [os.readlink(fd) for fd in (entry / "fd").iterdir()]
+                        if prefix.encode() in environment or any(
+                            handle == prefix or handle.startswith(prefix + os.sep) for handle in handles
+                        ):
+                            found.append((int(entry.name), prefix))
                 except OSError:
-                    continue
+                    # A process may have exited between enumeration and read.
+                    # An existing unreadable process cannot prove the run idle.
+                    if require_complete and entry.exists():
+                        return None
     else:
+        if require_complete:
+            # cwd alone cannot rule out live scratch users on this platform.
+            return None
         try:
             done = subprocess.run(["lsof", "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn"],
                                   text=True, capture_output=True, timeout=10)
@@ -472,13 +495,26 @@ def summary(posts: list[dict], receipts: list[dict], ignored: list[str]) -> str:
     return "\n".join(lines)
 
 
+def cleanup(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        logger.warning("Could not remove issue-review workspace %s: %s", path, error)
+
+
 def sweep() -> None:
     """Remove run directories a killed run could not clean up."""
     if not WORK_ROOT.is_dir():
         return
     for path in WORK_ROOT.iterdir():
+        if path.is_symlink() or not re.fullmatch(r"[0-9a-f]{32}", path.name):
+            continue
         try:
             if path.is_dir() and time() - path.stat().st_mtime > STALE_RUN_SECONDS:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:
-            continue
+                active = _cwd_pids(path, require_complete=True)
+                if active is not None and not active:
+                    cleanup(path)
+        except OSError as error:
+            logger.warning("Could not inspect issue-review workspace %s: %s", path, error)

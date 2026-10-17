@@ -351,6 +351,9 @@ computer.
 - Chat workspaces in `~/.poise/chat` (`POISE_CHAT_ROOT`).
 - Snippets in `~/.poise/snippets/poise.yml`.
 - Caller's data in `~/.poise/agent-interface` (`AGENT_INTERFACE_DATA_DIR`).
+- Issue-review temporary files in each owned run's `tmp` directory under
+  `~/.cache/agent-interface/issue-review` (`AGENT_INTERFACE_WORK_DIR` can move
+  this root), removed with the run ([Issue review](Issue-review.md)).
 - Caller itself runs from the image: its CLIs from `CALLER_BIN_ROOT`,
   `agent-interface` in `AGENT_INTERFACE_ROOT`.
 
@@ -642,6 +645,10 @@ after pairing; Poise Link then pairs again.
 
 **Alerts** are recorded by the workspace and kept for 30 days. Each condition
 alerts once, and again only after it has cleared:
+- in service mode, temporary space falls to 5 GB free and each GB below
+  (binary GB, measured every minute); only downward crossings alert, including
+  an initial low reading, and recovery resolves the warning. Measurements and
+  warnings never pause, reject or stop work;
 - a Claude or other provider sign-in is needed, or the person's own GitHub
   account or the agent account is not signed in to gh;
 - a behavior failed and is held;
