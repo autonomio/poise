@@ -192,6 +192,16 @@ describe('quota notifications', () => {
     expect(alerts.openAlerts()).toHaveLength(0)
   })
 
+  it('clears exhaustion on confirmed remaining quota even while the rate is unknown', () => {
+    const exhausted = quota.quotaBuckets(payload(5000), 'octocat', T0)[0]
+    quota.syncQuotaAlerts([{ ...account(5000, 100), buckets: [exhausted] }], T0)
+    expect(alerts.openAlerts()[0].kind).toBe('github_quota_exhausted')
+    const recovered = quota.quotaBuckets(payload(100), 'octocat', T0 + 15_000)[0]
+    expect(recovered).toMatchObject({ remaining: 4900, perMinute: null, riskPercent: null })
+    quota.syncQuotaAlerts([{ ...account(100, null), buckets: [recovered] }], T0 + 15_000)
+    expect(alerts.openAlerts()).toHaveLength(0)
+  })
+
   it('monitors while Analytics is closed and stops cleanly', async () => {
     database.setMeta('me', 'octocat')
     mocks.runFile.mockResolvedValue({ stdout: JSON.stringify(payload(5000)) })

@@ -134,7 +134,9 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
     const [, login, resource, reset] = alert.dedupeKey.split(':')
     const account = accounts.find((entry) => entry.login.toLowerCase() === login)
     const bucket = account?.buckets.find((entry) => entry.resource === resource)
-    const known = !account?.error && bucket && (bucket.riskPercent !== null || bucket.limit === 0 || Date.parse(bucket.resetAt) !== Number(reset))
+    const known = !account?.error && bucket && (bucket.riskPercent !== null
+      || (alert.kind === 'github_quota_exhausted' && bucket.remaining > 0)
+      || bucket.limit === 0 || Date.parse(bucket.resetAt) !== Number(reset))
     if (!account || known || Number(reset) <= now) resolveAlert(alert.dedupeKey, now)
   }
 }

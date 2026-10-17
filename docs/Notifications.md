@@ -79,6 +79,8 @@ warning clears when risk returns to zero, exhaustion replaces it, the window
 resets, or the account is removed. Failed reads and insufficient observations
 retain known alerts until reset; they do not claim recovery. Notifications off stops background quota
 reads and new quota alerts. Opening Analytics can still read quota.
+An exhaustion error clears as soon as GitHub confirms positive remaining
+capacity, even while a new consumption rate is being collected.
 
 ## Pull requests ready to merge
 
