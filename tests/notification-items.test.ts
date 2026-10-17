@@ -35,9 +35,11 @@ describe('the list', () => {
     const items = notificationItems([
       notice('warning', { kind: 'github_quota_warning', target: null }),
       notice('error', { kind: 'github_quota_exhausted', target: null }),
+      notice('storage', { kind: 'storage_low', target: null }),
     ], null, NOW)
     expect(items).toMatchObject([
       { id: 'warning', group: 'needs', tone: 'amber', source: 'GitHub API' },
+      { id: 'storage', group: 'needs', tone: 'amber', source: 'Storage' },
       { id: 'error', group: 'faults', tone: 'red', source: 'GitHub API' },
     ])
     expect(headTone(countItems(items))).toBe('red')

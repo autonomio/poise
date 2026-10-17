@@ -306,6 +306,7 @@ alerts once and again only after it has cleared:
 | `pr_ready` | one of the person's own open pull requests becomes ready to merge, by Current's rule, checked every two minutes while notifications are on; not while the person has silenced it | it is merged or closed, or stops being ready |
 | `github_quota_warning` | a configured user or automation account has positive estimated risk of exhausting an API budget before reset, while notifications are on | risk returns to zero, an exhaustion error replaces it, the window resets, or the account is removed; missing observations retain the warning |
 | `github_quota_exhausted` | a configured account has zero remaining API quota, while notifications are on | quota recovers, the window resets, or the account is removed; failed reads retain it until reset |
+| `storage_low` | in service mode, temporary space falls to 5 GB free and each GB below; once per threshold in a low-space episode | space recovers to 6 GB; work continues normally |
 
 An alert's `url` is absolute: `POISE_PUBLIC_ORIGIN` in a workspace, the
 address the request came to otherwise. The browser client has no per-view

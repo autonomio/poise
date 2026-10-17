@@ -9,6 +9,7 @@ import { claudeAuth, type ClaudeAuthCheckOptions, type ClaudeAuthSnapshot, type 
 import { accountsChecked, claudeAuthStatusChanged } from './alerts/producers'
 import { pruneAlerts } from './alerts/store'
 import { checkNotices, dismissNotice, noticesState, silenceNotice, startNoticesRuntime, stopNoticesRuntime } from './alerts/notices'
+import { startTemporaryStorageRuntime, stopTemporaryStorageRuntime } from './temporary-storage'
 import { recordRunningRelease, runningRelease } from './running-release'
 import { LinkApi } from './link/api'
 import { getCallerReleaseHealth } from './caller-release'
@@ -143,6 +144,7 @@ export function startPoiseRuntime(opts: CachePluginOptions = {}): void {
   startBehaviorsRuntime()
   startNoticesRuntime()
   startGithubQuotaRuntime()
+  if (service) startTemporaryStorageRuntime()
   startReviewCheckoutPruning()
   startContentFinalizer()
   if (!chatRuntime) {
@@ -216,7 +218,7 @@ export async function stopPoiseRuntime(): Promise<void> {
   serviceControl = null
   dailyModelRefresh = null
   linkApi = null
-  await Promise.all([stopOrganizationsRuntime(), stopBehaviorsRuntime(), stopNoticesRuntime(), stopGithubQuotaRuntime(), stopReviewCheckoutPruning(), stopContentFinalizer(), stopJev(), chatStop, socketStop, terminalStop, ...authStops])
+  await Promise.all([stopOrganizationsRuntime(), stopBehaviorsRuntime(), stopNoticesRuntime(), stopGithubQuotaRuntime(), stopTemporaryStorageRuntime(), stopReviewCheckoutPruning(), stopContentFinalizer(), stopJev(), chatStop, socketStop, terminalStop, ...authStops])
 }
 
 /** Connected accounts, read now or from the last few seconds, with their
