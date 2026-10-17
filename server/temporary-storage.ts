@@ -15,6 +15,9 @@ export function temporaryStorageMeasured(free: number): void {
   db.transaction(() => {
     const previous = Number(getMeta(BUCKET_KEY) ?? '6')
     if (!Number.isInteger(previous) || previous < 1 || previous > 6) throw new Error('invalid temporary storage warning bucket')
+    // Rearm after a full GB of recovery above the first warning. Oscillating
+    // near a threshold must not create repeated desktop notifications.
+    if (bucket >= previous && free < 6 * TEMPORARY_STORAGE_GB) return
     if (bucket === previous) return
     for (let level = 1; level <= 5; level++) resolveAlert(alertKey(level))
     if (bucket < previous && bucket <= 5) {

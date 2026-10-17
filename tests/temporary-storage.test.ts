@@ -47,15 +47,19 @@ describe('temporary storage warnings', () => {
     expect(notices.noticesState().notices).toMatchObject([{ kind: 'storage_low', target: null, silenceable: false }])
   })
 
-  it('warns on first observation below 5 GB, clears on recovery and rearms for another descent', () => {
+  it('warns once per threshold in a low-space episode and rearms only after recovering to 6 GB', () => {
     const gb = storage.TEMPORARY_STORAGE_GB
     storage.temporaryStorageMeasured(3.5 * gb)
     expect(alerts.openAlerts()[0].title).toContain('4 GB')
     storage.temporaryStorageMeasured(4.5 * gb)
     storage.temporaryStorageMeasured(4.5 * gb)
-    expect(alerts.openAlerts()).toHaveLength(0)
+    expect(alerts.openAlerts()[0].title).toContain('4 GB')
     expect(alerts.alertsAfter(0, 20)).toHaveLength(1)
     storage.temporaryStorageMeasured(3.5 * gb)
+    expect(alerts.alertsAfter(0, 20)).toHaveLength(1)
+    storage.temporaryStorageMeasured(2.5 * gb)
+    expect(alerts.alertsAfter(0, 20)).toHaveLength(2)
+    for (const free of [5.1, 4.9, 5.1, 4.9, 3.1, 2.9]) storage.temporaryStorageMeasured(free * gb)
     expect(alerts.alertsAfter(0, 20)).toHaveLength(2)
     storage.temporaryStorageMeasured(6 * gb)
     expect(alerts.openAlerts()).toHaveLength(0)

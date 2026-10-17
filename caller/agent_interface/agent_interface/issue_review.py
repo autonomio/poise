@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -304,12 +305,19 @@ def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None
         for entry in proc.iterdir():
             if entry.name.isdigit() and int(entry.name) != os.getpid():
                 try:
+                    if require_complete and entry.stat().st_uid != os.getuid():
+                        continue
                     found.append((int(entry.name), os.readlink(entry / "cwd")))
                     if require_complete:
                         # A detached process may have left the checkout but
                         # still use this run's temporary files or environment.
                         environment = (entry / "environ").read_bytes()
-                        handles = [os.readlink(fd) for fd in (entry / "fd").iterdir()]
+                        handles = []
+                        for fd in (entry / "fd").iterdir():
+                            try:
+                                handles.append(os.readlink(fd))
+                            except FileNotFoundError:
+                                continue  # A closed handle no longer uses this run.
                         if prefix.encode() in environment or any(
                             handle == prefix or handle.startswith(prefix + os.sep) for handle in handles
                         ):
@@ -325,20 +333,34 @@ def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None
                         if state != "Z":
                             return None
     else:
-        if require_complete:
-            # cwd alone cannot rule out live scratch users on this platform.
-            return None
         try:
-            done = subprocess.run(["lsof", "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn"],
+            args = ["lsof", "-a", "-u", str(os.getuid()), "-Fpn"]
+            if not require_complete:
+                args += ["-d", "cwd"]
+            done = subprocess.run(args,
                                   text=True, capture_output=True, timeout=10)
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return None if require_complete else []
+        if require_complete and done.returncode:
+            return None
         pid = None
         for line in done.stdout.splitlines():
             if line.startswith("p") and line[1:].isdigit():
                 pid = int(line[1:])
             elif line.startswith("n") and pid is not None:
                 found.append((pid, line[1:]))
+        if require_complete:
+            try:
+                processes = subprocess.run(["ps", "eww", "-U", str(os.getuid()), "-o", "pid=,command="],
+                                           text=True, capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if processes.returncode:
+                return None
+            for line in processes.stdout.splitlines():
+                fields = line.strip().split(None, 1)
+                if len(fields) == 2 and fields[0].isdigit() and prefix in fields[1]:
+                    found.append((int(fields[0]), prefix))
     return [pid for pid, path in found
             if pid != os.getpid() and (path == prefix or path.startswith(prefix + os.sep))]
 
@@ -502,8 +524,27 @@ def summary(posts: list[dict], receipts: list[dict], ignored: list[str]) -> str:
 
 
 def cleanup(path: Path) -> None:
+    def report(function, failed_path, error):
+        logger.warning("Could not remove issue-review artifact %s: %s", failed_path, error)
+
+    def writable(directory: Path) -> None:
+        mode = directory.lstat().st_mode
+        if stat.S_ISDIR(mode) and mode & stat.S_IRWXU != stat.S_IRWXU:
+            directory.chmod(stat.S_IMODE(mode) | stat.S_IRWXU, follow_symlinks=False)
+
     try:
-        shutil.rmtree(path)
+        if path.is_symlink():
+            logger.warning("Refusing to traverse issue-review workspace symlink %s", path)
+            return
+        writable(path)
+        for root, directories, _ in os.walk(path, followlinks=False, onerror=lambda error: report(None, path, error)):
+            for name in directories:
+                directory = Path(root) / name
+                try:
+                    writable(directory)
+                except OSError as error:
+                    report(None, directory, error)
+        shutil.rmtree(path, onexc=report)
     except FileNotFoundError:
         return
     except OSError as error:

@@ -8,7 +8,7 @@ import time
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import agent_interface
 from agent_interface import issue_review, review_budget
@@ -534,10 +534,73 @@ class TestProcessesAndErrors(TestCase):
             self.assertTrue(active.exists())
 
     def test_failed_cleanup_is_visible_without_failing_the_review(self):
-        with patch.object(issue_review.shutil, "rmtree", side_effect=OSError("busy")), \
-                self.assertLogs(issue_review.logger, level="WARNING") as captured:
-            issue_review.cleanup(Path("owned-run"))
-        self.assertIn("Could not remove issue-review workspace owned-run: busy", captured.output[0])
+        with tempfile.TemporaryDirectory() as work:
+            with patch.object(issue_review.shutil, "rmtree", side_effect=OSError("busy")), \
+                    self.assertLogs(issue_review.logger, level="WARNING") as captured:
+                issue_review.cleanup(Path(work))
+            self.assertIn(f"Could not remove issue-review workspace {work}: busy", captured.output[0])
+
+    def test_read_only_artifacts_are_removed_without_changing_symlink_targets(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "owned"
+            readonly = root / "module-cache" / "package"
+            readonly.mkdir(parents=True)
+            (readonly / "module").write_text("dependency")
+            readonly.chmod(0o500)
+            readonly.parent.chmod(0o500)
+            outside = Path(work) / "outside"
+            outside.mkdir()
+            (outside / "keep").write_text("unrelated")
+            outside.chmod(0o500)
+            (root / "link").symlink_to(outside, target_is_directory=True)
+            try:
+                issue_review.cleanup(root)
+                self.assertFalse(root.exists())
+                self.assertEqual((outside / "keep").read_text(), "unrelated")
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o500)
+                root.symlink_to(outside, target_is_directory=True)
+                with self.assertLogs(issue_review.logger, level="WARNING"):
+                    issue_review.cleanup(root)
+                self.assertTrue(root.is_symlink())
+                self.assertTrue((outside / "keep").exists())
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o500)
+            finally:
+                outside.chmod(0o700)
+
+    def test_process_inventory_ignores_foreign_users_and_detects_owned_environment_references(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "owned"
+            root.mkdir()
+            own = Path(work) / "424242"
+            own.mkdir()
+            (own / "cwd").symlink_to(Path(work), target_is_directory=True)
+            (own / "fd").mkdir()
+            (own / "environ").write_bytes(f"TMPDIR={root}\0".encode())
+            foreign = Mock()
+            foreign.name = "1"
+            foreign.stat.return_value.st_uid = os.getuid() + 1
+            proc = Mock()
+            proc.is_dir.return_value = True
+            proc.iterdir.side_effect = lambda: iter([foreign, own])
+            real_path = Path
+            with patch.object(issue_review, "Path", side_effect=lambda value: proc if str(value) == "/proc" else real_path(value)):
+                self.assertEqual(issue_review._cwd_pids(root, require_complete=True), [424242])
+                (own / "environ").write_bytes(b"TMPDIR=/elsewhere\0")
+                self.assertEqual(issue_review._cwd_pids(root, require_complete=True), [])
+
+    def test_non_proc_inventory_checks_open_files_and_environment_then_proves_an_idle_run(self):
+        root = Path("/owned/run")
+        proc = Mock()
+        proc.is_dir.return_value = False
+        real_path = Path
+        listing = subprocess.CompletedProcess([], 0, "p424242\nn/elsewhere\n", "")
+        active = subprocess.CompletedProcess([], 0, f"424242 worker TMPDIR={root}\n", "")
+        idle = subprocess.CompletedProcess([], 0, "424242 worker TMPDIR=/elsewhere\n", "")
+        with patch.object(issue_review, "Path", side_effect=lambda value: proc if str(value) == "/proc" else real_path(value)):
+            with patch.object(issue_review.subprocess, "run", side_effect=[listing, active]):
+                self.assertEqual(issue_review._cwd_pids(root, require_complete=True), [424242])
+            with patch.object(issue_review.subprocess, "run", side_effect=[listing, idle]):
+                self.assertEqual(issue_review._cwd_pids(root, require_complete=True), [])
 
     def test_a_provider_error_is_its_message_not_its_output(self):
         stdout = "\n".join([

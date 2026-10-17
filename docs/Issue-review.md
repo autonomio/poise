@@ -12,8 +12,11 @@ directory inside its existing run workspace. Its instruction puts throwaway
 files, dependency environments, downloads and test artifacts there. Full
 repository access, build/test commands and provider permissions stay the same.
 Caller removes the workspace after success or failure. A later review also
-cleans abandoned run directories older than two hours, preserving active
-workers, unreadable process state, unrelated paths and symlink targets.
+cleans abandoned run directories older than two hours. It checks the workspace
+user's processes (including temporary-directory environment and open files),
+preserves active or unreadable relevant process state, and ignores other users.
+Read-only owned build directories are made removable; unrelated paths and
+symlink targets are preserved. Cleanup errors are logged without failing a review.
 
 The instruction each reviewer gets is fixed:
 

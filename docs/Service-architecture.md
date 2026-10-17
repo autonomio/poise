@@ -647,7 +647,8 @@ after pairing; Poise Link then pairs again.
 alerts once, and again only after it has cleared:
 - in service mode, temporary space falls to 5 GB free and each GB below
   (binary GB, measured every minute); only downward crossings alert, including
-  an initial low reading, and recovery resolves the warning. Measurements and
+  an initial low reading. Recovery to 6 GB clears and rearms the warning so
+  fluctuations near a threshold do not repeat it. Measurements and
   warnings never pause, reject or stop work;
 - a Claude or other provider sign-in is needed, or the person's own GitHub
   account or the agent account is not signed in to gh;
