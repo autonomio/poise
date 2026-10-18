@@ -22,10 +22,10 @@ log() {
 # Every command is bounded, so a stalled download fails instead of holding up
 # the CLIs after it.
 run() {
-  timeout --kill-after=30s 15m "$@"
+  node /opt/poise/dist/runtime-diagnostic.js "$@"
   local code=$?
   if [ "$code" -ne 0 ]; then
-    log "command failed (exit $code): $*"
+    log "command failed (exit $code): $1"
   fi
   return "$code"
 }

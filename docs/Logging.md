@@ -156,3 +156,11 @@ labeled as post-event container state; it never substitutes a later usage
 reading for usage at the incident. Removed containers or an exhausted inspection
 budget leave explicit unavailable resource evidence. Exit 137 alone does not
 establish an OOM cause.
+
+The workspace image also ships `dist/runtime-diagnostic.js`. Provider bootstrap
+uses it before the application starts: it preserves the existing 15-minute
+command deadline and 30-second termination grace, drains bounded stderr,
+redacts complete lines before truncation, and stores one source event per failed
+command or native Warning. Stdout and arguments are excluded. A diagnostic sink
+or reporter failure does not change the installer exit status. Cwd-filesystem
+measurements are labeled as such; an unobserved affected filesystem stays null.
