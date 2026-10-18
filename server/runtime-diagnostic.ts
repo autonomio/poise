@@ -4,6 +4,7 @@ import { constants as fsConstants, accessSync, realpathSync, statfsSync, writeSy
 import { constants, homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { stripVTControlCharacters } from 'node:util'
 import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from '../gateway/src/diagnostics/contract'
 import { lineRedactor } from '../gateway/src/diagnostics/redaction.mjs'
 import { diagnosticConfig } from '../gateway/src/diagnostics/config'
@@ -39,8 +40,9 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   let stdoutPending = Buffer.alloc(0); let stdoutDiscarding = false; let stdoutForwarded = 0
   let timedOut = false; let spawnError: NodeJS.ErrnoException | null = null; let captureError: string | null = null
   const addLine = (line: Buffer) => {
-    const safe = redactStderr(line.toString())
-    nativeWarning ||= /^(?:npm\s+warn\b|warning:|warn(?:ing)?[:\s])/im.test(safe)
+    const text = stripVTControlCharacters(line.toString())
+    nativeWarning ||= /^(?:npm\s+warn\b|warning:|warn(?:ing)?[:\s])/im.test(text)
+    const safe = redactStderr(text)
     const bytes = Buffer.concat([stderr, Buffer.from(safe + '\n')])
     if (bytes.length > 16 * 1024) truncated = true
     stderr = bytes.subarray(Math.max(0, bytes.length - 16 * 1024))

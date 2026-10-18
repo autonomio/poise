@@ -45,6 +45,8 @@ Unknown and inaccessible IDs share one response; expiry is reported only from
 an authorized tombstone. SQLite's page budget, cache and
 journal are also bounded. Records remain after a source or container disappears.
 Source coverage and its unavailable intervals are separate from event counts.
+Coverage IDs affected by redaction use stable opaque identities, keeping source
+updates and partial backfills distinct even when their labels redact alike.
 The collection runtime has a separate coverage journal and in-memory health
 path, so a broken event sink does not turn failed reads into an empty result.
 
@@ -162,7 +164,8 @@ The workspace image also ships `dist/runtime-diagnostic.js`. Provider bootstrap
 uses it before the application starts: it preserves the existing 15-minute
 command deadline and 30-second termination grace, drains bounded stderr,
 redacts complete lines before truncation, and stores one source event per failed
-command or native Warning. Stdout and arguments are excluded. A diagnostic sink
+command or native Warning. Native level detection precedes secret redaction;
+only redacted text is retained or forwarded. Stdout and arguments are excluded. A diagnostic sink
 or reporter failure does not change the installer exit status. Cwd-filesystem
 measurements are labeled as such; an unobserved affected filesystem stays null.
 

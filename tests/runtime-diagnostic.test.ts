@@ -36,6 +36,19 @@ it('preserves native warnings and deadline outcomes without inferring severity f
   expect(events.at(-1)).toMatchObject({ severity: 'error', timeoutMs: 50, context: { timedOut: true } })
 })
 
+it('classifies native warnings before short-secret redaction alters their level text', async () => {
+  vi.stubEnv('PASSWORD', 'a')
+  const storePath = path(); const events: LogEvent[] = []
+  expect(await captureRuntimeCommand(process.execPath, ['-e', "process.stderr.write('\\x1b[33mnpm warn native warning\\x1b[0m')"],
+    { path: storePath, workspace: 'alice', quiet: true, write: (event) => events.push(event) })).toBe(0)
+  expect(events).toHaveLength(1)
+  expect(events[0].severity).toBe('warning')
+  expect(events[0].stderr).toBe('npm w[redacted]rn n[redacted]tive w[redacted]rning\n')
+  const store = new DiagnosticStore(storePath)
+  try { expect(store.query({ workspace: 'alice', operator: false }).events[0]).toMatchObject({ severity: 'warning', stderr: events[0].stderr }) }
+  finally { store.close() }
+})
+
 it('does not change installer status when diagnostic persistence or reporting fails', async () => {
   const storePath = path(); writeFileSync(storePath, 'broken database')
   vi.spyOn(process.stderr, 'write').mockReturnValue(true)

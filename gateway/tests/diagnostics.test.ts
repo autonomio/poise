@@ -310,6 +310,31 @@ describe('material cause identity', () => {
 
 
 describe('source recovery and unavailable evidence', () => {
+  it('keeps redacted coverage identities distinct and partial across admission and restart', async () => {
+    const path = join(directory(), 'logging.db')
+    const options = { path, now: () => NOW, secrets: ['alice', 'bob'], report: () => undefined }
+    const runtime = new DiagnosticRuntime(options)
+    runtime.unconfigured('workspace:alice', 'poise', 'alice', 'pending setup')
+    runtime.observe('workspace:bob', 'poise', 'bob')
+    runtime.partial('workspace:alice', 'poise', 'alice', 'pending backfill')
+    expect(runtime.health().sources).toHaveLength(2)
+    const source = runtime.health().sources.find((row) => row.workspace === 'alice')!
+    expect(source).toMatchObject({ status: 'partial', error: 'pending backfill' })
+    expect(source.id).not.toContain('alice')
+    expect(runtime.health().sources.find((row) => row.workspace === 'bob')!.id).not.toBe(source.id)
+    for (let i = 0; i < 254; i++) runtime.observe('extra-' + i, 'poise', null)
+    runtime.partial('workspace:alice', 'poise', 'alice', 'still backfilling')
+    expect(runtime.health().rejected).toBe(0)
+    runtime.flush()
+    expect(runtime.query((db) => db.readCoverage(alice)).find((row) => row.id === source.id)?.status).toBe('partial')
+    await runtime.stop()
+    const restarted = new DiagnosticRuntime(options)
+    restarted.partial('workspace:alice', 'poise', 'alice', 'backfill continues')
+    expect(restarted.health().sources).toHaveLength(256)
+    expect(restarted.health().sources.find((row) => row.id === source.id)).toMatchObject({ status: 'partial', error: 'backfill continues' })
+    await restarted.stop()
+  })
+
   it('redacts configured opaque secrets at native and workspace persistence boundaries', () => {
     vi.stubEnv('POISE_TEST_TOKEN', 'opaque-configured-secret')
     try {

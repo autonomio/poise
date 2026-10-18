@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from './contract.js'
@@ -91,6 +91,10 @@ export class DiagnosticRuntime {
   private iso(): string { return new Date(this.now()).toISOString() }
   private journalPath(): string | null { return this.options.path === ':memory:' ? null : this.options.path + '.coverage.json' }
   private safe(value: string, limit = 2048): string { return redact(value, this.secrets).slice(0, limit) }
+  private coverageId(value: string): string {
+    // Redaction can collapse distinct labels; retain an opaque, stable identity.
+    return this.safe(value, 256) === value ? value : 'source_' + createHash('sha256').update(value).digest('hex')
+  }
   private message(error: unknown): string { return this.safe(error instanceof Error ? error.message : String(error)) }
 
   private notify(event: string, message: string): void {
@@ -149,22 +153,23 @@ export class DiagnosticRuntime {
   }
 
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
+    id = this.coverageId(id)
     if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source bound reached')); return }
-    this.sources.set(id, { id, source, workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
+    this.sources.set(id, { id, source: this.safe(source, 128), workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
       availableFrom: null, error: this.safe(reason), gaps: [] })
     this.saveJournal()
   }
 
   observe(id: string, source: string, workspace: string | null, error: string | null = null): void {
+    id = this.coverageId(id)
     if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source limit of 256 reached')); return }
-    id = this.safe(id, 256)
     const previous = this.sources.get(id)
     const at = this.iso()
     const reason = error === null ? null : this.safe(error)
     let gaps = [...(previous?.gaps ?? [])]
     if (reason && !gaps.some((gap) => gap.to === null)) gaps.push({ from: at, to: null, reason: this.safe(reason, 128) })
     if (!reason) gaps = gaps.map((gap) => gap.to === null ? { ...gap, to: at } : gap)
-    this.sources.set(id, { id: this.safe(id, 256), source: this.safe(source, 128), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
+    this.sources.set(id, { id, source: this.safe(source, 128), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
       observedAt: reason ? previous?.observedAt ?? null : at, ingestedAt: previous?.ingestedAt ?? null,
       availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32) })
     if (reason && previous?.error !== reason) this.emit({ source: 'collection', component: source, level: 'warning', operation: 'source.unavailable',
@@ -174,7 +179,7 @@ export class DiagnosticRuntime {
 
   partial(id: string, source: string, workspace: string | null, reason: string): void {
     this.observe(id, source, workspace)
-    const value = this.sources.get(id)
+    const value = this.sources.get(this.coverageId(id))
     if (value) { value.status = 'partial'; value.error = this.safe(reason) }
     this.saveJournal()
   }
