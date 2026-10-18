@@ -3191,6 +3191,7 @@ tr:hover .stop-btn { opacity: 1; }
 }
 
 #logging-filters { flex-wrap: wrap; }
+#logging-filters .logging-compact[hidden], #logging-new[hidden] { display: none; }
 #logging-filters .logging-compact { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text-secondary); font-size: 0.75rem; }
 #logging-filters .st-select { width: auto; margin: 0; }
 .logging-custom:not([hidden]), .logging-exact-fields { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-3); margin-block: var(--sp-3); }

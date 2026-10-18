@@ -28,6 +28,9 @@ async function ready(page: Page, path?: string, timezone = 'UTC'): Promise<void>
   await expect(status(page)).toContainText('matching retained events')
   await expect(page.locator('#logging-loader')).toBeHidden()
   if (!path) await page.evaluate((started) => Object.assign(window, { loggingNavigationMs: performance.now() - started }), started)
+  await expect(page.locator('#menu-surface')).toBeHidden()
+  await expect(page.locator('#logging-scope-label')).toBeHidden()
+  await expect(page.locator('#logging-new')).toBeHidden()
 }
 
 // Only this file uses the real API/store; other browser fixtures intercept it.
@@ -133,7 +136,7 @@ test('uses Settings civil day/week boundaries across the spring DST transition',
   await page.clock.setFixedTime(new Date('2026-03-29T12:00:00Z'))
   const query = async (preset: string) => {
     const response = page.waitForResponse((reply) => new URL(reply.url()).pathname === '/api/logging')
-    await page.locator(`[data-time="${preset}"]`).click()
+    await page.locator(`#view-logging [data-time="${preset}"]`).click()
     const url = new URL((await response).url())
     return [url.searchParams.get('from'), url.searchParams.get('to')]
   }
@@ -220,7 +223,7 @@ test('late older ingestions stay behind an explicit control and pagination retai
 
 test('custom interval drafts survive refresh, use zoned civil bounds, and reject invalid ranges honestly', async ({ page }) => {
   await ready(page, undefined, 'Europe/Helsinki')
-  await page.locator('[data-time="custom"]').click()
+  await page.locator('#view-logging [data-time="custom"]').click()
   await page.locator('#logging-from').fill('2026-03-29T00:00:00+02:00')
   await page.locator('#logging-to').fill('2026-03-30T00:00:00+03:00')
   await action(page, 'refresh').click()

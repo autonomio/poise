@@ -53,7 +53,7 @@ describe('authorized retained diagnostic reads', () => {
     const unknown = await request('alice', alice, '/events/evt_' + '0'.repeat(16) + '_' + '0'.repeat(64))
     expect(inaccessible.status).toBe(404)
     expect(unknown.status).toBe(404)
-    expect(inaccessible.json<{ error: string }>().error).toBe(unknown.json<{ error: string }>().error)
+    expect(inaccessible.json()).toEqual(unknown.json())
     expect(h.logs.filter((entry) => entry.event === 'logging.query')).toEqual(expect.arrayContaining([expect.objectContaining({ actor: 'root', scope: 'instance' })]))
     h.store.addAllowed('root', 'root')
     h.config.admins.splice(0)
