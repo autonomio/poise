@@ -249,9 +249,8 @@ export class DockerClient {
         limits: { memoryBytes: spec.HostConfig.Memory, nanoCpus: spec.HostConfig.NanoCpus, pids: spec.HostConfig.PidsLimit } })
       this.reportingError = null
     } catch (failure) {
+      // The collector exposes this through its independent health journal.
       this.reportingError = redact(failure instanceof Error ? failure.message : String(failure), environmentSecrets()).slice(0, 2048)
-      try { process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.task_capture.failed', message: this.reportingError }) + '\n') }
-      catch (reportFailure) { this.reportingError = (this.reportingError + '; stderr reporting unavailable: ' + redact(String(reportFailure), environmentSecrets())).slice(0, 2048) }
     }
   }
 

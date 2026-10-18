@@ -77,10 +77,10 @@ it.each(['timeout', 'http', 'malformed', 'logs', 'start'] as const)('retains rel
 
 it('preserves the task failure when both the observer and stderr reporter fail', async () => {
   const fixture = await engine('http')
-  vi.spyOn(process.stderr, 'write').mockImplementation(() => { throw new Error('fixture stderr failed') })
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => { throw new Error('fixture stderr failed') })
   const client = new DockerClient(fixture.socket, () => { throw new Error('fixture observer failed') })
   await expect(client.runTask('release-proof', spec)).rejects.toThrow('fixture wait failed')
   expect(fixture.removed()).toBe(true)
   expect(client.taskCaptureError).toContain('fixture observer failed')
-  expect(client.taskCaptureError).toContain('stderr reporting unavailable')
+  expect(stderr).not.toHaveBeenCalled()
 })
