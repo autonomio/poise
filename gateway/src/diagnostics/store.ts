@@ -163,7 +163,9 @@ export class DiagnosticStore {
     if (filter.workspace && !access.operator && filter.workspace !== access.workspace) throw new Error('Logging workspace scope is forbidden')
     const clauses = [levels.length ? `severity IN (${levels.map(() => '?').join(',')})` : '0']
     const values: Array<string | number> = [...levels]
-    if (!access.operator) { clauses.push("workspace=? AND visibility='workspace'"); values.push(access.workspace) }
+    clauses.push(access.operator ? "(visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))"
+      : "workspace=? AND visibility IN ('workspace','infrastructure')")
+    values.push(access.workspace)
     const columns = { source: 'source', component: 'component', workspace: 'workspace', account: 'account', repository: 'repository',
       callId: 'call_id', correlationId: 'correlation_id', incidentId: 'incident_id' }
     for (const [key, column] of Object.entries(columns)) {
@@ -212,17 +214,23 @@ export class DiagnosticStore {
   }
 
   bounds(access: LogAccess) {
-    const predicate = access.operator ? '' : "WHERE workspace=? AND visibility='workspace'"
-    const parameters = access.operator ? [] : [access.workspace]
+    const predicate = access.operator ? "WHERE visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace')"
+      : "WHERE workspace=? AND visibility IN ('workspace','infrastructure')"
+    const parameters = [access.workspace]
     const row = this.db.prepare(`SELECT MIN(sort_time) AS from_time,MAX(sort_time) AS to_time FROM log_events ${predicate}`).get(...parameters) as { from_time: string | null; to_time: string | null }
     return { from: row.from_time, to: row.to_time, retentionAfter: new Date(this.now() - this.policy.retentionMs).toISOString() }
   }
 
   lookup(access: LogAccess, id: string): { status: 'found'; event: LogEvent } | { status: 'expired' | 'unavailable' } {
     if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid Logging event identifier')
-    const row = (access.operator ? this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(id)
-      : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility='workspace'").get(id, access.workspace)) as { payload: string } | undefined
+    const row = (access.operator ? this.db.prepare("SELECT payload FROM log_events WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
+      : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace)) as { payload: string } | undefined
     if (row) return { status: 'found', event: JSON.parse(row.payload) as LogEvent }
+    // Inaccessible IDs are indistinguishable from unknown IDs, even after expiry.
+    const prefix = id.split('_')[2]
+    const allowed = [scopePrefix(access.workspace, 'workspace'), scopePrefix(access.workspace, 'infrastructure')]
+    if (access.operator) allowed.push(scopePrefix(null, 'operator'))
+    if (!allowed.includes(prefix)) return { status: 'unavailable' }
     // Do not expose the existence of another workspace's evidence.
     const milliseconds = Number(id.split('_')[1])
     if (!Number.isFinite(milliseconds) || !Number.isFinite(new Date(milliseconds).getTime())) throw new Error('Invalid Logging event time')

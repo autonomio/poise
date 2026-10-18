@@ -51,6 +51,9 @@ outside retention, and unavailable evidence without exposing other workspaces.
 
 A trusted server supplies `LogAccess`: an ordinary workspace scope cannot be
 widened by a query, event ID or cursor. Operator scope is an explicit server
-authorization. Shared coverage hides operator-only cause details from ordinary
+authorization for infrastructure events. It never widens access to another
+workspace's application or Caller records. A safely attributable infrastructure
+event can be read by its workspace owner and the operator; unassigned host
+evidence is operator-only. Shared coverage hides operator-only cause details from ordinary
 workspace queries. Collection buffers default to at most 1,000 events or 2 MiB;
 sink failures and drops remain visible while active work continues.

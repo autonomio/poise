@@ -9,7 +9,7 @@ import { callerDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.
 
 const NOW = Date.parse('2026-10-18T10:00:00Z')
 const alice = { workspace: 'alice', operator: false }
-const operator = { workspace: 'operator', operator: true }
+const operator = { workspace: 'alice', operator: true }
 const stores: DiagnosticStore[] = []
 const directories: string[] = []
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const dir of directories.splice(0)) rmSync(dir, { force: true, recursive: true }) })
@@ -75,9 +75,11 @@ describe('retained authorized queries', () => {
   it('does not widen scope through filters, direct IDs or cursors', () => {
     const db = store(); const bob = event('bob', { workspace: 'bob' }); db.append([event('alice'), bob, event('host', { workspace: null })])
     expect(db.query(alice).events).toHaveLength(1)
-    expect(db.query(operator).events).toHaveLength(3)
+    expect(db.query(operator).events).toHaveLength(2)
     expect(() => db.query(alice, { workspace: 'bob' })).toThrow('forbidden')
     expect(db.lookup(alice, bob.id).status).toBe('unavailable')
+    expect(db.lookup(operator, bob.id).status).toBe('unavailable')
+    expect(db.query(operator, { workspace: 'bob' }).total).toBe(0)
     const cursor = db.query(operator, { limit: 1 }).nextCursor!
     expect(() => db.query(alice, { cursor })).toThrow('filters')
   })

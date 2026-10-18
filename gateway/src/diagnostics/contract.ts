@@ -37,7 +37,7 @@ export interface DiagnosticInput {
   errno?: string | number | null
   context?: Facts
   resources?: Facts
-  visibility?: 'workspace' | 'operator'
+  visibility?: 'workspace' | 'operator' | 'infrastructure'
 }
 export interface LogEvent {
   version: 1
@@ -75,7 +75,7 @@ export interface LogEvent {
   errno: string | number | null
   context: Facts
   resources: Facts
-  visibility: 'workspace' | 'operator'
+  visibility: 'workspace' | 'operator' | 'infrastructure'
 }
 
 const PRIVATE_KEY = /^(?:prompt|prompts|content|body|response|stdout|argv|args|environment|env|messages|conversation|attachments|reasoning)$/i
