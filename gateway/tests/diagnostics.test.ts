@@ -407,3 +407,17 @@ it('redacts nonempty known secrets of every length without recursively expanding
   expect(once.length).toBeLessThan(200)
   expect(once).not.toContain('opaque-other-value')
 })
+
+
+it('keeps the authoritative owner scope when a short secret overlaps its public handle', () => {
+  const event = normalize({ source: 'poise', operation: 'fixture.failure', workspace: 'alice', level: 'error', message: 'bare a' }, NOW, ['a'])!
+  expect(event.workspace).toBe('alice')
+  expect(event.message).not.toContain('bare a')
+  expect(event.message).toContain('[redacted]')
+  const store = new DiagnosticStore(':memory:', DEFAULT_LOG_POLICY, () => NOW)
+  try {
+    store.append([event])
+    expect(store.query({ workspace: 'alice', operator: false }).total).toBe(1)
+    expect(store.query({ workspace: 'bob', operator: true }).total).toBe(0)
+  } finally { store.close() }
+})

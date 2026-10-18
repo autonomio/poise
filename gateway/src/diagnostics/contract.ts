@@ -135,7 +135,9 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     ? `Collection could not normalize ${clean(input.source)}: ${level === 'invalid' ? 'unknown source severity' : 'invalid source timestamp'}. ${clean(input.message, 1024)}` : clean(input.message, 2048)
   const source = level === 'invalid' || invalidTime ? 'collection' : clean(input.source, 128)
   const operation = level === 'invalid' || invalidTime ? 'normalization.failed' : clean(input.operation, 128)
-  const workspace = nullable(input.workspace)
+  // The owner is an authorization namespace, not captured technical text.
+  const workspace = input.workspace == null ? null : String(input.workspace)
+  if (workspace !== null && !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/i.test(workspace)) throw new Error('Invalid diagnostic workspace identity')
   const visibility = input.visibility ?? (workspace ? 'workspace' : 'operator')
   if (!['workspace', 'operator', 'infrastructure'].includes(visibility)) throw new Error('Invalid diagnostic visibility')
   if (visibility === 'workspace' && !workspace) throw new Error('Workspace diagnostics require a workspace identity')
