@@ -91,7 +91,8 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
                 if diagnostic:
                     diagnostic.update(repository=repo, pr=atoms.pr_number(pr), expected_head=head, reviewer=actor,
                                       base_sha=base, merge_base_sha=merge_base)
-                    raise atoms.AgentPreflightError(diagnostic_message(diagnostic), diagnostic=diagnostic)
+                    raise atoms.AgentPreflightError(diagnostic_message(diagnostic),
+                                                    "review_budget_exhausted" if diagnostic.get("outcome") == "timed_out" else None, diagnostic)
                 raise ValueError((done.stderr or done.stdout).strip() or "checkout command failed")
             info = json.loads(done.stdout)
             if (info.get("action") != "checkout_review" or info.get("repository") != repo

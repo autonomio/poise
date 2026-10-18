@@ -149,6 +149,8 @@ def packet(
         error = (done.stderr or done.stdout).strip() or f"github-interface exited {done.returncode}"
         code = "review_packet_too_large" if error.startswith("error: review_packet_too_large:") else None
         diagnostic = diagnostic_from_stderr(done.stderr, "packet_acquisition")
+        if diagnostic and diagnostic.get("outcome") == "timed_out":
+            code = "review_budget_exhausted"
         raise AgentPreflightError(diagnostic_message(diagnostic) if diagnostic else error, code, diagnostic)
     if cache is not None:
         cache[key] = done.stdout

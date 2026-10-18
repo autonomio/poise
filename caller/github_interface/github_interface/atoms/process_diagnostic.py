@@ -47,6 +47,14 @@ class StderrCapture:
             del self.last[:-STDERR_BYTES // 2]
 
     def evidence(self, env):
+        text, truncated = self._evidence(env)
+        encoded = text.encode("utf-8")
+        if len(encoded) <= STDERR_BYTES:
+            return text, truncated
+        return (encoded[:STDERR_BYTES // 2].decode("utf-8", errors="replace") + MARKER
+                + encoded[-STDERR_BYTES // 2:].decode("utf-8", errors="replace")), True
+
+    def _evidence(self, env):
         truncated = self.size > STDERR_BYTES
         if not truncated:
             raw = bytes(self.first) + bytes(self.last)[max(0, len(self.first) + len(self.last) - self.size):]
@@ -111,4 +119,5 @@ def failure(cwd, env, args, started, capture, *, process=None, error=None, timed
         "workspace": env.get("POISE_WORKSPACE_HANDLE"), "container": env.get("HOSTNAME") if env.get("POISE_MODE") == "service" else None,
         "release": env.get("POISE_RELEASE"),
     }
+    diagnostic = {key: redact(value, env) if isinstance(value, str) else value for key, value in diagnostic.items()}
     return (GitTimeoutError if timed_out else GitProcessError)(diagnostic)
