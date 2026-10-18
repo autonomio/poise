@@ -175,7 +175,7 @@ describe('the alert producers', () => {
     expect(next.seq).toBeGreaterThan(first.seq)
     expect(next.dismissedAt).toBeNull()
     expect(next.body).toContain('Input exceeds the maximum length')
-    expect(store.alertsAfter(first.seq)).toHaveLength(1)
+    expect(store.alertsAfter(first.seq, 50)).toHaveLength(1)
 
     store.dismissAlert(next.seq)
     producers.behaviorHeld('approve-prs', 'acme/app#12', true,
