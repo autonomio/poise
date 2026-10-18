@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { analyticsDay, analyticsHistoryBounds } from '../src/analytics-day'
+import { analyticsDay, analyticsDailyBounds, analyticsHistoryBounds } from '../src/analytics-day'
 import { historyChart, histogram, historySeries, periodLabel, type AnalyticsPeriod } from '../src/analytics-history'
 import { setLocalSettings } from '../src/config'
 
@@ -31,6 +31,10 @@ describe('the periods', () => {
     vi.setSystemTime(new Date('2026-11-02T12:00:00Z'))
     setLocalSettings({ org: '', me: '', timezone: 'Europe/Helsinki' })
     const bounds = analyticsHistoryBounds(0, new Date(), 2)
+    const daily = analyticsDailyBounds(-7, new Date())
+    expect(daily).toHaveLength(8)
+    expect(daily.at(-1)).toBe(bounds[1])
+    expect(daily.some((edge, i) => i > 0 && Date.parse(edge) - Date.parse(daily[i - 1]) === 25 * 3_600_000)).toBe(true)
     // Summer time ends on 25 October: that week is 169 hours long.
     expect(bounds).toEqual(['2026-10-18T21:00:00.000Z', '2026-10-25T22:00:00.000Z', '2026-11-01T22:00:00.000Z'])
   })
@@ -44,15 +48,15 @@ describe('the periods', () => {
 })
 
 describe('the series', () => {
-  it('gives the five topline figures as daily averages, and time to merge as each period\'s mean', () => {
-    const all = historySeries({ periods: [period(0), period(1, { merged: 0, lines: { total: null, median: null, counted: 0 }, averageTimeToMergeMs: null })], errors: [] })
+  it('gives the five topline figures as daily averages, and time to merge as each period\'s median', () => {
+    const all = historySeries({ periods: [period(0), period(1, { merged: 0, lines: { total: null, median: null, counted: 0 }, averageTimeToMergeMs: null, medianTimeToMergeMs: null })], errors: [] })
     expect(all).toHaveLength(13)
     const series = all.slice(0, 5)
     expect(series.map((s) => s.label)).toEqual(['Issues opened', 'Issues closed', 'Pull requests merged', 'Lines changed', 'Time to merge'])
     expect(series.map((s) => s.values)).toEqual([[2, 2], [1, 1], [1, 0], [100, 0], [3_600_000, null]])
     expect(series.map((s) => s.format(s.values[0]))).toEqual(['2.0/day', '1.0/day', '1.0/day', '100/day', '1h'])
     expect(series[4].format(null)).toBe('—')
-    expect(series.map((s) => s.detail(period(0)))).toEqual(['14 opened', '7 closed', '7 merged', '700 lines', 'Mean of 7 PRs'])
+    expect(series.map((s) => s.detail(period(0)))).toEqual(['14 opened', '7 closed', '7 merged', '700 lines', 'Median of 7 PRs'])
     expect(series[4].detail(period(1, { merged: 0 }))).toBe('No merges')
   })
 

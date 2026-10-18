@@ -15,10 +15,11 @@ function report(merged: number, hours = 27): AnalyticsReport {
       mergedByAgent: merged ? merged - 1 : 0,
       firstReview: { count: 3, medianMs: hours > 30 ? 150_000 : 75_000 },
       commentsPerPr: merged ? 3.25 : null,
+      medianCommentsPerPr: merged ? 3 : null,
       lines: { total: merged ? 4210 : null, median: merged ? 180 : null, counted: merged ? merged - 1 : 0 },
-      behaviors: { perPr: merged ? 2 : null, approvals: merged, reviews: merged, changesRequested: 0 },
+      behaviors: { medianPerPr: merged ? 2 : null, perPr: merged ? 2 : null, approvals: merged, reviews: merged, changesRequested: 0 },
       averageTimeToMergeMs: merged ? hours * 3_600_000 : null,
-      medianTimeToMergeMs: merged ? 6 * 3_600_000 : null,
+      medianTimeToMergeMs: merged ? hours / 4.5 * 3_600_000 : null,
     },
     errors: [],
   }
@@ -30,7 +31,7 @@ function history(bounds: string[]): AnalyticsHistory {
     const quiet = i % 13 === 0
     const merged = quiet ? 0 : 7 + i % 5
     return { since: bounds[i], until, issues: { opened: i % 9, closed: (i * 3) % 7 },
-      pullRequests: { ...report(merged).pullRequests, lines: { total: quiet ? null : 700 + 50 * (i % 6), median: quiet ? null : 100 + i, counted: merged }, averageTimeToMergeMs: quiet ? null : (10 + i % 7) * 3_600_000 } }
+      pullRequests: { ...report(merged).pullRequests, lines: { total: quiet ? null : 700 + 50 * (i % 6), median: quiet ? null : 100 + i, counted: merged }, averageTimeToMergeMs: quiet ? null : (10 + i % 7) * 3_600_000, medianTimeToMergeMs: quiet ? null : (10 + i % 7) * 3_600_000 } }
   }) }
 }
 
@@ -68,7 +69,9 @@ async function workspace(page: Page, timezone = 'UTC'): Promise<Workspace> {
       state.reads.push(read)
       if (state.fail) return route.fulfill({ status: 502, json: { error: 'acme: datastore offline' } })
       const baseline = Date.parse(read.until!) - Date.parse(read.since!) > 2 * 86_400_000
-      return route.fulfill({ json: baseline ? report(state.baselineMerged, state.baselineHours) : report(read.since === '2026-10-08T00:00:00.000Z' ? 0 : 4) })
+      const result = baseline ? report(state.baselineMerged, state.baselineHours) : report(read.since === '2026-10-08T00:00:00.000Z' ? 0 : 4)
+      if (baseline) result.daily = Array.from({ length: 7 }, () => ({ issues: { opened: 2, closed: 1 }, pullRequests: report(1).pullRequests }))
+      return route.fulfill({ json: result })
     }
     if (url.pathname === '/api/settings') return route.fulfill({ json: { org: 'acme', me: 'octocat', timezone, organizations, models: {} } })
     if (url.pathname === '/api/organizations') return route.fulfill({ json: { organizations } })
@@ -98,7 +101,7 @@ async function leaveAnalytics(page: Page) {
 }
 
 function mergeTrend(page: Page) {
-  return page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Time to merge$/ }) }).locator('.analytics-trend')
+  return page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Time to merge$/ }) }).locator('.analytics-summary')
 }
 
 function value(page: Page, label: string) {
@@ -218,7 +221,7 @@ test('draws each headline figure\'s past year by 7-day period, ending at the sel
   for (const plot of await plots.all()) await expect(plot.locator('.analytics-history-line')).toHaveAttribute('d', /^M[\d.]+ [\d.]+ L/)
   // Weeks without a merge leave time to merge unknown, not zero.
   await expect(topline.locator('.analytics-history[data-series="Time to merge"] .analytics-history-line')).toHaveAttribute('d', / M/)
-  await expect(topline.locator('.analytics-history[data-series="Pull requests merged"] .analytics-history-max')).toHaveText('52 weeksMax 1.6/day')
+  await expect(topline.locator('.analytics-history[data-series="Pull requests merged"] .analytics-history-max')).toHaveText('Max 1.6/day')
   expect(state.historyReads).toHaveLength(1)
   const [{ bounds, org }] = state.historyReads
   expect(bounds).toHaveLength(53)
@@ -272,8 +275,8 @@ test('holds each chart\'s place while the past year loads, and says when it cann
 
   state.historyFails = true
   await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
-  await expect(tile.locator('.analytics-history-empty')).toHaveText('Past year unavailable')
-  await expect(tile.locator('.analytics-history-empty')).toHaveAttribute('data-help', 'acme: datastore offline')
+  await expect(tile.locator('.analytics-history')).toHaveAttribute('aria-label', 'History unavailable')
+  await expect(page.locator('#view-analytics')).not.toContainText('datastore offline')
   await expect(value(page, 'Issues opened')).toHaveText('12')
   expect((await tile.boundingBox())!.height).toBe(pending)
 })
@@ -355,7 +358,7 @@ test('shows live account quota below daily analytics with usage, resets and risk
   await expect(risk.nth(0)).toHaveClass(/yellow/)
   await expect(risk.nth(0)).toHaveText('25% estimated risk')
   await expect(risk.nth(1)).toHaveClass(/orange/)
-  await expect(section).toContainText('GitHub authentication is unavailable for octo-agent.')
+  await expect(section).not.toContainText('GitHub authentication is unavailable for octo-agent.')
   expect(await section.evaluate((element) => element.previousElementSibling?.className)).toBe('analytics-groups')
   await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
   await expect(risk.nth(0)).toHaveText('25% estimated risk')
@@ -381,10 +384,10 @@ test('shows quota read failure and refreshes it without retaining stale values',
   await page.goto('/')
   await openAnalytics(page)
   const section = page.getByRole('region', { name: 'GitHub API · Live' })
-  await expect(section).toContainText('Quota service unavailable')
+  await expect(section).not.toContainText('Quota service unavailable')
   failed = false
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
-  await expect(section).toContainText('Set your GitHub user and automation accounts')
+  await expect(section.locator('.github-quota-account')).toHaveCount(0)
   await expect(section.locator('.github-quota-accounts')).not.toHaveClass(/st-help-error/)
 })
 
@@ -401,19 +404,19 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(value(page, 'Issues closed')).toHaveText('9')
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
   await expect(value(page, 'Lines changed')).toHaveText('4,210')
-  await expect(value(page, 'Time to merge')).toHaveText('1d 3h')
+  await expect(value(page, 'Time to merge')).toHaveText('6h')
   await expect(value(page, 'Comments')).toHaveText('3.3')
   await expect(value(page, 'Median lines')).toHaveText('—')
   await expect(value(page, 'Behaviors')).toHaveText('2.0')
   await expect(value(page, 'Median time')).toHaveText('6h')
   await expect(panel.locator('.analytics-group').last().locator('.analytics-label').nth(3)).toHaveText('Median time')
   await expect(mergeTrend(page)).toHaveClass(/good/)
-  await expect(mergeTrend(page)).toContainText('↓ 50%')
-  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('50% faster versus the preceding 7-day average')
-  await expect(panel).toContainText('7-day rolling average: 2d 6h · 8 PRs')
-  await expect(panel).toContainText('From 3 of 4 pull requests')
-  await expect(panel.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Issues opened$/ }) }).locator('.analytics-trend')).toContainText('↑ 600%')
-  await expect(panel).toContainText('7-day daily average: 1.7')
+  await expect(mergeTrend(page)).toContainText('50%')
+  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('50% faster versus the preceding 7-day median')
+  await expect(panel).toContainText('7-day median: 12h · 8 PRs')
+  await expect(value(page, 'Lines changed')).toHaveAttribute('data-help', /From 3 of 4 pull requests/)
+  await expect(panel.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Issues opened$/ }) }).locator('.analytics-trend')).toContainText('500%')
+  await expect(panel).toContainText('7-day median: 2.0 / day')
   await page.screenshot({ path: info.outputPath('analytics-day-trend.png') })
   expect(state.reads).toEqual([
     { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: null },
@@ -426,7 +429,7 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(value(page, 'Pull requests merged')).toHaveText('0')
   await expect(value(page, 'Median time')).toHaveText('—')
   await expect(mergeTrend(page).getByRole('img')).toHaveCount(0)
-  await expect(panel).toContainText('No pull requests were merged in this range.')
+  await expect(panel).not.toContainText('No pull requests were merged in this range.')
   await panel.getByRole('button', { name: 'Previous day' }).click()
   await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
   await expect.poll(() => state.reads.slice(2)).toEqual([
@@ -460,8 +463,8 @@ test('reads both periods for the selected account and shows slower merges in red
     { since: '2026-10-02T00:00:00.000Z', until: '2026-10-09T00:00:00.000Z', org: 'beta' },
   ])
   await expect(mergeTrend(page)).toHaveClass(/bad/)
-  await expect(mergeTrend(page)).toContainText('↑ 200%')
-  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('200% slower versus the preceding 7-day average')
+  await expect(mergeTrend(page)).toContainText('200%')
+  await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('200% slower versus the preceding 7-day median')
 })
 
 test('names an empty baseline instead of inventing a trend', async ({ page }) => {
@@ -469,9 +472,9 @@ test('names an empty baseline instead of inventing a trend', async ({ page }) =>
   state.baselineMerged = 0
   await page.goto('/')
   await openAnalytics(page)
-  await expect(value(page, 'Time to merge')).toHaveText('1d 3h')
+  await expect(value(page, 'Time to merge')).toHaveText('6h')
   await expect(mergeTrend(page).getByRole('img')).toHaveCount(0)
-  await expect(page.locator('#view-analytics')).toContainText('7-day rolling average: — · 0 PRs · No baseline')
+  await expect(page.locator('#view-analytics')).toContainText('7-day median: — · 0 PRs · No baseline')
 })
 
 test('uses configured timezone boundaries across DST', async ({ page }) => {
@@ -493,7 +496,7 @@ test('says when the numbers could not be read instead of showing old ones', asyn
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
   state.fail = true
   await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
-  await expect(page.locator('#view-analytics .analytics-status')).toHaveText('acme: datastore offline')
+  await expect(page.locator('#view-analytics')).not.toContainText('acme: datastore offline')
   await expect(page.locator('#view-analytics .analytics-tile')).toHaveCount(0)
 })
 
@@ -521,7 +524,7 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await response
   await expect(panel.locator('.analytics-groups')).not.toHaveAttribute('aria-busy', 'true')
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
-  await expect(mergeTrend(page)).toContainText('↓ 50%')
+  await expect(mergeTrend(page)).toContainText('50%')
 })
 
 test('retains the selected calendar date when navigating across midnight', async ({ page }) => {
@@ -593,7 +596,8 @@ test('clears a previous read error while retrying with the loader', async ({ pag
   await page.goto('/')
   await openAnalytics(page)
   const panel = page.locator('#view-analytics')
-  await expect(panel.locator('.analytics-status')).toHaveText('acme: datastore offline')
+  await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
+  await expect(panel).not.toContainText('acme: datastore offline')
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/analytics?**', async route => { await held; await route.fallback() })
@@ -705,4 +709,52 @@ test('keyboard selection takes precedence over a pending pointer readout', async
   await expect(plot.locator('.analytics-history-tip span')).toHaveText('6 opened · 2 Oct – 8 Oct 2026')
   await page.clock.runFor(600)
   await expect(plot.locator('.analytics-history-tip span')).toHaveText('6 opened · 2 Oct – 8 Oct 2026')
+})
+
+test('routes repeated account, history and quota failures into global notifications and restores colored median summaries', async ({ page }, info) => {
+  await workspace(page)
+  let failed = true
+  const detail = 'pullRequests totalCount changed while enumerating Vaquum/design-system: 109 to 110'
+  await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices: [] } }))
+  await page.route('**/api/analytics/history?**', route => {
+    const data = history(new URL(route.request().url()).searchParams.get('bounds')!.split(','))
+    data.errors = failed ? [{ org: 'vaquum', error: detail }] : []
+    return route.fulfill({ json: data })
+  })
+  await page.route('**/api/analytics?**', route => {
+    const query = new URL(route.request().url()).searchParams
+    const baseline = query.has('dailyBounds')
+    const data = report(baseline ? 8 : 4, baseline ? 54 : 27)
+    if (baseline) data.daily = Array.from({ length: 7 }, () => ({ issues: { opened: 2, closed: 1 }, pullRequests: report(1).pullRequests }))
+    data.errors = failed ? [{ org: 'vaquum', error: detail, stale: true }] : []
+    return route.fulfill({ json: data })
+  })
+  await page.route('**/api/github-quota', route => route.fulfill({ json: failed ? quotaReport() : { accounts: [] } }))
+  await page.goto('/')
+  await openAnalytics(page)
+  const view = page.locator('#view-analytics')
+  const summary = mergeTrend(page)
+  await expect(summary.locator('.analytics-value')).toHaveText('6h')
+  await expect(summary.locator('.analytics-arrow')).toHaveText('↓')
+  await expect(summary.locator('.analytics-delta')).toHaveText('50%')
+  await expect(summary).toHaveClass(/good/)
+  const colors = await summary.evaluate(el => [getComputedStyle(el.querySelector('.analytics-value')!).color, getComputedStyle(el.querySelector('.analytics-arrow')!).color, getComputedStyle(el.querySelector('.analytics-delta')!).color])
+  expect(new Set(colors).size).toBe(1)
+  const figure = (await summary.locator('.analytics-value').boundingBox())!
+  const arrow = (await summary.locator('.analytics-arrow').boundingBox())!
+  expect(arrow.x).toBeGreaterThan(figure.x + figure.width)
+  expect(Math.abs(arrow.y + arrow.height - figure.y - figure.height)).toBeLessThan(8)
+  await expect(view).not.toContainText(detail)
+  await expect(view).not.toContainText(/52 weeks|Distribution|Some GitHub accounts are unavailable|Showing available results/)
+  await page.locator('.nr-bell').click()
+  const rail = page.locator('.nr-rail')
+  await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(1)
+  await expect(rail).toContainText('GitHub authentication is unavailable for octo-agent.')
+  await page.screenshot({ path: info.outputPath('analytics-colored-median-notifications.png'), fullPage: true })
+  await leaveAnalytics(page)
+  await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(1)
+  failed = false
+  await openAnalytics(page)
+  await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(0)
+  await expect(rail).not.toContainText('GitHub authentication is unavailable for octo-agent.')
 })

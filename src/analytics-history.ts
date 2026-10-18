@@ -33,7 +33,7 @@ function perDay(value: number | null): string {
   return value === null ? '—' : `${formatRate(value)}/day`
 }
 
-/** All metric figures over the periods: counts as daily averages, time to merge as each period's mean. */
+/** All metric figures over the periods: counts as daily averages, time to merge as each period's median. */
 export function historySeries(history: AnalyticsHistory): HistorySeries[] {
   const { periods } = history
   return [
@@ -51,9 +51,9 @@ export function historySeries(history: AnalyticsHistory): HistorySeries[] {
     },
     {
       label: 'Time to merge',
-      values: periods.map((p) => p.pullRequests.averageTimeToMergeMs),
+      values: periods.map((p) => p.pullRequests.medianTimeToMergeMs),
       format: formatDuration,
-      detail: ({ pullRequests: pr }) => pr.merged ? `Mean of ${formatCount(pr.merged)} ${pr.merged === 1 ? 'PR' : 'PRs'}` : 'No merges',
+      detail: ({ pullRequests: pr }) => pr.merged ? `Median of ${formatCount(pr.merged)} ${pr.merged === 1 ? 'PR' : 'PRs'}` : 'No merges',
     },
     { label: 'Pull requests opened', values: periods.map((p) => p.pullRequests.opened / PERIOD_DAYS), format: perDay, detail: (p) => `${formatCount(p.pullRequests.opened)} opened` },
     { label: 'Closed without merging', values: periods.map((p) => p.pullRequests.closedUnmerged / PERIOD_DAYS), format: perDay, detail: (p) => `${formatCount(p.pullRequests.closedUnmerged)} closed unmerged` },

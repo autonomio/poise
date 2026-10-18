@@ -242,3 +242,34 @@ describe('saving a choice', () => {
     expect(failures).toEqual([['Error: second', 2]])
   })
 })
+
+it('shares browser read failures across sources, dismisses locally, clears on recovery and respects notifications off', async () => {
+  let enabled = true
+  const request = vi.fn(async () => new Response(JSON.stringify({ enabled, notices: [] }), { status: 200 }))
+  const feed = new NoticeFeed(request)
+  await feed.read()
+  const failure = { key: 'account:vaquum', title: 'GitHub data for vaquum is unavailable', body: 'totalCount changed: 109 to 110' }
+  feed.reportReadErrors('day', [failure])
+  feed.reportReadErrors('history', [failure])
+  expect(feed.current.notices).toHaveLength(1)
+  const first = feed.current.notices[0].id
+  await feed.read()
+  expect(feed.current.notices[0].body).toBe(failure.body)
+  await feed.dismiss(first)
+  expect(feed.current.notices).toEqual([])
+  feed.reportReadErrors('day', [failure])
+  expect(feed.current.notices).toEqual([])
+  expect(request).toHaveBeenCalledTimes(2)
+  feed.reportReadErrors('day', [])
+  feed.reportReadErrors('history', [])
+  feed.reportReadErrors('day', [failure])
+  expect(feed.current.notices[0].id).not.toBe(first)
+  enabled = false
+  await feed.read()
+  expect(feed.current.notices).toEqual([])
+  enabled = true
+  await feed.read()
+  expect(feed.current.notices).toHaveLength(1)
+  feed.reportReadErrors('day', [])
+  expect(feed.current.notices).toEqual([])
+})
