@@ -1,7 +1,7 @@
 // The page's side of the notices (src/notices.ts): reading the server's
 // answer and keeping this tab's notices in step with it.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NoticeFeed, noticesFrom, sendLatest, standingFor, type Notice } from '../src/notices'
 import { noticeMeta } from '../src/notification-items'
 

@@ -14,8 +14,7 @@ export interface AnalyticsReport {
     commentsPerPr: number | null
     medianCommentsPerPr?: number | null
     lines: { total: number | null, median: number | null, counted: number }
-    behaviors: { perPr: number | null
-      medianPerPr?: number | null, approvals: number, reviews: number, changesRequested: number }
+    behaviors: { perPr: number | null, medianPerPr?: number | null, approvals: number, reviews: number, changesRequested: number }
     averageTimeToMergeMs: number | null
     medianTimeToMergeMs: number | null
   }
