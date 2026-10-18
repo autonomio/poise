@@ -997,7 +997,6 @@ tr:hover .review-btn { opacity: 1; }
 .analytics-group, .github-quota-section { margin-bottom: var(--sp-7); }
 #view-analytics .tp-group-label { margin: 0 0 var(--sp-4); }
 #view-analytics [data-help] { cursor: help; }
-#view-analytics .analytics-label[data-help] { text-decoration: underline dotted var(--border); text-underline-offset: 4px; }
 #view-analytics [tabindex="0"]:focus-visible { outline: 2px solid var(--a1); outline-offset: 2px; }
 .analytics-tiles, .github-quota-accounts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); margin: 0; }
 .analytics-tile, .github-quota-account { min-width: 0; padding: var(--sp-3); border: var(--b-base); border-radius: var(--r-sm); background: var(--surface); }

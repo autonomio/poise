@@ -57,7 +57,6 @@ function renderShell(): string {
       <section class="github-quota-section" aria-labelledby="analytics-github-quota">
         <h2 class="tp-group-label" id="analytics-github-quota">GitHub API · Live</h2>
         <div class="github-quota-accounts" aria-live="polite"></div>
-        <p class="analytics-group-note">Estimated risk of running out before reset, assuming recent usage continues. Collecting samples takes at least 15 seconds. Live quotas do not follow the selected day or organization.</p>
       </section>
     </main>`
 }
@@ -125,7 +124,7 @@ async function readQuota(): Promise<void> {
               <progress max="${bucket.limit}" value="${bucket.used}" aria-label="${escapeHtml(bucket.label)} quota used"></progress>
               <p class="analytics-note">Reset ${escapeHtml(time(bucket.resetAt))} · ${minutes.toFixed(1)} min left</p>
               <p class="analytics-note">${bucket.perMinute === null ? 'Collecting usage samples…' : `${number(Math.round(bucket.perMinute * 10) / 10)} / min used · ${(bucket.remaining / Math.max(minutes, 1 / 60)).toFixed(1)} / min available`}</p>
-              <p class="github-quota-risk ${quotaRiskTone(risk)}">${risk === null ? minutes === 0 ? 'Awaiting reset refresh' : 'Risk: collecting samples…' : `${risk}% estimated risk${bucket.remaining === 0 ? ' · Exhausted' : ''}`}</p>
+              <p class="github-quota-risk ${quotaRiskTone(risk)}" tabindex="0" data-help="Estimated chance of exhausting this budget before reset if the recently observed rate continues. Requires at least 15 seconds of samples; live quota is independent of the selected day and organization.">${risk === null ? minutes === 0 ? 'Awaiting reset refresh' : 'Risk: collecting samples…' : `${risk}% estimated risk${bucket.remaining === 0 ? ' · Exhausted' : ''}`}</p>
             `}
             ${quotaCharts(bucket, now)}
           </div>`
@@ -173,16 +172,32 @@ function historyMarkup(label: string, all: HistorySeries[] | null): string {
   </dd>`
 }
 
+const measurementHelp: Record<string, string> = {
+  'Issues opened': 'Issues created on the selected day within the selected organization scope.',
+  'Issues closed': 'Issues closed on the selected day within the selected organization scope.',
+  'Pull requests merged': 'Pull requests merged on the selected day.',
+  'Lines changed': 'Additions plus deletions across pull requests merged on the selected day. Partial size coverage is reported below the cards.',
+  'Time to merge': 'Mean elapsed time from opening to merge across pull requests merged on the selected day.',
+  'Pull requests opened': 'Pull requests created on the selected day.',
+  'Closed without merging': 'Pull requests closed on the selected day without being merged.',
+  'Time to first review': 'Median elapsed time from opening to the first submitted review by someone other than the author, for first reviews on the selected day.',
+  'Comments': 'Mean conversation and review comments per pull request merged on the selected day.',
+  'Median lines': 'Median additions plus deletions per pull request merged on the selected day. Withheld when any size is unknown.',
+  'Behaviors': 'Mean completed review and approval behaviors per pull request merged on the selected day.',
+  'Median time': 'Median elapsed time from opening to merge across pull requests merged on the selected day.',
+  'Merged by agent': 'Share of pull requests merged on the selected day whose merger was the configured agent account.',
+}
+
 function groupMarkup(group: AnalyticsGroup): string {
   const series = history.data ? historySeries(history.data) : null
   return `
     <section class="analytics-group" data-group="${group.id}" aria-labelledby="analytics-${group.id}">
-      <h2 class="tp-group-label" id="analytics-${group.id}" data-help="${escapeHtml(group.help)}" tabindex="0">${escapeHtml(group.label)}</h2>
+      <h2 class="tp-group-label" id="analytics-${group.id}">${escapeHtml(group.label)}</h2>
       <dl class="analytics-tiles">
         ${group.tiles.map((tile) => `
           <div class="analytics-tile">
-            <dt class="analytics-label"${tile.note ? ` data-help="${escapeHtml(tile.note)}" tabindex="0"` : ''}>${escapeHtml(tile.label)}</dt>
-            <dd class="analytics-value">${escapeHtml(tile.value)}</dd>
+            <dt class="analytics-label">${escapeHtml(tile.label)}</dt>
+            <dd class="analytics-value" data-help="${escapeHtml([measurementHelp[tile.label], tile.note].filter(Boolean).join(' '))}" tabindex="0">${escapeHtml(tile.value)}</dd>
             <dd class="analytics-trend ${tile.trend?.direction ?? 'neutral'}">${tile.trend ? `<span role="img" aria-label="${escapeHtml(tile.trend.description)}" data-help="${escapeHtml(tile.trend.caption)}">${escapeHtml(tile.trend.text)}</span>` : ''}</dd>
             <dd class="analytics-note">${tile.comparison ? escapeHtml(tile.comparison) : ''}</dd>
             ${historyMarkup(tile.label, series)}

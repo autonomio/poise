@@ -235,6 +235,8 @@ the daily report), counted exactly as the day is. The server reads local
 datastores once across all periods and uses the existing behavior ledger;
 this adds no upstream requests.
 
-Section and metric explanations appear after half a second on hover or on
-keyboard focus; missing data and coverage notes remain visible. See
+Measurement explanations appear after half a second on hover or keyboard
+focus. Headings stay plain and have no tooltips or dotted underlines. Risk
+assumptions and sample requirements live on the risk measurement itself;
+missing data and coverage notes remain visible. See
 [Menu and Settings](Menu.md).

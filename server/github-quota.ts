@@ -58,7 +58,7 @@ export function quotaBuckets(value: unknown, login: string, now: number): Github
       const persisted = getMeta(observationKey)
       const hour = Math.floor(now / 3_600_000)
       const previous: GithubQuotaObservation[] = persisted ? JSON.parse(persisted) : []
-      observations = [...previous.filter((sample) => sample.at >= now - 7 * 86_400_000 && Math.floor(sample.at / 3_600_000) < hour), { at: now, used, remaining, limit }]
+      observations = [...previous.filter((sample) => Math.floor(sample.at / 3_600_000) >= hour - 167 && Math.floor(sample.at / 3_600_000) < hour), { at: now, used, remaining, limit }]
       histories.push([observationKey, JSON.stringify(observations)])
     }
     const minutesLeft = Math.max(0, (reset * 1000 - now) / 60_000)

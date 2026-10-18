@@ -142,7 +142,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(flow.locator('[data-help="Faster vs 7-day median"]')).toBeVisible()
   await expect(flow).toContainText('7-day median: 2m 30s · 3 first reviews')
   await expect(value(page, 'Merged by agent')).toHaveText('75%')
-  await expect(perPr.locator('.analytics-label').last()).toHaveAttribute('data-help', '3 of 4 by octo-agent')
+  await expect(perPr.locator('.analytics-value').last()).toHaveAttribute('data-help', /3 of 4 by octo-agent/)
   await expect(quota.locator('.github-quota-bucket')).toHaveCount(2)
   // The window, not the reading column: the five topline numbers share one
   // row, the per-PR numbers sit under them, and each account is a row.
@@ -621,4 +621,24 @@ test('shows quota charts from the existing read and centers every organization s
     expect(geometry.top).toBe(geometry.bottom)
     expect(geometry.line + geometry.border).toBe(geometry.height)
   }
+})
+
+test('attaches delayed help to measurements, with plain headings and no quota explainer', async ({ page }) => {
+  await workspace(page)
+  await page.route('**/api/github-quota', (route) => route.fulfill({ json: quotaReport() }))
+  await page.goto('/')
+  await openAnalytics(page)
+  const view = page.locator('#view-analytics')
+  await expect(view.locator('h2[data-help], dt[data-help]')).toHaveCount(0)
+  await expect(view).not.toContainText('Estimated risk of running out before reset, assuming recent usage continues.')
+  await expect(view.locator('.analytics-value[data-help]')).toHaveCount(13)
+  const figure = value(page, 'Behaviors')
+  await figure.hover()
+  const tooltip = page.getByRole('tooltip')
+  await expect(tooltip).toBeHidden()
+  await expect(tooltip).toBeVisible()
+  await expect(tooltip).toContainText('Mean completed review and approval behaviors')
+  await expect(figure).toHaveCSS('text-decoration-line', 'none')
+  await page.mouse.move(0, 0)
+  await expect(tooltip).toBeHidden()
 })
