@@ -213,7 +213,8 @@ export class DockerClient {
   async runTask(name: string, spec: TaskSpec): Promise<number> {
     await this.call('DELETE', `/containers/${encodeURIComponent(name)}?force=true`, undefined, [404])
     const created = await this.call('POST', `/containers/create?name=${encodeURIComponent(name)}`, spec)
-    const container = typeof (created.body as { Id?: unknown }).Id === 'string' ? String((created.body as { Id: string }).Id) : null
+    const native = created.body && typeof created.body === 'object' ? created.body as { Id?: unknown } : null
+    const container = typeof native?.Id === 'string' ? native.Id : null
     try {
       await this.call('POST', `/containers/${encodeURIComponent(name)}/start`)
       const result = await this.call('POST', `/containers/${encodeURIComponent(name)}/wait`, undefined, [], TASK_TIMEOUT_MS)

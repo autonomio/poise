@@ -283,6 +283,9 @@ contract() {
   done
   check_user
   check_tools
+  docker exec "$workspace" node --input-type=module --eval "await import('/opt/poise/scripts/provider-cli-updates.mjs'); await import('/opt/poise/dist/runtime-diagnostic.js')" \
+    || fail "standalone maintenance diagnostics or its canonical redactor is missing"
+  pass "standalone maintenance diagnostics load without a provider or network"
   check_home "$workspace"
   check_entrypoint "$public_key"
 }
