@@ -481,7 +481,9 @@ it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key
 it.each(['signal', 'errno'] as const)('marks byte truncation of persisted %s evidence', (field) => {
   for (const original of ['x'.repeat(513), '障'.repeat(171)]) {
     const record = event('bounded-' + field, { [field]: original })
-    expect(Buffer.byteLength(record[field]!)).toBeLessThanOrEqual(512)
+    const bounded = record[field]
+    if (typeof bounded !== 'string') throw new Error('Expected bounded text evidence')
+    expect(Buffer.byteLength(bounded)).toBeLessThanOrEqual(512)
     expect(record[field]).not.toContain('\uFFFD')
     expect(record.truncated).toBe(true)
     const db = store(); db.append([record])
@@ -489,6 +491,14 @@ it.each(['signal', 'errno'] as const)('marks byte truncation of persisted %s evi
   }
   expect(event('exact-' + field, { [field]: 'x'.repeat(512) }).truncated).toBe(false)
   expect(event('numeric-' + field, { [field]: 9 })).toMatchObject({ [field]: 9, truncated: false })
+})
+
+it('redacts long credential field names through the shared structured-key classifier', () => {
+  const key = 'x'.repeat(2000) + 'PASSWORD', secret = 'opaque-unconfigured-value'
+  const record = event('long-credential-name', { stderr: JSON.stringify({ phase: 'prepare', [key]: secret }), message: 'retained technical cause' })
+  const db = store(); db.append([record])
+  expect(JSON.stringify(db.lookup(alice, record.id))).not.toContain(secret)
+  expect(record.message).toBe('retained technical cause')
 })
 
 

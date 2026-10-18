@@ -2,7 +2,28 @@ import { Buffer } from 'node:buffer'
 export const SECRET_KEY = /authorization|cookie|password|passwd|secret|credential|token(?:[-_]?hint)?$|^auth$|^bearer$|api.?key|private.?key/i
 
 const TERMINAL_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
-const CREDENTIAL_HEADER = /\b(?:[a-z0-9_./ -]*(?:authorization|cookie|password|passwd|secret|credential|api.?key|private.?key)[a-z0-9_./ -]*|[a-z0-9_./-]*token(?:[-_]?hint)?|auth|bearer)\\*["']?\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim
+// Scan each field run once, then use the same classifier as structured facts.
+const CREDENTIAL_FIELD = /(^|["'\\{},\r\n:=])([^"'\\:=\r\n{},]*[^ \t"'\\:=\r\n{},])\\*["']?[ \t]*[:=]/g
+
+/** @param {string} value @returns {boolean} */
+function hasCredentialHeader(value) {
+  for (const match of value.matchAll(CREDENTIAL_FIELD)) if (SECRET_KEY.test(match[2].trim())) return true
+  return false
+}
+
+/** @param {string} value @returns {string} */
+function redactHeaders(value) {
+  let output = '', offset = 0
+  for (const match of value.matchAll(CREDENTIAL_FIELD)) {
+    if (match.index < offset || !SECRET_KEY.test(match[2].trim())) continue
+    let end = value.indexOf('\n', match.index + match[0].length)
+    while (end >= 0 && /[ \t]/.test(value[end + 1] ?? '')) end = value.indexOf('\n', end + 1)
+    if (end < 0) end = value.length
+    output += value.slice(offset, match.index + match[1].length) + '[redacted header]'
+    offset = end
+  }
+  return output + value.slice(offset)
+}
 
 /** Normalize before detecting credentials or private field names. @param {string} value @returns {string} */
 export function cleanText(value) {
@@ -12,8 +33,7 @@ export function cleanText(value) {
 /** @param {string} value @param {readonly string[]} secrets @returns {string} */
 export function redact(value, secrets = []) {
   value = cleanText(value)
-  value = value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]')
-    .replace(CREDENTIAL_HEADER, '[redacted header]')
+  value = redactHeaders(value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]'))
     .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi, '$1[redacted]@')
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
@@ -55,7 +75,7 @@ export function lineRedactor(secrets = []) {
   return (line) => {
     line = cleanText(line)
     const continuation = header && /^[ \t]/.test(line)
-    header = continuation || line.search(CREDENTIAL_HEADER) >= 0
+    header = continuation || hasCredentialHeader(line)
     return continuation ? '[redacted header continuation]' : redact(line, secrets)
   }
 }
