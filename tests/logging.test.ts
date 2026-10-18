@@ -116,3 +116,16 @@ it('closes the active forwarding outage after a subsequent successful write', ()
   const source = loggingRuntime()!.health().sources.find((source) => source.id === 'forwarding')!
   expect(source.error).toBeNull(); expect(source.gaps.every((gap) => gap.to !== null)).toBe(true)
 })
+
+it('isolates synchronous and native stderr transport failures from application work', async () => {
+  start()
+  const write = vi.mocked(process.stderr.write)
+  write.mockImplementationOnce(() => { throw new Error('fixture writer failed') })
+  expect(() => diagnostic({ level: 'error', operation: 'write.failure', message: 'source cause' })).not.toThrow()
+  expect(loggingRuntime()!.health().sources.some((source) => source.id === 'capture' && source.error)).toBe(true)
+  expect(() => process.stderr.emit('error', Object.assign(new Error('fixture pipe closed'), { code: 'EPIPE' }))).not.toThrow()
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'forwarding')?.error).toContain('EPIPE')
+  await expect(runFile(process.execPath, ['-e', 'process.exit(0)'])).resolves.toMatchObject({ stdout: '' })
+  loggingRuntime()!.flush()
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { search: 'source cause' })).total).toBe(1)
+})

@@ -17,6 +17,12 @@ let fatalListener: ((error: Error) => void) | null = null
 let path = ''
 let sequence = 0
 let workspace = 'local'
+let stderrFailed = false
+const stderrFailure = (error: Error & { code?: unknown }) => {
+  if (stderrFailed) return
+  stderrFailed = true
+  active?.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding failed: ' + (typeof error.code === 'string' ? error.code : error.name))
+}
 
 export function loggingRuntime(): DiagnosticRuntime | null { return active }
 export function loggingWorkspace(): string { return workspace }
@@ -33,12 +39,12 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
     const accepted = active.ingest(event)
     // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
     if (process.stderr.writableLength < 256 * 1024) {
-      if (process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')) active.observe('forwarding', 'collection', workspace)
+      if (process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')) { stderrFailed = false; active.observe('forwarding', 'collection', workspace) }
     }
     else active.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding is backpressured; durable backfill remains available')
     return accepted
   } catch (error) {
-    process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.capture.failed', message: error instanceof Error ? error.name : 'capture failure' }) + '\n')
+    active?.observe('capture', 'collection', workspace, 'Diagnostic capture failed: ' + (error instanceof Error ? error.name : 'capture failure'))
     return null
   }
 }
@@ -101,6 +107,8 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
   active = new DiagnosticRuntime({ path, workspace, ...diagnosticConfig(process.env) })
+  stderrFailed = false
+  process.stderr.on('error', stderrFailure)
   sequence = 0
   try {
     if (existsSync(path + '.caller')) {
@@ -145,7 +153,10 @@ export async function stopLogging(): Promise<void> {
   if (fatalListener) process.off('uncaughtException', fatalListener)
   fatalListener = null
   restoreConsole?.(); restoreConsole = null
-  active?.stop(); active = null
+  active?.stop()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  process.stderr.off('error', stderrFailure)
+  active = null
 }
 
 /** Authenticated maintenance export; the HTTP owner supplies authorization. */

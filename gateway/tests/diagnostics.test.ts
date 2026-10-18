@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { normalize, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
+import { environmentSecrets, normalize, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { DiagnosticStore, DEFAULT_LOG_POLICY } from '../src/diagnostics/store.js'
 import { callerDiagnostic, nativeDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.js'
@@ -381,4 +381,10 @@ it('redacts standard credential URLs and decorated API headers before retaining 
     stderr: '\x1b[31mX-Api-Key\x1b[0m: decorated-private-key\nsocks5h://user:proxy-private-password@proxy.example\npostgresql://user:database-private-password@db.example' }, NOW, [])!
   for (const secret of ['decorated-private-key', 'proxy-private-password', 'database-private-password']) expect(value.stderr).not.toContain(secret)
   expect(value.stderr).toContain('socks5h://[redacted]@proxy.example')
+})
+
+it('extracts command-specific bearer credentials before retaining bare stderr values', () => {
+  const secrets = environmentSecrets({ GIT_CONFIG_VALUE_0: 'Authorization: Bearer overlay-private-credential' })
+  const event = normalize({ source: 'poise', operation: 'git.fetch', level: 'error', message: 'fetch failed', stderr: 'overlay-private-credential' }, NOW, secrets)!
+  expect(event.stderr).toBe('[redacted]')
 })
