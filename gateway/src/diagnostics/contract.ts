@@ -154,7 +154,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   if (!['workspace', 'operator', 'infrastructure'].includes(visibility)) throw new Error('Invalid diagnostic visibility')
   if (visibility === 'workspace' && !workspace) throw new Error('Workspace diagnostics require a workspace identity')
   const prefix = scopePrefix(workspace, visibility)
-  const condition = hash(redact(input.condition ?? input.message + '\n' + (input.stderr ?? ''), secrets))
+  const condition = hash(redact(input.condition ?? [input.message, input.stderr ?? '', ...(input.cause ?? []).slice(0, 8)].join('\n'), secrets))
   const incidentId = 'inc_' + prefix + '_' + hash(JSON.stringify([workspace, visibility, source, operation, input.account ?? null,
     input.repository ?? null, input.target ?? null, input.behavior ?? null, condition]))
   const id = 'evt_' + prefix + '_' + hash(JSON.stringify([workspace, input.source, input.id ?? randomUUID()]))

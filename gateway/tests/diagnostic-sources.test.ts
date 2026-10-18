@@ -71,3 +71,13 @@ describe('operator diagnostic budgets', () => {
     }
   })
 })
+
+
+it('preserves a full gateway cause beyond stdout formatting limits with truthful truncation', () => {
+  const lines: string[] = []; const events: Array<ReturnType<typeof normalize>> = []
+  const logger = createLogger((line) => lines.push(line), (level, operation, fields) => events.push(normalize(gatewayDiagnostic(level, operation, fields))))
+  logger.error('proxy.failed', { handle: 'alice', error: 'x'.repeat(1400) + ' exact-tail-cause' })
+  expect(JSON.parse(lines[0]).truncated).toBe(true)
+  expect(events[0]?.message).toContain('exact-tail-cause')
+  expect(events[0]?.truncated).toBe(false)
+})

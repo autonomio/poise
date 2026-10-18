@@ -302,6 +302,7 @@ describe('material cause identity', () => {
   it('separates causes after display truncation and exact stderr changes', () => {
     const prefix = 'same display '.repeat(200)
     expect(event('one-cause', { message: prefix + 'cause A' }).incidentId).not.toBe(event('other-cause', { message: prefix + 'cause B' }).incidentId)
+    expect(event('cause-a', { cause: ['actual cause A'] }).incidentId).not.toBe(event('cause-b', { cause: ['actual cause B'] }).incidentId)
     expect(event('stderr-a', { stderr: 'fatal: missing ref' }).incidentId).not.toBe(event('stderr-b', { stderr: 'fatal: permission denied' }).incidentId)
     expect(event('context-a', { callId: 'attempt-1', release: 'old', context: { attempts: 1 } }).incidentId).toBe(event('context-b', { callId: 'attempt-2', release: 'new', context: { attempts: 2 } }).incidentId)
   })

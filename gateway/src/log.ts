@@ -11,9 +11,11 @@ export interface Logger {
 export function createLogger(write: (line: string) => void, observe?: (level: string, event: string, fields: LogFields) => void): Logger {
   const secrets = environmentSecrets()
   const emit = (level: string, event: string, fields: LogFields = {}) => {
-    const safe = redactFacts(fields, secrets)
-    write(JSON.stringify({ time: new Date().toISOString(), level, event: redact(event, secrets), ...safe }))
-    if (level !== 'info') observe?.(level, event, safe)
+    let truncated = false
+    const safe = redactFacts(fields, secrets, () => { truncated = true })
+    write(JSON.stringify({ ...safe, time: new Date().toISOString(), level, event: redact(event, secrets), ...(truncated ? { truncated: true } : {}) }))
+    // The owned observer normalizes and redacts the full cause before its bounded persistence.
+    if (level !== 'info') observe?.(level, event, fields)
   }
   return {
     info: (event, fields) => emit('info', event, fields),
