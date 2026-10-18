@@ -58,6 +58,7 @@ test('an inline review survives editing, updates the existing PR, and supports r
   await expect(panel).toContainText('Please clarify this passage.')
   await expect(panel.getByRole('link', { name: 'PR #7' })).toHaveAttribute('href', 'https://github.com/acme/site/pull/7')
   await expect(panel.locator('textarea')).toHaveCount(1)
+  await expect.poll(() => panel.getAttribute('data-motion-running')).toBeNull()
   await page.screenshot({ path: info.outputPath('inline-review.png') })
 
   await page.locator('#editor-doc .editor-line').nth(2).fill('A clarified opening paragraph.')
@@ -81,6 +82,7 @@ test('an inline review survives editing, updates the existing PR, and supports r
   await panel.getByRole('button', { name: 'Resolve thread', exact: true }).click()
   await expect(panel.locator('.editor-review-state')).toHaveText('Resolved')
   expect(calls.filter((call) => call.path.endsWith('/action')).map((call) => call.body.action)).toEqual(['reply', 'resolve'])
+  await expect.poll(() => panel.getAttribute('data-motion-running')).toBeNull()
   await page.screenshot({ path: info.outputPath('resolved-review.png') })
 })
 

@@ -63,6 +63,12 @@ export class EditorReviews {
       if (this.visible()) void this.synchronize()
       else this.close()
     })
+    // The app initializes a view before making it visible. Resume on the
+    // actual visibility transition, including returns to an existing draft.
+    new MutationObserver(() => {
+      if (this.visible()) void this.synchronize()
+      else { clearTimeout(this.timer); this.close() }
+    }).observe(host.view, { attributes: true, attributeFilter: ['hidden'] })
     window.addEventListener('focus', () => { if (this.visible()) void this.synchronize() })
     window.addEventListener('resize', () => this.renderMarks())
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') this.close() })

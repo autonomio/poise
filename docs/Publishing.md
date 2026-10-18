@@ -169,7 +169,7 @@ published; the pull requests stay.
 ### Reviewing in the Editor
 
 Published documents show Review comments above the writing surface. Inline
-threads also underline their passage with a dashed blue mark; opening either
+threads also underline their passage with a distinct dashed mark; opening either
 shows the reviewer, site, PR, replies and resolved/outdated state. Reviewer
 text is read-only. General PR comments, review summaries, metadata feedback,
 removed passages and ambiguous locations remain accessible in the review list.
