@@ -908,8 +908,11 @@ def run_governed_behavior(
             print(json.dumps({"id": id_, "error": str(e), "error_code": "review_submission_failed"}))
             raise SystemExit(1)
         except review_budget.ReviewLimitError as e:
-            finish(id_, "failed", response=response, error=str(e), error_code=e.code)
-            print(json.dumps({"id": id_, "error": str(e), "error_code": e.code}))
+            diagnostic = {**e.diagnostic, "call_id": id_, "correlation_id": correlation_id,
+                          "repository": repo, "pr": mod.pr_number(pr), "reviewer": actor, "behavior": behavior,
+                          "expected_head": expected_head} if e.diagnostic else None
+            finish(id_, "failed", response=response, error=str(e), error_code=e.code, diagnostic=diagnostic)
+            print(json.dumps({"id": id_, "error": str(e), "error_code": e.code, "diagnostic": diagnostic}))
             raise SystemExit(1)
         except atoms.AgentPreflightError as e:
             diagnostic = {**e.diagnostic, "call_id": id_, "correlation_id": correlation_id,
@@ -983,7 +986,7 @@ def _run_review_with_recovery(mod, behavior, pr, pwd, actor, head, note, seconds
                 raise RuntimeError("review activity changed without matching counters")
         except Exception as verification:
             raise review_budget.ReviewLimitError(
-                f"{failure}; could not prove a safe recovery: {verification}", failure.code) from verification
+                f"{failure}; could not prove a safe recovery: {verification}", failure.code, failure.diagnostic) from verification
         # Only a Claude output limit is recoverable, and only by a different model.
         if failure.code != "model_output_limit" or spec.provider != "claude" or recovery.identity == spec.identity:
             raise failure

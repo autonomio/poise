@@ -1,4 +1,6 @@
 import io
+import json
+import subprocess
 from uuid import uuid4
 import tempfile
 from pathlib import Path
@@ -44,6 +46,16 @@ class TestReviewBudget(TestCase):
                 self.assertEqual(run.call_count, 1)
             with budget.ReviewBudget(): atoms.packet('/tmp', '#1', 'bit-mis', HEAD)
             self.assertEqual(run.call_count, 2)
+
+class TestPreparationDeadlines(TestCase):
+    def test_packet_git_deadline_does_not_claim_the_total_budget_expired(self):
+        diagnostic = {"version": 1, "source": "caller", "severity": "error", "operation": "fetch",
+                      "outcome": "timed_out", "stderr": "peer did not respond", "stderr_truncated": False}
+        done = SimpleNamespace(returncode=1, stdout="", stderr="caller_diagnostic: " + json.dumps(diagnostic))
+        with budget.ReviewBudget(), patch.object(atoms.subprocess, 'run', return_value=done), self.assertRaises(atoms.AgentPreflightError) as failure:
+            atoms.packet('/tmp', '#1', 'bit-mis', HEAD)
+        self.assertIsNone(failure.exception.code)
+        self.assertEqual(failure.exception.diagnostic['phase'], 'packet_acquisition')
 
 class TestRecovery(TestCase):
     def setUp(self):
@@ -115,6 +127,24 @@ class TestRecovery(TestCase):
         with api.db() as connection:
             stored = json.loads(connection.execute('select diagnostic from calls where id=?', (row['id'],)).fetchone()[0])
         self.assertEqual(stored, row['diagnostic'])
+
+    def test_total_packet_deadline_keeps_process_evidence_through_failed_reconciliation(self):
+        with patch.object(budget, 'monotonic', return_value=100) as clock:
+            def timeout(*args, **kwargs):
+                clock.return_value = 2000
+                raise subprocess.TimeoutExpired('github-interface', kwargs['timeout'])
+
+            def packet(*args, **kwargs):
+                return atoms.packet(self.directory.name, '#1', 'bit-mis', HEAD)
+
+            with patch.object(atoms.subprocess, 'run', side_effect=timeout):
+                row = self.execute(packet, [facts(), RuntimeError('GitHub unavailable')], model='gpt-6-astra-ultra')
+        self.assertEqual(row['error_code'], 'review_budget_exhausted')
+        self.assertEqual(row['diagnostic']['phase'], 'packet_acquisition')
+        self.assertEqual(row['diagnostic']['outcome'], 'timed_out')
+        self.assertEqual(row['diagnostic']['timeout_seconds'], 600)
+        self.assertEqual(row['diagnostic']['call_id'], row['id'])
+        self.assertEqual(row['diagnostic']['correlation_id'], row['correlation_id'])
 
     def test_github_submission_before_provider_error_never_launches_recovery(self):
         row = self.execute([budget.ReviewLimitError('output token maximum')], [facts(), approved()])

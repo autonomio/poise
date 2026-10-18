@@ -37,12 +37,18 @@ class Repository:
 
     def inspect(self, requests: list[dict]) -> dict:
         limit = review_budget.timeout(30, reserve=review_budget.FINAL_CHECK_SECONDS)
-        done = subprocess.run(
-            [os.getenv("GITHUB_INTERFACE_CLI", "github-interface"), "--review-context",
-             "--requests-json", json.dumps(requests)], cwd=str(self.root), text=True,
-            capture_output=True, timeout=limit,
-            env={**os.environ, "GITHUB_INTERFACE_REVIEW_ROOT": str(self.root)},
-        )
+        try:
+            done = subprocess.run(
+                [os.getenv("GITHUB_INTERFACE_CLI", "github-interface"), "--review-context",
+                 "--requests-json", json.dumps(requests)], cwd=str(self.root), text=True,
+                capture_output=True, timeout=limit,
+                env={**os.environ, "GITHUB_INTERFACE_REVIEW_ROOT": str(self.root)},
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            diagnostic = command_failure(error, "inspection", str(self.root), limit)
+            raise atoms.AgentPreflightError(f"cannot inspect review repository: {error}",
+                                            "review_budget_exhausted" if isinstance(error, subprocess.TimeoutExpired) else None,
+                                            diagnostic) from error
         if done.returncode:
             message = (done.stderr or done.stdout).strip() or "repository inspection failed"
             code = ("review_contract_violation" if message.startswith(("error: inspection", "error: invalid repository",
@@ -99,7 +105,6 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
                     or info.get("head_sha") != head or info.get("merge_base_sha") != merge_base
                     or info.get("path") != str(root)):
                 raise ValueError("checkout receipt differs from the pinned PR packet")
-            yield Repository(root, info)
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             message = str(error)
             code = ("review_budget_exhausted" if isinstance(error, (TimeoutError, subprocess.TimeoutExpired))
@@ -107,6 +112,7 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
                     if "exceeds its file or byte limit" in message or "guidance exceeds its byte limit" in message else None)
             diagnostic = command_failure(error, "checkout", pwd, limit) if isinstance(error, (OSError, subprocess.TimeoutExpired)) else None
             raise atoms.AgentPreflightError(f"cannot inspect review checkout: {error}", code, diagnostic) from error
+        yield Repository(root, info)
 
 
 @contextmanager

@@ -143,14 +143,17 @@ def packet(
     try:
         done = subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=limit)
     except (OSError, subprocess.TimeoutExpired) as error:
-        review_budget.timeout(1)
-        raise AgentPreflightError(str(error), diagnostic=command_failure(error, "packet_acquisition", pwd, limit)) from error
+        diagnostic = command_failure(error, "packet_acquisition", pwd, limit)
+        try:
+            review_budget.timeout(1)
+        except review_budget.ReviewLimitError as exhausted:
+            exhausted.diagnostic = diagnostic
+            raise
+        raise AgentPreflightError(str(error), diagnostic=diagnostic) from error
     if done.returncode:
         error = (done.stderr or done.stdout).strip() or f"github-interface exited {done.returncode}"
         code = "review_packet_too_large" if error.startswith("error: review_packet_too_large:") else None
         diagnostic = diagnostic_from_stderr(done.stderr, "packet_acquisition")
-        if diagnostic and diagnostic.get("outcome") == "timed_out":
-            code = "review_budget_exhausted"
         raise AgentPreflightError(diagnostic_message(diagnostic) if diagnostic else error, code, diagnostic)
     if cache is not None:
         cache[key] = done.stdout
