@@ -77,9 +77,9 @@ export function nativeDiagnostic(value: unknown, source: 'ingress' | 'kernel' | 
     : Number.isFinite(clock) && clock >= 0 && clock <= 8.64e15 ? new Date(clock).toISOString() : 'invalid source timestamp'
   return { id, time, source, level: typeof row.level === 'string' || typeof row.level === 'number' ? row.level : typeof row.PRIORITY === 'string' || typeof row.PRIORITY === 'number' ? row.PRIORITY : 'unknown',
     workspace, visibility: workspace ? 'infrastructure' : 'operator', operation: text(row.event) ?? text(row.logger) ?? source + '.diagnostic',
-    message: text(row.message) ?? text(row.msg) ?? text(row.MESSAGE) ?? 'Source supplied no message',
+    message: (text(row.message) ?? text(row.msg) ?? text(row.MESSAGE) ?? 'Source supplied no message').replace(/\?[^\s'"]+/g, '?[query omitted]'),
     requestId: text(row.request_id), container: text(row.container), release: text(row.release),
-    context: { method: object(row.request)?.method ?? row.method ?? null, route: text(object(row.request)?.uri)?.split('?')[0] ?? null,
+    context: { method: object(row.request)?.method ?? row.method ?? null, route: text(object(row.request)?.uri)?.startsWith('/api/') ? text(object(row.request)?.uri)?.split('?')[0].split('/').slice(0, 3).join('/') : null,
       durationMs: number(row.duration) === null ? null : Number(row.duration) * 1000,
       upstream: text(row.upstream), errno: text(row.errno), sourceCursor: text(row.__CURSOR) },
   }

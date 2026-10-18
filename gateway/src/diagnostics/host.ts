@@ -8,7 +8,7 @@ export class HostJournal {
   private child: ChildProcess | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private stopping = false
-  constructor(private readonly runtime: DiagnosticRuntime) {}
+  constructor(private readonly runtime: DiagnosticRuntime, private readonly executable = 'journalctl') {}
   start(): void {
     if (this.timer) return
     this.stopping = false
@@ -21,22 +21,34 @@ export class HostJournal {
     try { cursor = this.runtime.query((db) => db.checkpoint('host-journal')) }
     catch (error) { this.runtime.observe('host-journal', 'kernel', null, String(error)); return }
     const args = ['--follow', '--no-pager', '--output=json', '--priority=warning', ...(cursor ? ['--after-cursor=' + cursor] : ['--since=-1 minute']), '_TRANSPORT=kernel', '+', '_SYSTEMD_UNIT=docker.service']
-    const child = spawn('journalctl', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(this.executable, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
     let pending = Buffer.alloc(0)
+    let discarding = false
     let sourceError: string | null = null
     child.once('spawn', () => this.runtime.observe('host-journal', 'kernel', null))
     child.stdout?.on('data', (chunk: Buffer) => {
-      pending = Buffer.concat([pending, chunk])
-      if (pending.length > 128 * 1024) { sourceError = 'Host journal record exceeds its bound; observation gap'; child.kill('SIGTERM'); return }
-      let end: number
-      while ((end = pending.indexOf(10)) >= 0) {
-        const line = pending.subarray(0, end); pending = pending.subarray(end + 1)
+      let remaining = chunk
+      while (remaining.length) {
+        const end = remaining.indexOf(10)
+        const part = end < 0 ? remaining : remaining.subarray(0, end)
+        if (!discarding && pending.length + part.length > 64 * 1024) {
+          discarding = true; pending = Buffer.alloc(0)
+          this.runtime.observe('host-journal', 'kernel', null, 'Oversized native journal record excluded; historical coverage gap')
+        }
+        if (!discarding) pending = Buffer.concat([pending, part])
+        if (end < 0) return
+        remaining = remaining.subarray(end + 1)
+        if (discarding) { discarding = false; continue }
+        const line = pending; pending = Buffer.alloc(0)
         try {
           if (line.length > 64 * 1024) throw new Error('Host journal record exceeds 64 KiB')
           const row = JSON.parse(line.toString()) as Record<string, unknown>
           if (typeof row.__CURSOR !== 'string' || row.__CURSOR.length > 1024) throw new Error('Host journal supplied no usable cursor')
           if (row._TRANSPORT !== 'kernel' && row._SYSTEMD_UNIT !== 'docker.service') continue
+          if (row._SYSTEMD_UNIT === 'docker.service' && row._TRANSPORT !== 'kernel' && !/poise[-_. ]|daemon|no space left|read-only file system|out of memory|too many open files/i.test(String(row.MESSAGE))) {
+            this.runtime.query((db) => db.commitDelivery([], 'host-journal', String(row.__CURSOR))); continue
+          }
           // Native operational metadata only; never unit environments or arbitrary service payloads.
           const input = nativeDiagnostic(row, row._TRANSPORT === 'kernel' ? 'kernel' : 'docker', row.__CURSOR, null)
           input.message = input.message.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]')

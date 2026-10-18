@@ -29,12 +29,13 @@ export function refreshModelCatalog(): Promise<Record<string, unknown>> {
     let report: unknown
     try { report = JSON.parse(stdout) } catch { throw new Error('The model check returned an unreadable report') }
     if (!report || typeof report !== 'object' || !('families' in report) || !report.families || typeof report.families !== 'object' || Array.isArray(report.families)) throw new Error('The model check returned an invalid report')
+    const updates = 'cli_updates' in report && report.cli_updates && typeof report.cli_updates === 'object' ? report.cli_updates as Record<string, Record<string, unknown>> : {}
     for (const [family, value] of Object.entries(report.families)) {
       if (value && typeof value === 'object' && 'status' in value && value.status !== 'ok') diagnostic({
         level: 'warning', operation: 'models.discovery', component: family,
         message: 'error' in value && typeof value.error === 'string' ? value.error : 'Model discovery did not return a healthy result',
-        context: { family, status: value.status, reportPath: catalogReportPath(), configuredExecutable: process.env[family.toUpperCase() + '_CLI'] ?? family,
-          resolvedExecutable: null, phase: 'catalog_discovery' },
+        context: { family, status: value.status, reportPath: catalogReportPath(), configuredExecutable: process.env[family.toUpperCase() + '_CLI'] ?? null,
+          resolvedExecutable: updates[family]?.path ?? null, launchExecutable: updates[family]?.launchPath ?? null, phase: 'catalog_discovery' },
       })
     }
     return report as Record<string, unknown>

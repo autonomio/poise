@@ -1,3 +1,4 @@
+import { environmentSecrets, redact } from './diagnostics/contract.js'
 import { DiagnosticRuntime } from './diagnostics/runtime.js'
 import { EnvironmentCollectors, gatewayDiagnostic } from './diagnostics/collectors.js'
 import { HostJournal } from './diagnostics/host.js'
@@ -39,6 +40,14 @@ mkdirSync(config.dataDir, { recursive: true, mode: 0o700 })
 diagnostics = new DiagnosticRuntime({ path: join(config.dataDir, 'logging.db') })
 diagnostics.start()
 diagnostics.observe('gateway', 'gateway', null)
+process.once('uncaughtException', (error) => {
+  diagnostics?.emit({ source: 'gateway', operation: 'process.uncaught', level: 'critical', message: error.message, stack: error.stack })
+  diagnostics?.flush()
+  process.stderr.write(redact(error.stack ?? error.message, environmentSecrets()) + '\n')
+  process.exit(1)
+})
+const hostJournal = new HostJournal(diagnostics)
+hostJournal.start()
 const now = () => Date.now()
 const store = new Store(join(config.dataDir, 'gateway.db'), now)
 store.syncEnvAllowList(config.allowedUsers)
@@ -62,7 +71,6 @@ const gateway = createGateway({
 })
 
 const collectors = new EnvironmentCollectors(diagnostics, docker, gateway.context)
-const hostJournal = new HostJournal(diagnostics)
 
 // Before anything can call a workspace: this container may be new, and on none of their networks.
 await orchestrator.joinWorkspaceNetworks()
@@ -71,7 +79,6 @@ gateway.server.listen(config.port, () => {
   log.info('gateway.listening', { port: config.port, domain: config.domain, image: config.runtimeImage })
 })
 collectors.start()
-hostJournal.start()
 const stopUpgrades = orchestrator.startUpgradeLoop()
 const stopDiskWatch = disk.start()
 const stopPurging = startPurgeLoop(store, log, PURGE_INTERVAL_MS)

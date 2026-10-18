@@ -345,3 +345,13 @@ describe('switching to another release', () => {
     }
   })
 })
+
+describe('private diagnostic maintenance delivery', () => {
+  it('refuses browser/link assertions before reading any diagnostic evidence', () => {
+    const { service } = serviceOf()
+    for (const scope of ['browser', 'link'] as const) {
+      expect(() => call('GET', '/api/service/diagnostics', { kind: 'gateway', scope }, service)).toThrow(expect.objectContaining({ statusCode: 403 }))
+    }
+    expect(call('POST', '/api/service/diagnostics', { kind: 'gateway', scope: 'admin' }, service)).toMatchObject({ status: 405, allow: 'GET' })
+  })
+})

@@ -119,7 +119,13 @@ export class EnvironmentCollectors {
       for (let i = 0; i < events.length; i += 100) this.runtime.query((db) => db.append(events.slice(i, i + 100)))
       this.runtime.query((db) => db.commitDelivery([], key, String(until)))
       this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, excluded ? 'Unstructured source output excluded to protect user content; structured diagnostic coverage only' : null)
-    } catch (error) { this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, String(error)) }
+    } catch (error) {
+      if (/bound|exceeds|tail/i.test(String(error))) {
+        try { this.runtime.query((db) => db.commitDelivery([], key, String(until))) }
+        catch (failure) { this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, String(failure)); return }
+      }
+      this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, String(error))
+    }
   }
 
   private async events(until: number): Promise<void> {
@@ -129,7 +135,7 @@ export class EnvironmentCollectors {
       const since = previous ? Number(previous) : until - 60
       const bytes = await this.docker.diagnosticRead(`/events?since=${since}&until=${until}`, 512 * 1024)
       const lines = bytes.toString().split('\n').filter(Boolean)
-      if (lines.length > 2000) throw new Error('Docker lifecycle event bound exceeded; coverage gap')
+      if (lines.length >= 256) throw new Error('Docker retained native event history limit reached; collection gap')
       const events = lines.flatMap((line) => {
         const input = dockerLifecycle(JSON.parse(line)); const event = input && normalize(input)
         return event ? [event] : []
@@ -137,7 +143,13 @@ export class EnvironmentCollectors {
       for (let i = 0; i < events.length; i += 100) this.runtime.query((db) => db.append(events.slice(i, i + 100)))
       this.runtime.query((db) => db.commitDelivery([], key, String(until)))
       this.runtime.observe('docker-events', 'docker', null)
-    } catch (error) { this.runtime.observe('docker-events', 'docker', null, String(error)) }
+    } catch (error) {
+      if (/bound|exceeds|limit reached/i.test(String(error))) {
+        try { this.runtime.query((db) => db.commitDelivery([], key, String(until))) }
+        catch (failure) { this.runtime.observe('docker-events', 'docker', null, String(failure)); return }
+      }
+      this.runtime.observe('docker-events', 'docker', null, String(error))
+    }
   }
 
   private async workspace(handle: string, login: string): Promise<void> {
