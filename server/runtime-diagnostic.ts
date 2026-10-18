@@ -17,7 +17,7 @@ function resolved(command: string): string | null {
   return null
 }
 function forward(fd: number, value: string | Buffer): string | null {
-  try { writeSync(fd, value); return null }
+  try { writeSync(fd, typeof value === 'string' ? Buffer.from(value) : value); return null }
   catch (error) { return String((error as NodeJS.ErrnoException).code ?? 'DIAGNOSTIC_OUTPUT_UNAVAILABLE') }
 }
 function publish(event: LogEvent): void {

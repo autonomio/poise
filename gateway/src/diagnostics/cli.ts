@@ -9,7 +9,7 @@ import { nativeDiagnostic } from './sources.js'
 interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
 
 /** Operator access is Docker/host ownership, never a workspace browser assertion. */
-export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n'), input: AsyncIterable<Buffer | string> = process.stdin): Promise<void> {
+export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n'), stdin: AsyncIterable<Buffer | string> = process.stdin): Promise<void> {
   const [command = 'health', ...options] = args
   const path = join(process.env.POISE_GATEWAY_DATA ?? '/data', 'logging.db')
   const { policy } = diagnosticConfig(process.env)
@@ -54,7 +54,7 @@ export async function runOperator(args: string[], write: (line: string) => void 
     } else if (command === 'ingress') {
       if (options.length) throw new Error('ingress reads one bounded JSON record from stdin')
       let size = 0; const chunks: Buffer[] = []
-      for await (const chunk of input) {
+      for await (const chunk of stdin) {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
         size += bytes.length
         if (size > 64 * 1024) throw new Error('Ingress record exceeds 64 KiB')
