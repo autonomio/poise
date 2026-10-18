@@ -111,3 +111,22 @@ it('gives host operator commands no workspace identity, including a real owner n
   expect(JSON.stringify(lines)).not.toContain('owner-only-coverage')
   expect(JSON.parse(lines[2]).status).toBe('unavailable')
 })
+
+
+it('retains distinct ingress occurrences for one request while deduplicating exact replay', async () => {
+  const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path); vi.stubEnv('POISE_DOMAIN', 'poise.test')
+  const records = [
+    { request: { host: 'poise.test' }, request_id: 'same-request', ts: 1792317600, level: 'warn', msg: 'proxy retry' },
+    { request: { host: 'poise.test' }, request_id: 'same-request', ts: 1792317600, level: 'error', msg: 'proxy failed' },
+  ]
+  const lines: string[] = []
+  for (const row of [...records, records[0]]) {
+    async function* input() { yield JSON.stringify(row) }
+    await runOperator(['ingress'], (line) => lines.push(line), input())
+  }
+  expect(JSON.parse(lines[0]).eventId).not.toBe(JSON.parse(lines[1]).eventId)
+  expect(JSON.parse(lines[0]).eventId).toBe(JSON.parse(lines[2]).eventId)
+  await runOperator(['query'], (line) => lines.push(line))
+  expect(JSON.parse(lines[3]).total).toBe(2)
+  expect(JSON.parse(lines[3]).events).toEqual(expect.arrayContaining(records.map((row) => expect.objectContaining({ message: row.msg, requestId: 'same-request' }))))
+})

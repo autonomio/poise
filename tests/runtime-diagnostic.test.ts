@@ -75,3 +75,17 @@ it('retains collection loss when a successful command emits only an oversized na
   expect(events[0]).toMatchObject({ source: 'collection', severity: 'warning', truncated: true, context: { captureError: 'Oversized bootstrap stderr line excluded' } })
   expect(JSON.stringify(events)).not.toContain('private-payload')
 })
+
+
+it('redacts folded bootstrap headers across child chunks before durable capture and reporting', async () => {
+  const storePath = path(); const events: LogEvent[] = []
+  const script = "process.stderr.write('Authorization: Bearer\\n');setTimeout(()=>{process.stderr.write(' opaque-folded-value\\n\\tsecond-folded-value\\nfatal: preserved cause');process.exit(9)},20)"
+  expect(await captureRuntimeCommand(process.execPath, ['-e', script], { path: storePath, workspace: 'alice', quiet: true, write: (event) => events.push(event) })).toBe(9)
+  const store = new DiagnosticStore(storePath)
+  try {
+    const retained = store.query({ workspace: 'alice', operator: false })
+    for (const value of ['opaque-folded-value', 'second-folded-value']) expect(JSON.stringify({ retained, events })).not.toContain(value)
+    expect(retained.events[0].stderr).toContain('fatal: preserved cause')
+    expect(retained.events[0].exitCode).toBe(9)
+  } finally { store.close() }
+})

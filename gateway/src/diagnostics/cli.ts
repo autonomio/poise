@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { diagnosticConfig } from './config.js'
 import { join } from 'node:path'
@@ -65,7 +66,7 @@ export async function runOperator(args: string[], write: (line: string) => void 
       const domain = process.env.POISE_DOMAIN
       const host = row.request?.host?.split(':')[0].toLowerCase()
       if (!domain || !host || (host !== domain && !host.endsWith('.' + domain))) throw new Error('Ingress record is outside the configured Poise domain')
-      const input = nativeDiagnostic(row, 'ingress', row.request_id ?? text, null)
+      const input = nativeDiagnostic(row, 'ingress', createHash('sha256').update(text).digest('hex'), null)
       input.context = { host, integration: 'operator-stdin' }
       const event = normalize(input, Date.now(), environmentSecrets())
       if (event) db.append([event])

@@ -5,6 +5,7 @@ import { constants, homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from '../gateway/src/diagnostics/contract'
+import { lineRedactor } from '../gateway/src/diagnostics/redaction.mjs'
 import { diagnosticConfig } from '../gateway/src/diagnostics/config'
 import { DiagnosticStore } from '../gateway/src/diagnostics/store'
 
@@ -33,11 +34,12 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   const workspace = options.workspace ?? process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   const secrets = environmentSecrets()
   const executable = resolved(command)
+  const redactStderr = lineRedactor(secrets); const redactStdout = lineRedactor(secrets)
   let stderr = Buffer.alloc(0); let pending = Buffer.alloc(0); let discarding = false; let truncated = false; let nativeWarning = false
   let stdoutPending = Buffer.alloc(0); let stdoutDiscarding = false; let stdoutForwarded = 0
   let timedOut = false; let spawnError: NodeJS.ErrnoException | null = null; let captureError: string | null = null
   const addLine = (line: Buffer) => {
-    const safe = redact(line.toString(), secrets)
+    const safe = redactStderr(line.toString())
     nativeWarning ||= /^(?:npm\s+warn\b|warning:|warn(?:ing)?[:\s])/im.test(safe)
     const bytes = Buffer.concat([stderr, Buffer.from(safe + '\n')])
     if (bytes.length > 16 * 1024) truncated = true
@@ -45,7 +47,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   }
   const child = spawn(command, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
   const forwardStdout = (line: Buffer) => {
-    const safe = Buffer.from(redact(line.toString(), secrets) + '\n')
+    const safe = Buffer.from(redactStdout(line.toString()) + '\n')
     if (stdoutForwarded + safe.length > 64 * 1024) { captureError = 'Bootstrap stdout forwarding exceeded 64 KiB; content excluded'; return }
     stdoutForwarded += safe.length
     if (!options.quiet) captureError = forward(1, safe) ?? captureError
@@ -62,7 +64,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       let remaining = chunk
       while (remaining.length) {
         const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
-        if (!stdoutDiscarding && stdoutPending.length + part.length > 64 * 1024) { stdoutDiscarding = true; stdoutPending = Buffer.alloc(0); captureError = 'Oversized bootstrap stdout line excluded' }
+        if (!stdoutDiscarding && stdoutPending.length + part.length > 64 * 1024) { stdoutDiscarding = true; stdoutPending = Buffer.alloc(0); redactStdout('Authorization:'); captureError = 'Oversized bootstrap stdout line excluded' }
         if (!stdoutDiscarding) stdoutPending = Buffer.concat([stdoutPending, part])
         if (end < 0) return
         remaining = remaining.subarray(end + 1)
@@ -75,7 +77,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       let remaining = chunk
       while (remaining.length) {
         const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
-        if (!discarding && pending.length + part.length > 64 * 1024) { captureError = 'Oversized bootstrap stderr line excluded'; truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('[oversized stderr line excluded]')) }
+        if (!discarding && pending.length + part.length > 64 * 1024) { captureError = 'Oversized bootstrap stderr line excluded'; truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('Authorization: [oversized stderr line excluded]')) }
         if (!discarding) pending = Buffer.concat([pending, part])
         if (end < 0) return
         remaining = remaining.subarray(end + 1)

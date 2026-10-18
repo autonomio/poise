@@ -1,14 +1,17 @@
 import { Buffer } from 'node:buffer'
 export const SECRET_KEY = /authorization|cookie|password|secret|credential|(?:^|[_-])token$|^(?:access|refresh|id|auth|api|session)Token$|^auth$|^bearer$|api.?key|private.?key/i
 
+const TERMINAL_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
+const CREDENTIAL_HEADER = /\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|x-auth-token|x-amz-security-token|password|passwd|client[-_]?secret)["']?\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim
+
 /** @param {string} value @param {readonly string[]} secrets @returns {string} */
 export function redact(value, secrets = []) {
-  value = value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  value = value.replace(TERMINAL_CSI, '')
   for (const secret of [...secrets].filter((item) => item.length >= 8).sort((a, b) => b.length - a.length)) {
     for (const encoded of [secret, Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')]) value = value.split(encoded).join('[redacted]')
   }
   return value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]')
-    .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|x-auth-token|x-amz-security-token|password|passwd|client[-_]?secret)["']?\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
+    .replace(CREDENTIAL_HEADER, '[redacted header]')
     .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi, '$1[redacted]@')
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
@@ -34,3 +37,17 @@ export function environmentSecrets(env = process.env) {
   return secrets
 }
 
+
+/** Retain folded-header state across bounded source lines, without keeping raw credentials.
+ * @param {readonly string[]} secrets
+ * @returns {(line: string) => string}
+ */
+export function lineRedactor(secrets = []) {
+  let header = false
+  return (line) => {
+    line = line.replace(TERMINAL_CSI, '')
+    const continuation = header && /^[ \t]/.test(line)
+    header = continuation || line.search(CREDENTIAL_HEADER) >= 0
+    return continuation ? '[redacted header continuation]' : redact(line, secrets)
+  }
+}

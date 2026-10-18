@@ -88,6 +88,7 @@ export class EnvironmentCollectors {
     try {
       const containers = await this.docker.diagnosticContainers()
       if (containers.length > 128) throw new Error('Docker collection exceeds 128 source containers; remaining coverage is unavailable')
+      this.runtime.query((db) => db.reconcileDockerCheckpoints(containers.map((container) => container.Id)))
       for (const container of containers) {
         if (this.stopping) return
         await this.logs(container, until)

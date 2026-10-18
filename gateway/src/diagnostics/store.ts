@@ -261,6 +261,13 @@ export class DiagnosticStore {
     return (this.db.prepare('SELECT value FROM log_meta WHERE key=?').get('checkpoint:' + key) as { value: string } | undefined)?.value ?? null
   }
 
+  /** Discovery includes stopped containers; removed IDs can never resume a log stream. */
+  reconcileDockerCheckpoints(containerIds: readonly string[]): void {
+    if (containerIds.length > 128 || containerIds.some((id) => !/^[a-zA-Z0-9._-]{1,240}$/.test(id))) throw new Error('Invalid Docker checkpoint inventory')
+    const keys = containerIds.map((id) => 'checkpoint:docker-log:' + id)
+    this.db.prepare(`DELETE FROM log_meta WHERE key GLOB 'checkpoint:docker-log:*'${keys.length ? ` AND key NOT IN (${keys.map(() => '?').join(',')})` : ''}`).run(...keys)
+  }
+
   commitDelivery(events: readonly LogEvent[], key: string, cursor: string): number {
     this.checkpoint(key)
     if (cursor.length > 1024) throw new Error('Diagnostic checkpoint exceeds its bound')

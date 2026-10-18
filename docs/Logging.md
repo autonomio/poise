@@ -225,3 +225,5 @@ also recognizes the entrypoint's three owned fatal configuration/home checks;
 it assigns the verified container owner even when workspace environment setup
 failed. Normal supervisor startup chatter remains excluded. Helper/reporting
 unavailability is a collection Warning rather than an invented application cause.
+
+Container discovery includes stopped containers and removes checkpoints only for absent container IDs; retained events survive that cleanup. Operator ingress deduplicates exact record replays, while separate records sharing a request ID retain distinct occurrence IDs. Bootstrap line capture keeps folded credential-header state across child output chunks before reporting or persistence.

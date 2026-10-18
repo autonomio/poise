@@ -124,3 +124,26 @@ it('captures only owned fatal entrypoint checks and explicit supervisor collecti
   const invalid = supervisorDiagnostic('poise-runtime: POISE_SKIP_CLI_BOOTSTRAP must be 0 or 1, not "private-config-value".', 'invalid', 'alice')
   expect(JSON.stringify(invalid)).not.toContain('private-config-value')
 })
+
+
+it('bounds removed-container checkpoints across churn without evicting retained evidence or live cursors', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'poise-checkpoint-churn-')); directories.push(directory)
+  const path = join(directory, 'history.db'); const store = new DiagnosticStore(path, { maxBytes: 4096, maxEvents: 100, retentionMs: 86400000 })
+  const control = new Database(path)
+  try {
+    const event = normalize(input)!
+    store.commitDelivery([event], 'docker-log:live', 'live-cursor')
+    store.commitDelivery([], 'host-journal', 'host-cursor')
+    for (let i = 0; i < 1000; i++) {
+      store.reconcileDockerCheckpoints(['live', 'replacement-' + i])
+      store.commitDelivery([], 'docker-log:replacement-' + i, String(i))
+    }
+    expect(control.prepare("SELECT COUNT(*) AS count FROM log_meta WHERE key GLOB 'checkpoint:docker-log:*'").get()).toEqual({ count: 2 })
+    expect(store.checkpoint('docker-log:replacement-0')).toBeNull()
+    expect(store.checkpoint('docker-log:live')).toBe('live-cursor')
+    expect(store.checkpoint('host-journal')).toBe('host-cursor')
+    store.reconcileDockerCheckpoints([])
+    expect(store.checkpoint('docker-log:live')).toBeNull()
+    expect(store.lookup(access, event.id).status).toBe('found')
+  } finally { control.close(); store.close() }
+})
