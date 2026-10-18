@@ -524,11 +524,14 @@ def diagnostics(after: int = 0, limit: int = 3) -> dict:
             evidence = json.loads(row["diagnostic"]) if row["diagnostic"] else None
             if evidence is not None and not isinstance(evidence, dict):
                 raise ValueError("diagnostic must be an object")
+            # Python's decoder accepts NaN/Infinity and overflowing exponents.
+            # The stream must remain finite JSON for its JavaScript consumer.
+            json.dumps(evidence, allow_nan=False)
             entry["diagnostic"] = evidence
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             entry["diagnostic"] = None
-            entry["evidence_unavailable"] = "Stored process diagnostic is malformed or exceeds 64 KiB"
-        if len(json.dumps(entry).encode()) > 64 * 1024:
+            entry["evidence_unavailable"] = "Stored process diagnostic is malformed, non-finite or exceeds bounded decoding limits"
+        if len(json.dumps(entry, allow_nan=False).encode()) > 64 * 1024:
             entry["diagnostic"] = None
             entry["error"] = (row["error"] or "")[:2048]
             entry["evidence_unavailable"] = "Stored process diagnostic exceeds the bounded metadata envelope"
@@ -1448,7 +1451,7 @@ def main():
     if len(sys.argv) in (2, 3, 4) and sys.argv[1] == "--diagnostics":
         after = int(sys.argv[2]) if len(sys.argv) >= 3 else 0
         limit = int(sys.argv[3]) if len(sys.argv) == 4 else 3
-        print(json.dumps(diagnostics(after, limit)))
+        print(json.dumps(diagnostics(after, limit), allow_nan=False))
         return
     if sys.argv[1:] == ["--logs"]:
         print(json.dumps(logs(), indent=2))

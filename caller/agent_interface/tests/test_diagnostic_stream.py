@@ -1,5 +1,7 @@
 """The Logging stream never reads prompts or artifacts and never skips late completion."""
+import io
 import json
+import sys
 import tempfile
 from pathlib import Path
 from unittest import TestCase
@@ -77,3 +79,42 @@ class DiagnosticStreamCase(TestCase):
         self.assertEqual(replay["streamId"], stale["streamId"])
         self.assertEqual([row["id"] for row in replay["events"]], [second])
         self.assertEqual(replay["cursor"], 1)
+
+    def test_nonfinite_and_deep_evidence_cannot_poison_cli_pages_or_block_later_calls(self):
+        malformed = [
+            '{"version":1,"context":{"value":NaN}}',
+            '{"version":1,"context":{"value":Infinity}}',
+            '{"version":1,"context":{"value":-Infinity}}',
+            '{"version":1,"context":{"value":1e9999}}',
+            '{"version":1,"context":' + '[' * 2000 + '0' + ']' * 2000 + '}',
+        ]
+        ids = []
+        for raw in malformed:
+            id_ = self.call()
+            agent_interface.finish(id_, "failed", error="known process cause")
+            with agent_interface.db() as conn:
+                conn.execute("update calls set diagnostic=? where id=?", (raw, id_))
+            ids.append(id_)
+        later = self.call()
+        agent_interface.finish(later, "failed", error="later exact cause", diagnostic={"version": 1, "stderr": "later stderr"})
+        cursor = 0
+        for id_ in ids:
+            with self.subTest(id=id_):
+                page = agent_interface.diagnostics(cursor, 1)
+                output = io.StringIO()
+                with patch.object(sys, "argv", ["agent-interface", "--diagnostics", str(cursor), "1"]), patch.object(sys, "stdout", output):
+                    agent_interface.main()
+                parsed = json.loads(output.getvalue(), parse_constant=lambda value: self.fail(f"invalid JSON constant {value}"))
+                self.assertEqual(parsed, page)
+                json.dumps(page, allow_nan=False)
+                row = page["events"][0]
+                self.assertEqual(row["id"], id_)
+                self.assertIsNone(row["diagnostic"])
+                self.assertIn("evidence_unavailable", row)
+                self.assertEqual(row["error"], "known process cause")
+                self.assertGreater(page["cursor"], cursor)
+                cursor = page["cursor"]
+        final = agent_interface.diagnostics(cursor, 1)
+        self.assertEqual(final["events"][0]["id"], later)
+        self.assertEqual(final["events"][0]["diagnostic"]["stderr"], "later stderr")
+        self.assertEqual(agent_interface.diagnostics(final["cursor"])["events"], [])

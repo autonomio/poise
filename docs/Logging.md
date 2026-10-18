@@ -199,6 +199,8 @@ explicitly distinguished from unobserved incident usage.
 Start/wait failures capture available stderr before cleanup too. Unknown task
 completion keeps a null exit code and the actual control error; failed evidence
 reads or reporting remain explicit and never replace the task's outcome.
+Malformed, non-finite or excessively nested Caller evidence advances with an
+explicit unavailable marker; it cannot poison JSON pages or block later calls.
 
 
 ## Storage calibration
