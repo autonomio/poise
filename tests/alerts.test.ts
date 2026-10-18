@@ -184,6 +184,14 @@ describe('the alert producers', () => {
     expect(store.openAlerts()[0].dismissedAt).not.toBeNull()
   })
 
+  it('keeps different HTTP failure causes distinct while ignoring attempt IDs', () => {
+    producers.behaviorHeld('approve-prs', 'acme/app#12', false, `GitHub 403 for attempt ${'a'.repeat(32)}`)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true, `GitHub 403 for attempt ${'b'.repeat(32)}`)
+    expect(rows()).toHaveLength(1)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true, `GitHub 500 for attempt ${'c'.repeat(32)}`)
+    expect(rows().map((row) => row.resolved === null)).toEqual([false, true])
+  })
+
   it('alerts when a datastore sync has been failing for 15 minutes, until it succeeds', () => {
     const since = Date.parse('2026-10-03T10:00:00.000Z')
     producers.datastoreSyncFailed('Acme', since, since)

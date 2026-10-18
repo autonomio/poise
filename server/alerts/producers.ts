@@ -168,8 +168,11 @@ export function behaviorHeld(behavior: string, target: string, alreadyHeld: bool
 
 // Attempt IDs and changing counts do not make a continuing failure new.
 function heldCause(body: string): string {
+  if (/review_packet_too_large|Input exceeds the maximum length|PR packet is too large|review prompt limit/.test(body)) return 'review_packet_too_large'
+  if (/No space left on device|\bENOSPC\b/.test(body)) return 'storage_exhausted'
   return body.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '<id>')
-    .replace(/\b[0-9a-f]{32,40}\b/gi, '<id>').replace(/\d+(?:\.\d+)?/g, '<n>')
+    .replace(/\b[0-9a-f]{32,40}\b/gi, '<id>')
+    .replace(/\b\d+(?:\.\d+)? (bytes|characters|seconds|milliseconds|attempts)\b/gi, '<n> $1')
 }
 
 const datastoreKey = (login: string) => `datastore-sync:${login.toLowerCase()}`
