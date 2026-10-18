@@ -34,8 +34,12 @@ response fields, and preserve its exact process evidence when available.
 
 ## Retention and queries
 
-Defaults are **up to 30 days**, **64 MiB of event payloads**, and **50,000 events**;
-the earliest bound reached expires evidence. SQLite's page budget, cache and
+Defaults are **up to 30 days**, **64 MiB of accounted event storage**, and **50,000 events**;
+the earliest bound reached expires evidence. Accounting includes the searchable
+projection and an index allowance. Expiry tombstones retain only ID and scope
+for up to one further retention period, capped at twice the event count limit.
+Unknown and inaccessible IDs share one response; expiry is reported only from
+an authorized tombstone. SQLite's page budget, cache and
 journal are also bounded. Records remain after a source or container disappears.
 Source coverage and its unavailable intervals are separate from event counts.
 The collection runtime has a separate coverage journal and in-memory health

@@ -49,7 +49,10 @@ export class DiagnosticStore {
     if (!readOnly && path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new Database(path, { readonly: readOnly, fileMustExist: readOnly })
     this.db.pragma('busy_timeout = 25')
-    if (readOnly) return
+    if (readOnly) {
+      this.checkVersion()
+      return
+    }
     if (path !== ':memory:') chmodSync(path, 0o600)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('secure_delete = ON')
@@ -71,12 +74,18 @@ export class DiagnosticStore {
       CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
       CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
       CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS log_expired (id TEXT PRIMARY KEY, workspace TEXT, visibility TEXT NOT NULL, expired_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS log_expired_time ON log_expired(expired_at);
       CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT OR IGNORE INTO log_meta VALUES ('version','1');
       INSERT OR IGNORE INTO log_meta VALUES ('expired_through','');
     `)
-    const version = this.db.prepare("SELECT value FROM log_meta WHERE key='version'").get() as { value: string }
-    if (version.value !== '1') throw new Error(`Unsupported Logging store version ${version.value}`)
+    this.checkVersion()
+  }
+
+  private checkVersion(): void {
+    const version = this.db.prepare("SELECT value FROM log_meta WHERE key='version'").get() as { value: string } | undefined
+    if (version?.value !== '1') throw new Error(`Unsupported Logging store version ${version?.value ?? 'missing'}`)
   }
 
   append(events: readonly LogEvent[]): number {
@@ -86,8 +95,8 @@ export class DiagnosticStore {
       for (const event of events) {
         if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new Error('Invalid Logging event version or severity')
         const payload = JSON.stringify(event)
-        const bytes = Buffer.byteLength(payload)
-        if (bytes > 64 * 1024) throw new Error('Logging event exceeds 64 KiB')
+        const payloadBytes = Buffer.byteLength(payload)
+        if (payloadBytes > 64 * 1024) throw new Error('Logging event exceeds 64 KiB')
         const prefix = scopePrefix(event.workspace, event.visibility)
         if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[2] !== prefix
           || !event.incidentId.startsWith(`inc_${prefix}_`)) throw new Error('Logging event identity is outside its authorized scope')
@@ -96,10 +105,11 @@ export class DiagnosticStore {
           if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id)
           continue
         }
-        // Make room before insertion, including when the disk budget is full.
-        this.prune(bytes)
         const search = [event.message, event.target, event.id, event.incidentId, event.callId, event.correlationId,
           event.requestId, event.operation, event.repository, event.account].filter(Boolean).join('\n').toLowerCase()
+        // Account for the searchable projection and a conservative index allowance.
+        const bytes = payloadBytes + Buffer.byteLength(search) + 1024
+        this.prune(bytes)
         inserted += this.db.prepare(`INSERT OR IGNORE INTO log_events
           (id,incident_id,sort_time,ingested_at,severity,source,component,workspace,visibility,account,repository,call_id,correlation_id,search,bytes,payload)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(event.id, event.incidentId, event.eventTime ?? event.ingestedAt,
@@ -117,12 +127,16 @@ export class DiagnosticStore {
     this.db.prepare("DELETE FROM log_meta WHERE key LIKE 'expired_through:%' AND value < ?").run(cutoff)
     const expired = this.db.prepare('SELECT workspace,visibility,MAX(sort_time) AS at FROM log_events WHERE sort_time < ? GROUP BY workspace,visibility').all(cutoff) as Array<{ workspace: string | null; visibility: string; at: string }>
     for (const value of expired) this.expire(value.workspace, value.visibility, value.at)
+    this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE sort_time < ?').run(new Date(this.now()).toISOString(), cutoff)
     this.db.prepare('DELETE FROM log_events WHERE sort_time < ?').run(cutoff)
+    this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
+    this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
     let { count, bytes } = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(bytes),0) AS bytes FROM log_events').get() as { count: number; bytes: number }
 
     while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
       const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY sort_time,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
       if (!oldest) break
+      this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(oldest.id, oldest.workspace, oldest.visibility, new Date(this.now()).toISOString())
       this.db.prepare('DELETE FROM log_events WHERE id=?').run(oldest.id)
       this.expire(oldest.workspace, oldest.visibility, oldest.sort_time)
       bytes -= oldest.bytes
@@ -144,8 +158,7 @@ export class DiagnosticStore {
   }
 
   readCoverage(access: LogAccess): Coverage[] {
-    const rows = (access.operator ? this.db.prepare('SELECT payload FROM log_coverage').all()
-      : this.db.prepare('SELECT payload FROM log_coverage WHERE workspace=? OR workspace IS NULL').all(access.workspace)) as Array<{ payload: string }>
+    const rows = this.db.prepare('SELECT payload FROM log_coverage WHERE workspace=? OR workspace IS NULL').all(access.workspace) as Array<{ payload: string }>
     return rows.map(({ payload }) => {
       const value = JSON.parse(payload) as Coverage
       return access.operator || value.workspace === access.workspace ? value : {
@@ -226,18 +239,10 @@ export class DiagnosticStore {
     const row = (access.operator ? this.db.prepare("SELECT payload FROM log_events WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
       : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace)) as { payload: string } | undefined
     if (row) return { status: 'found', event: JSON.parse(row.payload) as LogEvent }
-    // Inaccessible IDs are indistinguishable from unknown IDs, even after expiry.
-    const prefix = id.split('_')[2]
-    const allowed = [scopePrefix(access.workspace, 'workspace'), scopePrefix(access.workspace, 'infrastructure')]
-    if (access.operator) allowed.push(scopePrefix(null, 'operator'))
-    if (!allowed.includes(prefix)) return { status: 'unavailable' }
-    // Do not expose the existence of another workspace's evidence.
-    const milliseconds = Number(id.split('_')[1])
-    if (!Number.isFinite(milliseconds) || !Number.isFinite(new Date(milliseconds).getTime())) throw new Error('Invalid Logging event time')
-    const time = new Date(milliseconds).toISOString()
-    const key = access.operator ? 'expired_through' : 'expired_through:' + scopePrefix(access.workspace, 'workspace')
-    const watermark = (this.db.prepare('SELECT value FROM log_meta WHERE key=?').get(key) as { value: string } | undefined)?.value ?? '' 
-    return { status: time < new Date(this.now() - this.policy.retentionMs).toISOString() || (watermark && time <= watermark) ? 'expired' : 'unavailable' }
+    const expired = (access.operator
+      ? this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
+      : this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace))
+    return { status: expired ? 'expired' : 'unavailable' }
   }
 
   close(): void { this.db.close() }
