@@ -73,6 +73,7 @@ def init_db():
             "runner",
             "receipts",
             "review_comments",
+            "diagnostic",
         ):
             if col not in cols:
                 try:
@@ -344,6 +345,7 @@ def finish(
     head_sha: str | None = None,
     action: str | None = None,
     error_code: str | None = None,
+    diagnostic: dict | None = None,
 ) -> float:
     path = str((RESPONSES / f"{id_}.txt").resolve()) if response else None
     if response:
@@ -351,8 +353,8 @@ def finish(
     ended_at = time()
     with db() as conn:
         conn.execute(
-            "update calls set status=?, ended_at=?, response_path=?, error=?, outcome=?, head_sha=?, action=?, error_code=?, progress=coalesce(?, progress) where id=?",
-            (status, ended_at, path, error, outcome, head_sha, action, error_code, progress.terminal(status), id_),
+            "update calls set status=?, ended_at=?, response_path=?, error=?, outcome=?, head_sha=?, action=?, error_code=?, diagnostic=?, progress=coalesce(?, progress) where id=?",
+            (status, ended_at, path, error, outcome, head_sha, action, error_code, json.dumps({**diagnostic, "call_id": id_}) if diagnostic else None, progress.terminal(status), id_),
         )
     return ended_at
 
@@ -429,7 +431,7 @@ def logs():
                       response_path, error, pr_id, repo, actor, behavior,
                       session_id, outcome, head_sha, expected_head, source,
                       correlation_id, action, error_code, progress, review_policy, recovery_model,
-                      review_id, runner, receipts, review_comments
+                      review_id, runner, receipts, review_comments, diagnostic
                from calls order by started_at"""
         ).fetchall()
     return [
@@ -454,6 +456,7 @@ def logs():
             "correlation_id": r["correlation_id"],
             "action": r["action"],
             "error_code": r["error_code"],
+            "diagnostic": json.loads(r["diagnostic"]) if r["diagnostic"] else None,
             "progress": progress.decode(r["progress"]),
             "review_policy": r["review_policy"],
             "recovery_model": r["recovery_model"],
@@ -909,6 +912,9 @@ def run_governed_behavior(
             print(json.dumps({"id": id_, "error": str(e), "error_code": e.code}))
             raise SystemExit(1)
         except atoms.AgentPreflightError as e:
+            diagnostic = {**e.diagnostic, "call_id": id_, "correlation_id": correlation_id,
+                          "repository": repo, "pr": mod.pr_number(pr), "reviewer": actor, "behavior": behavior,
+                          "expected_head": expected_head} if e.diagnostic else None
             finish(
                 id_,
                 "failed",
@@ -917,6 +923,7 @@ def run_governed_behavior(
                 outcome="preflight_failed",
                 action="not_started",
                 error_code=e.code,
+                diagnostic=diagnostic,
             )
             print(json.dumps({
                 "id": id_,
@@ -930,6 +937,7 @@ def run_governed_behavior(
                 "outcome": "preflight_failed",
                 "error": str(e),
                 "error_code": e.code,
+                "diagnostic": diagnostic,
             }, indent=2))
             raise SystemExit(1)
         except Exception as e:

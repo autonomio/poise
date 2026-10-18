@@ -81,6 +81,41 @@ class TestRecovery(TestCase):
         self.assertIsNone(row['head_sha'])
         self.assertIsNone(row['recovery_model'])
 
+    def test_checkout_cause_propagates_from_cli_into_durable_call_and_log(self):
+        import json
+        import sys
+        from agent_interface import review_repository
+        diagnostic = {"version": 1, "source": "caller", "severity": "error", "operation": "fetch",
+                      "phase": "checkout", "outcome": "exit", "exit_code": 128, "signal": None,
+                      "errno": None, "stderr": "fatal: remote ref missing\nremote: exact cause",
+                      "stderr_truncated": False, "filesystem": None}
+        cli = Path(self.directory.name) / "fake-github-interface"
+        cli.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write({('caller_diagnostic: ' + json.dumps(diagnostic))!r})\nsys.exit(1)\n")
+        cli.chmod(0o700)
+        packet = json.dumps({"repository": "o/r", "head_sha": HEAD,
+                             "pull": {"base": {"sha": "b" * 40}}, "merge_base_sha": "b" * 40})
+
+        def prepare(*args, **kwargs):
+            with review_repository.prepare(self.directory.name, 'https://github.com/o/r/pull/1', 'bit-mis', HEAD, packet):
+                self.fail('failed checkout yielded a repository')
+
+        with patch.dict('os.environ', {"GITHUB_INTERFACE_CLI": str(cli)}):
+            row = self.execute(prepare, [facts()], model='gpt-6-astra-ultra')
+        self.assertEqual(row['diagnostic']['stderr'], diagnostic['stderr'])
+        self.assertEqual(row['diagnostic']['call_id'], row['id'])
+        self.assertEqual(row['diagnostic']['correlation_id'], row['correlation_id'])
+        self.assertEqual(row['diagnostic']['expected_head'], HEAD)
+        self.assertEqual(row['diagnostic']['repository'], 'o/r')
+        self.assertEqual(row['diagnostic']['reviewer'], 'bit-mis')
+        self.assertIn('git fetch', row['error'])
+        self.assertIn('remote: exact cause', row['error'])
+        self.assertEqual(row['action'], 'not_started')
+        self.assertEqual(row['outcome'], 'preflight_failed')
+        self.assertEqual(self.mod.run.call_count, 1)
+        with api.db() as connection:
+            stored = json.loads(connection.execute('select diagnostic from calls where id=?', (row['id'],)).fetchone()[0])
+        self.assertEqual(stored, row['diagnostic'])
+
     def test_github_submission_before_provider_error_never_launches_recovery(self):
         row = self.execute([budget.ReviewLimitError('output token maximum')], [facts(), approved()])
         self.assertEqual(self.mod.run.call_count, 1)

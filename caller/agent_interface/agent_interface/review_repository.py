@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import current_thread, main_thread
 
 from . import atoms, progress, review_budget
+from .process_diagnostic import command_failure, diagnostic_from_stderr, diagnostic_message
 
 INSPECTION_RULE = "Bash(github-interface --review-context --requests-json *)"
 POLICY = (
@@ -46,7 +47,8 @@ class Repository:
             message = (done.stderr or done.stdout).strip() or "repository inspection failed"
             code = ("review_contract_violation" if message.startswith(("error: inspection", "error: invalid repository",
                     "error: search requires", "error: search exceeds")) else None)
-            raise atoms.AgentPreflightError(message, code)
+            diagnostic = diagnostic_from_stderr(done.stderr, "inspection")
+            raise atoms.AgentPreflightError(diagnostic_message(diagnostic) if diagnostic else message, code, diagnostic)
         response = json.loads(done.stdout)
         if response.get("action") != "review_context" or response.get("head_sha") != self.info["head_sha"]:
             raise atoms.AgentPreflightError("repository inspection returned a different head")
@@ -85,6 +87,11 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
                 cwd=pwd, text=True, capture_output=True, timeout=limit,
             )
             if done.returncode:
+                diagnostic = diagnostic_from_stderr(done.stderr, "checkout")
+                if diagnostic:
+                    diagnostic.update(repository=repo, pr=atoms.pr_number(pr), expected_head=head, reviewer=actor,
+                                      base_sha=base, merge_base_sha=merge_base)
+                    raise atoms.AgentPreflightError(diagnostic_message(diagnostic), diagnostic=diagnostic)
                 raise ValueError((done.stderr or done.stdout).strip() or "checkout command failed")
             info = json.loads(done.stdout)
             if (info.get("action") != "checkout_review" or info.get("repository") != repo
@@ -97,7 +104,8 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
             code = ("review_budget_exhausted" if isinstance(error, (TimeoutError, subprocess.TimeoutExpired))
                     or "timed out" in message else "review_packet_too_large"
                     if "exceeds its file or byte limit" in message or "guidance exceeds its byte limit" in message else None)
-            raise atoms.AgentPreflightError(f"cannot inspect review checkout: {error}", code) from error
+            diagnostic = command_failure(error, "checkout", pwd, limit) if isinstance(error, (OSError, subprocess.TimeoutExpired)) else None
+            raise atoms.AgentPreflightError(f"cannot inspect review checkout: {error}", code, diagnostic) from error
 
 
 @contextmanager

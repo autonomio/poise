@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import progress, review_budget
+from .process_diagnostic import command_failure, diagnostic_from_stderr, diagnostic_message
 from .provider_progress import claude_error, claude_result
 
 import os
@@ -30,9 +31,10 @@ CORRELATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 class AgentPreflightError(RuntimeError):
-    def __init__(self, message: str, code: str | None = None):
+    def __init__(self, message: str, code: str | None = None, diagnostic: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.diagnostic = diagnostic
 
 
 # A provider that refused the work or an account it cannot use: running the
@@ -142,11 +144,12 @@ def packet(
         done = subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=limit)
     except (OSError, subprocess.TimeoutExpired) as error:
         review_budget.timeout(1)
-        raise AgentPreflightError(str(error)) from error
+        raise AgentPreflightError(str(error), diagnostic=command_failure(error, "packet_acquisition", pwd, limit)) from error
     if done.returncode:
         error = (done.stderr or done.stdout).strip() or f"github-interface exited {done.returncode}"
         code = "review_packet_too_large" if error.startswith("error: review_packet_too_large:") else None
-        raise AgentPreflightError(error, code)
+        diagnostic = diagnostic_from_stderr(done.stderr, "packet_acquisition")
+        raise AgentPreflightError(diagnostic_message(diagnostic) if diagnostic else error, code, diagnostic)
     if cache is not None:
         cache[key] = done.stdout
     return done.stdout
