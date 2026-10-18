@@ -214,3 +214,14 @@ proofs from a Node 22 container on the Engine host network. This also works when
 a macOS checkout cannot directly route to Docker Desktop's private bridge IPs.
 Only the isolated test runner receives the Docker socket; production workspaces
 retain their existing restricted mounts and networks.
+
+
+The workspace supervisor retains native spawn errors, unexpected nonzero/signal
+exits, unavailable requested releases and early-release fallback observations
+through the same private local store before the application starts. Expected
+update exits and container shutdown do not produce fault rows. Reporting failure
+does not change release selection or process exit behavior. The Docker adapter
+also recognizes the entrypoint's three owned fatal configuration/home checks;
+it assigns the verified container owner even when workspace environment setup
+failed. Normal supervisor startup chatter remains excluded. Helper/reporting
+unavailability is a collection Warning rather than an invented application cause.

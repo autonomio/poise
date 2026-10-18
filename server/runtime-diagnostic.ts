@@ -4,7 +4,7 @@ import { constants as fsConstants, accessSync, realpathSync, statfsSync, writeSy
 import { constants, homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { environmentSecrets, normalize, redact, type LogEvent } from '../gateway/src/diagnostics/contract'
+import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from '../gateway/src/diagnostics/contract'
 import { diagnosticConfig } from '../gateway/src/diagnostics/config'
 import { DiagnosticStore } from '../gateway/src/diagnostics/store'
 
@@ -107,24 +107,43 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       stderr: stderr.toString(), truncated, exitCode: failedSpawn ? null : result.code, signal: result.signal, errno: failedSpawn?.errno ?? failedSpawn?.code ?? null, timeoutMs,
       context: { configuredExecutable: command, resolvedExecutable: executable, elapsedMs: Date.now() - started, timedOut,
         captureError, processErrorCode: failedSpawn?.code ?? null, providerStarted: child.pid !== undefined }, resources }, Date.now(), secrets)!
-    const path = options.path ?? join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
-    let store: DiagnosticStore | null = null
-    try { store = new DiagnosticStore(path, diagnosticConfig(process.env).policy); store.append([event]) }
-    catch (error) {
-      const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.persistence_unavailable',
-        message: error instanceof Error ? error.message : String(error), context: { eventId: event.id } }, Date.now(), secrets)!
-      try { (options.write ?? publish)(gap) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
-    } finally {
-      try { store?.close() }
-      catch (error) {
-        const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.close_failed',
-          message: error instanceof Error ? error.message : String(error) }, Date.now(), secrets)!
-        try { (options.write ?? publish)(gap) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
-      }
-    }
-    try { (options.write ?? publish)(event) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
+    persistRuntimeDiagnostic(event, options)
   }
   return code
+}
+
+function persistRuntimeDiagnostic(event: LogEvent, options: CaptureOptions): void {
+  const workspace = event.workspace
+  const secrets = environmentSecrets()
+  const path = options.path ?? join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
+  let store: DiagnosticStore | null = null
+  try { store = new DiagnosticStore(path, diagnosticConfig(process.env).policy); store.append([event]) }
+  catch (error) {
+    const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.persistence_unavailable',
+      message: error instanceof Error ? error.message : String(error), context: { eventId: event.id } }, Date.now(), secrets)!
+    try { (options.write ?? publish)(gap) } catch { forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') }
+  } finally {
+    try { store?.close() }
+    catch (error) {
+      const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.close_failed',
+        message: error instanceof Error ? error.message : String(error) }, Date.now(), secrets)!
+      try { (options.write ?? publish)(gap) } catch { forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') }
+    }
+  }
+  try { (options.write ?? publish)(event) } catch { forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') }
+}
+
+/** Supervisor observations share bootstrap persistence without controlling process lifecycle. */
+export function recordRuntimeDiagnostic(input: DiagnosticInput, options: CaptureOptions = {}): string | null {
+  try {
+    const event = normalize({ ...input, source: input.source ?? 'poise',
+      time: input.time === undefined ? new Date().toISOString() : input.time,
+      workspace: options.workspace ?? process.env.POISE_WORKSPACE_HANDLE ?? 'local', visibility: 'workspace',
+      container: input.container === undefined ? process.env.HOSTNAME ?? null : input.container,
+      release: input.release === undefined ? process.env.POISE_RELEASE ?? null : input.release }, Date.now(), environmentSecrets())
+    if (event) persistRuntimeDiagnostic(event, options)
+    return event?.id ?? null
+  } catch { forward(2, 'poise-runtime: diagnostic reporting unavailable.\n'); return null }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

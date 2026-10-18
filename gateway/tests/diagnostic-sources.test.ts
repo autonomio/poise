@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { supervisorDiagnostic } from '../src/diagnostics/sources.js'
 import { normalize } from '../src/diagnostics/contract.js'
 import { dockerLifecycle, dockerLines, gatewayDiagnostic } from '../src/diagnostics/collectors.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
@@ -112,4 +113,14 @@ it('quarantines evidence above the configured storage budget without pinning the
     expect(runtime.query((db) => db.lookup(access, later.id)).status).toBe('found')
     expect(runtime.health()).toMatchObject({ status: 'partial', rejected: expect.any(Number) })
   } finally { runtime.stop() }
+})
+
+it('captures only owned fatal entrypoint checks and explicit supervisor collection failures', () => {
+  const missing = supervisorDiagnostic('poise-runtime: missing environment: POISE_MODE POISE_WORKSPACE_HANDLE.', 'entrypoint', 'alice')
+  expect(normalize(missing!)).toMatchObject({ source: 'poise', severity: 'error', workspace: 'alice', visibility: 'workspace', component: 'workspace-supervisor' })
+  expect(supervisorDiagnostic('poise-runtime: installing missing provider CLIs in the background', 'routine', 'alice')).toBeNull()
+  expect(supervisorDiagnostic('arbitrary private user content', 'private', 'alice')).toBeNull()
+  expect(supervisorDiagnostic('poise-runtime: diagnostic helper unavailable.', 'gap', 'alice')).toMatchObject({ level: 'warning', source: 'collection' })
+  const invalid = supervisorDiagnostic('poise-runtime: POISE_SKIP_CLI_BOOTSTRAP must be 0 or 1, not "private-config-value".', 'invalid', 'alice')
+  expect(JSON.stringify(invalid)).not.toContain('private-config-value')
 })

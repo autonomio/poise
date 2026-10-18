@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { captureRuntimeCommand } from '../server/runtime-diagnostic'
+import { captureRuntimeCommand, recordRuntimeDiagnostic } from '../server/runtime-diagnostic'
 import { DiagnosticStore } from '../gateway/src/diagnostics/store'
 import type { LogEvent } from '../gateway/src/diagnostics/contract'
 
@@ -51,4 +51,18 @@ it('records missing executable evidence and bounds oversized stdout without reta
   expect(await captureRuntimeCommand(process.execPath, ['-e', "process.stdout.write('private-payload'.repeat(10000))"], options)).toBe(0)
   expect(events.at(-1)).toMatchObject({ source: 'collection', severity: 'warning' })
   expect(JSON.stringify(events)).not.toContain('private-payload')
+})
+
+it('persists supervisor observations through the shared private store before application startup', () => {
+  const storePath = path(); const emitted: LogEvent[] = []
+  vi.stubEnv('POISE_TEST_TOKEN', 'supervisor-private-credential')
+  const id = recordRuntimeDiagnostic({ source: 'poise', component: 'workspace-supervisor', operation: 'workspace.spawn', level: 'error',
+    release: 'old-release', message: 'spawn rejected supervisor-private-credential', errno: -13 },
+    { path: storePath, workspace: 'alice', write: (event) => emitted.push(event) })
+  const store = new DiagnosticStore(storePath)
+  try {
+    expect(store.lookup({ workspace: 'alice', operator: false }, id!)).toMatchObject({ status: 'found', event: { component: 'workspace-supervisor', release: 'old-release', errno: -13 } })
+    expect(store.query({ workspace: null, operator: true }).total).toBe(0)
+    expect(JSON.stringify(emitted)).not.toContain('supervisor-private-credential')
+  } finally { store.close() }
 })

@@ -86,3 +86,15 @@ export function nativeDiagnostic(value: unknown, source: 'ingress' | 'kernel' | 
       upstream: text(row.upstream), errno: text(row.errno), sourceCursor: text(row.__CURSOR) },
   }
 }
+
+/** The entrypoint emits only these fatal checks before application logging can start. */
+export function supervisorDiagnostic(line: string, id: string, workspace: string): DiagnosticInput | null {
+  const unavailable = /^poise-runtime: diagnostic (?:helper|reporting) unavailable[.:]/.test(line)
+  const missing = /^poise-runtime: missing environment:/.test(line)
+  const bootstrap = /^poise-runtime: POISE_SKIP_CLI_BOOTSTRAP must be 0 or 1,/.test(line)
+  const home = /^poise-runtime: .+ must be writable by uid \d+, the workspace user\.$/.test(line)
+  if (!unavailable && !missing && !bootstrap && !home) return null
+  return { id, source: unavailable ? 'collection' : 'poise', component: 'workspace-supervisor', workspace, visibility: 'workspace',
+    operation: unavailable ? 'supervisor.capture_unavailable' : 'workspace.entrypoint', phase: 'entrypoint', level: unavailable ? 'warning' : 'error',
+    message: bootstrap ? 'POISE_SKIP_CLI_BOOTSTRAP must be 0 or 1; the configured value was excluded' : line }
+}

@@ -5,7 +5,7 @@ import { signAssertion } from '../assertion.js'
 import http from 'node:http'
 import { normalize, type DiagnosticInput, type LogEvent } from './contract.js'
 import { DiagnosticRuntime } from './runtime.js'
-import { nativeDiagnostic, workspaceEnvelope } from './sources.js'
+import { nativeDiagnostic, supervisorDiagnostic, workspaceEnvelope } from './sources.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const handle = (value: string | undefined) => value && /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(value) ? value : null
@@ -116,6 +116,12 @@ export class EnvironmentCollectors {
       if (lines.length >= 1000) throw new Error('Docker log tail bound reached; earlier records may be missing')
       for (const line of lines) {
         const content = line.slice(line.indexOf(' ') + 1)
+        const startup = workspace ? supervisorDiagnostic(content, container.Id + ':' + hash(line), workspace) : null
+        if (startup) {
+          const event = normalize({ ...startup, time: line.slice(0, line.indexOf(' ')), container: container.Id })
+          if (event) events.push(event)
+          continue
+        }
         let row: unknown
         try { row = JSON.parse(content) } catch { excluded++; continue }
         const envelope = row && typeof row === 'object' && 'poiseDiagnostic' in row ? row.poiseDiagnostic : null
