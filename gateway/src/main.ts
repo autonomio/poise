@@ -1,3 +1,4 @@
+import { diagnosticConfig } from './diagnostics/config.js'
 import { environmentSecrets, redact } from './diagnostics/contract.js'
 import { DiagnosticRuntime } from './diagnostics/runtime.js'
 import { EnvironmentCollectors, gatewayDiagnostic } from './diagnostics/collectors.js'
@@ -37,7 +38,7 @@ if (config.insecureHttp) {
 }
 
 mkdirSync(config.dataDir, { recursive: true, mode: 0o700 })
-diagnostics = new DiagnosticRuntime({ path: join(config.dataDir, 'logging.db') })
+diagnostics = new DiagnosticRuntime({ path: join(config.dataDir, 'logging.db'), ...diagnosticConfig(process.env) })
 diagnostics.start()
 diagnostics.observe('gateway', 'gateway', null)
 process.once('uncaughtException', (error) => {

@@ -75,7 +75,7 @@ export class DiagnosticRuntime {
           const gaps = source.gaps.slice(-31).map((gap) => ({ ...gap, reason: this.safe(gap.reason, 128) }))
           // An existing open outage already covers the unobserved restart interval.
           if (!journal.stopped && !gaps.some((gap) => gap.to === null)) gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
-          this.sources.set(source.id, { ...source, status: source.error ? 'unavailable' : 'partial', gaps })
+          this.sources.set(source.id, { ...source, status: source.status === 'not-configured' ? 'not-configured' : source.error ? 'unavailable' : 'partial', gaps })
         }
       } catch (error) { this.journalError = this.message(error); this.notify('logging.coverage.unavailable', this.journalError) }
     }
@@ -139,6 +139,13 @@ export class DiagnosticRuntime {
   private reject(error: unknown): void {
     this.rejected++; this.lastRejected = this.message(error)
     this.notify('logging.record.rejected', this.lastRejected)
+  }
+
+  unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
+    if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source bound reached')); return }
+    this.sources.set(id, { id, source, workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
+      availableFrom: null, error: this.safe(reason), gaps: [] })
+    this.saveJournal()
   }
 
   observe(id: string, source: string, workspace: string | null, error: string | null = null): void {

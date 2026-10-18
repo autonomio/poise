@@ -1,3 +1,4 @@
+import { diagnosticConfig } from '../src/diagnostics/config.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,5 +56,18 @@ describe('owned source boundaries', () => {
       expect(() => store.commitDelivery([{ ...event, message: 'contradictory' }], 'workspace:alice', 'bad-cursor')).toThrow('Conflicting')
       expect(store.checkpoint('workspace:alice')).toBe('source-cursor')
     } finally { store.close() }
+  })
+})
+
+
+describe('operator diagnostic budgets', () => {
+  it('applies explicit retention/storage/buffer limits and rejects contradictory configuration', () => {
+    expect(diagnosticConfig({ POISE_LOG_RETENTION_DAYS: '7', POISE_LOG_MAX_BYTES: '1048576', POISE_LOG_MAX_EVENTS: '500', POISE_LOG_QUEUE_EVENTS: '20', POISE_LOG_QUEUE_BYTES: '65536' })).toEqual({
+      policy: { retentionMs: 7 * 86_400_000, maxBytes: 1048576, maxEvents: 500 }, maxQueueEvents: 20, maxQueueBytes: 65536,
+    })
+    for (const key of ['POISE_LOG_RETENTION_DAYS', 'POISE_LOG_MAX_BYTES', 'POISE_LOG_MAX_EVENTS', 'POISE_LOG_QUEUE_EVENTS', 'POISE_LOG_QUEUE_BYTES']) {
+      expect(() => diagnosticConfig({ [key]: '-1' })).toThrow(key)
+      expect(() => diagnosticConfig({ [key]: 'unexpected' })).toThrow(key)
+    }
   })
 })

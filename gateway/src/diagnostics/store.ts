@@ -27,7 +27,7 @@ export interface Coverage {
   id: string
   source: string
   workspace: string | null
-  status: 'connected' | 'unavailable' | 'partial'
+  status: 'connected' | 'unavailable' | 'partial' | 'not-configured'
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null

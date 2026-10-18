@@ -1,17 +1,43 @@
+import { readFileSync, statSync } from 'node:fs'
+import { diagnosticConfig } from './config.js'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { DiagnosticStore } from './store.js'
-import { environmentSecrets, normalize } from './contract.js'
+import { DiagnosticStore, type Coverage } from './store.js'
+import { environmentSecrets, normalize, redact } from './contract.js'
 import { nativeDiagnostic } from './sources.js'
+
+interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; writtenAt: string; sources: Coverage[] }
 
 /** Operator access is Docker/host ownership, never a workspace browser assertion. */
 export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n')): Promise<void> {
   const [command = 'health', ...options] = args
-  const db = new DiagnosticStore(join(process.env.POISE_GATEWAY_DATA ?? '/data', 'logging.db'))
+  const path = join(process.env.POISE_GATEWAY_DATA ?? '/data', 'logging.db')
+  const { policy } = diagnosticConfig(process.env)
   const access = { workspace: 'operator', operator: true }
+  if (command === 'health') {
+    let journal: JournalHealth | null = null
+    let journalError: string | null = null
+    try {
+      if (statSync(path + '.coverage.json').size > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
+      journal = JSON.parse(readFileSync(path + '.coverage.json', 'utf8')) as JournalHealth
+      if (!journal || journal.version !== 1 || !Array.isArray(journal.sources) || !Number.isFinite(Date.parse(journal.writtenAt))) throw new Error('Coverage journal is incompatible')
+      journal.sources = journal.sources.filter((source) => source.workspace === null || source.workspace === access.workspace)
+    } catch (error) { journalError = redact(error instanceof Error ? error.message : String(error), environmentSecrets()) }
+    let reader: DiagnosticStore | null = null
+    try {
+      reader = new DiagnosticStore(path, policy, Date.now, true)
+      const status = journalError ? 'partial' : journal?.sinkError ? 'unavailable' : journal?.stopped ? 'stopped'
+        : !journal?.writtenAt || Date.now() - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : 'connected'
+      write(JSON.stringify({ version: 1, status, journalError, journal, sources: reader.readCoverage(access), bounds: reader.bounds(access), policy }))
+    } catch (error) {
+      write(JSON.stringify({ version: 1, status: 'unavailable', error: redact(error instanceof Error ? error.message : String(error), environmentSecrets()),
+        journalError, journal: journal ? { ...journal, sources: journal.sources?.filter((source) => source.workspace === null || source.workspace === access.workspace) } : null, policy }))
+    } finally { reader?.close() }
+    return
+  }
+  const db = new DiagnosticStore(path, policy, Date.now, command !== 'ingress')
   try {
-    if (command === 'health') write(JSON.stringify({ version: 1, sources: db.readCoverage(access), bounds: db.bounds(access), policy: db.policy }))
-    else if (command === 'event') {
+    if (command === 'event') {
       if (options.length !== 1) throw new Error('event requires one event ID')
       write(JSON.stringify(db.lookup(access, options[0])))
     } else if (command === 'query' || command === 'export') {
@@ -38,11 +64,14 @@ export async function runOperator(args: string[], write: (line: string) => void 
       input.context = { host, integration: 'operator-stdin' }
       const event = normalize(input, Date.now(), environmentSecrets())
       if (event) db.append([event])
+      const at = new Date().toISOString()
+      db.coverage({ id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', observedAt: at, ingestedAt: event ? at : null,
+        availableFrom: at, error: 'Record delivery observed; continuous external proxy coverage is unverified', gaps: [] })
       write(JSON.stringify({ accepted: true, eventId: event?.id ?? null }))
     } else throw new Error('Use health, query, event, export or ingress')
   } finally { db.close() }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runOperator(process.argv.slice(2)).catch((error: unknown) => { process.stderr.write((error instanceof Error ? error.message : 'Operator diagnostic command failed') + '\n'); process.exitCode = 1 })
+  runOperator(process.argv.slice(2)).catch((error: unknown) => { process.stderr.write(redact(error instanceof Error ? error.message : 'Operator diagnostic command failed', environmentSecrets()) + '\n'); process.exitCode = 1 })
 }

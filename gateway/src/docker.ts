@@ -116,7 +116,7 @@ export class DockerClient {
   }
 
   /** Bounded diagnostics only; payload parsing is owned by the collector. */
-  async diagnosticRead(path: string, maxBytes = 2 * 1024 * 1024): Promise<Buffer> {
+  async diagnosticRead(path: string, maxBytes = 2 * 1024 * 1024, timeoutMs = 5000): Promise<Buffer> {
     if (!path.startsWith('/containers/') && !path.startsWith('/events?')) throw new Error('Unsupported Docker diagnostic operation')
     return new Promise((resolve, reject) => {
       const req = http.get({ socketPath: this.socketPath, path, headers: { host: 'docker' } }, (res) => {
@@ -131,7 +131,7 @@ export class DockerClient {
         res.on('end', () => res.statusCode === 200 ? resolve(Buffer.concat(chunks))
           : reject(new Error(`Docker diagnostic source answered HTTP ${res.statusCode}`)))
       })
-      req.setTimeout(5000, () => req.destroy(new Error('Docker diagnostic read timed out after 5000 ms')))
+      req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker diagnostic read timed out after ${timeoutMs} ms`)))
       req.on('error', reject)
     })
   }

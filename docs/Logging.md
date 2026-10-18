@@ -134,3 +134,25 @@ journal collection uses `--all` with a bounded field projection and `--no-tail`,
 so journalctl's default 4 KiB null substitution and ten-record follow tail do
 not silently discard replayable evidence. See the upstream
 [journalctl contract](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html).
+
+Operators configure `POISE_LOG_RETENTION_DAYS` (1–365), `POISE_LOG_MAX_BYTES`
+(4 KiB–1 GiB), `POISE_LOG_MAX_EVENTS` (1–1,000,000),
+`POISE_LOG_QUEUE_EVENTS` (1–10,000) and `POISE_LOG_QUEUE_BYTES`
+(64 KiB–16 MiB). Defaults are 30 days / 64 MiB / 50,000 retained events and
+1,000 events / 2 MiB queued. The first reached bound applies. Invalid values
+name the configuration error at startup. These settings govern the central
+store and, when supplied to a local application, its separate store.
+
+The operator health command reads the independent coverage journal even when
+SQLite is unavailable. Query/detail/export open the existing store read-only;
+a missing store is an explicit error. Local development reports Docker, kernel
+and ingress as not configured. External proxy record delivery remains partial
+coverage unless a continuous observation boundary is established; a received
+record does not prove complete proxy history.
+
+Native container faults retain a bounded post-event inspection of actual
+memory/CPU/PID limits and Docker's OOM state when available. The measurement is
+labeled as post-event container state; it never substitutes a later usage
+reading for usage at the incident. Removed containers or an exhausted inspection
+budget leave explicit unavailable resource evidence. Exit 137 alone does not
+establish an OOM cause.

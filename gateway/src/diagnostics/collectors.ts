@@ -66,6 +66,16 @@ export class EnvironmentCollectors {
   start(): void {
     if (this.timer) return
     this.stopping = false
+    if (this.context.deps.config.proxyListen) {
+      try {
+        this.runtime.query((db) => {
+          if (!db.readCoverage({ workspace: 'operator', operator: true }).some((source) => source.id === 'external-ingress')) db.coverage({
+            id: 'external-ingress', source: 'ingress', workspace: null, status: 'not-configured', observedAt: null, ingestedAt: null, availableFrom: null,
+            error: 'External proxy diagnostic delivery has not been configured; coverage is unknown', gaps: [],
+          })
+        })
+      } catch (error) { this.runtime.observe('external-ingress', 'ingress', null, String(error)) }
+    }
     const run = () => { if (!this.pass) this.pass = this.collect().finally(() => { this.pass = null }) }
     this.timer = setInterval(run, 15_000); this.timer.unref(); run()
   }
@@ -136,10 +146,27 @@ export class EnvironmentCollectors {
       const bytes = await this.docker.diagnosticRead(`/events?since=${since}&until=${until}`, 512 * 1024)
       const lines = bytes.toString().split('\n').filter(Boolean)
       if (lines.length >= 256) throw new Error('Docker retained native event history limit reached; collection gap')
-      const events = lines.flatMap((line) => {
-        const input = dockerLifecycle(JSON.parse(line)); const event = input && normalize(input)
-        return event ? [event] : []
-      })
+      const events: LogEvent[] = []
+      const inspectionDeadline = Date.now() + 2000
+      for (const line of lines) {
+        const input = dockerLifecycle(JSON.parse(line))
+        if (!input) continue
+        input.id = 'docker-event:' + hash(line)
+        if (input.container && Date.now() < inspectionDeadline) {
+          try {
+            const bytes = await this.docker.diagnosticRead(`/containers/${encodeURIComponent(input.container)}/json`, 256 * 1024, 250)
+            const detail = JSON.parse(bytes.toString()) as { Image?: string; State?: { OOMKilled?: boolean; ExitCode?: number; StartedAt?: string; FinishedAt?: string }; HostConfig?: { Memory?: number; NanoCpus?: number; PidsLimit?: number } }
+            const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null
+            input.resources = { ...input.resources, memoryLimitBytes: finite(detail.HostConfig?.Memory), memoryUnlimited: detail.HostConfig?.Memory === 0,
+              cpuLimitNanoCpus: finite(detail.HostConfig?.NanoCpus), pidsLimit: finite(detail.HostConfig?.PidsLimit),
+              observedOomKilled: typeof detail.State?.OOMKilled === 'boolean' ? detail.State.OOMKilled : null,
+              measuredAt: new Date().toISOString(), measurement: 'container configuration/state after the native event' }
+            input.context = { imageId: detail.Image ?? null, startedAt: detail.State?.StartedAt ?? null, finishedAt: detail.State?.FinishedAt ?? null }
+          } catch { input.context = { resourceEvidenceUnavailable: true, reason: 'Container inspection unavailable; native event remains authoritative' } }
+        } else input.context = { resourceEvidenceUnavailable: true, reason: 'Bounded resource-inspection budget exhausted' }
+        const event = normalize(input)
+        if (event) events.push(event)
+      }
       for (let i = 0; i < events.length; i += 100) this.runtime.query((db) => db.append(events.slice(i, i + 100)))
       this.runtime.query((db) => db.commitDelivery([], key, String(until)))
       this.runtime.observe('docker-events', 'docker', null)

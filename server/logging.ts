@@ -1,3 +1,4 @@
+import { diagnosticConfig } from '../gateway/src/diagnostics/config'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -25,8 +26,9 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
   try {
     const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
       source: input.source ?? 'poise', workspace, visibility: 'workspace',
-      instance: process.env.POISE_INSTANCE_LABEL ?? (process.env.POISE_MODE === 'service' ? 'service' : 'local'),
-      release: process.env.POISE_SOURCE_SHA ?? null }, Date.now(), [...environmentSecrets(), ...secrets])
+      instance: process.env.POISE_WORKSPACE_HANDLE ?? process.env.POISE_INSTANCE_LABEL ?? 'local',
+      container: process.env.POISE_MODE === 'service' ? process.env.HOSTNAME ?? null : null,
+      release: process.env.POISE_RELEASE || process.env.POISE_SOURCE_SHA || null }, Date.now(), [...environmentSecrets(), ...secrets])
     if (!event) return null
     const accepted = active.ingest(event)
     // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
@@ -87,7 +89,7 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   if (active) return
   workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
-  active = new DiagnosticRuntime({ path })
+  active = new DiagnosticRuntime({ path, ...diagnosticConfig(process.env) })
   sequence = 0
   try {
     if (existsSync(path + '.caller')) {
@@ -99,6 +101,9 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   active.start()
   setProcessFailureObserver((error, evidence) => diagnosticFailure(evidence.operation, error, { executable: evidence.executable, configuredCommand: evidence.command, cwd: evidence.cwd, elapsedMs: evidence.elapsedMs, timeoutMs: evidence.timeoutMs }, { secrets: evidence.secrets, stderr: evidence.stderrAllowed }))
   active.observe('application', 'poise', workspace)
+  if (process.env.POISE_MODE !== 'service') for (const source of ['docker', 'kernel', 'ingress']) {
+    active.unconfigured(source, source, workspace, 'This local application has no configured ' + source + ' collector')
+  }
   if (options.captureFatal) {
     fatalListener = (error) => {
       diagnostic({ level: 'critical', operation: 'process.uncaught', message: error.message, stack: error.stack })
