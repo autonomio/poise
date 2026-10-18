@@ -75,6 +75,7 @@ it('checkpoints Caller completions after quarantining evidence above the local s
   const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, cursor: 3, hasMore: false, backfillPending: false,
     events: [{ id: 'a'.repeat(32), error: 'source failure', diagnostic: { version: 1, severity: 'error', stderr: 'x'.repeat(16000) } }, { id: 'b'.repeat(32), error: 'later precise cause' }] }), stderr: '' })
   vi.stubEnv('POISE_LOG_MAX_BYTES', '8192')
+  vi.stubEnv('POISE_LOG_QUEUE_EVENTS', '1')
   start()
   await vi.waitFor(() => expect(readFileSync(join(directory, 'logging.db.caller'), 'utf8')).toBe('3'))
   expect(run).toHaveBeenCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))

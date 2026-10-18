@@ -72,7 +72,11 @@ async function collectCaller(): Promise<void> {
       || typeof page.hasMore !== 'boolean' || typeof page.backfillPending !== 'boolean') throw new Error('Caller diagnostic stream is incompatible')
     for (const row of page.events) {
       const input = callerDiagnostic(row, workspace)
-      if (input && !diagnostic(input)) throw new Error('Caller diagnostic delivery is buffered or unavailable')
+      if (input) {
+        while (runtime.health().queued) if (!runtime.flush()) break
+        if (!diagnostic(input)) throw new Error('Caller diagnostic delivery is buffered or unavailable')
+        while (runtime.health().queued) if (!runtime.flush()) break
+      }
     }
     while (runtime.health().queued) if (!runtime.flush()) break
     // Do not acknowledge a Caller completion until its durable local transaction succeeds.
