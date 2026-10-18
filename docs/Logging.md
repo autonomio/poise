@@ -120,3 +120,10 @@ The command requires a request host inside `POISE_DOMAIN`, bounds input to
 only after persistence. The operator owns delivery/retry and must not forward
 unrelated business-service logs. No public or workspace ingestion endpoint is
 added. Unconfigured external ingress coverage remains unknown, not healthy.
+
+Production starts capture after secure environment validation and before the
+application database modules load. An uncaught process failure retains a
+Critical event and then exits with the existing failure status. Structured
+stderr forwarding is capped by backpressure; local durable backfill remains
+independent. Source records beyond Docker/window or native-line bounds produce
+explicit historical gaps and do not pin later collection behind poison input.

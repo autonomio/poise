@@ -12,6 +12,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 let pass: Promise<void> | null = null
 let abort: AbortController | null = null
 let restoreConsole: (() => void) | null = null
+let fatalListener: ((error: Error) => void) | null = null
 let path = ''
 let sequence = 0
 let workspace = 'local'
@@ -26,10 +27,12 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
     source: input.source ?? 'poise', workspace, visibility: 'workspace',
     instance: process.env.POISE_INSTANCE_LABEL ?? (process.env.POISE_MODE === 'service' ? 'service' : 'local'),
     release: process.env.POISE_SOURCE_SHA ?? null }, Date.now(), [...environmentSecrets(), ...secrets])
-  if (!event || !active.ingest(event)) return null
+  if (!event) return null
+  const accepted = active.ingest(event)
   // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
-  process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
-  return event.id
+  if (process.stderr.writableLength < 256 * 1024) process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
+  else active.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding is backpressured; durable backfill remains available')
+  return accepted
   } catch (error) {
     process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.capture.failed', message: error instanceof Error ? error.name : 'capture failure' }) + '\n')
     return null
@@ -73,7 +76,7 @@ async function collectCaller(): Promise<void> {
   } finally { abort = null }
 }
 
-export function startLogging(): void {
+export function startLogging(options: { captureFatal?: boolean } = {}): void {
   if (active) return
   workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
@@ -86,6 +89,14 @@ export function startLogging(): void {
   active.start()
   setProcessFailureObserver((error, evidence) => diagnosticFailure(evidence.operation, error, { executable: evidence.executable, configuredCommand: evidence.command, cwd: evidence.cwd, elapsedMs: evidence.elapsedMs, timeoutMs: evidence.timeoutMs }, { secrets: evidence.secrets, stderr: evidence.stderrAllowed }))
   active.observe('application', 'poise', workspace)
+  if (options.captureFatal) {
+    fatalListener = (error) => {
+      diagnostic({ level: 'critical', operation: 'process.uncaught', message: error.message, stack: error.stack })
+      active?.flush()
+      process.exit(1)
+    }
+    process.once('uncaughtException', fatalListener)
+  }
   // Console is an owned technical source. Arbitrary payload objects/stdout are excluded.
   const error = console.error; const warn = console.warn
   const capture = (level: 'error' | 'warning', args: unknown[]) => {
@@ -105,6 +116,8 @@ export async function stopLogging(): Promise<void> {
   if (timer) clearInterval(timer)
   timer = null; abort?.abort(); await pass
   setProcessFailureObserver(null)
+  if (fatalListener) process.off('uncaughtException', fatalListener)
+  fatalListener = null
   restoreConsole?.(); restoreConsole = null
   active?.stop(); active = null
 }

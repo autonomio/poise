@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,8 +7,9 @@ import { runFile } from '../server/process'
 
 let directory = ''
 afterEach(async () => { await stopLogging(); vi.restoreAllMocks(); vi.unstubAllEnvs(); if (directory) rmSync(directory, { recursive: true, force: true }) })
-function start() {
+function start(blocked = false) {
   directory = mkdtempSync(join(tmpdir(), 'poise-logging-source-'))
+  if (blocked) writeFileSync(join(directory, 'logging.db'), 'not a database')
   vi.stubEnv('POISE_DB', join(directory, 'cache.db'))
   vi.stubEnv('POISE_WORKSPACE_HANDLE', 'alice')
   vi.spyOn(process.stderr, 'write').mockReturnValue(true)
@@ -39,10 +40,12 @@ describe('independent application capture', () => {
     for (const value of ['private-output', 'private-argument']) expect(JSON.stringify(page)).not.toContain(value)
   })
 
-  it('reports a failed sink independently and leaves source work operational', () => {
-    start()
+  it('reports a failed sink independently and leaves source work operational', async () => {
+    start(true)
     expect(() => diagnostic({ source: 'poise', level: 'error', operation: 'read', message: 'cause' })).not.toThrow()
     loggingRuntime()!.flush()
+    expect(loggingRuntime()!.health().status).toBe('unavailable')
+    await expect(runFile(process.execPath, ['-e', 'process.exit(0)'])).resolves.toMatchObject({ stdout: '' })
     expect(readFileSync(join(directory, 'logging.db.coverage.json'), 'utf8')).toContain('application')
     expect(loggingRuntime()!.health().queuedBytes).toBeLessThanOrEqual(2 * 1024 * 1024)
   })
