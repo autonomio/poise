@@ -64,3 +64,54 @@ it('resumes authenticated bounded backfill after source recreation without reset
     await h.close(); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks()
   }
 })
+
+it('lets later workspaces and subsequent Docker passes progress when a source trickles bytes', async () => {
+  const h = await startHarness(); await h.openWorkspace('alice'); await h.openWorkspace('bob')
+  const directory = mkdtempSync(join(tmpdir(), 'poise-workspace-deadline-'))
+  const event = normalize({ id: 'later-workspace', source: 'poise', level: 'error', workspace: 'bob', operation: 'fixture.failure', message: 'later workspace cause' })!
+  const server = http.createServer((req, res) => {
+    if (req.headers.host?.startsWith('alice.')) {
+      res.writeHead(200); res.write(' ')
+      const trickle = setInterval(() => res.write(' '), 10)
+      const finish = setTimeout(() => res.end('{}'), 1000)
+      res.once('close', () => { clearInterval(trickle); clearTimeout(finish) })
+    } else res.end(JSON.stringify({ version: 1, events: [event], cursor: 'fixture-bob-cursor', coverage: { status: 'connected' } }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const docker = new DockerClient('/unused-fixture-socket')
+  const discovery = vi.spyOn(docker, 'diagnosticContainers').mockResolvedValue([])
+  vi.spyOn(docker, 'diagnosticRead').mockResolvedValue(Buffer.alloc(0))
+  const ctx = new Context({ ...h.context.deps, docker, upstream: () => ({ host: '127.0.0.1', port: (server.address() as AddressInfo).port }) })
+  const runtime = new DiagnosticRuntime({ path: join(directory, 'central.db'), report: () => undefined })
+  const collector = new EnvironmentCollectors(runtime, docker, ctx, 120)
+  try {
+    const started = Date.now(); collector.start()
+    await vi.waitFor(() => expect(runtime.query((db) => db.lookup({ workspace: 'bob', operator: false }, event.id)).status).toBe('found'), { timeout: 2500 })
+    expect(Date.now() - started).toBeLessThan(800)
+    expect(runtime.health().sources.find((row) => row.id === 'workspace:alice')?.error).toContain('absolute deadline')
+    await collector.stop(); collector.start()
+    await vi.waitFor(() => expect(discovery.mock.calls.length).toBeGreaterThanOrEqual(2))
+  } finally {
+    await collector.stop(); runtime.stop(); ctx.agent.destroy()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await h.close(); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks()
+  }
+})
+
+it('applies an absolute Docker read deadline despite continued response activity', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'poise-docker-deadline-')); const socket = join(directory, 'engine.sock')
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200); res.write(' ')
+    const trickle = setInterval(() => res.write(' '), 10)
+    const finish = setTimeout(() => res.end('done'), 1000)
+    res.once('close', () => { clearInterval(trickle); clearTimeout(finish) })
+  })
+  await new Promise<void>((resolve) => server.listen(socket, resolve))
+  try {
+    const client = new DockerClient(socket)
+    await expect(client.diagnosticRead('/events?until=1', 1000, 80)).rejects.toThrow('absolute deadline')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

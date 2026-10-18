@@ -144,6 +144,8 @@ export class DockerClient {
         res.on('end', () => res.statusCode === 200 ? resolve(Buffer.concat(chunks))
           : reject(new Error(`Docker diagnostic source answered HTTP ${res.statusCode}`)))
       })
+      const deadline = setTimeout(() => req.destroy(new Error(`Docker diagnostic read exceeded its absolute deadline after ${timeoutMs} ms`)), timeoutMs)
+      req.once('close', () => clearTimeout(deadline))
       req.setTimeout(timeoutMs, () => req.destroy(new Error(`Docker diagnostic read timed out after ${timeoutMs} ms`)))
       req.on('error', reject)
     })

@@ -65,7 +65,7 @@ export class EnvironmentCollectors {
   private timer: ReturnType<typeof setInterval> | null = null
   private pass: Promise<void> | null = null
   private stopping = false
-  constructor(private readonly runtime: DiagnosticRuntime, private readonly docker: DockerClient, private readonly context: Context) {}
+  constructor(private readonly runtime: DiagnosticRuntime, private readonly docker: DockerClient, private readonly context: Context, private readonly workspaceTimeoutMs = 5000) {}
 
   start(): void {
     if (this.timer) return
@@ -220,7 +220,9 @@ export class EnvironmentCollectors {
             catch (error) { reject(error) }
           })
         })
-        req.setTimeout(5000, () => req.destroy(new Error('Workspace diagnostic source timed out'))); req.on('error', reject)
+        const deadline = setTimeout(() => req.destroy(new Error('Workspace diagnostic source exceeded its absolute deadline')), this.workspaceTimeoutMs)
+        req.once('close', () => clearTimeout(deadline))
+        req.setTimeout(this.workspaceTimeoutMs, () => req.destroy(new Error('Workspace diagnostic source timed out'))); req.on('error', reject)
       })
       if (page.version !== 1 || !Array.isArray(page.events) || page.events.length > 3 || typeof page.cursor !== 'string' || !page.coverage || typeof page.coverage.status !== 'string') throw new Error('Workspace diagnostic delivery is incompatible')
       const events: LogEvent[] = []

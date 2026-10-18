@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { environmentSecrets, normalize, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
+import { environmentSecrets, normalize, redact, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { DiagnosticStore, DEFAULT_LOG_POLICY } from '../src/diagnostics/store.js'
 import { callerDiagnostic, nativeDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.js'
@@ -393,4 +393,17 @@ it('redacts quoted credential fields in captured diagnostic text', () => {
   const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected',
     stderr: '{"X-Api-Key":"json-private-key"}\npassword=private-password\nclient_secret: private-client-secret' }, NOW, [])!
   for (const secret of ['json-private-key', 'private-password', 'private-client-secret']) expect(value.stderr).not.toContain(secret)
+})
+
+
+it('redacts nonempty known secrets of every length without recursively expanding redaction markers', () => {
+  const secrets = environmentSecrets({ PASSWORD: 'pw7!', PASSWD: 's2' })
+  expect(secrets).toEqual(expect.arrayContaining(['pw7!', 's2']))
+  const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'failure pw7!', stderr: 'pw7! s2 X9' }, NOW, [...secrets, 'X9', ''])!
+  for (const secret of ['pw7!', 's2', 'X9']) expect(JSON.stringify(value)).not.toContain(secret)
+  const short = ['e', 'a', 'c', '.', '[']
+  const once = redact('each . [ Authorization: opaque-other-value\n cause', short)
+  expect(redact(once, short)).toBe(once)
+  expect(once.length).toBeLessThan(200)
+  expect(once).not.toContain('opaque-other-value')
 })
