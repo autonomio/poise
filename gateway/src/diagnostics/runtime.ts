@@ -214,26 +214,28 @@ export class DiagnosticRuntime {
   }
 
   /** Quarantine permanent record failures while keeping the source checkpoint atomic with accepted evidence. */
-  deliver(events: readonly LogEvent[], key: string, cursor: string): number {
-    let remaining = [...events]
+  deliver(events: readonly LogEvent[], key: string, cursor: string, source?: Pick<Coverage, 'id' | 'source' | 'workspace'>): number {
+    const originals = new Set(events)
+    const remaining = [...events]
     const rejected: Error[] = []
     for (;;) {
       try { this.query((store) => store.commitDelivery(remaining, key, cursor)); break }
       catch (error) {
         if (!(error instanceof DiagnosticEventError || error instanceof DiagnosticConflictError)) throw error
-        const event = remaining.find((event) => event.id === error.eventId)
-        if (!event) throw error
-        remaining = remaining.filter((event) => event.id !== error.eventId)
+        const index = remaining.indexOf(error.record)
+        if (index < 0) throw error
+        const [event] = remaining.splice(index, 1)
         rejected.push(error)
         if (event.source !== 'collection' || event.operation !== 'record.rejected') {
-          const warning = normalize({ id: 'record.rejected:' + event.id, time: null, source: 'collection', operation: 'record.rejected',
+          const warning = normalize({ id: 'record.rejected:' + event.id + ':' + createHash('sha256').update(this.message(error)).digest('hex'), time: null, source: 'collection', operation: 'record.rejected',
             level: 'warning', workspace: event.workspace, message: this.message(error), context: { rejectedEventId: event.id } }, this.now(), this.secrets)
           if (warning) remaining.push(warning)
         }
       }
     }
     for (const error of rejected) this.reject(error)
-    if (rejected.length) this.saveJournal(true)
+    this.persistCoverage(this.connection(), remaining.filter((event) => originals.has(event)), source)
+    this.saveJournal(rejected.length > 0)
     return rejected.length
   }
 
@@ -262,17 +264,7 @@ export class DiagnosticRuntime {
     const recovered = this.sinkError
     const unavailableSince = this.sinkSince
     this.sinkError = null; this.sinkSince = null; this.retryAt = 0; this.lastSuccess = this.iso()
-    try {
-      for (const source of this.sources.values()) {
-        if (batch.some(({ event }) => event.source === source.source && event.workspace === source.workspace)) source.ingestedAt = this.iso()
-        store.coverage(source)
-      }
-      this.coverageError = null
-    } catch (error) {
-      const message = this.message(error)
-      if (message !== this.coverageError) this.notify('logging.coverage.unavailable', message)
-      this.coverageError = message
-    }
+    this.persistCoverage(store, batch.map(({ event }) => event))
     if (recovered) {
       const event = normalize({ id: 'sink-recovered:' + this.runId + ':' + this.iso(), source: 'collection', level: 'warning', operation: 'sink.recovered',
         workspace: this.options.workspace ?? null, time: this.iso(), message: 'Diagnostic collection recovered after an unavailable interval',
@@ -282,6 +274,26 @@ export class DiagnosticRuntime {
     this.saveJournal()
     if (this.queue.length) this.schedule()
     return batch.length > 0
+  }
+
+  private persistCoverage(store: DiagnosticStore, events: readonly LogEvent[], delivered?: Pick<Coverage, 'id' | 'source' | 'workspace'>): void {
+    try {
+      const id = delivered ? this.coverageId(delivered.id) : null
+      if (events.length && delivered && id && !this.sources.has(id)) {
+        if (this.sources.size >= MAX_COVERAGE_SOURCES) this.reject(new Error('Collection source limit of 256 reached'))
+        else this.sources.set(id, { id, source: this.sourceName(delivered.source), workspace: delivered.workspace, status: 'partial',
+          observedAt: null, ingestedAt: null, availableFrom: null, error: null, gaps: [] })
+      }
+      for (const source of this.sources.values()) {
+        if (events.length && (id !== null ? source.id === id : events.some((event) => event.source === source.source && event.workspace === source.workspace))) source.ingestedAt = this.iso()
+        store.coverage(source)
+      }
+      this.coverageError = null
+    } catch (error) {
+      const message = this.message(error)
+      if (message !== this.coverageError) this.notify('logging.coverage.unavailable', message)
+      this.coverageError = message
+    }
   }
 
   private sinkFailure(error: unknown): void {

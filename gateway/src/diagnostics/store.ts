@@ -46,11 +46,11 @@ interface Cursor { kind: 'page' | 'watermark' | 'delivery'; high: number; time?:
 export class DiagnosticCursorError extends Error {}
 
 export class DiagnosticEventError extends Error {
-  constructor(readonly eventId: string, message: string) { super(message) }
+  constructor(readonly eventId: string, message: string, readonly record: LogEvent) { super(message) }
 }
 
 export class DiagnosticConflictError extends Error {
-  constructor(readonly eventId: string) { super('Conflicting immutable Logging event identity: ' + eventId) }
+  constructor(readonly eventId: string, readonly record: LogEvent) { super('Conflicting immutable Logging event identity: ' + eventId) }
 }
 
 export class DiagnosticStore {
@@ -120,13 +120,13 @@ export class DiagnosticStore {
       let inserted = 0
       this.prune()
       for (const event of events) {
-        if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new DiagnosticEventError(event.id, 'Invalid Logging event version or severity')
+        if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new DiagnosticEventError(event.id, 'Invalid Logging event version or severity', event)
         const payload = JSON.stringify(event)
         const payloadBytes = Buffer.byteLength(payload)
-        if (payloadBytes > 64 * 1024) throw new DiagnosticEventError(event.id, 'Logging event exceeds 64 KiB')
+        if (payloadBytes > 64 * 1024) throw new DiagnosticEventError(event.id, 'Logging event exceeds 64 KiB', event)
         const prefix = scopePrefix(event.workspace, event.visibility)
         if (!/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[1] !== prefix
-          || !new RegExp(`^inc_${prefix}_[a-f0-9]{64}$`).test(event.incidentId)) throw new DiagnosticEventError(event.id, 'Logging event identity is outside its authorized scope')
+          || !new RegExp(`^inc_${prefix}_[a-f0-9]{64}$`).test(event.incidentId)) throw new DiagnosticEventError(event.id, 'Logging event identity is outside its authorized scope', event)
         if (this.db.prepare('SELECT 1 FROM log_expired WHERE id=?').get(event.id)) continue
         if (Date.parse(event.ingestedAt) < this.now() - this.policy.retentionMs) {
           this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(event.id, event.workspace, event.visibility, new Date(this.now()).toISOString())
@@ -134,14 +134,14 @@ export class DiagnosticStore {
         }
         const existing = this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(event.id) as { payload: string } | undefined
         if (existing) {
-          if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id)
+          if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id, event)
           continue
         }
         const search = [event.message, event.target, event.id, event.incidentId, event.callId, event.correlationId,
           event.requestId, event.operation, event.repository, event.account].filter(Boolean).join('\n').toLowerCase()
         // Account for the searchable projection and a conservative index allowance.
         const bytes = payloadBytes + Buffer.byteLength(search) + 1024
-        if (bytes > this.policy.maxBytes) throw new DiagnosticEventError(event.id, 'Logging event exceeds the configured storage budget')
+        if (bytes > this.policy.maxBytes) throw new DiagnosticEventError(event.id, 'Logging event exceeds the configured storage budget', event)
         this.evict(bytes)
         inserted += this.db.prepare(`INSERT OR IGNORE INTO log_events
           (id,incident_id,sort_time,ingested_at,severity,source,component,workspace,visibility,account,repository,call_id,correlation_id,search,bytes,payload)

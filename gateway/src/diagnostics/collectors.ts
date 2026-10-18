@@ -174,7 +174,7 @@ export class EnvironmentCollectors {
           if (event) events.push(event)
         } else excluded++
       }
-      const rejected = this.runtime.deliver(events, key, String(until))
+      const rejected = this.runtime.deliver(events, key, String(until), { id: coverage, source: workspace ? 'poise' : 'ingress', workspace })
       this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, excluded || rejected ? 'Unstructured source output excluded to protect user content; structured diagnostic coverage only' : null)
     } catch (error) {
       if (/bound|exceeds|tail/i.test(String(error))) {
@@ -214,7 +214,7 @@ export class EnvironmentCollectors {
         const event = normalize(input)
         if (event) events.push(event)
       }
-      const rejected = this.runtime.deliver(events, key, String(until))
+      const rejected = this.runtime.deliver(events, key, String(until), { id: key, source: 'docker', workspace: null })
       if (rejected) this.runtime.partial('docker-events', 'docker', null, 'Native evidence rejected; historical collection gap')
       else this.runtime.observe('docker-events', 'docker', null)
     } catch (error) {
@@ -266,7 +266,7 @@ export class EnvironmentCollectors {
           if (warning) events.push(warning)
         }
       }
-      rejected += this.runtime.deliver(events, key, page.cursor)
+      rejected += this.runtime.deliver(events, key, page.cursor, { id: key, source: 'poise', workspace: handle })
       if (page.coverage.status === 'unavailable' || page.coverage.status === 'initializing' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
       else if (rejected || page.coverage.status === 'partial' || ('hasMore' in page && page.hasMore)) this.runtime.partial(key, 'poise', handle, 'Workspace is reachable; historical gaps or pending backfill limit completeness')
       else this.runtime.observe(key, 'poise', handle)

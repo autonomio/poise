@@ -44,6 +44,8 @@ it('resumes authenticated bounded backfill after source recreation without reset
     collector.start()
     await vi.waitFor(() => expect(cursor()).not.toBeNull())
     await collector.stop()
+    expect(runtime.health().sources.find((row) => row.id === 'workspace:alice')?.ingestedAt).toEqual(expect.any(String))
+    expect(runtime.query((db) => db.readCoverage({ workspace: 'alice', operator: false })).find((row) => row.id === 'workspace:alice')?.ingestedAt).toEqual(expect.any(String))
     const original = cursor()
     source.close(); rmSync(sourcePath); source = new DiagnosticStore(sourcePath)
     const second = event('after-recreation'); source.append([second])

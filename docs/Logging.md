@@ -262,3 +262,8 @@ restarts preserve all retained gaps and accumulated drop counts.
 Credential and private-field matching follows terminal/control-byte cleanup,
 including recursive field names and streaming folded headers. Removed bytes
 cannot reveal a credential name after its redaction check.
+
+Atomic source delivery quarantines only the offending record, preserving the
+first valid occurrence even when conflicting copies share one batch. Successful
+deliveries update the exact source boundary’s last-ingestion time independently
+of later coverage writes; coverage persistence failures remain explicit.

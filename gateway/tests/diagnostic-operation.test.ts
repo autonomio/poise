@@ -46,6 +46,7 @@ describe('native host collection without touching host journals', () => {
     first.start()
     try {
       await vi.waitFor(() => expect(runtime.query((db) => db.checkpoint('host-journal'))).toBe('cursor-c'))
+      expect(runtime.health().sources.find((row) => row.id === 'host-journal')?.ingestedAt).toEqual(expect.any(String))
       const page = runtime.query((db) => db.query({ workspace: 'operator', operator: true }))
       expect(page.events.filter((event) => event.source === 'kernel' || event.source === 'docker')).toHaveLength(2)
       expect(JSON.stringify(page)).not.toContain('business-app')
