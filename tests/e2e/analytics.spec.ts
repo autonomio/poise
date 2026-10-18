@@ -138,7 +138,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   const flow = topline
   const perPr = view.getByRole('region', { name: 'Per merged pull request' })
   const quota = view.getByRole('region', { name: 'GitHub API · Live' })
-  await expect(topline.locator('.analytics-label')).toHaveText(['Issues opened', 'Issues closed', 'Pull requests merged', 'Lines changed', 'Time to merge', 'Pull requests opened', 'Closed without merging', 'Time to first review'])
+  await expect(topline.locator('.analytics-label')).toHaveText(['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Time to first review', 'Time to merge', 'Issues opened', 'Issues closed'])
   await expect(perPr.locator('.analytics-label')).toHaveText(['Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent'])
   // Seconds matter: agents review within minutes.
   await expect(value(page, 'Time to first review')).toHaveText('1m 15s')
@@ -147,8 +147,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(value(page, 'Merged by agent')).toHaveText('75%')
   await expect(perPr.locator('.analytics-value').last()).toHaveAttribute('data-help', /3 of 4 by octo-agent/)
   await expect(quota.locator('.github-quota-bucket')).toHaveCount(2)
-  // The window, not the reading column: the five topline numbers share one
-  // row, the per-PR numbers sit under them, and each account is a row.
+  // Productivity fills two rows of four, with the smaller per-PR row below.
   expect(await view.locator('main').evaluate((main) => main.getBoundingClientRect().width)).toBeGreaterThan(1200)
   const tops = await topline.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => Math.round(tile.getBoundingClientRect().top)))
   expect(new Set(tops).size).toBe(2)

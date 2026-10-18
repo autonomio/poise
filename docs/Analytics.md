@@ -8,9 +8,10 @@ stays on Analytics, and choosing a view in the top nav leaves it.
 
 The page reads top to bottom:
 
-1. **Productivity**: eight cards for issues opened and closed, pull requests
-   merged, lines changed, time to merge, pull requests opened and closed
-   without merging, and time to first review. Four columns by two rows.
+1. **Productivity**: four columns by two rows. The first row shows pull
+   requests opened, merged, closed without merging, and lines changed.
+   The second shows time to first review, time to merge, issues opened,
+   and issues closed.
 2. **Per merged pull request**: five compact cards for comments, median lines,
    behaviors, median time and the share merged by the agent account.
 3. **GitHub API · Live**: avatar-led user and automation account panels side
