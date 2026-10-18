@@ -14,4 +14,5 @@ COPY tsconfig.json vitest.config.ts ./
 COPY src ./src
 COPY tests ./tests
 ENV POISE_GATEWAY_DOCKER_TESTS=1 DOCKER_HOST=unix:///var/run/docker.sock
-CMD ["node_modules/.bin/vitest", "run", "tests/docker.integration.test.ts", "tests/diagnostics.docker.test.ts"]
+# Both files discover managed containers on the same Engine; their fixture lifetimes must not overlap.
+CMD ["node_modules/.bin/vitest", "run", "--no-file-parallelism", "tests/docker.integration.test.ts", "tests/diagnostics.docker.test.ts"]
