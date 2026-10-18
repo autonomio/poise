@@ -1,3 +1,4 @@
+import { sign } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { normalize } from '../src/diagnostics/contract.js'
@@ -75,6 +76,17 @@ describe('authorized retained diagnostic reads', () => {
     expect(remaining.slice(1).map((line) => line.event.id)).toEqual(events.slice(0, 5).reverse().map((event) => event.id))
   })
 
+  it('retains a cold Logging URL through fake GitHub sign-in and the bound workspace ticket', async () => {
+    const target = '/?' + new URLSearchParams({ view: 'logging', event: own.id, from: '2026-10-18T03:00:00+03:00' })
+    const { reply, bindCookie } = await h.signIn('Alice', 'https://' + workspaceHost('alice') + target)
+    const ticket = new URL(reply.headers.location!)
+    expect(ticket.searchParams.get('next')).toBe(target)
+    const session = await h.request({ host: workspaceHost('alice'), path: ticket.pathname + ticket.search, headers: { cookie: bindCookie } })
+    expect(session.status).toBe(302)
+    expect(session.headers.location).toBe(target)
+    expect(session.cookie('poise_ws')).not.toBe('')
+  })
+
   it.each(['', '/health', '/export', '/events/' + own.id, '?incidentId=' + own.incidentId])('applies browser authentication and exact-origin guards to %s', async (path) => {
     expect((await request('alice', '', path)).status).toBe(401)
     expect((await request('alice', root, path)).status).toBe(403)
@@ -82,7 +94,19 @@ describe('authorized retained diagnostic reads', () => {
     expect((await request('alice', alice, path, { origin: 'https://bob.poise.test' })).status).toBe(403)
     expect((await request('alice', alice, path, { 'sec-fetch-site': 'same-site' })).status).toBe(403)
     expect((await request('alice', alice, path, { 'sec-fetch-site': 'none' })).status).toBe(403)
-    expect((await request('alice', '', path, { 'x-poise-identity': h.context.assertion(h.store.getUser('alice')!, 'admin') })).status).toBe(401)
+    const valid = h.context.assertion(h.store.getUser('alice')!, 'browser')
+    const [header, payload, signature] = valid.split('.')
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString())
+    const signed = (changes: Record<string, unknown>) => {
+      const input = header + '.' + Buffer.from(JSON.stringify({ ...claims, ...changes })).toString('base64url')
+      return input + '.' + sign(null, Buffer.from(input), h.keys.privateKey).toString('base64url')
+    }
+    const assertions = ['malformed', header + '.' + payload + '.' + signature.slice(0, -4) + 'AAAA',
+      signed({ iat: 1, exp: 61 }), signed({ iss: 'foreign' }), signed({ aud: 'workspace:bob' }), signed({ sub: 'bob' }),
+      signed({ iat: claims.iat + 120, exp: claims.iat + 180 }), signed({ exp: claims.iat + 3600 }), signed({ scope: 'unknown' }),
+      h.context.assertion(h.store.getUser('alice')!, 'link'), h.context.assertion(h.store.getUser('alice')!, 'admin')]
+    for (const identity of assertions) expect((await request('alice', '', path, { 'x-poise-identity': identity })).status).toBe(401)
+    expect((await request('alice', alice, path + (path.includes('?') ? '&' : '?') + 'scope=instance')).status).toBe(403)
   })
 })
 

@@ -33,6 +33,35 @@ fields recursively. Strings and nested context are bounded; truncation is
 explicit. The source adapters select Caller metadata without reading prompt or
 response fields, and preserve its exact process evidence when available.
 
+## Native Logging view
+
+Menu → Logging opens a server-paged table of retained events, with all three
+severities and Any time selected initially. Filters cover the full permitted
+store; the count is matching events, while each row's occurrence count describes
+its retained incident. Source time is displayed in Settings' timezone; missing
+source time is explicitly labeled as ingestion time. Today, Yesterday and This
+week use civil boundaries in that timezone. Custom intervals require UTC offsets.
+
+Expand a row with its evidence button (Enter or Space). Cause, stderr, stack,
+resource units/measurement time and truncation are shown as recorded. Related
+incident/correlation reads use the applied time, severity and access scope,
+twenty events per page. Recorded Caller runs open Swarm; valid repository/PR
+pairs open GitHub. Unrecorded targets have no link.
+
+Filters and the selected view survive reload. A mounted refresh preserves focus,
+scroll position and ID-keyed expansion. Only the visible first page checks for
+new ingestions every fifteen seconds; late older events count too. Apply the
+new-diagnostics button to replace the snapshot. Other pages retain their snapshot;
+hiding the document or leaving Logging cancels reads and stops polling. Failed
+refreshes visibly retain a stale snapshot with its last-success time.
+
+Durable `/?view=logging&event=ID` or `incident=ID` links accept optional zoned
+`from`/`to` bounds. They replace saved filters visibly, expand/focus the target,
+and offer Restore saved filters. Missing bounds use recorded time ± one hour;
+provided bounds widen visibly when needed. Invalid, unavailable, expired and
+query-service failure states are distinct and show available retention bounds.
+Export NDJSON reads a fresh matching snapshot, independent of the current page.
+
 ## Retention and queries
 
 Browser reads use `GET /_poise/api/logging` on the owner's workspace host, with

@@ -1,6 +1,8 @@
 # Operating Poise
 
-Diagnostic HTTP reads are for the owner's same-origin workspace page. Typing or
+Open Menu → Logging to investigate retained diagnostics; Export NDJSON downloads
+a fresh bounded snapshot of the applied filters. Diagnostic HTTP reads are for
+the owner's same-origin workspace page. Typing or
 bookmarking an export endpoint is refused by the existing browser guards; an
 operator without that page uses the operator command documented in Logging.
 The page's authenticated `/_poise/api/logging/export` request returns bounded
