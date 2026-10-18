@@ -1,3 +1,4 @@
+import { reveal } from '../motion'
 import { patchContent } from '../dom-patch'
 // Analytics — a view of its own, opened from the burger menu rather than the
 // top nav: the selected day's productivity topline with each figure's past
@@ -5,10 +6,10 @@ import { patchContent } from '../dom-patch'
 // live GitHub API quota. Independent of Current's filters.
 import { analyticsGroups, type AnalyticsGroup, type AnalyticsReport } from '../analytics-format'
 import { analyticsDay, analyticsHistoryBounds } from '../analytics-day'
-import { HISTORY_BASELINE, historyChart, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
+import { HISTORY_BASELINE, historyChart, histogram, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
 import { mountOrganizationFilter, organizationErrors, organizationUrl } from '../organizations'
 import { effectiveTimezone } from '../config'
-import { GITHUB_QUOTA_REFRESH_MS, quotaRiskTone, type GithubQuotaReport } from '../github-quota'
+import { GITHUB_QUOTA_REFRESH_MS, quotaRiskTone, quotaHours, type GithubQuotaReport, type GithubQuotaBucket } from '../github-quota'
 
 let viewEl: HTMLElement
 let initialized = false
@@ -30,6 +31,9 @@ let shown: { report: AnalyticsReport, baseline: AnalyticsReport } | null = null
 let history: { data: AnalyticsHistory | null, error: string } = { data: null, error: '' }
 // The period a chart's cursor rests on, by tile, while hovered or focused.
 const cursors = new Map<string, number>()
+let hoverTimer: ReturnType<typeof setTimeout> | undefined
+let hoveredSeries: string | null = null
+let hoveredIndex = 0
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -58,6 +62,40 @@ function renderShell(): string {
     </main>`
 }
 
+function histogramMarkup(series: HistorySeries): string {
+  const bins = histogram(series.values)
+  const max = Math.max(1, ...bins.map((bin) => bin.count))
+  const count = bins.reduce((sum, bin) => sum + bin.count, 0)
+  const help = `${series.label}: distribution of ${count} known weekly values over the past year in 10 equal-width bins. Unknown periods are excluded.`
+  return `<div class="analytics-histogram" tabindex="0" role="img" aria-label="${escapeHtml(help)}" data-help="${escapeHtml(help)}">
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">${bins.map((bin, i) => `<rect x="${i * 10 + 1}" y="${39 - bin.count / max * 36}" width="8" height="${bin.count / max * 36}" data-help="${escapeHtml(`${series.format(bin.from)} – ${series.format(bin.until)}: ${bin.count} periods`)}"/>`).join('')}</svg>
+    <span class="analytics-chart-axis"><span>${escapeHtml(series.format(bins[0].from))}</span><span>${count ? 'Distribution' : 'No observations'}</span><span>${escapeHtml(series.format(bins[9].until))}</span></span>
+  </div>`
+}
+
+function quotaCharts(bucket: GithubQuotaBucket, now: number): string {
+  const observations = (bucket.history ?? []).filter((sample) => sample.at >= now - 7 * 86_400_000 && sample.at <= now && sample.limit > 0)
+  const hours = quotaHours(observations, now)
+  const time = (at: number) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(at)
+  const used = histogram(observations.map((sample) => sample.used / sample.limit * 100), 0, 100)
+  const left = histogram(observations.map((sample) => sample.remaining / sample.limit * 100), 0, 100)
+  const peak = Math.max(1, ...used.map((bin) => bin.count), ...left.map((bin) => bin.count))
+  const help = 'Used and remaining quota at the latest observation in each hour, past 24 hours including this hour. Empty columns have no observation. Heights show percentage of the quota limit.'
+  const distribution = `Past 7 days: distribution of used and remaining quota percentages in 10 bins, from ${observations.length} hourly observations. Gaps are excluded.`
+  return `<div class="quota-charts">
+    <div class="analytics-chart-heading"><span>Past 24 hours</span><span class="quota-legend"><i class="quota-used"></i>Used <i class="quota-left"></i>Left</span></div>
+    <div class="quota-hours" role="img" tabindex="0" aria-label="${help}" data-help="${help}">${hours.map((sample, i) => {
+      const at = Math.floor(now / 3_600_000) * 3_600_000 - (23 - i) * 3_600_000
+      const text = sample ? `${time(sample.at)}: ${sample.used.toLocaleString('en-US')} used · ${sample.remaining.toLocaleString('en-US')} left` : `${time(at)}: no observation`
+      return `<span class="quota-hour${sample ? '' : ' quota-hour-empty'}" data-help="${escapeHtml(text)}">${sample ? `<i class="quota-left" style="height:${sample.remaining / sample.limit * 100}%"></i><i class="quota-used" style="height:${sample.used / sample.limit * 100}%"></i>` : ''}</span>`
+    }).join('')}</div>
+    <span class="analytics-chart-axis"><span>24h ago</span><span>Now</span></span>
+    <div class="analytics-chart-heading"><span>Past 7 days · Distribution</span><span>${observations.length}/168 hours</span></div>
+    <div class="quota-distribution" role="img" tabindex="0" aria-label="${escapeHtml(distribution)}" data-help="${escapeHtml(distribution)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">${used.map((bin, i) => `<g data-help="${bin.from}–${bin.until}% quota: ${bin.count} used observations · ${left[i].count} remaining observations"><rect class="quota-used" x="${i * 10 + 1}" y="${39 - bin.count / peak * 36}" width="3.5" height="${bin.count / peak * 36}"/><rect class="quota-left" x="${i * 10 + 5}" y="${39 - left[i].count / peak * 36}" width="3.5" height="${left[i].count / peak * 36}"/></g>`).join('')}</svg></div>
+    <span class="analytics-chart-axis"><span>0%</span><span>${observations.length ? 'Quota utilization' : 'Collecting history…'}</span><span>100%</span></span>
+  </div>`
+}
+
 async function readQuota(): Promise<void> {
   const generation = ++quotaGeneration
   const content = viewEl.querySelector<HTMLElement>('.github-quota-accounts')!
@@ -73,10 +111,11 @@ async function readQuota(): Promise<void> {
     patchContent(content, data.accounts.length ? data.accounts.map((account) => `
       <article class="github-quota-account" data-account="${escapeHtml(account.login)}">
         <header class="github-quota-identity">
-          <h3>${escapeHtml(account.login)} <span>${escapeHtml(account.roles.join(' + '))}</span></h3>
-          ${account.checkedAt ? `<p class="analytics-note">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}
+          <img class="github-quota-avatar last-avatar" src="https://github.com/${encodeURIComponent(account.login)}.png?size=80" alt="" width="40" height="40">
+          <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
+          ${account.checkedAt ? `<p class="analytics-note">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}</div>
         </header>
-        ${account.error ? `<p class="st-help st-help-error">${escapeHtml(account.error)}</p>` : account.buckets.map((bucket) => {
+        ${account.error ? `<p class="st-help st-help-error">${escapeHtml(account.error)}</p>` : account.buckets.filter((bucket) => bucket.resource === 'core' || bucket.resource === 'graphql').map((bucket) => {
           const minutes = Math.max(0, (Date.parse(bucket.resetAt) - now) / 60_000)
           const risk = minutes > 0 ? bucket.riskPercent : null
           return `<div class="github-quota-bucket">
@@ -88,6 +127,7 @@ async function readQuota(): Promise<void> {
               <p class="analytics-note">${bucket.perMinute === null ? 'Collecting usage samples…' : `${number(Math.round(bucket.perMinute * 10) / 10)} / min used · ${(bucket.remaining / Math.max(minutes, 1 / 60)).toFixed(1)} / min available`}</p>
               <p class="github-quota-risk ${quotaRiskTone(risk)}">${risk === null ? minutes === 0 ? 'Awaiting reset refresh' : 'Risk: collecting samples…' : `${risk}% estimated risk${bucket.remaining === 0 ? ' · Exhausted' : ''}`}</p>
             `}
+            ${quotaCharts(bucket, now)}
           </div>`
         }).join('')}
       </article>`).join('') : '<p class="analytics-note">Set your GitHub user and automation accounts in Settings → General.</p>')
@@ -111,7 +151,7 @@ function showStatus(message: string, isError = false): void {
 
 function historyMarkup(label: string, all: HistorySeries[] | null): string {
   if (history.error) return `<dd class="analytics-history"><p class="analytics-history-empty" data-help="${escapeHtml(history.error)}" tabindex="0">Past year unavailable</p></dd>`
-  if (!all) return '<dd class="analytics-history" aria-busy="true"><span class="analytics-history-max"></span><div class="analytics-history-plot"></div></dd>'
+  if (!all) return '<dd class="analytics-history" aria-busy="true"><span class="analytics-history-max"></span><div class="analytics-history-plot"></div><div class="analytics-histogram"></div></dd>'
   const series = all.find((s) => s.label === label)
   if (!series) return ''
   const chart = historyChart(series.values)
@@ -119,7 +159,7 @@ function historyMarkup(label: string, all: HistorySeries[] | null): string {
   const at = (point: { x: number, y: number }) => `left: ${point.x}%; top: ${point.y}%`
   const summary = `${series.label}, the past year by 7-day period: latest ${series.format(series.values[series.values.length - 1] ?? null)}, highest ${series.format(chart.max)}. Arrow keys move between periods.`
   return `<dd class="analytics-history" data-series="${escapeHtml(series.label)}">
-    <span class="analytics-history-max">${chart.max === null ? '' : `Max ${escapeHtml(series.format(chart.max))}`}</span>
+    <span class="analytics-history-max"><span>52 weeks</span><span>${chart.max === null ? '' : `Max ${escapeHtml(series.format(chart.max))}`}</span></span>
     <div class="analytics-history-plot" tabindex="0" role="img" aria-label="${escapeHtml(summary)}">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
         <line class="analytics-history-base" x1="0" y1="${HISTORY_BASELINE}" x2="100" y2="${HISTORY_BASELINE}" vector-effect="non-scaling-stroke"/>
@@ -129,29 +169,12 @@ function historyMarkup(label: string, all: HistorySeries[] | null): string {
       ${chart.isolated.map((point) => `<span class="analytics-history-dot" style="${at(point)}"></span>`).join('')}
       ${latest ? `<span class="analytics-history-latest" style="${at(latest)}"></span>` : ''}
     </div>
+    ${histogramMarkup(series)}
   </dd>`
 }
 
-function historyTable(): string {
-  const data = history.data
-  if (!data) return ''
-  const series = historySeries(data)
-  const zone = effectiveTimezone()
-  return `<details class="analytics-history-table">
-    <summary>The past year as a table</summary>
-    <table>
-      <thead><tr><th>Period</th>${series.map((s) => `<th>${escapeHtml(s.label)}</th>`).join('')}</tr></thead>
-      <tbody>${data.periods.map((period, i) => `<tr><td>${escapeHtml(periodLabel(period, zone))}</td>${series.map((s) => `<td>${escapeHtml(s.format(s.values[i]))}</td>`).join('')}</tr>`).reverse().join('')}</tbody>
-    </table>
-  </details>`
-}
-
 function groupMarkup(group: AnalyticsGroup): string {
-  const topline = group.id === 'productivity'
-  const series = topline && history.data ? historySeries(history.data) : null
-  const historyNote = !topline ? '' : history.data?.errors.length
-    ? organizationErrors(history.data)
-    : 'Under each figure, the past year by 7-day period: daily averages, and time to merge as each period\'s mean. The last period is the 7 days before the selected day.'
+  const series = history.data ? historySeries(history.data) : null
   return `
     <section class="analytics-group" data-group="${group.id}" aria-labelledby="analytics-${group.id}">
       <h2 class="tp-group-label" id="analytics-${group.id}" data-help="${escapeHtml(group.help)}" tabindex="0">${escapeHtml(group.label)}</h2>
@@ -160,13 +183,13 @@ function groupMarkup(group: AnalyticsGroup): string {
           <div class="analytics-tile">
             <dt class="analytics-label"${tile.note ? ` data-help="${escapeHtml(tile.note)}" tabindex="0"` : ''}>${escapeHtml(tile.label)}</dt>
             <dd class="analytics-value">${escapeHtml(tile.value)}</dd>
-            ${tile.trend ? `<dd class="analytics-trend ${tile.trend.direction}"><span role="img" aria-label="${escapeHtml(tile.trend.description)}">${escapeHtml(tile.trend.text)}</span><span class="analytics-trend-caption" aria-hidden="true">${escapeHtml(tile.trend.caption)}</span></dd>` : ''}
-            ${tile.comparison ? `<dd class="analytics-note">${escapeHtml(tile.comparison)}</dd>` : ''}
-            ${topline ? historyMarkup(tile.label, series) : ''}
+            <dd class="analytics-trend ${tile.trend?.direction ?? 'neutral'}">${tile.trend ? `<span role="img" aria-label="${escapeHtml(tile.trend.description)}" data-help="${escapeHtml(tile.trend.caption)}">${escapeHtml(tile.trend.text)}</span>` : ''}</dd>
+            <dd class="analytics-note">${tile.comparison ? escapeHtml(tile.comparison) : ''}</dd>
+            ${historyMarkup(tile.label, series)}
           </div>`).join('')}
       </dl>
       ${group.note ? `<p class="analytics-group-note">${escapeHtml(group.note)}</p>` : ''}
-      ${topline && history.data ? `<p class="analytics-group-note">${escapeHtml(historyNote)}</p>${historyTable()}` : ''}
+      ${group.id === 'productivity' && history.data?.errors.length ? `<p class="analytics-group-note st-help-error">${escapeHtml(organizationErrors(history.data))}</p>` : ''}
     </section>`
 }
 
@@ -209,7 +232,11 @@ function showCursor(label: string, index: number): void {
   value.textContent = series.format(series.values[i])
   const detail = document.createElement('span')
   detail.textContent = `${series.detail(data.periods[i])} · ${periodLabel(data.periods[i], effectiveTimezone())}`
-  tip.replaceChildren(value, detail)
+  const explanation = document.createElement('small')
+  explanation.textContent = `${series.label} · Past year, one value per 7-day period. ${['Issues opened', 'Issues closed', 'Pull requests merged', 'Lines changed', 'Pull requests opened', 'Closed without merging'].includes(label) ? 'Daily averages.' : label === 'Time to merge' ? 'Period means.' : 'Period values.'} Last period: the 7 days before the selected day.`
+  const firstShow = !tip.childElementCount
+  tip.replaceChildren(value, detail, explanation)
+  if (firstShow) reveal(tip, { distance: 4 })
   // Centre the readout on the cursor but keep it on the page: a chart in the
   // right column of a narrow page is narrower than its readout. Only a
   // readout wider than the page itself wraps.
@@ -241,7 +268,12 @@ function onPlotPointer(event: PointerEvent): void {
   const count = history.data?.periods.length ?? 0
   if (!label || !count) return
   const rect = plotFor(label)!.getBoundingClientRect()
-  showCursor(label, Math.round((event.clientX - rect.left) / Math.max(1, rect.width) * (count - 1)))
+  hoveredIndex = Math.round((event.clientX - rect.left) / Math.max(1, rect.width) * (count - 1))
+  if (hoveredSeries !== label) {
+    clearTimeout(hoverTimer)
+    hoveredSeries = label
+    hoverTimer = setTimeout(() => { if (hoveredSeries === label && active) showCursor(label, hoveredIndex) }, 500)
+  } else if (cursors.has(label)) showCursor(label, hoveredIndex)
 }
 
 function onPlotKey(event: KeyboardEvent): void {
@@ -259,6 +291,8 @@ async function readHistory(bounds: string[]): Promise<void> {
   const generation = ++historyGeneration
   history = { data: null, error: '' }
   cursors.clear()
+  clearTimeout(hoverTimer)
+  hoveredSeries = null
   try {
     const res = await fetch(organizationUrl(`/api/analytics/history?${new URLSearchParams({ bounds: bounds.join(',') })}`))
     const data = await res.json().catch(() => null)
@@ -347,7 +381,11 @@ export function initAnalyticsView(): void {
     groups.addEventListener('pointerout', (event) => {
       const label = plotLabel(event)
       const plot = label ? plotFor(label) : null
-      if (label && plot && !plot.contains(event.relatedTarget as Node | null) && document.activeElement !== plot) hideCursor(label)
+      if (label && plot && !plot.contains(event.relatedTarget as Node | null)) {
+        clearTimeout(hoverTimer)
+        hoveredSeries = null
+        if (document.activeElement !== plot) hideCursor(label)
+      }
     })
     groups.addEventListener('focusin', (event) => {
       const label = plotLabel(event)
@@ -384,6 +422,8 @@ export function stopAnalyticsRefresh(): void {
   readGeneration++
   quotaGeneration++
   historyGeneration++
+  clearTimeout(hoverTimer)
+  hoveredSeries = null
   clearInterval(quotaTimer)
   clearTimeout(midnightTimer)
 }
