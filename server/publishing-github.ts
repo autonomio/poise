@@ -134,6 +134,10 @@ function fail(answer: Answer, what: string): never {
 /** Typed GraphQL reads and explicit review actions, under the publishing account. */
 export async function queryGitHub<T>(session: GitHubSession, query: string, variables: Record<string, unknown>): Promise<T> {
   const answer = await request(session, 'POST', 'graphql', { query, variables })
+  if (answer.status === 200 && Array.isArray(answer.body?.errors)
+    && answer.body.errors.some((error: unknown) => error && typeof error === 'object' && 'type' in error && error.type === 'NOT_FOUND')) {
+    fail({ ...answer, status: 404 }, 'Reading or updating GitHub reviews')
+  }
   if (answer.status !== 200 || answer.body?.errors?.length || !answer.body?.data) fail(answer, 'Reading or updating GitHub reviews')
   return answer.body.data as T
 }

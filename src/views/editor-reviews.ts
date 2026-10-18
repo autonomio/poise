@@ -25,7 +25,7 @@ export class EditorReviews {
   private generation = 0
   private running = false
   private selected: string | null = null
-  private busy = false
+  private actions = new Set<string>()
   private error = ''
   private drafts = new Map<string, string>()
   private list: HTMLElement
@@ -79,6 +79,7 @@ export class EditorReviews {
   }
 
   private visible(): boolean { return this.running && !!this.slug && !this.host.view.hidden && !document.hidden }
+  private get busy(): boolean { return !!this.slug && this.actions.has(this.slug) }
 
   async load(slug: string): Promise<void> {
     const generation = ++this.generation
@@ -116,20 +117,20 @@ export class EditorReviews {
     return data
   }
 
-  async synchronize(force = false): Promise<void> {
+  async synchronize(force = false, polling = false): Promise<void> {
     if (!this.visible() || this.busy) return
     // A switched document must schedule its own sync after the previous request finishes.
     if (this.pending) {
       const generation = this.generation
       await this.pending
-      if (this.visible() && generation === this.generation) return this.synchronize(force)
+      if (this.visible() && generation === this.generation) return this.synchronize(force, polling)
       return
     }
     const generation = this.generation
     const slug = this.slug!
     const operation = (async () => {
       try {
-        const data = await this.request(slug, '/sync', { force })
+        const data = await this.request(slug, '/sync', { force, poll: polling })
         if (generation !== this.generation) return
         this.data = data
         this.error = ''
@@ -148,7 +149,7 @@ export class EditorReviews {
     clearTimeout(this.timer)
     if (!this.visible() || !this.data.active) return
     const delay = Math.max(REVIEW_INTERVAL_MS, this.data.retryAt ? Date.parse(this.data.retryAt) - Date.now() : 0)
-    this.timer = setTimeout(() => { void this.synchronize() }, delay)
+    this.timer = setTimeout(() => { void this.synchronize(false, true) }, delay)
   }
 
   private location(review: ArticleReview): { start: number, end: number } | null {
@@ -249,7 +250,7 @@ export class EditorReviews {
     const generation = this.generation
     const body = this.drafts.get(review.id) ?? ''
     if (action === 'reply' && !body.trim()) { this.error = 'Write a reply first.'; this.renderPanel(); return }
-    this.busy = true
+    this.actions.add(slug)
     this.error = ''
     this.renderPanel()
     try {
@@ -258,6 +259,10 @@ export class EditorReviews {
       if (generation !== this.generation) return
       this.data = data
     } catch (error) { if (generation === this.generation) this.error = (error as Error).message }
-    finally { this.busy = false; if (generation === this.generation) { this.render(); this.schedule() } }
+    finally {
+      this.actions.delete(slug)
+      if (generation === this.generation) { this.render(); this.schedule() }
+      else if (this.slug === slug) { this.render(); void this.synchronize() }
+    }
   }
 }

@@ -154,3 +154,35 @@ test('a failed sync keeps comments visible and reports stale feedback', async ({
   await expect(page.getByRole('alert')).toContainText('GitHub is unavailable')
   await expect(page.locator('.editor-review-item')).toHaveCount(1)
 })
+
+test('switching documents during a GitHub reply does not suspend the new document', async ({ page }) => {
+  await editorWithReviews(page)
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const actionStarted = new Promise<void>((resolve) => { started = resolve })
+  await page.route('**/api/editor/doc/draft/reviews/action', async (route) => { started(); await held; await route.fallback() })
+  let secondSyncs = 0
+  const second: ArticleReviews = { reviews: [{ ...review(), id: 'thread-second', pr: 8, site: 'Another site', anchor: { quote: 'Different paragraph.', before: '', after: '', unique: true } }], checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [] }
+  await page.route('**/api/editor/doc/another**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/annotations')) return route.fulfill({ json: { annotations: [], version: VERSION } })
+    if (path.endsWith('/reviews/sync')) secondSyncs++
+    if (path.includes('/reviews')) return route.fulfill({ json: second })
+    return route.fulfill({ json: { slug: 'another', content: '# Another\n\nDifferent paragraph.', version: VERSION } })
+  })
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await panel.getByLabel('Reply on GitHub', { exact: true }).fill('A reply still in flight.')
+  await panel.getByRole('button', { name: 'Reply on GitHub', exact: true }).click()
+  await actionStarted
+  try {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'another' } })))
+    await expect(page.locator('#editor-doc')).toContainText('Different paragraph.')
+    await expect.poll(() => secondSyncs).toBe(1)
+    await page.locator('.editor-review-list summary').click()
+    await expect(page.getByRole('button', { name: 'Refresh reviews' })).toBeEnabled()
+    await page.locator('.editor-review-item').click()
+    await expect(panel).toContainText('Another site')
+  } finally { release() }
+})

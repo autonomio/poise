@@ -140,7 +140,7 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
   let result: PullAnswer
   try { result = await read(previous && previous.repoId === expectedId ? previous.repo : record.repo) }
   catch (error) {
-    if (!(error instanceof GitHubError) || !expectedId || error.retryAt) throw error
+    if (!(error instanceof GitHubError) || error.status !== 404 || !expectedId || error.retryAt) throw error
     const own = await repositoryById(session, expectedId)
     result = await read(own.fullName)
   }
@@ -182,11 +182,12 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
   return { reviews: items, active: pull.state === 'OPEN', checkedAt: new Date().toISOString(), pullId: pull.id, repo: repository.nameWithOwner, repoId: repository.databaseId }
 }
 
-async function refresh(me: string, record: PublishRecord, force: boolean): Promise<Cached> {
+async function refresh(me: string, record: PublishRecord, force: boolean, polling = false): Promise<Cached> {
   const key = keyFor(me, record)
   const active = pending.get(key)
   if (active) return active
   const old = cached(key)
+  if (polling && !force && old.snapshot && !old.snapshot.active) return old
   const now = Date.now()
   // Force still has a short shared cooldown; background reads always observe five minutes.
   if (now < old.nextAt && (!force || old.problem || now - Date.parse(old.snapshot?.checkedAt ?? '') < 10_000)) return old
@@ -207,7 +208,7 @@ async function refresh(me: string, record: PublishRecord, force: boolean): Promi
 }
 
 /** Cached GET never reaches GitHub. Only a visible editor asks POST to synchronize. */
-export async function articleReviews(slug: string, synchronize = false, force = false): Promise<ArticleReviews> {
+export async function articleReviews(slug: string, synchronize = false, force = false, polling = false): Promise<ArticleReviews> {
   await readDoc(slug)
   const { records } = await readPublishLedger(slug)
   const me = getMeta('me') ?? ''
@@ -215,7 +216,7 @@ export async function articleReviews(slug: string, synchronize = false, force = 
   let retryAt = 0
   // Serial requests also keep multi-site articles from producing a burst.
   for (const record of records) {
-    const value = synchronize ? await refresh(me, record, force) : cached(keyFor(me, record))
+    const value = synchronize ? await refresh(me, record, force, polling) : cached(keyFor(me, record))
     if (value.snapshot) {
       result.reviews.push(...value.snapshot.reviews)
       result.active ||= value.snapshot.active
@@ -281,7 +282,7 @@ export async function handleArticleReviewsApi(req: IncomingMessage, res: ServerR
     if (releaseBackgroundPaused()) throw new HttpError(503, 'Poise is installing an update; try again afterwards.')
     finished = trackReleaseBackground()
     const input = await readJson<Record<string, unknown>>(req)
-    if (match[2] === 'sync') return send(200, await articleReviews(match[1], true, input?.force === true))
+    if (match[2] === 'sync') return send(200, await articleReviews(match[1], true, input?.force === true, input?.poll === true))
     return send(200, await reviewAction(match[1], input))
   } catch (error) {
     if (error instanceof HttpError) return send(error.statusCode, { error: error.message })

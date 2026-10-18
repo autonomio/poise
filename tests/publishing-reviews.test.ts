@@ -140,6 +140,25 @@ describe('cached article review synchronization', () => {
     expect(mocks.query).toHaveBeenCalledTimes(2)
   })
 
+  it('polls only open PRs when a multi-site document also has a merged publication', async () => {
+    await editor.writePublishLedger('draft', { records: [record(), { ...record(), pullRequest: { number: 8, url: 'https://github.com/acme/site/pull/8' } }] })
+    const original = mocks.query.getMockImplementation()!
+    mocks.query.mockImplementation(async (...args: unknown[]) => {
+      const result = await original(...args) as { repository: { pullRequest: ReturnType<typeof pull> } }
+      const variables = args[2] as { number: number }
+      result.repository.pullRequest.state = variables.number === 8 ? 'MERGED' : 'OPEN'
+      result.repository.pullRequest.number = variables.number
+      return result
+    })
+    await request('/sync', {})
+    vi.setSystemTime(Date.now() + REVIEW_INTERVAL_MS)
+    await request('/sync', { poll: true })
+    expect(mocks.query.mock.calls.map((call) => (call[2] as { number: number }).number)).toEqual([7, 8, 7])
+    vi.setSystemTime(Date.now() + 11_000)
+    await request('/sync', { force: true })
+    expect(mocks.query).toHaveBeenCalledTimes(5)
+  })
+
   it('keeps feedback accessible when an original passage cannot be fetched', async () => {
     mocks.file.mockRejectedValue(new github.GitHubError('The reviewed commit is unavailable.', 404))
     const result = (await request('/sync', {})).body
