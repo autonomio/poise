@@ -137,7 +137,7 @@ async function sourceFor(session: GitHubSession, repo: string, path: string, com
 async function readSnapshot(session: GitHubSession, record: PublishRecord, previous?: Snapshot): Promise<Snapshot> {
   const read = (repo: string) => query<PullAnswer>(session, PULL_QUERY, { owner: repo.split('/')[0], name: repo.split('/')[1], number: record.pullRequest.number })
   let result: PullAnswer
-  try { result = await read(previous?.repoId === record.repoId ? previous.repo : record.repo) }
+  try { result = await read(previous && previous.repoId === record.repoId ? previous.repo : record.repo) }
   catch (error) {
     if (!(error instanceof GitHubError) || !record.repoId || error.retryAt) throw error
     const own = await repositoryById(session, record.repoId)
