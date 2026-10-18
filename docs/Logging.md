@@ -39,7 +39,8 @@ Defaults are **up to 30 days**, **64 MiB of accounted event storage**, and **50,
 the earliest bound reached expires evidence. Age and eviction use ingestion time,
 so an untrusted future source timestamp cannot pin a record. Accounting includes the searchable
 projection and an index allowance. Expiry tombstones retain only ID and scope
-for up to one further retention period, capped at twice the event count limit.
+for up to one further retention period, capped at the smaller of twice the event
+count limit and one tombstone per KiB of the storage budget (at least one).
 Unknown and inaccessible IDs share one response; expiry is reported only from
 an authorized tombstone. SQLite's page budget, cache and
 journal are also bounded. Records remain after a source or container disappears.
@@ -185,3 +186,24 @@ with unlimited expiry history. Once that metadata expires, lookup reports
 unavailable rather than inventing an expiry claim. Release-install tasks capture
 their owned bounded stderr before Docker removes them; configured limits are
 explicitly distinguished from unobserved incident usage.
+
+
+## Storage calibration
+
+The automated `diagnostic-volume.test.ts` replay measures 100 qualifying records
+across Git/Caller, datastore, Docker OOM, kernel/filesystem and ingress causes.
+It also verifies that 1,000 routine Info observations produce no retained rows.
+On the 18 October 2026 candidate, those records consumed 210,640 accounted bytes:
+2,107 bytes per record, including search and the conservative index allowance.
+At that fixture size, 64 MiB holds about 31,850 events; larger stderr reduces
+that count. This is a reproducible fixture measurement, not a measured production
+arrival rate. Thirty days is a maximum age, never a guaranteed history window.
+The 50,000-event cap also bounds small records; bytes normally expire these
+representative records first. Operators can size either bound from their own
+retained event counts and observed coverage without running another log stack.
+
+A permanent record rejection (including a configured byte budget smaller than
+one record) is quarantined with a collection Warning when it fits and a durable
+rejection count regardless. Accepted siblings and their native source checkpoint
+commit together. A sink or checkpoint transaction failure instead preserves the
+cursor for retry; native inspection metadata is not committed ahead of it.

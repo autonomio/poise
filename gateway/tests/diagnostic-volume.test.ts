@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
@@ -28,6 +28,6 @@ it('measures representative operational evidence against the default bounded sto
     const capacityAtFixtureSize = Math.floor(DEFAULT_LOG_POLICY.maxBytes / averageAccountedBytes)
     expect(capacityAtFixtureSize).toBeGreaterThan(10000)
     expect(usage.events).toBe(100)
-    console.info('Logging fixture calibration', JSON.stringify({ events: usage.events, accountedBytes: usage.bytes, averageAccountedBytes, capacityAtFixtureSize, sqliteBytes: statSync(path).size, sourceCount: cases.length, routineEventsExcluded: 1000 }))
+    console.info('Logging fixture calibration', JSON.stringify({ events: usage.events, accountedBytes: usage.bytes, averageAccountedBytes, capacityAtFixtureSize, sqliteAllocatedBytes: [path, path + '-wal', path + '-shm'].reduce((bytes, file) => bytes + (existsSync(file) ? statSync(file).size : 0), 0), sourceCount: cases.length, routineEventsExcluded: 1000 }))
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
 })
