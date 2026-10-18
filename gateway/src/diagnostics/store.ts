@@ -1,0 +1,236 @@
+import Database from 'better-sqlite3'
+import { chmodSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
+import { scopePrefix, SEVERITIES, type LogEvent, type Severity } from './contract.js'
+
+export interface LogAccess { workspace: string; operator: boolean }
+export interface LogFilter {
+  severities?: Severity[]
+  from?: string
+  to?: string
+  source?: string
+  component?: string
+  workspace?: string
+  account?: string
+  repository?: string
+  callId?: string
+  correlationId?: string
+  incidentId?: string
+  search?: string
+  cursor?: string
+  limit?: number
+}
+export interface Coverage {
+  id: string
+  source: string
+  workspace: string | null
+  status: 'connected' | 'unavailable' | 'partial'
+  observedAt: string | null
+  ingestedAt: string | null
+  availableFrom: string | null
+  error: string | null
+  gaps: Array<{ from: string; to: string | null; reason: string }>
+}
+export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
+export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, maxBytes: 64 * 1024 * 1024, maxEvents: 50_000 }
+interface EventRow { id: string; sort_time: string; payload: string }
+interface Cursor { high: number; time: string; id: string; filter: string }
+
+export class DiagnosticConflictError extends Error {
+  constructor(readonly eventId: string) { super('Conflicting immutable Logging event identity: ' + eventId) }
+}
+
+export class DiagnosticStore {
+  private readonly db: Database.Database
+  constructor(readonly path: string, readonly policy: LogPolicy = DEFAULT_LOG_POLICY, readonly now = Date.now, readonly readOnly = false) {
+    if (!Object.values(policy).every((value) => Number.isSafeInteger(value) && value > 0)) throw new Error('Logging retention and storage limits must be positive integers')
+    if (!readOnly && path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    this.db = new Database(path, { readonly: readOnly, fileMustExist: readOnly })
+    this.db.pragma('busy_timeout = 25')
+    if (readOnly) return
+    if (path !== ':memory:') chmodSync(path, 0o600)
+    this.db.pragma('journal_mode = WAL')
+    this.db.pragma('secure_delete = ON')
+    this.db.pragma('cache_size = -2048')
+    this.db.pragma('wal_autocheckpoint = 128')
+    this.db.pragma('journal_size_limit = 8388608')
+    this.db.pragma(`max_page_count = ${Math.ceil((policy.maxBytes * 2 + 1024 * 1024) / 4096)}`)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS log_events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, incident_id TEXT NOT NULL,
+        sort_time TEXT NOT NULL, ingested_at TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('critical','error','warning')),
+        source TEXT NOT NULL, component TEXT NOT NULL, workspace TEXT, visibility TEXT NOT NULL,
+        account TEXT, repository TEXT, call_id TEXT, correlation_id TEXT, search TEXT NOT NULL,
+        bytes INTEGER NOT NULL, payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
+      CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
+      CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT OR IGNORE INTO log_meta VALUES ('version','1');
+      INSERT OR IGNORE INTO log_meta VALUES ('expired_through','');
+    `)
+    const version = this.db.prepare("SELECT value FROM log_meta WHERE key='version'").get() as { value: string }
+    if (version.value !== '1') throw new Error(`Unsupported Logging store version ${version.value}`)
+  }
+
+  append(events: readonly LogEvent[]): number {
+    if (events.length > 100) throw new Error('Logging ingestion batch exceeds 100 events')
+    return this.db.transaction(() => {
+      let inserted = 0
+      for (const event of events) {
+        if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new Error('Invalid Logging event version or severity')
+        const payload = JSON.stringify(event)
+        const bytes = Buffer.byteLength(payload)
+        if (bytes > 64 * 1024) throw new Error('Logging event exceeds 64 KiB')
+        const prefix = scopePrefix(event.workspace, event.visibility)
+        if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[2] !== prefix
+          || !event.incidentId.startsWith(`inc_${prefix}_`)) throw new Error('Logging event identity is outside its authorized scope')
+        const existing = this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(event.id) as { payload: string } | undefined
+        if (existing) {
+          if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id)
+          continue
+        }
+        // Make room before insertion, including when the disk budget is full.
+        this.prune(bytes)
+        const search = [event.message, event.target, event.id, event.incidentId, event.callId, event.correlationId,
+          event.requestId, event.operation, event.repository, event.account].filter(Boolean).join('\n').toLowerCase()
+        inserted += this.db.prepare(`INSERT OR IGNORE INTO log_events
+          (id,incident_id,sort_time,ingested_at,severity,source,component,workspace,visibility,account,repository,call_id,correlation_id,search,bytes,payload)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(event.id, event.incidentId, event.eventTime ?? event.ingestedAt,
+          event.ingestedAt, event.severity, event.source, event.component, event.workspace, event.visibility,
+          event.account, event.repository, event.callId, event.correlationId, search, bytes, payload).changes
+      }
+      this.prune()
+      return inserted
+    })()
+  }
+
+  prune(reserve = 0): void {
+    if (reserve > this.policy.maxBytes) throw new Error('Logging event exceeds the configured storage budget')
+    const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
+    this.db.prepare("DELETE FROM log_meta WHERE key LIKE 'expired_through:%' AND value < ?").run(cutoff)
+    const expired = this.db.prepare('SELECT workspace,visibility,MAX(sort_time) AS at FROM log_events WHERE sort_time < ? GROUP BY workspace,visibility').all(cutoff) as Array<{ workspace: string | null; visibility: string; at: string }>
+    for (const value of expired) this.expire(value.workspace, value.visibility, value.at)
+    this.db.prepare('DELETE FROM log_events WHERE sort_time < ?').run(cutoff)
+    let { count, bytes } = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(bytes),0) AS bytes FROM log_events').get() as { count: number; bytes: number }
+
+    while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
+      const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY sort_time,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
+      if (!oldest) break
+      this.db.prepare('DELETE FROM log_events WHERE id=?').run(oldest.id)
+      this.expire(oldest.workspace, oldest.visibility, oldest.sort_time)
+      bytes -= oldest.bytes
+      count--
+    }
+
+  }
+
+  private expire(workspace: string | null, visibility: string, through: string): void {
+    for (const key of ['expired_through', 'expired_through:' + scopePrefix(workspace, visibility)]) {
+      this.db.prepare('INSERT INTO log_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)').run(key, through)
+    }
+  }
+
+  coverage(value: Coverage): void {
+    const payload = JSON.stringify({ ...value, gaps: value.gaps.slice(-32) })
+    if (Buffer.byteLength(payload) > 64 * 1024) throw new Error('Logging coverage exceeds its bound')
+    this.db.prepare('INSERT INTO log_coverage VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,payload=excluded.payload').run(value.id, value.workspace, payload)
+  }
+
+  readCoverage(access: LogAccess): Coverage[] {
+    const rows = (access.operator ? this.db.prepare('SELECT payload FROM log_coverage').all()
+      : this.db.prepare('SELECT payload FROM log_coverage WHERE workspace=? OR workspace IS NULL').all(access.workspace)) as Array<{ payload: string }>
+    return rows.map(({ payload }) => {
+      const value = JSON.parse(payload) as Coverage
+      return access.operator || value.workspace === access.workspace ? value : {
+        ...value, id: value.source, error: value.error ? 'Source unavailable; an operator can inspect the cause.' : null,
+        gaps: value.gaps.map((gap) => ({ ...gap, reason: 'Shared source collection gap' })),
+      }
+    })
+  }
+
+  query(access: LogAccess, filter: LogFilter = {}) {
+    const levels = filter.severities ?? [...SEVERITIES]
+    if (!Array.isArray(levels) || !levels.every((level) => SEVERITIES.includes(level))) throw new Error('Select only Critical, Error and Warning')
+    const limit = filter.limit ?? 50
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Logging page size must be between 1 and 100')
+    if (filter.workspace && !access.operator && filter.workspace !== access.workspace) throw new Error('Logging workspace scope is forbidden')
+    const clauses = [levels.length ? `severity IN (${levels.map(() => '?').join(',')})` : '0']
+    const values: Array<string | number> = [...levels]
+    if (!access.operator) { clauses.push("workspace=? AND visibility='workspace'"); values.push(access.workspace) }
+    const columns = { source: 'source', component: 'component', workspace: 'workspace', account: 'account', repository: 'repository',
+      callId: 'call_id', correlationId: 'correlation_id', incidentId: 'incident_id' }
+    for (const [key, column] of Object.entries(columns)) {
+      const value = filter[key as keyof typeof columns]
+      if (value !== undefined) {
+        if (typeof value !== 'string' || value.length > 512) throw new Error(`Invalid Logging ${key}`)
+        clauses.push(`${column}=?`); values.push(value)
+      }
+    }
+    for (const [key, sign] of [['from', '>='], ['to', '<=']] as const) {
+      if (filter[key] !== undefined) {
+        const at = Date.parse(filter[key])
+        if (!Number.isFinite(at)) throw new Error(`Invalid Logging ${key} time`)
+        clauses.push(`sort_time ${sign} ?`); values.push(new Date(at).toISOString())
+      }
+    }
+    if (filter.search) {
+      if (filter.search.length > 256) throw new Error('Logging search exceeds 256 characters')
+      clauses.push("search LIKE ? ESCAPE '\\'"); values.push('%' + filter.search.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%')
+    }
+    const fingerprint = createHash('sha256').update(JSON.stringify([access, clauses, values])).digest('hex')
+    let cursor: Cursor | null = null
+    if (filter.cursor) {
+      if (filter.cursor.length > 1024) throw new Error('Invalid Logging cursor')
+      try { cursor = JSON.parse(Buffer.from(filter.cursor, 'base64url').toString()) as Cursor } catch { throw new Error('Invalid Logging cursor') }
+      if (!cursor || cursor.filter !== fingerprint || !Number.isSafeInteger(cursor.high) || cursor.high < 0
+        || typeof cursor.time !== 'string' || !Number.isFinite(Date.parse(cursor.time)) || typeof cursor.id !== 'string' || !/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(cursor.id)) throw new Error('Logging cursor does not match these filters')
+    }
+    const high = cursor?.high ?? (this.db.prepare('SELECT COALESCE(MAX(seq),0) AS high FROM log_events').get() as { high: number }).high
+    clauses.push('seq<=?'); values.push(high)
+    const where = clauses.join(' AND ')
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM log_events WHERE ${where}`).get(...values) as { count: number }).count
+    const pageWhere = cursor ? where + ' AND (sort_time < ? OR (sort_time = ? AND id < ?))' : where
+    const pageValues = cursor ? [...values, cursor.time, cursor.time, cursor.id, limit + 1] : [...values, limit + 1]
+    const rows = this.db.prepare(`SELECT id,sort_time,payload FROM log_events WHERE ${pageWhere} ORDER BY sort_time DESC,id DESC LIMIT ?`).all(...pageValues) as EventRow[]
+    const page = rows.slice(0, limit)
+    const events = page.map((row) => {
+      const event = JSON.parse(row.payload) as LogEvent
+      const occurrences = (this.db.prepare('SELECT COUNT(*) AS count FROM log_events WHERE incident_id=?').get(event.incidentId) as { count: number }).count
+      return { ...event, occurrences }
+    })
+    const last = page.at(-1)
+    return { version: 1, events, total, countKind: 'events', nextCursor: rows.length > limit && last
+      ? Buffer.from(JSON.stringify({ high, time: last.sort_time, id: last.id, filter: fingerprint })).toString('base64url') : null,
+    coverage: this.readCoverage(access), bounds: this.bounds(access), policy: this.policy }
+  }
+
+  bounds(access: LogAccess) {
+    const predicate = access.operator ? '' : "WHERE workspace=? AND visibility='workspace'"
+    const parameters = access.operator ? [] : [access.workspace]
+    const row = this.db.prepare(`SELECT MIN(sort_time) AS from_time,MAX(sort_time) AS to_time FROM log_events ${predicate}`).get(...parameters) as { from_time: string | null; to_time: string | null }
+    return { from: row.from_time, to: row.to_time, retentionAfter: new Date(this.now() - this.policy.retentionMs).toISOString() }
+  }
+
+  lookup(access: LogAccess, id: string): { status: 'found'; event: LogEvent } | { status: 'expired' | 'unavailable' } {
+    if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid Logging event identifier')
+    const row = (access.operator ? this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(id)
+      : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility='workspace'").get(id, access.workspace)) as { payload: string } | undefined
+    if (row) return { status: 'found', event: JSON.parse(row.payload) as LogEvent }
+    // Do not expose the existence of another workspace's evidence.
+    const milliseconds = Number(id.split('_')[1])
+    if (!Number.isFinite(milliseconds) || !Number.isFinite(new Date(milliseconds).getTime())) throw new Error('Invalid Logging event time')
+    const time = new Date(milliseconds).toISOString()
+    const key = access.operator ? 'expired_through' : 'expired_through:' + scopePrefix(access.workspace, 'workspace')
+    const watermark = (this.db.prepare('SELECT value FROM log_meta WHERE key=?').get(key) as { value: string } | undefined)?.value ?? '' 
+    return { status: time < new Date(this.now() - this.policy.retentionMs).toISOString() || (watermark && time <= watermark) ? 'expired' : 'unavailable' }
+  }
+
+  close(): void { this.db.close() }
+}
