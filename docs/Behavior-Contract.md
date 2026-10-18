@@ -44,7 +44,8 @@ cached automatic failure summary.
 
 If the browser cannot read `/api/behaviors`, it reports one request diagnostic
 and retains its last known snapshot. It does not infer agent-log, datastore or
-identity failures from that request. Controls remain unavailable until a
+identity failures from that request. A generic browser fetch exception retains
+its actual message and unknown cause; it never fabricates an ECONNRESET. Controls remain unavailable until a
 successful read restores current state.
 An initial unread runtime has `status: 'unknown'`. A previously observed
 degraded runtime remains visible alongside the request diagnostic until a

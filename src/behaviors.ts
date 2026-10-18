@@ -352,7 +352,7 @@ export async function refreshState(): Promise<void> {
   }]))
   try {
     const res = await fetch('/api/behaviors').catch((cause: unknown) => {
-      requestFailure = classifyBehaviorDiagnostic(cause instanceof TypeError ? 'ECONNRESET' : String(cause))
+      requestFailure = classifyBehaviorDiagnostic(cause instanceof Error ? cause.message : String(cause))
       throw cause
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)

@@ -141,6 +141,11 @@ query validation, coverage-journal and reporting failures remain distinct from s
 outages. Shutdown drains queued batches within two seconds, then records any loss.
 Coverage preserves prior drops and open outage intervals across restart.
 
+Quota observation continues every fifteen seconds with Notifications off.
+A warning requires at least 50% forecast risk sustained across distinct
+observations thirty seconds apart in one reset window; exhaustion remains
+immediate. These technical records do not depend on popup issuance or dismissal.
+
 ## Collection and operation
 
 The application starts a dedicated `logging.db` beside `POISE_DB` (otherwise
