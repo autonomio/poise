@@ -3,11 +3,11 @@ export const SECRET_KEY = /authorization|cookie|password|passwd|secret|credentia
 
 const TERMINAL_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
 // Scan each field run once, then use the same classifier as structured facts.
-const CREDENTIAL_FIELD = /(^|["'\\{},\r\n:=])([^"'\\:=\r\n{},]*[^ \t"'\\:=\r\n{},])\\*["']?[ \t]*[:=]/g
+const CREDENTIAL_FIELD = /(?:^|(?<=["'\\{},\r\n:=]))([^"'\\:=\r\n{},]*[^ \t"'\\:=\r\n{},])\\*["']?[ \t]*[:=]/g
 
 /** @param {string} value @returns {boolean} */
 function hasCredentialHeader(value) {
-  for (const match of value.matchAll(CREDENTIAL_FIELD)) if (SECRET_KEY.test(match[2].trim())) return true
+  for (const match of value.matchAll(CREDENTIAL_FIELD)) if (SECRET_KEY.test(match[1].trim())) return true
   return false
 }
 
@@ -15,11 +15,11 @@ function hasCredentialHeader(value) {
 function redactHeaders(value) {
   let output = '', offset = 0
   for (const match of value.matchAll(CREDENTIAL_FIELD)) {
-    if (match.index < offset || !SECRET_KEY.test(match[2].trim())) continue
+    if (match.index < offset || !SECRET_KEY.test(match[1].trim())) continue
     let end = value.indexOf('\n', match.index + match[0].length)
     while (end >= 0 && /[ \t]/.test(value[end + 1] ?? '')) end = value.indexOf('\n', end + 1)
     if (end < 0) end = value.length
-    output += value.slice(offset, match.index + match[1].length) + '[redacted header]'
+    output += value.slice(offset, match.index) + '[redacted header]'
     offset = end
   }
   return output + value.slice(offset)

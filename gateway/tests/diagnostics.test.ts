@@ -470,7 +470,7 @@ it.each(['api key', 'private key', 'id_token_hint', 'idTokenHint', 'bearerToken'
 
 it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key', 'private/key', 'access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key', 'DB_PASSWORD', 'databasePassword', 'DB_PASSWD', 'cloud_client_secret', 'credential_value', 'serviceAuthorization', 'sessionCookie', 'DB_API_KEY', 'DB_PRIVATE_KEY', 'custom.password.value', 'database password value'])('redacts opaque %s fields without configured secret values', (key) => {
   const secret = 'opaque-value-not-present-in-environment'
-  for (const field of [`{"phase":"auth","${key}":"${secret}"}`, JSON.stringify({ body: JSON.stringify({ [key]: secret }) }), `{'${key}': '${secret}'}`, `${key}=${secret}`]) {
+  for (const field of [`{"phase":"auth","${key}":"${secret}"}`, JSON.stringify({ body: JSON.stringify({ [key]: secret }) }), `{'${key}': '${secret}'}`, `${key}=${secret}`, `cause: ${key}=${secret}`]) {
     const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected', stderr: field }, NOW, [])!
     const db = store(); db.append([value])
     expect(JSON.stringify(db.query(alice))).not.toContain(secret)
