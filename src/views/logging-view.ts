@@ -429,6 +429,11 @@ async function poll(): Promise<void> {
   } finally { requests.delete(request) }
 }
 
+function refreshCurrent(): void {
+  if (link || linkFailure) void initialRead()
+  else void loadPage()
+}
+
 function filtersChanged(wait = false): void {
   invalidate(); clearLinkUrl(); page = null; firstSnapshot = null; linked = null; health = null; expanded.clear(); related.clear(); pageIndex = 0; message = ''; persist(); render()
   if (wait) debounce = setTimeout(() => { debounce = null; void loadPage() }, 250)
@@ -507,7 +512,7 @@ function onClick(event: Event): void {
   const id = button.dataset.row
   switch (button.dataset.action) {
     case 'expand': if (id) { if (expanded.has(id)) { expanded.delete(id); related.delete(id) } else expanded.add(id); render() } break
-    case 'refresh': case 'new': void loadPage(); break
+    case 'refresh': case 'new': refreshCurrent(); break
     case 'export': if (button.getAttribute('aria-busy') !== 'true') void exportCurrent(); break
     case 'custom': applyCustom(); break
     case 'next': if (page?.nextCursor) { cursors[pageIndex + 1] = page.nextCursor; void loadPage(page.nextCursor, false, false, pageIndex + 1) } break
@@ -559,13 +564,13 @@ function visibility(): void {
 
 export function initLoggingView(): void {
   if (!initialized) { view = document.getElementById('view-logging')!; shell(); initialized = true }
-  if (active) { if (mountedSearch !== location.search) { preferences = loadPreferences(); void initialRead() } else void loadPage(); return }
+  if (active) { if (mountedSearch !== location.search) { preferences = loadPreferences(); void initialRead() } else refreshCurrent(); return }
   active = true; preferences = loadPreferences(); access = null; expanded.clear(); related.clear()
   document.addEventListener('visibilitychange', visibility)
   void initialRead()
   requestAnimationFrame(() => { if (active && !link?.event && !link?.incident && !linkFailure) view.querySelector<HTMLElement>('.view-header')?.focus({ preventScroll: true }) })
 }
-export function refreshLoggingView(): void { if (active) void loadPage() }
+export function refreshLoggingView(): void { if (active) refreshCurrent() }
 export function stopLoggingRefresh(): void {
   if (!active) return
   active = false; invalidate(); document.removeEventListener('visibilitychange', visibility)

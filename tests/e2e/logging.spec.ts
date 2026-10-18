@@ -252,9 +252,16 @@ test('failed refreshes are stale and lookup failures never become an ordinary em
     await expect(page.locator('#logging-link')).toContainText(text)
     await expect(page.locator('#logging-empty')).toBeHidden()
     await expect(page.locator('#logging-health')).toContainText('Retention boundary:')
+    const retried = page.waitForResponse((reply) => new URL(reply.url()).pathname.startsWith('/api/logging/events/'))
+    await action(page, 'refresh').click()
+    await retried
+    await expect(page.locator('#logging-link')).toContainText(text)
+    await expect(page.locator('#logging-empty')).toBeHidden()
     await page.unroute('**/api/logging/events/**')
   }
   await page.goto('/?view=logging&event=invalid')
+  await expect(page.locator('#logging-link')).toContainText('link is invalid')
+  await action(page, 'refresh').click()
   await expect(page.locator('#logging-link')).toContainText('link is invalid')
   await expect(page.locator('#logging-empty')).toBeHidden()
 })

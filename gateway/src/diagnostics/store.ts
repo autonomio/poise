@@ -216,9 +216,16 @@ export class DiagnosticStore {
     const pageValues = cursor ? [...values, cursor.time, cursor.time, cursor.id, limit + 1] : [...values, limit + 1]
     const rows = this.db.prepare(`SELECT id,sort_time,payload FROM log_events WHERE ${pageWhere} ORDER BY sort_time DESC,id DESC LIMIT ?`).all(...pageValues) as EventRow[]
     const page = rows.slice(0, limit)
+    const occurrenceCounts = new Map<string, number>()
+    const countIncident = this.db.prepare('SELECT COUNT(*) AS count FROM log_events WHERE incident_id=? AND ingested_at>=?')
+    const retentionAfter = new Date(this.now() - this.policy.retentionMs).toISOString()
     const events = page.map((row) => {
       const event = JSON.parse(row.payload) as LogEvent
-      const occurrences = (this.db.prepare('SELECT COUNT(*) AS count FROM log_events WHERE incident_id=? AND ingested_at>=?').get(event.incidentId, new Date(this.now() - this.policy.retentionMs).toISOString()) as { count: number }).count
+      let occurrences = occurrenceCounts.get(event.incidentId)
+      if (occurrences === undefined) {
+        occurrences = (countIncident.get(event.incidentId, retentionAfter) as { count: number }).count
+        occurrenceCounts.set(event.incidentId, occurrences)
+      }
       return { ...event, occurrences }
     })
     const last = page.at(-1)
