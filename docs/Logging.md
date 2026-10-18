@@ -168,6 +168,8 @@ command or native Warning. Native level detection precedes secret redaction;
 only redacted text is retained or forwarded. Stdout and arguments are excluded. A diagnostic sink
 or reporter failure does not change the installer exit status. Cwd-filesystem
 measurements are labeled as such; an unobserved affected filesystem stays null.
+Helper SIGTERM/SIGINT forwards to the detached installer group, waits for bounded
+SIGKILL escalation even after the direct child exits, and returns status 143/130.
 
 Bootstrap stdout is redacted during forwarding and capped at 64 KiB per command,
 while its diagnostic event excludes stdout entirely. The bootstrap source file

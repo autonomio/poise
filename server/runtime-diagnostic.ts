@@ -38,7 +38,8 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   const redactStderr = lineRedactor(secrets); const redactStdout = lineRedactor(secrets)
   let stderr = Buffer.alloc(0); let pending = Buffer.alloc(0); let discarding = false; let truncated = false; let nativeWarning = false
   let stdoutPending = Buffer.alloc(0); let stdoutDiscarding = false; let stdoutForwarded = 0
-  let timedOut = false; let spawnError: NodeJS.ErrnoException | null = null; let captureError: string | null = null
+  let timedOut = false; let interrupted: NodeJS.Signals | null = null
+  let spawnError: NodeJS.ErrnoException | null = null; let captureError: string | null = null
   const addLine = (line: Buffer) => {
     const text = stripVTControlCharacters(line.toString())
     nativeWarning ||= /^(?:npm\s+warn\b|warning:|warn(?:ing)?[:\s])/im.test(text)
@@ -60,47 +61,63 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') captureError = redact(String(error), secrets) }
   }
   let escalation: Promise<void> | null = null
+  const escalate = () => {
+    // Closing the direct child's stdio does not establish group termination.
+    escalation ??= new Promise<void>((resolve) => setTimeout(() => { signal('SIGKILL'); resolve() }, options.killAfterMs ?? 30_000))
+  }
   const timer = setTimeout(() => {
     timedOut = true; signal('SIGTERM')
-    // The direct child can exit while a descendant closes stdio and ignores TERM.
-    escalation = new Promise<void>((resolve) => setTimeout(() => { signal('SIGKILL'); resolve() }, options.killAfterMs ?? 30_000))
+    escalate()
   }, timeoutMs)
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.stdout?.on('data', (chunk: Buffer) => {
-      let remaining = chunk
-      while (remaining.length) {
-        const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
-        if (!stdoutDiscarding && stdoutPending.length + part.length > 64 * 1024) { stdoutDiscarding = true; stdoutPending = Buffer.alloc(0); redactStdout('Authorization:'); captureError = 'Oversized bootstrap stdout line excluded' }
-        if (!stdoutDiscarding) stdoutPending = Buffer.concat([stdoutPending, part])
-        if (end < 0) return
-        remaining = remaining.subarray(end + 1)
-        if (!stdoutDiscarding) forwardStdout(stdoutPending)
-        stdoutPending = Buffer.alloc(0); stdoutDiscarding = false
-      }
+  const interrupt = (value: NodeJS.Signals) => {
+    if (timedOut || interrupted) return
+    interrupted = value; clearTimeout(timer); signal(value); escalate()
+  }
+  const onTerm = () => interrupt('SIGTERM'); const onInt = () => interrupt('SIGINT')
+  process.on('SIGTERM', onTerm); process.on('SIGINT', onInt)
+  let result: { code: number | null; signal: NodeJS.Signals | null }
+  try {
+    result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.stdout?.on('data', (chunk: Buffer) => {
+        let remaining = chunk
+        while (remaining.length) {
+          const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
+          if (!stdoutDiscarding && stdoutPending.length + part.length > 64 * 1024) { stdoutDiscarding = true; stdoutPending = Buffer.alloc(0); redactStdout('Authorization:'); captureError = 'Oversized bootstrap stdout line excluded' }
+          if (!stdoutDiscarding) stdoutPending = Buffer.concat([stdoutPending, part])
+          if (end < 0) return
+          remaining = remaining.subarray(end + 1)
+          if (!stdoutDiscarding) forwardStdout(stdoutPending)
+          stdoutPending = Buffer.alloc(0); stdoutDiscarding = false
+        }
+      })
+      child.stdout?.on('error', (error: Error) => { captureError = redact(error.message, secrets) })
+      child.stderr?.on('data', (chunk: Buffer) => {
+        let remaining = chunk
+        while (remaining.length) {
+          const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
+          if (!discarding && pending.length + part.length > 64 * 1024) { captureError = 'Oversized bootstrap stderr line excluded'; truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('Authorization: [oversized stderr line excluded]')) }
+          if (!discarding) pending = Buffer.concat([pending, part])
+          if (end < 0) return
+          remaining = remaining.subarray(end + 1)
+          if (!discarding) addLine(pending)
+          pending = Buffer.alloc(0); discarding = false
+        }
+      })
+      child.stderr?.on('error', (error: Error) => { captureError = redact(error.message, secrets) })
+      child.once('error', (error: NodeJS.ErrnoException) => { spawnError = error })
+      child.once('close', (code, signal) => resolve({ code, signal }))
     })
-    child.stdout?.on('error', (error: Error) => { captureError = redact(error.message, secrets) })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      let remaining = chunk
-      while (remaining.length) {
-        const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
-        if (!discarding && pending.length + part.length > 64 * 1024) { captureError = 'Oversized bootstrap stderr line excluded'; truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('Authorization: [oversized stderr line excluded]')) }
-        if (!discarding) pending = Buffer.concat([pending, part])
-        if (end < 0) return
-        remaining = remaining.subarray(end + 1)
-        if (!discarding) addLine(pending)
-        pending = Buffer.alloc(0); discarding = false
-      }
-    })
-    child.stderr?.on('error', (error: Error) => { captureError = redact(error.message, secrets) })
-    child.once('error', (error: NodeJS.ErrnoException) => { spawnError = error })
-    child.once('close', (code, signal) => resolve({ code, signal }))
-  })
-  clearTimeout(timer)
-  if (escalation) await escalation
+    clearTimeout(timer)
+    if (escalation) await escalation
+  } finally {
+    clearTimeout(timer)
+    process.removeListener('SIGTERM', onTerm); process.removeListener('SIGINT', onInt)
+  }
   if (pending.length && !discarding) addLine(pending)
   if (stdoutPending.length && !stdoutDiscarding) forwardStdout(stdoutPending)
   const failedSpawn = spawnError as NodeJS.ErrnoException | null
-  const code = timedOut ? 124 : failedSpawn ? failedSpawn.code === 'ENOENT' ? 127 : 126 : result.code ?? 128 + (result.signal ? constants.signals[result.signal] ?? 0 : 0)
+  const interruptedBy = interrupted as NodeJS.Signals | null
+  const code = timedOut ? 124 : interruptedBy ? 128 + constants.signals[interruptedBy] : failedSpawn ? failedSpawn.code === 'ENOENT' ? 127 : 126 : result.code ?? 128 + (result.signal ? constants.signals[result.signal] ?? 0 : 0)
   if (!options.quiet && stderr.length) captureError = forward(2, stderr) ?? captureError
   if (code !== 0 || nativeWarning || captureError) {
     let resources: Record<string, unknown>
@@ -112,9 +129,9 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     const event = normalize({ id: 'bootstrap:' + at + ':' + command, time: at, source: captureError && code === 0 ? 'collection' : 'poise',
       component: 'provider-bootstrap', operation: 'provider.bootstrap', phase: 'installer_command', level: code !== 0 ? 'error' : 'warning',
       workspace, visibility: 'workspace', container: process.env.HOSTNAME ?? null, release: process.env.POISE_RELEASE || null,
-      message: failedSpawn?.message ?? (captureError && code === 0 ? 'Bootstrap diagnostic forwarding was incomplete' : timedOut ? 'Provider bootstrap command exceeded its deadline' : code !== 0 ? `Provider bootstrap command exited ${code}` : 'Provider bootstrap emitted a native warning'),
+      message: failedSpawn?.message ?? (captureError && code === 0 ? 'Bootstrap diagnostic forwarding was incomplete' : timedOut ? 'Provider bootstrap command exceeded its deadline' : interruptedBy ? `Provider bootstrap command interrupted by ${interruptedBy}` : code !== 0 ? `Provider bootstrap command exited ${code}` : 'Provider bootstrap emitted a native warning'),
       stderr: stderr.toString(), truncated, exitCode: failedSpawn ? null : result.code, signal: result.signal, errno: failedSpawn?.errno ?? failedSpawn?.code ?? null, timeoutMs,
-      context: { configuredExecutable: command, resolvedExecutable: executable, elapsedMs: Date.now() - started, timedOut,
+      context: { configuredExecutable: command, resolvedExecutable: executable, elapsedMs: Date.now() - started, timedOut, interruptedBy,
         captureError, processErrorCode: failedSpawn?.code ?? null, providerStarted: child.pid !== undefined }, resources }, Date.now(), secrets)!
     persistRuntimeDiagnostic(event, options)
   }

@@ -1,8 +1,10 @@
-import { spawnSync } from 'node:child_process'
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
+import { build } from 'esbuild'
 import { captureRuntimeCommand, recordRuntimeDiagnostic } from '../server/runtime-diagnostic'
 import { DiagnosticStore } from '../gateway/src/diagnostics/store'
 import type { LogEvent } from '../gateway/src/diagnostics/contract'
@@ -118,3 +120,40 @@ it('kills a TERM-resistant descendant after the direct installer closes its stdi
     spawnSync('kill', ['-KILL', readFileSync(pidPath, 'utf8')])
   }
 })
+
+it.each(['SIGTERM', 'SIGINT'] as const)('contains the installer group when the helper receives %s', async (signal) => {
+  const storePath = path(); const directory = join(storePath, '..')
+  const pidPath = join(directory, 'descendant.pid'); const heartbeat = join(directory, 'heartbeat')
+  const cache = join(process.cwd(), 'node_modules', '.cache'); mkdirSync(cache, { recursive: true })
+  const compiled = mkdtempSync(join(cache, 'poise-interruption-')); directories.push(compiled)
+  const helper = join(compiled, 'helper.mjs')
+  await build({ stdin: { contents: `import { captureRuntimeCommand } from './server/runtime-diagnostic';process.exitCode=await captureRuntimeCommand(process.execPath,process.argv.slice(2),{path:${JSON.stringify(storePath)},workspace:'alice',quiet:true,killAfterMs:100,write:()=>undefined});`,
+    resolveDir: process.cwd(), sourcefile: 'interruption-fixture.ts', loader: 'ts' }, outfile: helper,
+  // Preserve imported-module identity so bundling does not run its CLI entrypoint.
+  define: { 'import.meta.url': JSON.stringify(pathToFileURL(join(process.cwd(), 'server/runtime-diagnostic.ts')).href) },
+  bundle: true, platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent' })
+  const descendant = `const fs=require('node:fs');process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>fs.writeFileSync(${JSON.stringify(heartbeat)},String(Date.now())),10)`
+  const parent = `const cp=require('node:child_process');const fs=require('node:fs');const child=cp.spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid));process.on('SIGTERM',()=>process.exit(0));process.on('SIGINT',()=>process.exit(0));setInterval(()=>{},1000)`
+  const child = spawn(process.execPath, [helper, '-e', parent], { stdio: ['ignore', 'ignore', 'pipe'] })
+  let error = ''; child.stderr.on('data', (chunk: Buffer) => { error = (error + chunk.toString()).slice(-2048) })
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal }))
+  })
+  try {
+    const deadline = Date.now() + 5000
+    while (!existsSync(heartbeat) && child.exitCode === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(existsSync(heartbeat), error).toBe(true)
+    child.kill(signal)
+    expect(await closed).toEqual({ code: signal === 'SIGTERM' ? 143 : 130, signal: null })
+    const stopped = readFileSync(heartbeat, 'utf8')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(readFileSync(heartbeat, 'utf8')).toBe(stopped)
+    const store = new DiagnosticStore(storePath)
+    try { expect(store.query({ workspace: 'alice', operator: false }).events[0]).toMatchObject({ context: { interruptedBy: signal, timedOut: false }, exitCode: 0 }) }
+    finally { store.close() }
+  } finally {
+    child.kill('SIGKILL')
+    if (existsSync(pidPath)) spawnSync('kill', ['-KILL', readFileSync(pidPath, 'utf8')])
+    await closed
+  }
+}, 10_000)
