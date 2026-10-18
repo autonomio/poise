@@ -341,7 +341,20 @@ describe('collection independence and Caller evidence', () => {
     expect(callerDiagnostic(row, 'alice')).toMatchObject({ operation: 'fetch', stderr: 'fatal: missing ref', exitCode: 128, callId: row.id, correlationId: 'run' })
     expect(callerDiagnostic({ ...row, outcome: 'superseded' }, 'alice')).toBeNull()
     expect(callerDiagnostic({ ...row, error_code: 'stopped' }, 'alice')).toBeNull()
-    expect(callerDiagnostic({ ...row, diagnostic: null, outcome: 'changes_requested' }, 'alice')).toBeNull()
+    expect(callerDiagnostic({ ...row, diagnostic: null, outcome: 'changes_requested' }, 'alice')).toMatchObject({ level: 'error', message: row.error })
+  })
+
+  it.each(['changes_requested', 'clean', 'approved'])('retains a failed Caller operation despite its %s verdict and missing structured evidence', (outcome) => {
+    const row = { id: 'b'.repeat(32), status: 'failed', outcome, diagnostic: null, error: 'Review receipt validation failed after publication', behavior: 'review' }
+    const input = callerDiagnostic(row, 'alice')!
+    const record = normalize(input, NOW)!
+    const db = store(); db.append([record])
+    expect(db.lookup(alice, record.id)).toMatchObject({ status: 'found', event: {
+      source: 'caller', severity: 'error', message: row.error, callId: row.id, context: { outcome, evidenceIncomplete: true },
+    } })
+    expect(callerDiagnostic({ ...row, status: 'completed', error: null }, 'alice')).toBeNull()
+    expect(callerDiagnostic({ ...row, error_code: 'stopped' }, 'alice')).toBeNull()
+    expect(callerDiagnostic({ ...row, outcome: 'superseded' }, 'alice')).toBeNull()
   })
 })
 

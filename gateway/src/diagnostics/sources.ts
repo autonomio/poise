@@ -17,9 +17,8 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
   const unavailable = text(row.evidence_unavailable)
   const error = text(row.error) ?? unavailable ?? ''
   if (/pull-request head or base changed (?:while building review packet|before checkout|during checkout)\b|pull-request head changed(?: [a-z ]+)?: expected [a-f0-9]{40}, got [a-f0-9]{40}/.test(error)) return null
+  // Review verdicts alone are routine; recorded failure evidence takes precedence.
   if (!diagnostic && !error && !row.error_code) return null
-  // A successful review requesting changes is a completed action, not an error.
-  if (!diagnostic && ['changes_requested', 'clean', 'approved'].includes(String(row.outcome))) return null
   const repository = text(row.repo)
   const pr = text(row.pr_id)
   return {

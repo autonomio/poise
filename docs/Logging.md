@@ -279,6 +279,10 @@ later failure arrives.
 Successful Caller pagination and pending legacy backfill are temporary partial
 coverage, not observation failures. Catch-up clears that state without creating
 an outage gap or a synthetic warning; genuine observed failure gaps remain.
+Review verdicts alone do not create diagnostics. A recorded operational failure
+remains an Error even when the row also has a clean, approved or changes-requested
+verdict and lacks structured process evidence; its cause is retained before the
+completion checkpoint advances.
 
 Empty Caller operation metadata uses the recorded behavior or `call.failed`,
 preserving its cause and acknowledging the page so later completions continue.

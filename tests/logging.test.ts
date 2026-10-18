@@ -195,6 +195,27 @@ it('retains the first Caller ingestion time without requiring another failure', 
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(1)
 })
 
+it('retains failed Caller verdict rows before acknowledging their completion page', async () => {
+  const streamId = '7'.repeat(32)
+  const base = { version: 1, streamId, cursor: 3, hasMore: false, backfillPending: false }
+  const events = ['changes_requested', 'clean', 'approved'].map((outcome, i) => ({
+    id: String(i + 1).repeat(32), status: 'failed', outcome, diagnostic: null, behavior: 'review', error: 'Receipt validation failed for ' + outcome,
+  }))
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ ...base, events: [] }), stderr: '' })
+    .mockResolvedValueOnce({ stdout: JSON.stringify({ ...base, events }), stderr: '' })
+  start()
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8'))).toMatchObject({ streamId, cursor: 3 }))
+  const retained = () => loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).events
+  expect(retained()).toHaveLength(3)
+  for (const event of events) expect(retained()).toContainEqual(expect.objectContaining({
+    callId: event.id, severity: 'error', message: event.error, context: expect.objectContaining({ outcome: event.outcome, evidenceIncomplete: true }),
+  }))
+  await stopLogging(); startLogging()
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+  expect(run).toHaveBeenLastCalledWith('agent-interface', ['--diagnostics', '3', '3'], expect.any(Object))
+  expect(retained()).toHaveLength(3)
+})
+
 it('acknowledges empty Caller operation metadata and continues with later completions', async () => {
   const streamId = '8'.repeat(32)
   const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId, cursor: 3, hasMore: false, backfillPending: false,
