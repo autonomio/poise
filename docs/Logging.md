@@ -47,6 +47,9 @@ journal are also bounded. Records remain after a source or container disappears.
 Source coverage and its unavailable intervals are separate from event counts.
 Coverage IDs affected by redaction use stable opaque identities, keeping source
 updates and partial backfills distinct even when their labels redact alike.
+Canonical source names and validated Caller call/correlation IDs keep their
+structural identity for filtering and drill-down; a whole identifier matching
+a configured credential is still masked. Technical evidence remains redacted.
 The collection runtime has a separate coverage journal and in-memory health
 path, so a broken event sink does not turn failed reads into an empty result.
 

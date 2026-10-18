@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from './contract.js'
+import { environmentSecrets, normalize, redact, SOURCES, type DiagnosticInput, type LogEvent } from './contract.js'
 import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, type Coverage, type LogPolicy } from './store.js'
 
 interface Journal {
@@ -95,6 +95,7 @@ export class DiagnosticRuntime {
     // Redaction can collapse distinct labels; retain an opaque, stable identity.
     return this.safe(value, 256) === value ? value : 'source_' + createHash('sha256').update(value).digest('hex')
   }
+  private sourceName(value: string): string { return SOURCES.find((source) => source === value) ?? this.safe(value, 128) }
   private message(error: unknown): string { return this.safe(error instanceof Error ? error.message : String(error)) }
 
   private notify(event: string, message: string): void {
@@ -155,7 +156,7 @@ export class DiagnosticRuntime {
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
     id = this.coverageId(id)
     if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source bound reached')); return }
-    this.sources.set(id, { id, source: this.safe(source, 128), workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
+    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
       availableFrom: null, error: this.safe(reason), gaps: [] })
     this.saveJournal()
   }
@@ -169,7 +170,7 @@ export class DiagnosticRuntime {
     let gaps = [...(previous?.gaps ?? [])]
     if (reason && !gaps.some((gap) => gap.to === null)) gaps.push({ from: at, to: null, reason: this.safe(reason, 128) })
     if (!reason) gaps = gaps.map((gap) => gap.to === null ? { ...gap, to: at } : gap)
-    this.sources.set(id, { id, source: this.safe(source, 128), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
+    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
       observedAt: reason ? previous?.observedAt ?? null : at, ingestedAt: previous?.ingestedAt ?? null,
       availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32) })
     if (reason && previous?.error !== reason) this.emit({ source: 'collection', component: source, level: 'warning', operation: 'source.unavailable',

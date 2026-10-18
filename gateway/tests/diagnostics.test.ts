@@ -23,6 +23,23 @@ function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
 }
 
 describe('one diagnostic contract', () => {
+  it('preserves typed source and Caller identities through short-secret redaction and backfill', async () => {
+    const callId = 'a1'.repeat(16); const correlationId = 'ab12cd34-ab12-cd34-ab12-cd34ab12cd34'
+    const input = callerDiagnostic({ id: callId, correlation_id: correlationId, completed_at: new Date(NOW).toISOString(),
+      status: 'failed', error: 'actual cause a', diagnostic: { version: 1, severity: 'error', operation: 'checkout', stderr: 'fatal: cause a' } }, 'alice')!
+    const secrets = ['a', 'caller']
+    const original = normalize(input, NOW, secrets)!
+    const central = workspaceEnvelope(original, 'alice', NOW, secrets)
+    expect(central).toMatchObject({ source: 'caller', callId, correlationId, message: expect.stringContaining('[redacted]') })
+    const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, secrets, report: () => undefined })
+    runtime.observe('caller', 'caller', 'alice'); runtime.ingest(central); runtime.flush()
+    expect(runtime.query((db) => db.query(alice, { source: 'caller', callId, correlationId })).total).toBe(1)
+    expect(runtime.health().sources[0]).toMatchObject({ source: 'caller', ingestedAt: new Date(NOW).toISOString() })
+    await runtime.stop()
+    // A configured credential itself is never admitted as a public identifier.
+    expect(normalize({ ...input, callId, correlationId: callId }, NOW, [callId])).toMatchObject({ callId: '[redacted]', correlationId: '[redacted]' })
+  })
+
   it('keeps unknown-time identity independent of ingestion time and replacement containers', () => {
     const input = { id: 'stable-native-id', time: null, level: 'error', source: 'native', operation: 'read', message: 'cause' }
     expect(normalize(input, NOW)?.id).toBe(normalize({ ...input, container: 'replacement' }, NOW + 5000)?.id)

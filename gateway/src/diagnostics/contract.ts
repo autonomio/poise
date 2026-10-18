@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 export const LOG_VERSION = 1
 export const SEVERITIES = ['critical', 'error', 'warning'] as const
+export const SOURCES = ['poise', 'caller', 'gateway', 'docker', 'kernel', 'ingress', 'collection'] as const
 export type Severity = typeof SEVERITIES[number]
 export type Facts = Record<string, unknown>
 export interface DiagnosticInput {
@@ -126,6 +127,8 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     return bytes.subarray(0, end).toString()
   }
   const nullable = (value: string | number | null | undefined) => value == null ? null : clean(String(value))
+  const identifier = (value: string | null | undefined, pattern: RegExp) => value != null && pattern.test(value)
+    && !secrets.includes(value) ? value : nullable(value)
   const number = (value: number | null | undefined) => value != null && Number.isFinite(value) ? value : null
   const time = input.time == null ? null : Date.parse(input.time)
   const invalidTime = time !== null && (!Number.isFinite(time) || time < 0)
@@ -133,7 +136,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const eventTime = time === null || invalidTime ? null : new Date(time).toISOString()
   const message = level === 'invalid' || invalidTime
     ? `Collection could not normalize ${clean(input.source)}: ${level === 'invalid' ? 'unknown source severity' : 'invalid source timestamp'}. ${clean(input.message, 1024)}` : clean(input.message, 2048)
-  const source = level === 'invalid' || invalidTime ? 'collection' : clean(input.source, 128)
+  const source = level === 'invalid' || invalidTime ? 'collection' : SOURCES.find((source) => source === input.source) ?? clean(input.source, 128)
   const operation = level === 'invalid' || invalidTime ? 'normalization.failed' : clean(input.operation, 128)
   // The owner is an authorization namespace, not captured technical text.
   const workspace = input.workspace == null ? null : String(input.workspace)
@@ -156,7 +159,8 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     component: clean(input.component ?? input.source, 128), operation, phase: nullable(input.phase), target: nullable(input.target),
     workspace, visibility, instance: nullable(input.instance), container: nullable(input.container), release: nullable(input.release),
     account: nullable(input.account), repository: nullable(input.repository), pr: nullable(input.pr), behavior: nullable(input.behavior),
-    reviewer: nullable(input.reviewer), callId: nullable(input.callId), requestId: nullable(input.requestId), correlationId: nullable(input.correlationId),
+    reviewer: nullable(input.reviewer), callId: identifier(input.callId, /^[a-f0-9]{32}$/), requestId: nullable(input.requestId),
+    correlationId: identifier(input.correlationId, /^(?:[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i),
     message, cause: (input.cause ?? []).slice(0, 8).map((cause) => clean(cause, 512)), stderr, stack,
     truncated,
     exitCode: number(input.exitCode), signal: typeof input.signal === 'number' ? number(input.signal) : nullable(input.signal),
