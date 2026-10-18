@@ -289,6 +289,11 @@ for (const theme of ['light', 'dark']) test(`uses native table styles and bounde
     return { font: style.fontFamily, size: style.fontSize, padding: style.padding, border: style.borderBottom, color: style.color }
   })
   const loggingStyle = await tableStyle('#logging-table th')
+  await page.route('**/api/agent-logs**', (route) => route.fulfill({ json: { logs: [{
+    id: fixtures[0].callId, repo: 'acme/repo', pr_id: '42', actor: 'octocat', model: 'fixture', behavior: 'pr-review',
+    session_id: null, prompt: 'Fixture review', started_at: fixtures[0].ingestedAt, started_at_precise: fixtures[0].ingestedAt,
+    completed_at: fixtures[0].ingestedAt, time_elapsed: '1ms', status: 'completed', outcome: 'failed', response: '', error: fixtures[0].message,
+  }] } }))
   await page.getByRole('button', { name: 'Swarm', exact: true }).click()
   await expect(page.locator('#swarm-table')).toBeVisible()
   expect(await tableStyle('#swarm-table th')).toEqual(loggingStyle)
