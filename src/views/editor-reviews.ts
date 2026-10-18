@@ -1,7 +1,6 @@
 import { patchContent } from '../dom-patch'
 import { reveal, watchPanel } from '../motion'
 import { locateReview, REVIEW_INTERVAL_MS, type ArticleReview, type ArticleReviews } from '../publishing-review'
-import './editor-reviews.css'
 
 interface Host {
   view: HTMLElement
@@ -222,7 +221,8 @@ export class EditorReviews {
       ${review.canResolve && !review.resolved ? `<button type="button" data-action="resolve"${this.busy ? ' disabled' : ''}>Resolve thread</button>` : ''}
       <button type="button" data-action="ask"${this.busy ? ' disabled' : ''}>Ask agent privately</button></div>`)
     const input = this.panel.querySelector<HTMLTextAreaElement>('textarea')
-    if (input && document.activeElement !== input) input.value = this.drafts.get(review.id) ?? ''
+    const draft = this.drafts.get(review.id) ?? ''
+    if (input && input.value !== draft) input.value = draft
   }
 
   private click(event: MouseEvent): void {

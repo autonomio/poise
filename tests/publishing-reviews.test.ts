@@ -92,7 +92,7 @@ describe('review positions', () => {
   it('uses the reviewed body after frontmatter and supports multi-line comments', () => {
     const anchor = api.anchorFromSource(SOURCE, 7, 8)!
     expect(anchor.quote).toBe('Second line.\nThird line.')
-    expect(locateReview('# A question\n\nInserted paragraph.\n\nSecond line.\nThird line.', anchor)).toEqual({ start: 38, end: 63 })
+    expect(locateReview('# A question\n\nInserted paragraph.\n\nSecond line.\nThird line.', anchor)).toEqual({ start: 35, end: 59 })
     expect(api.anchorFromSource(SOURCE, 2, 2)).toBeUndefined()
   })
 
@@ -101,7 +101,7 @@ describe('review positions', () => {
     expect(locateReview('Repeated.\n\nRepeated.', anchor)).toBeNull()
     expect(locateReview('Repeated.', anchor)).toBeNull()
     expect(locateReview('A replacement.', { ...anchor, unique: true })).toBeNull()
-    expect(locateReview('First\nRepeated.\nAfter\n\nSecond\nRepeated.\nEnd', { ...anchor, before: 'Second', after: 'End' })).toEqual({ start: 32, end: 41 })
+    expect(locateReview('First\nRepeated.\nAfter\n\nSecond\nRepeated.\nEnd', { ...anchor, before: 'Second', after: 'End' })).toEqual({ start: 30, end: 39 })
   })
 })
 

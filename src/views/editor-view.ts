@@ -2277,6 +2277,7 @@ async function loadDoc(slug: string) {
     // cannot be stranded when currentSlug changes below.
     if (!(await flushBeforeLeavingDocument('switch documents')) || requestId !== loadRequestId) return
     currentSlug = nextSlug
+    articleReviews?.clear()
     documentVersions.set(currentSlug, data.version)
     loadIntoEditor(data.content)
     // History is per-document: undo must never walk back into the
