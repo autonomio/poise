@@ -110,6 +110,25 @@ describe('one diagnostic contract', () => {
 })
 
 describe('retained authorized queries', () => {
+  it('expires authorized tombstones in idle writable and read-only stores', () => {
+    const policy = { retentionMs: 1000, maxBytes: 100_000, maxEvents: 1 }
+    const path = join(directory(), 'tombstones.db'); let now = NOW
+    const writer = new DiagnosticStore(path, policy, () => now); stores.push(writer)
+    const original = event('tombstone-age')
+    writer.append([original]); writer.append([event('tombstone-replacement')])
+    const reader = new DiagnosticStore(path, policy, () => now, true); stores.push(reader)
+    for (const db of [writer, reader]) {
+      expect(db.lookup(alice, original.id).status).toBe('expired')
+      expect(db.lookup(operator, original.id).status).toBe('expired')
+      expect(db.lookup({ workspace: 'bob', operator: false }, original.id).status).toBe('unavailable')
+    }
+    now += policy.retentionMs + 1
+    for (const db of [writer, reader]) {
+      expect(db.lookup(alice, original.id).status).toBe('unavailable')
+      expect(db.lookup(operator, original.id).status).toBe('unavailable')
+    }
+  })
+
   it('bounds actual bytes and never resurrects a tombstoned replay', () => {
     const policy = { retentionMs: 100_000, maxBytes: 20_000, maxEvents: 100 }
     const db = store(policy)

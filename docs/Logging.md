@@ -276,3 +276,9 @@ later failure arrives.
 Successful Caller pagination and pending legacy backfill are temporary partial
 coverage, not observation failures. Catch-up clears that state without creating
 an outage gap or a synthetic warning; genuine observed failure gaps remain.
+
+Empty Caller operation metadata uses the recorded behavior or `call.failed`,
+preserving its cause and acknowledging the page so later completions continue.
+Routine Info ingress delivery updates observation without erasing the last
+retained ingestion time. Tombstone lookups enforce their age limit even when
+the store is idle or opened read-only.

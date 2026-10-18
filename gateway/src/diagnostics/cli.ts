@@ -72,8 +72,9 @@ export async function runOperator(args: string[], write: (line: string) => void 
       const event = normalize(input, Date.now(), environmentSecrets())
       if (event) db.append([event])
       const at = new Date().toISOString()
-      db.coverage({ id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', observedAt: at, ingestedAt: event ? at : null,
-        availableFrom: at, error: 'Record delivery observed; continuous external proxy coverage is unverified', gaps: [] })
+      const previous = db.readCoverage(access).find((source) => source.id === 'external-ingress')
+      db.coverage({ id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', observedAt: at, ingestedAt: event ? at : previous?.ingestedAt ?? null,
+        availableFrom: previous?.availableFrom ?? at, error: 'Record delivery observed; continuous external proxy coverage is unverified', gaps: previous?.gaps ?? [] })
       write(JSON.stringify({ accepted: true, eventId: event?.id ?? null }))
     } else throw new Error('Use health, query, event, export or ingress')
   } finally { db.close() }

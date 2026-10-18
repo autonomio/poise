@@ -143,3 +143,21 @@ it('retains distinct ingress occurrences for one request while deduplicating exa
   expect(JSON.parse(lines[3]).total).toBe(2)
   expect(JSON.parse(lines[3]).events).toEqual(expect.arrayContaining(records.map((row) => expect.objectContaining({ message: row.msg, requestId: 'same-request' }))))
 })
+
+it('preserves retained ingress coverage when later routine records are excluded', async () => {
+  const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path); vi.stubEnv('POISE_DOMAIN', 'poise.test')
+  const send = async (level: string) => {
+    async function* input() { yield JSON.stringify({ request: { host: 'poise.test' }, level, msg: level + ' native cause' }) }
+    await runOperator(['ingress'], () => undefined, input())
+  }
+  const coverage = () => {
+    const db = new DiagnosticStore(join(path, 'logging.db'), undefined, Date.now, true)
+    try { return db.readCoverage({ workspace: null, operator: true }).find((source) => source.id === 'external-ingress')! }
+    finally { db.close() }
+  }
+  await send('info'); expect(coverage().ingestedAt).toBeNull()
+  await send('error'); const retained = coverage()
+  expect(retained.ingestedAt).toEqual(expect.any(String))
+  await send('info')
+  expect(coverage()).toMatchObject({ ingestedAt: retained.ingestedAt, availableFrom: retained.availableFrom, status: 'partial' })
+})

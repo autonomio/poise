@@ -25,7 +25,7 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
   return {
     id: 'caller:' + row.id, time: text(row.completed_at), source: unavailable && !row.error && !diagnostic ? 'collection' : 'caller', component: text(row.behavior) ?? 'agent-interface',
     level: unavailable && !row.error && !diagnostic ? 'warning' : diagnostic?.severity === 'error' ? 'error' : ['overloaded', 'rate_limit', 'authentication_failed', 'interrupted'].includes(String(row.error_code)) ? 'warning' : 'error',
-    operation: unavailable && !row.error && !diagnostic ? 'caller.evidence_unavailable' : text(diagnostic?.operation) ?? text(row.behavior) ?? 'call.failed', phase: text(diagnostic?.phase), workspace,
+    operation: unavailable && !row.error && !diagnostic ? 'caller.evidence_unavailable' : text(diagnostic?.operation) || text(row.behavior) || 'call.failed', phase: text(diagnostic?.phase), workspace,
     repository, pr, target: repository && pr ? `${repository}#${pr}` : repository,
     account: text(row.actor), reviewer: text(row.actor), behavior: text(row.behavior), callId: String(row.id),
     correlationId: text(row.correlation_id), container: text(context.container), release: text(context.release),

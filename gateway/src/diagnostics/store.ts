@@ -339,9 +339,10 @@ export class DiagnosticStore {
       const event = JSON.parse(row.payload) as LogEvent
       return Date.parse(event.ingestedAt) >= this.now() - this.policy.retentionMs ? { status: 'found', event } : { status: 'expired' }
     }
+    const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
     const expired = (access.operator
-      ? this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
-      : this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace))
+      ? this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace')) AND expired_at>=?").get(id, access.workspace, cutoff)
+      : this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure') AND expired_at>=?").get(id, access.workspace, cutoff))
     return { status: expired ? 'expired' : 'unavailable' }
   }
 

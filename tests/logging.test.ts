@@ -172,6 +172,27 @@ it('retains the first Caller ingestion time without requiring another failure', 
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(1)
 })
 
+it('acknowledges empty Caller operation metadata and continues with later completions', async () => {
+  const streamId = '8'.repeat(32)
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId, cursor: 3, hasMore: false, backfillPending: false,
+    events: [{ id: '4'.repeat(32), behavior: 'review', error: 'empty operation cause', diagnostic: { version: 1, operation: '' } },
+      { id: '5'.repeat(32), behavior: '', error: 'empty behavior cause', diagnostic: { version: 1, operation: '' } },
+      { id: '6'.repeat(32), error: 'later completion cause' }] }), stderr: '' })
+  start()
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8'))).toMatchObject({ streamId, cursor: 3 }))
+  const records = loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).events
+  expect(records).toHaveLength(3)
+  expect(records).toEqual(expect.arrayContaining([
+    expect.objectContaining({ message: 'empty operation cause', operation: 'review' }),
+    expect.objectContaining({ message: 'empty behavior cause', operation: 'call.failed' }),
+    expect.objectContaining({ message: 'later completion cause' }),
+  ]))
+  await stopLogging(); startLogging()
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+  expect(run).toHaveBeenLastCalledWith('agent-interface', ['--diagnostics', '3', '3'], expect.any(Object))
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(3)
+})
+
 
 it.each([{ hasMore: true, backfillPending: false }, { hasMore: false, backfillPending: true }, { hasMore: true, backfillPending: true }])('clears pending Caller coverage without inventing loss for %j', async (pending) => {
   const base = { version: 1, streamId: '9'.repeat(32), cursor: 1 }
