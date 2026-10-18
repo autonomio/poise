@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { DockerClient, type TaskSpec } from '../src/docker.js'
-import { releaseTaskDiagnostic } from '../src/diagnostics/collectors.js'
+import { observeReleaseTask } from '../src/diagnostics/collectors.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
 
@@ -25,7 +25,7 @@ async function engine(mode: 'timeout' | 'http' | 'malformed' | 'logs' | 'start')
   const server = http.createServer((req, res) => {
     const json = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
     if (req.method === 'DELETE') { if (created) { removed = true; events.push('remove') }; return json(204, {}) }
-    if (req.url?.startsWith('/containers/create')) { created = true; events.push('create'); return json(201, { Id: 'native-task-id' }) }
+    if (req.url?.startsWith('/containers/create')) { created = true; removed = false; events.push('create'); return json(201, { Id: 'native-task-id' }) }
     if (req.url?.endsWith('/start')) { events.push('start'); return mode === 'start' ? json(503, { message: 'fixture start failed' }) : json(204, {}) }
     if (req.url?.endsWith('/wait')) {
       events.push('wait')
@@ -54,8 +54,7 @@ it.each(['timeout', 'http', 'malformed', 'logs', 'start'] as const)('retains rel
   const runtime = new DiagnosticRuntime({ path, secrets: [], report: () => undefined })
   const client = new DockerClient(fixture.socket, (evidence) => {
     fixture.events.push('capture'); expect(fixture.removed()).toBe(false)
-    const input = releaseTaskDiagnostic(evidence)
-    expect(input).not.toBeNull(); runtime.emit(input!)
+    observeReleaseTask(runtime, evidence)
   }, mode === 'timeout' ? 80 : 1000)
   try {
     await expect(client.runTask('release-proof', spec)).rejects.toThrow(mode === 'timeout' ? 'timed out' : mode === 'malformed' ? 'no valid exit status' : mode === 'start' ? 'fixture start failed' : 'fixture wait failed')
@@ -83,4 +82,19 @@ it('preserves the task failure when both the observer and stderr reporter fail',
   expect(fixture.removed()).toBe(true)
   expect(client.taskCaptureError).toContain('fixture observer failed')
   expect(stderr).not.toHaveBeenCalled()
+})
+
+it('retains a reporting gap when the channel recovers before the next collection poll', async () => {
+  const fixture = await engine('http')
+  const runtime = new DiagnosticRuntime({ path: join(fixture.directory, 'logging.db'), report: () => undefined })
+  vi.spyOn(runtime, 'emit').mockImplementationOnce(() => { throw new Error('fixture capture failed') })
+  const client = new DockerClient(fixture.socket, (evidence) => observeReleaseTask(runtime, evidence))
+  try {
+    await expect(client.runTask('release-proof', spec)).rejects.toThrow('fixture wait failed')
+    expect(runtime.health().sources.find((source) => source.id === 'docker-task-reporting')).toMatchObject({ status: 'unavailable' })
+    await expect(client.runTask('release-proof', spec)).rejects.toThrow('fixture wait failed')
+    expect(client.taskCaptureError).toBeNull()
+    const source = runtime.health().sources.find((source) => source.id === 'docker-task-reporting')!
+    expect(source.status).toBe('partial'); expect(source.gaps).toHaveLength(1); expect(source.gaps[0].to).not.toBeNull()
+  } finally { await runtime.stop() }
 })

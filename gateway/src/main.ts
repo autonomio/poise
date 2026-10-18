@@ -1,7 +1,7 @@
 import { diagnosticConfig } from './diagnostics/config.js'
 import { environmentSecrets, redact } from './diagnostics/contract.js'
 import { DiagnosticRuntime } from './diagnostics/runtime.js'
-import { EnvironmentCollectors, gatewayDiagnostic, releaseTaskDiagnostic } from './diagnostics/collectors.js'
+import { EnvironmentCollectors, gatewayDiagnostic, observeReleaseTask } from './diagnostics/collectors.js'
 import { HostJournal } from './diagnostics/host.js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -54,8 +54,7 @@ const store = new Store(join(config.dataDir, 'gateway.db'), now)
 store.syncEnvAllowList(config.allowedUsers)
 const keys = loadOrCreateKeys(config.dataDir, log)
 const docker = new DockerClient(config.dockerSocket, (evidence) => {
-  const input = releaseTaskDiagnostic(evidence)
-  if (input) diagnostics?.emit(input)
+  if (diagnostics) observeReleaseTask(diagnostics, evidence)
 })
 const workspaceResolvConf = await prepareWorkspaceDns(config, docker)
 if (workspaceResolvConf) log.info('workspace.dns.configured', { resolvers: config.workspaceDns, file: workspaceResolvConf })

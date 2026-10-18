@@ -60,6 +60,17 @@ export function releaseTaskDiagnostic(evidence: TaskFailureEvidence): Diagnostic
       measurement: 'configuration submitted to Docker; incident usage not observed' } }
 }
 
+export function observeReleaseTask(runtime: DiagnosticRuntime, evidence: TaskFailureEvidence): void {
+  try {
+    const input = releaseTaskDiagnostic(evidence)
+    if (input) runtime.emit(input)
+    runtime.observe('docker-task-reporting', 'collection', null)
+  } catch (error) {
+    runtime.observe('docker-task-reporting', 'collection', null, error instanceof Error ? error.message : String(error))
+    throw error
+  }
+}
+
 export function dockerLifecycle(value: unknown): DiagnosticInput | null {
   if (!value || typeof value !== 'object') throw new Error('Malformed Docker lifecycle event')
   const row = value as { Type?: string; Action?: string; Actor?: { ID?: string; Attributes?: Record<string, string> }; timeNano?: number; time?: number }
