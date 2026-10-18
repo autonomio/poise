@@ -1,4 +1,4 @@
-import { environmentSecrets, redact, SECRET_KEY } from './redaction.mjs'
+import { cleanText, environmentSecrets, redact, SECRET_KEY } from './redaction.mjs'
 export { environmentSecrets, redact } from './redaction.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 
@@ -102,7 +102,7 @@ function safeFacts(value: unknown, secrets: readonly string[], depth = 0, cut: (
   if (depth >= 4) { cut(); return '[truncated]' }
   if (Array.isArray(value)) { if (value.length > 16) cut(); return value.slice(0, 16).map((item) => safeFacts(item, secrets, depth + 1, cut)) }
   if (typeof value !== 'object') return '[unsupported value]'
-  const entries = Object.entries(value).filter(([key]) => !PRIVATE_KEY.test(key))
+  const entries = Object.entries(value).map(([key, item]) => [cleanText(key), item] as const).filter(([key]) => !PRIVATE_KEY.test(key))
   if (entries.length > 32 || entries.some(([key]) => key.length > 64)) cut()
   return Object.fromEntries(entries.slice(0, 32).map(([key, item]) => [redact(key, secrets).slice(0, 64), SECRET_KEY.test(key) ? '[redacted]' : safeFacts(item, secrets, depth + 1, cut)]))
 }

@@ -258,3 +258,7 @@ Configured and explicitly supplied nonempty secrets are masked regardless of len
 The independent coverage journal has an 8 MiB read/write limit, covering the
 maximum 256 sources with 32 bounded Unicode gap reasons per source. Clean
 restarts preserve all retained gaps and accumulated drop counts.
+
+Credential and private-field matching follows terminal/control-byte cleanup,
+including recursive field names and streaming folded headers. Removed bytes
+cannot reveal a credential name after its redaction check.

@@ -546,3 +546,24 @@ it.each([4096, 8192])('keeps full coverage independent of a %i-byte event budget
     expect(restored.lookup(alice, event('after-restart-full-coverage').id).status).toBe('found')
   } finally { restored.close() }
 })
+
+
+it.each([...Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).filter((value) => !['\t', '\r', '\n'].includes(value)), '\x7f', '\x1b[31m'])('redacts credential names before removed control %j can expose them', (control) => {
+  const secret = 'opaque-header-credential-not-configured'
+  const record = event('control-' + control.charCodeAt(0) + control.length, {
+    stderr: 'X-Api-' + control + 'Key: ' + secret + '\nfatal: exact cause',
+    context: { ['pass' + control + 'word']: secret, ['pro' + control + 'mpt']: 'private-prompt', safe: 'actual measurement' },
+  })
+  const db = store(); db.append([record])
+  const retained = JSON.stringify({ page: db.query(alice), detail: db.lookup(alice, record.id) })
+  expect(retained).not.toContain(secret)
+  expect(retained).not.toContain('private-prompt')
+  expect(record.stderr).toContain('fatal: exact cause')
+  expect(record.context).toEqual({ password: '[redacted]', safe: 'actual measurement' })
+  expect(redact(record.stderr!)).toBe(record.stderr)
+})
+
+it('matches normalized configured credentials without creating empty secret patterns', () => {
+  expect(redact('opaque\x00credential', ['opaque\x00credential'])).toBe('[redacted]')
+  expect(redact('actual cause', ['\x00', '\x1b[31m'])).toBe('actual cause')
+})
