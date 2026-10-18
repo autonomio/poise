@@ -1,5 +1,13 @@
 # Operating Poise
 
+For a signed-in browser, the owner's workspace host offers
+`/_poise/api/logging/export`; append `scope=instance` only for an administrator's
+explicit instance investigation. The response is bounded NDJSON with a metadata
+line containing `truncated` and `resumeCursor`. To continue, send that cursor
+with the same filters. Local installations expose `/api/logging/export` instead;
+the existing operator command remains available without a running workspace.
+See [Logging](Logging.md) for access, retention, filters and query budgets.
+
 This guide runs Poise as a service on one Linux server, for yourself and a
 few colleagues. Each person signs in with GitHub at one address and gets
 their own workspace: their own Poise, agent CLIs, GitHub accounts and data,

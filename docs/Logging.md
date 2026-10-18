@@ -35,6 +35,33 @@ response fields, and preserve its exact process evidence when available.
 
 ## Retention and queries
 
+Browser reads use `GET /_poise/api/logging` on the owner's workspace host, with
+its existing `poise_ws` session. Device tokens and identity assertions cannot
+replace that session. An Origin, when supplied, must match exactly. The gateway
+reads central history itself, without starting or querying a workspace.
+`scope=instance` is an explicit administrator choice checked on every request;
+it never grants another owner's private application or Caller evidence.
+
+`/logging/events/ID`, `/logging/health` and `/logging/export` share that boundary.
+Local development uses `/api/logging` and the same suffixes under its loopback,
+Host and Origin rules. Service workspaces refuse this alternative query path.
+The HTTP and operator JSON adapters share filter validation. HTTP `severity`
+may repeat; a single empty value selects none. Times require valid zoned ISO
+timestamps, and unknown or duplicate scalar parameters fail explicitly.
+
+One worker handles reads away from agent/request execution, with at most sixteen
+queued jobs and two outstanding responses per owner across scopes. Admission is
+held until the response finishes or closes. A two-second budget includes queue,
+execution and response backpressure. Saturation returns 429 with Retry-After;
+timeouts and unavailable/unsupported stores return explicit 503 errors.
+Unknown and inaccessible event IDs both return 404; only authorized retained
+expiry evidence returns 410. Health projects independent collection state and
+never exposes other owners' private counts or causes.
+
+Export is NDJSON, with metadata first, at most 1,000 events and 8 MiB including
+metadata. `resumeCursor` and `truncated` describe bounded partial exports; resume
+with the same filters and that opaque cursor. No CSV or logged URL is executed.
+
 Defaults are **up to 30 days**, **64 MiB of accounted event storage**, and **50,000 events**;
 the earliest bound reached expires evidence. Age and eviction use ingestion time,
 so an untrusted future source timestamp cannot pin a record. Accounting includes the searchable

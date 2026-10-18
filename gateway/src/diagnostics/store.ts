@@ -35,6 +35,12 @@ export interface Coverage {
   gaps: Array<{ from: string; to: string | null; reason: string }>
 }
 export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
+export function projectCoverage(value: Coverage, access: LogAccess): Coverage {
+  return access.operator || value.workspace === access.workspace ? value : {
+    ...value, id: 'shared_' + createHash('sha256').update(value.id).digest('hex').slice(0, 16), error: value.error ? 'Source unavailable; an operator can inspect the cause.' : null,
+    gaps: value.gaps.map((gap) => ({ ...gap, reason: 'Shared source collection gap' })),
+  }
+}
 export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, maxBytes: 64 * 1024 * 1024, maxEvents: 50_000 }
 export const MAX_COVERAGE_SOURCES = 256
 export const MAX_COVERAGE_RECORD_BYTES = 64 * 1024
@@ -191,13 +197,7 @@ export class DiagnosticStore {
 
   readCoverage(access: LogAccess): Coverage[] {
     const rows = this.db.prepare('SELECT payload FROM log_coverage WHERE workspace=? OR workspace IS NULL').all(access.workspace) as Array<{ payload: string }>
-    return rows.map(({ payload }) => {
-      const value = JSON.parse(payload) as Coverage
-      return access.operator || value.workspace === access.workspace ? value : {
-        ...value, id: 'shared_' + createHash('sha256').update(value.id).digest('hex').slice(0, 16), error: value.error ? 'Source unavailable; an operator can inspect the cause.' : null,
-        gaps: value.gaps.map((gap) => ({ ...gap, reason: 'Shared source collection gap' })),
-      }
-    })
+    return rows.map(({ payload }) => projectCoverage(JSON.parse(payload) as Coverage, access))
   }
 
   query(access: LogAccess, filter: LogFilter = {}) {
