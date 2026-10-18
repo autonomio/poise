@@ -27,7 +27,7 @@ it('queries 100,000 retained records with independent filter/count/export and sn
           source: i % 2 ? 'caller' : 'poise', component: i % 2 ? 'parity-a' : 'parity-b', workspace: 'alice',
           level: ['critical', 'error', 'warning'][i % 3], operation: 'dataset', condition: 'same-retained-condition',
           account: 'account-' + i % 2, repository: 'acme/repo', callId: (i % 1000 + 1).toString(16).padStart(32, '0'),
-          correlationId: 'c'.repeat(32), target: 'target-' + i % 10, message: 'failure token=never-search-secret literal_% ' + i % 10 }, now, ['never-search-secret'])!
+          correlationId: 'c'.repeat(32), target: 'target-' + i % 10, message: 'failure literal_% ' + i % 10 + '\nAuthorization: Bearer never-search-secret' }, now, ['never-search-secret'])!
       })
       events.push(...batch); db.append(batch)
     }
@@ -62,10 +62,10 @@ it('queries 100,000 retained records with independent filter/count/export and sn
     expect(lines[0]).toMatchObject({ total: 100, exported: 100, truncated: false, resumeCursor: null })
     expect(lines.slice(1).map((line) => line.event.id)).toEqual(expected.map((event) => event.id))
     expect(exported.body).not.toContain('never-search-secret'); expect(exported.body).not.toContain('bob-private-cause')
-    const pool = new LoggingQueryPool()
+    const pool = new LoggingQueryPool(); let timedOut = false
     try {
-      const lease = await pool.read({ ...request, filter: { callId: events[7].callId! } }, 'alice', new AbortController().signal, () => { throw new Error('Bounded worker timed out on the 100k fixture') })
-      expect(JSON.parse(lease.reply.body).total).toBe(100); lease.release()
+      const lease = await pool.read({ ...request, filter: { callId: events[7].callId! } }, 'alice', new AbortController().signal, () => { timedOut = true })
+      expect(JSON.parse(lease.reply.body).total).toBe(100); expect(timedOut).toBe(false); lease.release()
     } finally { await pool.close() }
     const bounded = executeLoggingRead({ ...request, operation: 'export' })
     const header = JSON.parse(bounded.body.split('\n')[0])
@@ -88,7 +88,7 @@ it('queries 100,000 retained records with independent filter/count/export and sn
 it('exports an honest byte-bounded prefix and resumes exactly at the first omitted event', () => {
   const dir = mkdtempSync(join(tmpdir(), 'logging-export-bytes-')); const now = Date.now(); const path = join(dir, 'logging.db')
   const db = new DiagnosticStore(path)
-  const events = Array.from({ length: 400 }, (_, i) => normalize({ id: 'large-' + i, time: new Date(now + i).toISOString(), source: 'caller', workspace: 'alice', level: 'error', operation: 'large', message: 'large retained cause', stderr: 'x'.repeat(16_384), stack: 'y'.repeat(8192), cause: Array(8).fill('z'.repeat(512)), context: { details: 'a'.repeat(8000) } }, now)!)
+  const events = Array.from({ length: 400 }, (_, i) => normalize({ id: 'large-' + i, time: new Date(now + i).toISOString(), source: 'caller', workspace: 'alice', level: 'error', operation: 'large', message: 'large retained cause', stderr: 'retained stderr line\n'.repeat(820), stack: 'retained stack frame\n'.repeat(410), cause: Array(8).fill('retained cause '.repeat(36)), context: { details: 'recorded context '.repeat(480) } }, now)!)
   const request: LoggingRead = { path, now, policy: DEFAULT_LOG_POLICY, access: { workspace: 'alice', operator: false }, operation: 'export', filter: {} }
   try {
     for (let i = 0; i < events.length; i += 100) db.append(events.slice(i, i + 100))

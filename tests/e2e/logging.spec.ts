@@ -36,8 +36,8 @@ test.beforeAll(() => {
   const now = Date.now()
   for (let index = 0; index < 120; index++) {
     const input = callerDiagnostic({ id: callId(index), completed_at: index === 60 ? null : new Date(now - (index >= 110 ? 300_000 : (120 - index) * 20_000)).toISOString(),
-      behavior: component, repo: 'acme/repo', pr_id: '42', actor: 'octocat', outcome: 'failed', error: 'fetch failed token=fixture-secret',
-      diagnostic: { version: 1, severity: 'error', operation: 'git.fetch', phase: 'checkout', stderr: 'fatal: retained stderr token=fixture-secret',
+      behavior: component, repo: 'acme/repo', pr_id: '42', actor: 'octocat', outcome: 'failed', error: 'fetch failed\nAuthorization: Bearer fixture-secret',
+      diagnostic: { version: 1, severity: 'error', operation: 'git.fetch', phase: 'checkout', stderr: 'fatal: retained stderr\nAuthorization: Bearer fixture-secret',
         context: { exit_code: 128, timeout_seconds: 15, elapsed_ms: 23, provider_started: false } } }, 'local')!
     fixtures.push(normalize({ ...input, condition: 'fixture-fetch', cause: ['underlying retained cause', 'x'.repeat(512)], resources: { usedBytes: 42, measuredAt: new Date(now - 1000).toISOString(), measurement: 'statfs' } }, now, ['fixture-secret'])!)
   }
@@ -62,7 +62,7 @@ test('real retained Caller evidence supports bounded native filters, expansion, 
   await button.focus(); await page.keyboard.press('Enter')
   await expect(button).toHaveAttribute('aria-expanded', 'true')
   const detail = page.locator('#logging-tbody > .agent-expand-row').first()
-  await expect(detail).toContainText('fatal: retained stderr token=[redacted]')
+  await expect(detail).toContainText(fixtures[0].stderr!)
   await expect(detail).toContainText('underlying retained cause')
   await expect(detail).toContainText('Resource measurement time')
   await expect(detail).toContainText('statfs')
