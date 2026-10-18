@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -353,4 +353,25 @@ it('keeps expiry metadata within a tiny byte budget under repeated eviction', ()
   expect(db.query(alice).total).toBeGreaterThan(0)
   expect(db.lookup(alice, event('tiny-budget-0').id).status).toBe('unavailable')
   expect(db.lookup(alice, event('tiny-budget-999').id).status).toBe('found')
+})
+
+it('redacts API-key headers absent from configured environment secrets', () => {
+  const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected',
+    stderr: 'X-Api-Key: opaque-header-credential\napi_key=another-opaque-value\nX-Goog-Api-Key: google-opaque-value\nprecise cause' }, NOW, [])!
+  for (const valueToHide of ['opaque-header-credential', 'another-opaque-value', 'google-opaque-value']) expect(value.stderr).not.toContain(valueToHide)
+  expect(value.stderr).toContain('precise cause')
+})
+
+it('retains coverage persistence failure independently in the journal and across restart', () => {
+  const path = join(directory(), 'coverage.db'); let now = NOW
+  const runtime = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
+  runtime.observe('app', 'poise', 'alice')
+  const failure = runtime.query((db) => vi.spyOn(db, 'coverage').mockImplementation(() => { throw new Error('fixture coverage write unavailable') }))
+  try {
+    now += 2000; runtime.emit({ source: 'poise', operation: 'cause', level: 'error', message: 'retained cause', workspace: 'alice' }); runtime.flush()
+    expect(runtime.health().coverageError).toContain('fixture coverage write unavailable')
+    expect(JSON.parse(readFileSync(path + '.coverage.json', 'utf8')).coverageError).toContain('fixture coverage write unavailable')
+  } finally { failure.mockRestore(); runtime.stop() }
+  const restored = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
+  try { expect(restored.health().coverageError).toContain('fixture coverage write unavailable') } finally { restored.stop() }
 })

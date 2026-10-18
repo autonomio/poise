@@ -105,3 +105,14 @@ it('preserves recorded source identity and explicit unknowns during historical C
   expect(events.find((event) => event.message === 'old cause')).toMatchObject({ instance: 'old-instance', container: 'old-container', release: 'old-release' })
   expect(events.find((event) => event.message === 'unknown cause')).toMatchObject({ instance: null, container: null, release: null })
 })
+
+it('closes the active forwarding outage after a subsequent successful write', () => {
+  start()
+  const length = vi.spyOn(process.stderr, 'writableLength', 'get').mockReturnValue(256 * 1024)
+  diagnostic({ level: 'error', operation: 'forward.first', message: 'first cause' })
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'forwarding')?.error).toContain('backpressured')
+  length.mockReturnValue(0)
+  diagnostic({ level: 'error', operation: 'forward.recovered', message: 'next cause' })
+  const source = loggingRuntime()!.health().sources.find((source) => source.id === 'forwarding')!
+  expect(source.error).toBeNull(); expect(source.gaps.every((gap) => gap.to !== null)).toBe(true)
+})

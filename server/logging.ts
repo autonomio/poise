@@ -32,7 +32,9 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
     if (!event) return null
     const accepted = active.ingest(event)
     // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
-    if (process.stderr.writableLength < 256 * 1024) process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
+    if (process.stderr.writableLength < 256 * 1024) {
+      if (process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')) active.observe('forwarding', 'collection', workspace)
+    }
     else active.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding is backpressured; durable backfill remains available')
     return accepted
   } catch (error) {

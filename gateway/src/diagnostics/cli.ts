@@ -6,7 +6,7 @@ import { DiagnosticStore, type Coverage } from './store.js'
 import { environmentSecrets, normalize, redact } from './contract.js'
 import { nativeDiagnostic } from './sources.js'
 
-interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
+interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; coverageError?: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
 
 /** Operator access is Docker/host ownership, never a workspace browser assertion. */
 export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n'), stdin: AsyncIterable<Buffer | string> = process.stdin): Promise<void> {
@@ -27,7 +27,7 @@ export async function runOperator(args: string[], write: (line: string) => void 
     try {
       reader = new DiagnosticStore(path, policy, Date.now, true)
       const sources = reader.readCoverage(access)
-      const partial = (journal?.dropped ?? 0) > 0 || (journal?.rejected ?? 0) > 0 || [...sources, ...(journal?.sources ?? [])].some((source) => source.status !== 'connected')
+      const partial = !!journal?.coverageError || (journal?.dropped ?? 0) > 0 || (journal?.rejected ?? 0) > 0 || [...sources, ...(journal?.sources ?? [])].some((source) => source.status !== 'connected')
       const status = journalError ? 'partial' : journal?.sinkError ? 'unavailable' : journal?.stopped ? 'stopped'
         : !journal?.writtenAt || Date.now() - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : partial ? 'partial' : 'connected'
       write(JSON.stringify({ version: 1, status, journalError, journal, sources, bounds: reader.bounds(access), policy }))

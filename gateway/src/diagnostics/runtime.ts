@@ -13,6 +13,7 @@ interface Journal {
   droppedSince: string | null
   rejected?: number
   sinkError: string | null
+  coverageError?: string | null
   sinkSince: string | null
   sources: Coverage[]
 }
@@ -71,6 +72,7 @@ export class DiagnosticRuntime {
         this.rejected = Number.isSafeInteger(journal.rejected) && journal.rejected! >= 0 ? journal.rejected! : 0
         this.dropped = journal.dropped
         this.droppedSince = journal.droppedSince ?? null
+        this.coverageError = journal.coverageError ?? null
         this.sinkError = journal.sinkError ?? null
         this.sinkSince = journal.sinkSince ?? null
         for (const source of journal.sources) {
@@ -290,7 +292,7 @@ export class DiagnosticRuntime {
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
       const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, rejected: this.rejected, droppedSince: this.droppedSince,
-        sinkError: this.sinkError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
+        sinkError: this.sinkError, coverageError: this.coverageError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
       const payload = JSON.stringify(journal)
       if (Buffer.byteLength(payload) > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
       writeFileSync(path + '.tmp', payload, { mode: 0o600 }); renameSync(path + '.tmp', path)

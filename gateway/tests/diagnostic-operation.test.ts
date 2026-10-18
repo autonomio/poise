@@ -66,7 +66,7 @@ describe('native host collection without touching host journals', () => {
 it('reports fresh source failures and recorded loss as partial operator coverage', async () => {
   const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path)
   const db = new DiagnosticStore(join(path, 'logging.db')); db.close()
-  for (const state of [{ dropped: 1, sources: [] }, { rejected: 1, sources: [] }, { dropped: 0, sources: [{ workspace: null, status: 'unavailable' }] }]) {
+  for (const state of [{ coverageError: 'coverage persistence unavailable', sources: [] }, { dropped: 1, sources: [] }, { rejected: 1, sources: [] }, { dropped: 0, sources: [{ workspace: null, status: 'unavailable' }] }]) {
     writeFileSync(join(path, 'logging.db.coverage.json'), JSON.stringify({ version: 1, stopped: false, writtenAt: new Date().toISOString(), sinkError: null, ...state }))
     const lines: string[] = []; await runOperator(['health'], (line) => lines.push(line))
     expect(JSON.parse(lines[0]).status).toBe('partial')

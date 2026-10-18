@@ -7,7 +7,7 @@ export function redact(value, secrets = []) {
     for (const encoded of [secret, Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')]) value = value.split(encoded).join('[redacted]')
   }
   return value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]')
-    .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
+    .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|x-auth-token|x-amz-security-token)\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
     .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
     .replace(/(https?:\/\/)[^\s/]+@/g, '$1[redacted]@')
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
