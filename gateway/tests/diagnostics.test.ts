@@ -437,6 +437,16 @@ it('redacts quoted credential fields in captured diagnostic text', () => {
   for (const secret of ['json-private-key', 'private-password', 'private-client-secret']) expect(value.stderr).not.toContain(secret)
 })
 
+it.each(['access_token', 'refresh_token', 'id_token', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
+  const secret = 'opaque-value-not-present-in-environment'
+  for (const field of [`{"phase":"auth","${key}":"${secret}"}`, `{'${key}': '${secret}'}`, `${key}=${secret}`]) {
+    const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected', stderr: field }, NOW, [])!
+    const db = store(); db.append([value])
+    expect(JSON.stringify(db.query(alice))).not.toContain(secret)
+    expect(redact(redact(field))).toBe(redact(field))
+  }
+})
+
 
 it('redacts nonempty known secrets of every length without recursively expanding redaction markers', () => {
   const secrets = environmentSecrets({ PASSWORD: 'pw7!', PASSWD: 's2' })

@@ -50,6 +50,8 @@ updates and partial backfills distinct even when their labels redact alike.
 Canonical source names and validated Caller call/correlation IDs keep their
 structural identity for filtering and drill-down; a whole identifier matching
 a configured credential is still masked. Technical evidence remains redacted.
+Opaque OAuth/token assignments and quoted credential fields are masked by
+field name even when the value is absent from the configured secret list.
 The collection runtime has a separate coverage journal and in-memory health
 path, so a broken event sink does not turn failed reads into an empty result.
 

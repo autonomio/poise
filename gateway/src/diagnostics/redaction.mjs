@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 export const SECRET_KEY = /authorization|cookie|password|passwd|secret|credential|(?:^|[_-])token$|^(?:access|refresh|id|auth|api|session)Token$|^auth$|^bearer$|api.?key|private.?key/i
 
 const TERMINAL_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
-const CREDENTIAL_HEADER = /\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|x-auth-token|x-amz-security-token|password|passwd|client[-_]?secret)["']?\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim
+const CREDENTIAL_HEADER = /\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|[a-z0-9_-]{0,128}token(?:[-_]secret)?|password|passwd|client[-_]?secret|auth|bearer|credentials?|secret|private[-_]?key)["']?\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim
 
 /** @param {string} value @param {readonly string[]} secrets @returns {string} */
 export function redact(value, secrets = []) {

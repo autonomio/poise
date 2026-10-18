@@ -16,14 +16,14 @@ function path() { const directory = mkdtempSync(join(tmpdir(), 'poise-bootstrap-
 it('retains bootstrap stderr and source measurements without arguments, stdout or credentials', async () => {
   const storePath = path(); const events: LogEvent[] = []
   vi.stubEnv('POISE_TEST_TOKEN', 'opaque-bootstrap-credential')
-  const code = await captureRuntimeCommand(process.execPath, ['-e', "process.stdout.write('private-output');process.stderr.write('fatal: precise cause\\nopaque-bootstrap-credential');process.exit(9)", 'private-argument'],
+  const code = await captureRuntimeCommand(process.execPath, ['-e', "process.stdout.write('private-output');process.stderr.write('fatal: precise cause\\nopaque-bootstrap-credential\\n{\"access_token\":\"opaque-oauth-stderr-value\"}');process.exit(9)", 'private-argument'],
     { path: storePath, workspace: 'alice', quiet: true, write: (event) => events.push(event) })
   expect(code).toBe(9)
   const store = new DiagnosticStore(storePath)
   try {
     const page = store.query({ workspace: 'alice', operator: false })
     expect(page.events[0]).toMatchObject({ severity: 'error', exitCode: 9, component: 'provider-bootstrap', stderr: expect.stringContaining('precise cause'), resources: { cwdFilesystem: process.cwd() } })
-    for (const value of ['private-output', 'private-argument', 'opaque-bootstrap-credential']) expect(JSON.stringify({ page, events })).not.toContain(value)
+    for (const value of ['private-output', 'private-argument', 'opaque-bootstrap-credential', 'opaque-oauth-stderr-value']) expect(JSON.stringify({ page, events })).not.toContain(value)
   } finally { store.close() }
 })
 
