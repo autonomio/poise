@@ -75,7 +75,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       let remaining = chunk
       while (remaining.length) {
         const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
-        if (!discarding && pending.length + part.length > 64 * 1024) { truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('[oversized stderr line excluded]')) }
+        if (!discarding && pending.length + part.length > 64 * 1024) { captureError = 'Oversized bootstrap stderr line excluded'; truncated = true; discarding = true; pending = Buffer.alloc(0); addLine(Buffer.from('[oversized stderr line excluded]')) }
         if (!discarding) pending = Buffer.concat([pending, part])
         if (end < 0) return
         remaining = remaining.subarray(end + 1)

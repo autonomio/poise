@@ -66,3 +66,12 @@ it('persists supervisor observations through the shared private store before app
     expect(JSON.stringify(emitted)).not.toContain('supervisor-private-credential')
   } finally { store.close() }
 })
+
+it('retains collection loss when a successful command emits only an oversized native warning', async () => {
+  const events: LogEvent[] = []
+  expect(await captureRuntimeCommand(process.execPath, ['-e', "process.stderr.write('npm warn ' + 'private-payload'.repeat(10000))"],
+    { path: path(), workspace: 'alice', quiet: true, write: (event) => events.push(event) })).toBe(0)
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ source: 'collection', severity: 'warning', truncated: true, context: { captureError: 'Oversized bootstrap stderr line excluded' } })
+  expect(JSON.stringify(events)).not.toContain('private-payload')
+})
