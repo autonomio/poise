@@ -140,7 +140,7 @@ export class EditorReviews {
 
   private schedule(): void {
     clearTimeout(this.timer)
-    if (!this.visible() || (!this.data.active && !this.error && !this.data.problems.length)) return
+    if (!this.visible() || !this.data.active) return
     const delay = Math.max(REVIEW_INTERVAL_MS, this.data.retryAt ? Date.parse(this.data.retryAt) - Date.now() : 0)
     this.timer = setTimeout(() => { void this.synchronize() }, delay)
   }

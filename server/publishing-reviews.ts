@@ -134,9 +134,15 @@ async function sourceFor(session: GitHubSession, repo: string, path: string, com
   try { return await read } catch (error) { sources.delete(key); throw error }
 }
 
-async function readSnapshot(session: GitHubSession, record: PublishRecord): Promise<Snapshot> {
+async function readSnapshot(session: GitHubSession, record: PublishRecord, previous?: Snapshot): Promise<Snapshot> {
   const read = (repo: string) => query<PullAnswer>(session, PULL_QUERY, { owner: repo.split('/')[0], name: repo.split('/')[1], number: record.pullRequest.number })
-  let result = await read(record.repo)
+  let result: PullAnswer
+  try { result = await read(previous?.repoId === record.repoId ? previous.repo : record.repo) }
+  catch (error) {
+    if (!(error instanceof GitHubError) || !record.repoId || error.retryAt) throw error
+    const own = await repositoryById(session, record.repoId)
+    result = await read(own.fullName)
+  }
   if (record.repoId && result.repository?.databaseId !== record.repoId) {
     const own = await repositoryById(session, record.repoId)
     result = await read(own.fullName)
@@ -185,7 +191,7 @@ async function refresh(me: string, record: PublishRecord, force: boolean): Promi
   if (now < old.nextAt && (!force || old.problem || now - Date.parse(old.snapshot?.checkedAt ?? '') < 10_000)) return old
   const read = (async () => {
     try {
-      const snapshot = await readSnapshot(await signIn(me), record)
+      const snapshot = await readSnapshot(await signIn(me), record, old.snapshot)
       return save(key, { snapshot, nextAt: Date.now() + REVIEW_INTERVAL_MS, failures: 0 })
     } catch (error) {
       if (!(error instanceof GitHubError || error instanceof HttpError)) throw error

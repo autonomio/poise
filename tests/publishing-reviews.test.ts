@@ -235,6 +235,21 @@ describe('cached article review synchronization', () => {
     expect(result.stale).toBe(true)
     expect(result.problems[0]).toContain('pagination cursor')
   })
+
+  it('finds a renamed publication by id when its old name cannot be queried', async () => {
+    const original = mocks.query.getMockImplementation()!
+    mocks.query.mockImplementation(async (...args: unknown[]) => {
+      const variables = args[2] as { name: string }
+      if (variables.name === 'site') throw new github.GitHubError('Repository not found.', 404)
+      const result = await original(...args) as { repository: { nameWithOwner: string } }
+      result.repository.nameWithOwner = 'acme/renamed'
+      return result
+    })
+    expect((await request('/sync', {})).body.reviews[0].repo).toBe('acme/renamed')
+    vi.setSystemTime(Date.now() + REVIEW_INTERVAL_MS)
+    await request('/sync', {})
+    expect(mocks.repository).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('explicit review actions', () => {

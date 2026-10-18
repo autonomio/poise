@@ -27,7 +27,7 @@ async function editorWithReviews(page: Page, initial: ArticleReview[] = [review(
       return route.fulfill({ json: { slug: 'draft', title: 'A question', content, updated_at: '2026-10-18T08:00:00Z', version: VERSION } })
     }
     if (path.endsWith('/annotations')) return route.fulfill({ json: { annotations: [], version: VERSION } })
-    if (path.endsWith('/reviews')) return route.fulfill({ json: data })
+    if (path.endsWith('/reviews')) return route.fulfill({ json: { ...data, reviews: [], checkedAt: null, stale: true } })
     if (path.endsWith('/reviews/sync')) { calls.push({ path, body }); return route.fulfill({ json: data }) }
     if (path.endsWith('/reviews/action')) {
       calls.push({ path, body })
@@ -125,8 +125,9 @@ test('review replies survive refreshing and retain reviewer text as read-only', 
 })
 
 test('only the visible editor polls, and closed publications stop polling', async ({ page }) => {
-  const { calls, data } = await editorWithReviews(page)
   await page.clock.install()
+  const { calls, data } = await editorWithReviews(page)
+  await expect(page.locator('.editor-review-mark').first()).toBeVisible()
   await page.clock.fastForward(REVIEW_INTERVAL_MS + 1000)
   await expect.poll(() => calls.filter((call) => call.path.endsWith('/sync')).length).toBe(2)
   await page.getByRole('button', { name: 'Current', exact: true }).click()
