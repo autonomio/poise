@@ -1020,7 +1020,7 @@ tr:hover .review-btn { opacity: 1; }
 .analytics-history-base { stroke: var(--hairline); stroke-width: 1; }
 .analytics-history-area { fill: var(--history-line); opacity: .08; }
 .analytics-history-line { fill: none; stroke: var(--history-line); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
-.analytics-history-dot, .analytics-history-latest, .analytics-history-point { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: var(--r-full); box-shadow: 0 0 0 2px var(--surface); pointer-events: none; }
+.analytics-history-dot, .analytics-history-latest, .analytics-history-point { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: var(--r-pill); box-shadow: 0 0 0 2px var(--surface); pointer-events: none; }
 .analytics-history-dot { background: var(--history-line); }
 .analytics-history-latest { background: var(--a1); }
 .analytics-history-point { background: var(--text); }
@@ -1046,7 +1046,7 @@ tr:hover .review-btn { opacity: 1; }
 .github-quota-accounts { grid-template-columns: minmax(0, 1fr); }
 .github-quota-account { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); align-content: start; }
 .github-quota-identity { display: flex; align-items: center; gap: var(--sp-3); grid-column: 1 / -1; padding-bottom: var(--sp-3); border-bottom: var(--b-hair); }
-.github-quota-avatar { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px; border-radius: var(--r-full); background: var(--n2); color: var(--text-secondary); overflow: hidden; }
+.github-quota-avatar { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px; border-radius: var(--r-pill); background: var(--n2); color: var(--text-secondary); overflow: hidden; }
 .github-quota-avatar svg { width: 24px; height: 24px; }
 .github-quota-avatar img { position: absolute; inset: 0; width: 40px; height: 40px; }
 .github-quota-identity h3 { margin: 0; font-size: .8125rem; overflow-wrap: anywhere; }
@@ -1067,7 +1067,7 @@ tr:hover .review-btn { opacity: 1; }
 .quota-legend i { display: inline-block; width: 6px; height: 6px; }
 .quota-used { background: var(--a1); fill: var(--a1); }
 .quota-left { background: var(--n2); fill: var(--n2); }
-[data-theme="dark"] .quota-left { background: var(--n5); fill: var(--n5); }
+[data-theme="dark"] .quota-left { background: var(--n3); fill: var(--n3); }
 .quota-hours { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); align-items: end; gap: 2px; height: 64px; }
 .quota-hour { display: flex; flex-direction: column; height: 100%; }
 .quota-hour i { display: block; width: 100%; }

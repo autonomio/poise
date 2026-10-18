@@ -618,6 +618,8 @@ test('shows quota charts from the existing read and centers every organization s
   await expect(view.locator('.quota-hour-empty')).toHaveCount(0)
   await expect(view.locator('.quota-distribution rect')).toHaveCount(40)
   await expect(view.locator('.github-quota-avatar img').first()).toHaveAttribute('src', 'https://github.com/octocat.png?size=80')
+  await expect(view.locator('.github-quota-avatar').first()).toHaveCSS('border-radius', '999px')
+  await expect(view.locator('.analytics-history-latest').first()).toHaveCSS('border-radius', '999px')
   expect(reads).toBe(1)
   expect(state.reads).toHaveLength(2)
   expect(state.historyReads).toHaveLength(1)
