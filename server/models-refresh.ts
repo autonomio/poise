@@ -1,3 +1,4 @@
+import { diagnostic } from './logging'
 import { releaseBackgroundPaused, trackReleaseBackground } from './release-background'
 // The scheduled job and manual check share CLI updates, discovery and receipts.
 import { dirname, join } from 'node:path'
@@ -28,6 +29,14 @@ export function refreshModelCatalog(): Promise<Record<string, unknown>> {
     let report: unknown
     try { report = JSON.parse(stdout) } catch { throw new Error('The model check returned an unreadable report') }
     if (!report || typeof report !== 'object' || !('families' in report) || !report.families || typeof report.families !== 'object' || Array.isArray(report.families)) throw new Error('The model check returned an invalid report')
+    for (const [family, value] of Object.entries(report.families)) {
+      if (value && typeof value === 'object' && 'status' in value && value.status !== 'ok') diagnostic({
+        level: 'warning', operation: 'models.discovery', component: family,
+        message: 'error' in value && typeof value.error === 'string' ? value.error : 'Model discovery did not return a healthy result',
+        context: { family, status: value.status, reportPath: catalogReportPath(), configuredExecutable: process.env[family.toUpperCase() + '_CLI'] ?? family,
+          resolvedExecutable: null, phase: 'catalog_discovery' },
+      })
+    }
     return report as Record<string, unknown>
   })().finally(() => { invalidateCatalog(); pending = null; finished() })
   return pending

@@ -1,0 +1,121 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { agentInterfaceRoot } from '../scripts/caller.mjs'
+import { environmentSecrets, normalize, type DiagnosticInput } from '../gateway/src/diagnostics/contract'
+import { DiagnosticRuntime } from '../gateway/src/diagnostics/runtime'
+import { callerDiagnostic } from '../gateway/src/diagnostics/sources'
+import { runFile, setProcessFailureObserver } from './process'
+
+let active: DiagnosticRuntime | null = null
+let timer: ReturnType<typeof setInterval> | null = null
+let pass: Promise<void> | null = null
+let abort: AbortController | null = null
+let restoreConsole: (() => void) | null = null
+let path = ''
+let sequence = 0
+let workspace = 'local'
+
+export function loggingRuntime(): DiagnosticRuntime | null { return active }
+export function loggingWorkspace(): string { return workspace }
+
+export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> & { source?: string }, secrets: readonly string[] = []): string | null {
+  if (!active) return null
+  try {
+  const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
+    source: input.source ?? 'poise', workspace, visibility: 'workspace',
+    instance: process.env.POISE_INSTANCE_LABEL ?? (process.env.POISE_MODE === 'service' ? 'service' : 'local'),
+    release: process.env.POISE_SOURCE_SHA ?? null }, Date.now(), [...environmentSecrets(), ...secrets])
+  if (!event || !active.ingest(event)) return null
+  // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
+  process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
+  return event.id
+  } catch (error) {
+    process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.capture.failed', message: error instanceof Error ? error.name : 'capture failure' }) + '\n')
+    return null
+  }
+}
+
+export function diagnosticFailure(operation: string, error: unknown, context: Record<string, unknown> = {}, options: { level?: 'error' | 'warning'; secrets?: readonly string[]; stderr?: boolean } = {}): string | null {
+  const value = error instanceof Error ? error : new Error(typeof error === 'string' ? error : 'Operation failed without an Error')
+  const fields = error as { stderr?: unknown; code?: unknown; signal?: unknown; errno?: unknown; killed?: unknown } | null
+  return diagnostic({ level: options.level ?? 'error', operation, message: value.message, stack: value.stack,
+    stderr: options.stderr === false ? null : typeof fields?.stderr === 'string' ? fields.stderr : null,
+    exitCode: typeof fields?.code === 'number' ? fields.code : null,
+    signal: typeof fields?.signal === 'string' ? fields.signal : null,
+    errno: typeof fields?.errno === 'string' || typeof fields?.errno === 'number' ? fields.errno : null,
+    context: { ...context, code: typeof fields?.code === 'string' ? fields.code : null, killed: fields?.killed === true } }, options.secrets)
+}
+
+async function collectCaller(): Promise<void> {
+  if (!active) return
+  const runtime = active
+  try {
+    abort = new AbortController()
+    const result = await runFile('agent-interface', ['--diagnostics', String(sequence), '3'], {
+      cwd: agentInterfaceRoot(), timeoutMs: 10_000, maxOutputBytes: 512 * 1024, signal: abort.signal,
+    })
+    const page = JSON.parse(result.stdout) as { version: number; events: unknown[]; cursor: number; hasMore: boolean; backfillPending: boolean }
+    if (page.version !== 1 || !Array.isArray(page.events) || page.events.length > 3 || !Number.isSafeInteger(page.cursor) || page.cursor < sequence
+      || typeof page.hasMore !== 'boolean' || typeof page.backfillPending !== 'boolean') throw new Error('Caller diagnostic stream is incompatible')
+    for (const row of page.events) {
+      const input = callerDiagnostic(row, workspace)
+      if (input && !diagnostic(input)) throw new Error('Caller diagnostic delivery is buffered or unavailable')
+    }
+    runtime.flush()
+    // Do not acknowledge a Caller completion until its durable local transaction succeeds.
+    if (runtime.health().error || runtime.health().queued) throw new Error('Caller diagnostic checkpoint waits for durable ingestion')
+    sequence = page.cursor
+    writeFileSync(path + '.caller', String(sequence), { mode: 0o600 })
+    runtime.observe('caller', 'caller', workspace, page.backfillPending ? 'Caller historical backfill is still pending' : null)
+  } catch (error) {
+    if (!abort?.signal.aborted) runtime.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error))
+  } finally { abort = null }
+}
+
+export function startLogging(): void {
+  if (active) return
+  workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
+  path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
+  active = new DiagnosticRuntime({ path })
+  if (existsSync(path + '.caller')) {
+    const raw = readFileSync(path + '.caller', 'utf8').trim()
+    if (/^\d{1,15}$/.test(raw)) sequence = Number(raw)
+    else active.observe('caller', 'caller', workspace, 'Caller checkpoint is invalid; bounded source replay will restart')
+  } else sequence = 0
+  active.start()
+  setProcessFailureObserver((error, evidence) => diagnosticFailure(evidence.operation, error, { executable: evidence.executable, configuredCommand: evidence.command, cwd: evidence.cwd, elapsedMs: evidence.elapsedMs, timeoutMs: evidence.timeoutMs }, { secrets: evidence.secrets, stderr: evidence.stderrAllowed }))
+  active.observe('application', 'poise', workspace)
+  // Console is an owned technical source. Arbitrary payload objects/stdout are excluded.
+  const error = console.error; const warn = console.warn
+  const capture = (level: 'error' | 'warning', args: unknown[]) => {
+    const header = typeof args[0] === 'string' && /^\[[a-z][\w-]*\]/i.test(args[0]) ? args[0] : null
+    const failure = args.find((arg) => arg instanceof Error)
+    if (failure) diagnosticFailure('application.' + (header?.match(/^\[([^\]]+)\]/)?.[1] ?? 'error'), failure, { componentMessage: header }, { level })
+    else diagnostic({ level, operation: 'application.message', message: header ?? 'Unstructured application diagnostic; payload excluded' })
+  }
+  console.error = (...args: unknown[]) => capture('error', args)
+  console.warn = (...args: unknown[]) => capture('warning', args)
+  restoreConsole = () => { console.error = error; console.warn = warn }
+  const run = () => { if (!pass) pass = collectCaller().finally(() => { pass = null }) }
+  timer = setInterval(run, 15_000); timer.unref(); run()
+}
+
+export async function stopLogging(): Promise<void> {
+  if (timer) clearInterval(timer)
+  timer = null; abort?.abort(); await pass
+  setProcessFailureObserver(null)
+  restoreConsole?.(); restoreConsole = null
+  active?.stop(); active = null
+}
+
+/** Authenticated maintenance export; the HTTP owner supplies authorization. */
+export function diagnosticPage(cursor: string | null) {
+  if (!active) throw new Error('Diagnostic collection has not started')
+  const page = active.query((store) => store.delivery({ workspace, operator: false }, cursor))
+  const health = active.health()
+  return { ...page, coverage: { status: health.status, dropped: health.dropped, rejected: health.rejected,
+    lastSuccessfulWriteAt: health.lastSuccessfulWriteAt, sources: health.sources.slice(0, 16).map((source) => ({
+      source: source.source, status: source.status, observedAt: source.observedAt, availableFrom: source.availableFrom,
+    })) } }
+}

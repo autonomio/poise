@@ -37,7 +37,9 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
       expectedHead: text(row.expected_head), observedHead: text(row.head_sha), executable: text(context.executable),
       resolvedExecutable: text(context.resolved_executable), cwd: text(context.cwd), elapsedMs: number(context.elapsed_ms),
       startedAt: text(row.started_at_precise) ?? text(row.started_at), source: text(row.source),
-      evidenceIncomplete: !diagnostic },
+      inputBytes: number(context.actual_input_bytes), inputLimitBytes: number(context.input_limit_bytes),
+      providerStarted: typeof context.provider_started === 'boolean' ? context.provider_started : null,
+      evidenceIncomplete: !diagnostic || !!row.evidence_unavailable },
   }
 }
 

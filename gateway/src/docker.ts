@@ -115,6 +115,37 @@ export class DockerClient {
     return (await this.call('GET', `/containers/json?all=true&filters=${filters}`)).body as ContainerSummary[]
   }
 
+  /** Bounded diagnostics only; payload parsing is owned by the collector. */
+  async diagnosticRead(path: string, maxBytes = 2 * 1024 * 1024): Promise<Buffer> {
+    if (!path.startsWith('/containers/') && !path.startsWith('/events?')) throw new Error('Unsupported Docker diagnostic operation')
+    return new Promise((resolve, reject) => {
+      const req = http.get({ socketPath: this.socketPath, path, headers: { host: 'docker' } }, (res) => {
+        let size = 0
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => {
+          size += chunk.length
+          if (size > maxBytes) { req.destroy(new Error(`Docker diagnostic response exceeds ${maxBytes} bytes; collection gap`)); return }
+          chunks.push(chunk)
+        })
+        res.on('error', reject)
+        res.on('end', () => res.statusCode === 200 ? resolve(Buffer.concat(chunks))
+          : reject(new Error(`Docker diagnostic source answered HTTP ${res.statusCode}`)))
+      })
+      req.setTimeout(5000, () => req.destroy(new Error('Docker diagnostic read timed out after 5000 ms')))
+      req.on('error', reject)
+    })
+  }
+
+  async diagnosticContainers(): Promise<ContainerSummary[]> {
+    const result = new Map<string, ContainerSummary>()
+    for (const label of ['poise.managed=true', 'com.docker.compose.project=poise', 'poise.task=install-release']) {
+      const filters = encodeURIComponent(JSON.stringify({ label: [label] }))
+      const body = await this.diagnosticRead(`/containers/json?all=true&filters=${filters}`, 512 * 1024)
+      for (const value of JSON.parse(body.toString()) as ContainerSummary[]) result.set(value.Id, value)
+    }
+    return [...result.values()]
+  }
+
   /** Each volume's size in bytes, as Docker measures it; -1 for one it did not. Docker walks every volume. */
   async volumeSizes(): Promise<Map<string, number>> {
     const body = (await this.call('GET', '/system/df?type=volume', undefined, [], DISK_USAGE_TIMEOUT_MS)).body as {

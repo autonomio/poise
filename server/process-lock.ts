@@ -1,3 +1,4 @@
+import { diagnosticFailure } from './logging'
 import Database from 'better-sqlite3'
 import { chmod, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -37,6 +38,8 @@ function delay(ms: number): Promise<void> {
 }
 
 function lockError(options: ProcessLockOptions, message: string, cause: unknown): Error {
+  if ((options.timeoutMs ?? DEFAULT_TIMEOUT_MS) >= 1000 || !isSqliteContention(cause)) diagnosticFailure('process_lock.acquire', cause,
+    { lockPath: options.path, phase: 'acquisition', waitLimitMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, holderPid: null, holderIdentityVerified: false }, { level: 'warning' })
   return options.errorFactory?.(message, cause) ?? new ProcessLockError(message, { cause })
 }
 

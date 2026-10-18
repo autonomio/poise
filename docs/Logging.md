@@ -68,3 +68,55 @@ sink failures and drops remain visible while active work continues. Invalid inpu
 query validation, coverage-journal and reporting failures remain distinct from sink
 outages. Shutdown drains queued batches within two seconds, then records any loss.
 Coverage preserves prior drops and open outage intervals across restart.
+
+## Collection and operation
+
+The application starts a dedicated `logging.db` beside `POISE_DB` (otherwise
+`~/.poise/logging.db`). This is independent of alerts, dismissal and recovery.
+An adjacent private journal retains collection gaps and loss across restart.
+The bounded Caller completion stream is polled every 15 seconds without
+opening prompts or response/reasoning artifacts. Process capture excludes argv,
+stdout and environments; credential commands also exclude stderr. Sync phases,
+input admission limits, model-discovery outcomes, lock acquisition failures and
+temporary-filesystem pressure retain measurements known at the source.
+
+The gateway retains its separate central `logging.db` in `poise-gateway-data`.
+Existing volume backup/restore snapshots it with the other SQLite databases.
+Gateway warnings/errors are redacted before Docker stdout and retained directly.
+Every 15 seconds the independent collector reads bounded Docker logs/lifecycle
+windows for managed workspaces, Poise Compose services and release-install
+tasks. Only validated structured workspace envelopes enter private history;
+unstructured output is excluded and its coverage limitation is explicit.
+Docker OOM, nonzero exit and unhealthy events use native lifecycle meanings.
+Workspace backfill reads three durable events per authenticated maintenance
+page and commits its checkpoint only with central persistence. Replacement or
+removal of the source does not delete central records. Query/collection outages
+never become empty successful reads.
+
+The gateway reads native host kernel and `docker.service` Warning-or-higher
+journal records using `journalctl`, with a durable native cursor. Compose mounts
+only the journal directories and machine ID read-only; workspaces receive no
+journal, Docker socket or central-store mount. Missing journals, insufficient
+permissions, unavailable Docker, incompatible old workspaces and excluded
+unstructured logs remain explicit source coverage gaps. The first observation
+is not a claim of complete history before installation. Polling bounds can
+limit historical replay; Docker's own retained native event history is finite.
+
+When a workspace cannot open, the host operator can investigate with:
+
+```sh
+docker exec poise-gateway node dist/diagnostics/cli.js health
+docker exec poise-gateway node dist/diagnostics/cli.js query '{"severities":["error","critical"]}'
+docker exec poise-gateway node dist/diagnostics/cli.js event EVENT_ID
+docker exec poise-gateway node dist/diagnostics/cli.js export '{"limit":100}'
+```
+
+Export is paged NDJSON with metadata, bounds and a continuation cursor. It
+includes infrastructure/operator records, never another owner's private Caller
+or application history. External proxy installations may send one native JSON
+record through `docker exec -i poise-gateway node dist/diagnostics/cli.js ingress`.
+The command requires a request host inside `POISE_DOMAIN`, bounds input to
+64 KiB, excludes headers/query/payload context and acknowledges the event ID
+only after persistence. The operator owns delivery/retry and must not forward
+unrelated business-service logs. No public or workspace ingestion endpoint is
+added. Unconfigured external ingress coverage remains unknown, not healthy.

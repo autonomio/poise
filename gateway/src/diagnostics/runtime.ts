@@ -107,6 +107,12 @@ export class DiagnosticRuntime {
     } catch (error) { this.reject(error); return null }
   }
 
+  /** Accept only an already normalized event from a trusted source adapter. */
+  ingest(event: LogEvent): string | null {
+    if (this.stopped || this.draining) return null
+    return this.enqueue(event)
+  }
+
   private enqueue(event: LogEvent): string | null {
     const existing = this.queue.find((entry) => entry.event.id === event.id)
     if (existing) {

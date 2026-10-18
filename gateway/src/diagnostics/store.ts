@@ -37,7 +37,7 @@ export interface Coverage {
 export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
 export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, maxBytes: 64 * 1024 * 1024, maxEvents: 50_000 }
 interface EventRow { id: string; sort_time: string; payload: string }
-interface Cursor { kind: 'page' | 'watermark'; high: number; time?: string; id?: string; filter: string }
+interface Cursor { kind: 'page' | 'watermark' | 'delivery'; high: number; time?: string; id?: string; filter: string }
 
 export class DiagnosticEventError extends Error {
   constructor(readonly eventId: string, message: string) { super(message) }
@@ -233,6 +233,34 @@ export class DiagnosticStore {
       ? this.sealToken({ kind: 'page', high, time: last.sort_time, id: last.id, filter: fingerprint }) : null,
     watermark: this.sealToken({ kind: 'watermark', high, filter: filterHash }),
     coverage: this.readCoverage(access), bounds: this.bounds(access), policy: this.policy }
+  }
+
+  delivery(access: LogAccess, cursor: string | null = null, limit = 3) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw new Error('Diagnostic delivery limit is 1..3')
+    const filter = createHash('sha256').update(JSON.stringify(access)).digest('hex')
+    const after = cursor ? this.openToken(cursor, 'delivery', filter).high : 0
+    const predicate = access.operator ? "(visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))"
+      : "workspace=? AND visibility IN ('workspace','infrastructure')"
+    const rows = this.db.prepare(`SELECT seq,payload FROM log_events WHERE ${predicate} AND seq>? ORDER BY seq LIMIT ?`)
+      .all(access.workspace, after, limit + 1) as Array<{ seq: number; payload: string }>
+    const page = rows.slice(0, limit)
+    return { version: 1, events: page.map((row) => JSON.parse(row.payload) as LogEvent),
+      cursor: this.sealToken({ kind: 'delivery', high: page.at(-1)?.seq ?? after, filter }), hasMore: rows.length > limit }
+  }
+
+  checkpoint(key: string): string | null {
+    if (!/^[a-zA-Z0-9:._-]{1,256}$/.test(key)) throw new Error('Invalid diagnostic checkpoint key')
+    return (this.db.prepare('SELECT value FROM log_meta WHERE key=?').get('checkpoint:' + key) as { value: string } | undefined)?.value ?? null
+  }
+
+  commitDelivery(events: readonly LogEvent[], key: string, cursor: string): number {
+    this.checkpoint(key)
+    if (cursor.length > 1024) throw new Error('Diagnostic checkpoint exceeds its bound')
+    return this.db.transaction(() => {
+      const inserted = this.append(events)
+      this.db.prepare('INSERT INTO log_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('checkpoint:' + key, cursor)
+      return inserted
+    })()
   }
 
   private key(): Buffer {

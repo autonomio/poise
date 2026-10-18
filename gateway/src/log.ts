@@ -1,3 +1,4 @@
+import { environmentSecrets, redact, redactFacts } from './diagnostics/contract.js'
 export type LogFields = Record<string, unknown>
 
 export interface Logger {
@@ -7,9 +8,12 @@ export interface Logger {
 }
 
 /** One JSON object per line, so `docker logs` output stays greppable and machine-readable. */
-export function createLogger(write: (line: string) => void): Logger {
+export function createLogger(write: (line: string) => void, observe?: (level: string, event: string, fields: LogFields) => void): Logger {
+  const secrets = environmentSecrets()
   const emit = (level: string, event: string, fields: LogFields = {}) => {
-    write(JSON.stringify({ time: new Date().toISOString(), level, event, ...fields }))
+    const safe = redactFacts(fields, secrets)
+    write(JSON.stringify({ time: new Date().toISOString(), level, event: redact(event, secrets), ...safe }))
+    if (level !== 'info') observe?.(level, event, safe)
   }
   return {
     info: (event, fields) => emit('info', event, fields),

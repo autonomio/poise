@@ -119,7 +119,7 @@ function safeFacts(value: unknown, secrets: readonly string[], depth = 0): unkno
     .map(([key, item]) => [redact(key, secrets).slice(0, 64), SECRET_KEY.test(key) ? '[redacted]' : safeFacts(item, secrets, depth + 1)]))
 }
 
-function facts(value: Facts | undefined, secrets: readonly string[]): Facts {
+export function redactFacts(value: Facts | undefined, secrets: readonly string[]): Facts {
   const safe = safeFacts(value ?? {}, secrets) as Facts
   return Buffer.byteLength(JSON.stringify(safe)) <= 8192 ? safe : { truncated: true, reason: 'Context exceeds 8 KiB' }
 }
@@ -168,7 +168,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     truncated,
     exitCode: number(input.exitCode), signal: typeof input.signal === 'number' ? number(input.signal) : nullable(input.signal),
     timeoutMs: number(input.timeoutMs), errno: typeof input.errno === 'number' ? number(input.errno) : nullable(input.errno),
-    context: level === 'invalid' || invalidTime ? { source: clean(input.source), originalOperation: clean(input.operation) } : facts(input.context, secrets),
-    resources: facts(input.resources, secrets),
+    context: level === 'invalid' || invalidTime ? { source: clean(input.source), originalOperation: clean(input.operation) } : redactFacts(input.context, secrets),
+    resources: redactFacts(input.resources, secrets),
   }
 }
