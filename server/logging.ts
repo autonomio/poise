@@ -56,11 +56,11 @@ export function diagnosticFailure(operation: string, error: unknown, context: Re
   const value = error instanceof Error ? error : new Error(typeof error === 'string' ? error : 'Operation failed without an Error')
   const fields = error as { stderr?: unknown; code?: unknown; signal?: unknown; errno?: unknown; killed?: unknown } | null
   const cause: string[] = []
-  const seen = new Set<Error>()
+  const seen = new Set<Error>([value])
   let underlying: unknown = value.cause
   while (underlying instanceof Error && !seen.has(underlying) && cause.length < 8) { seen.add(underlying); cause.push(underlying.message); underlying = underlying.cause }
   const identity = (key: string) => typeof context[key] === 'string' ? context[key] as string : null
-  return diagnostic({ level: options.level ?? 'error', operation, cause, account: identity('account'), repository: identity('repository'),
+  return diagnostic({ level: options.level ?? 'error', operation, cause, truncated: underlying instanceof Error, account: identity('account'), repository: identity('repository'),
     callId: identity('callId'), correlationId: identity('correlationId'), requestId: identity('requestId'), phase: identity('phase'),
     timeoutMs: typeof context.timeoutMs === 'number' ? context.timeoutMs : null, message: value.message, stack: value.stack,
     stderr: options.stderr === false ? null : typeof fields?.stderr === 'string' ? fields.stderr : null,

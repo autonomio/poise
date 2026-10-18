@@ -230,6 +230,36 @@ describe('collection independence and Caller evidence', () => {
     } finally { writeCoverage.mockRestore(); runtime.stop() }
   })
 
+  it.each(['flush', 'deliver'])('retains later-source ingestion across an earlier coverage failure during %s', (method) => {
+    const path = join(directory(), 'later-source.db'); let now = NOW
+    const runtime = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
+    runtime.observe('earlier', 'poise', 'alice')
+    runtime.observe('later', 'caller', 'alice')
+    runtime.observe('foreign', 'caller', 'bob')
+    const failure = runtime.query((db) => vi.spyOn(db, 'coverage').mockImplementationOnce(() => { throw new Error('earlier coverage failed') }))
+    const input = event('committed-later', { source: 'caller' })
+    const ingestedAt = new Date(now += 2000).toISOString()
+    try {
+      if (method === 'deliver') expect(runtime.deliver([input], 'later-cursor', '1', { id: 'later', source: 'caller', workspace: 'alice' })).toBe(0)
+      else { runtime.ingest(input); expect(runtime.flush()).toBe(true) }
+      expect(runtime.health()).toMatchObject({ error: null, queued: 0, coverageError: 'earlier coverage failed' })
+      expect(runtime.health().sources.find((source) => source.id === 'later')?.ingestedAt).toBe(ingestedAt)
+      expect(runtime.health().sources.find((source) => source.id === 'foreign')?.ingestedAt).toBeNull()
+      const journal = JSON.parse(readFileSync(path + '.coverage.json', 'utf8'))
+      expect(journal.sources.find((source: { id: string }) => source.id === 'later')?.ingestedAt).toBe(ingestedAt)
+      expect(runtime.query((db) => db.query(alice)).total).toBe(1)
+      if (method === 'deliver') expect(runtime.query((db) => db.checkpoint('later-cursor'))).toBe('1')
+    } finally { failure.mockRestore(); runtime.stop() }
+    const restarted = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
+    try {
+      expect(restarted.health().sources.find((source) => source.id === 'later')?.ingestedAt).toBe(ingestedAt)
+      now += 2000; restarted.flush()
+      expect(restarted.health().coverageError).toBeNull()
+      expect(restarted.query((db) => db.readCoverage(alice)).find((source) => source.id === 'later')?.ingestedAt).toBe(ingestedAt)
+      expect(restarted.query((db) => db.query(alice)).total).toBe(1)
+    } finally { restarted.stop() }
+  })
+
   it('quarantines poison input and preserves the first contradictory queued delivery', () => {
     const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, policy: { ...DEFAULT_LOG_POLICY, maxBytes: 20_000 }, report: () => undefined })
     const input = { id: 'queued', time: null, source: 'poise', operation: 'read', level: 'error', workspace: 'alice', message: 'original' }

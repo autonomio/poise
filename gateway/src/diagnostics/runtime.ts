@@ -286,8 +286,9 @@ export class DiagnosticRuntime {
       }
       for (const source of this.sources.values()) {
         if (events.length && (id !== null ? source.id === id : events.some((event) => event.source === source.source && event.workspace === source.workspace))) source.ingestedAt = this.iso()
-        store.coverage(source)
       }
+      // Record every committed source before a fallible coverage write can stop persistence.
+      for (const source of this.sources.values()) store.coverage(source)
       this.coverageError = null
     } catch (error) {
       const message = this.message(error)

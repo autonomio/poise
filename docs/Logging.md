@@ -267,6 +267,9 @@ Atomic source delivery quarantines only the offending record, preserving the
 first valid occurrence even when conflicting copies share one batch. Successful
 deliveries update the exact source boundary’s last-ingestion time independently
 of later coverage writes; coverage persistence failures remain explicit.
+Every matching source is updated before SQLite coverage persistence starts, so
+an earlier source's write failure cannot erase a later source's committed
+ingestion time. The journal retains that time across restart and idle recovery.
 
 Text capture also redacts spaced API/private-key names using the same key
 separators as structured context. Caller registers coverage before its first
@@ -286,6 +289,8 @@ the store is idle or opened read-only.
 Text credential detection covers prefixed/suffixed password, secret and key
 names as well as structured fields, without needing the secret value in the
 environment. The truncation marker includes bounded signal and errno text.
+Application exception chains retain the first eight underlying causes. A longer
+chain or a detected cycle marks the persisted event truncated explicitly.
 
 Age-expiry evidence starts when retention elapses. An idle store or later
 cleanup cannot extend that evidence window beyond one further retention period.

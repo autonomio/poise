@@ -18,6 +18,29 @@ function start(blocked = false) {
 }
 
 describe('independent application capture', () => {
+  it.each([0, 8, 9])('persists completeness for an exception with %i underlying causes', (length) => {
+    start()
+    let error = new Error('cause-' + length)
+    for (let i = length - 1; i >= 0; i--) error = new Error('cause-' + i, { cause: error })
+    diagnosticFailure('chain.failed', error)
+    loggingRuntime()!.flush()
+    expect(diagnosticPage(null).events.find((record) => record.operation === 'chain.failed')).toMatchObject({
+      message: 'cause-0', cause: Array.from({ length: Math.min(length, 8) }, (_, i) => 'cause-' + (i + 1)), truncated: length > 8,
+    })
+  })
+
+  it('marks a cyclic exception chain incomplete without repeating the outer error', () => {
+    start()
+    const inner = new Error('inner failure')
+    const error = new Error('outer failure', { cause: inner })
+    inner.cause = error
+    diagnosticFailure('cyclic.failed', error)
+    loggingRuntime()!.flush()
+    expect(diagnosticPage(null).events.find((record) => record.operation === 'cyclic.failed')).toMatchObject({
+      cause: ['inner failure'], truncated: true,
+    })
+  })
+
   it('retains exact process evidence without prompts, response artifacts or credentials', async () => {
     start()
     diagnosticFailure('provider.failed', Object.assign(new Error('provider rejection'), { stderr: 'fatal: exact cause\nAuthorization: Bearer opaque-secret', code: 7 }),
