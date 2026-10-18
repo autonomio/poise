@@ -361,11 +361,15 @@ test('shows live account quota below daily analytics with usage, resets and risk
   await expect(risk.nth(0)).toHaveText('25% estimated risk')
   await risk.nth(1).scrollIntoViewIfNeeded()
   await page.screenshot({ path: info.outputPath('github-quota.png') })
+  const avatar = section.locator('.github-quota-avatar img').first()
+  await expect(avatar).toHaveClass(/broken/)
   quota.accounts[0].buckets[0].remaining = 0
   quota.accounts[0].buckets[0].used = 5000
   quota.accounts[0].buckets[0].riskPercent = 100
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await expect(risk.nth(0)).toHaveText('100% estimated risk · Exhausted')
+  await expect(avatar).toHaveClass(/broken/)
+  await expect(avatar).toBeHidden()
 })
 
 test('shows quota read failure and refreshes it without retaining stale values', async ({ page }) => {

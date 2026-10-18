@@ -105,12 +105,14 @@ async function readQuota(): Promise<void> {
     if (generation !== quotaGeneration) return
     content.classList.remove('st-help-error')
     const now = Date.now()
+    const avatar = (login: string) => `https://github.com/${encodeURIComponent(login)}.png?size=80`
+    const failedAvatars = new Set(Array.from(content.querySelectorAll<HTMLImageElement>('.github-quota-avatar img.broken'), (img) => img.getAttribute('src')))
     const number = (n: number) => n.toLocaleString('en-US')
     const time = (value: string) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date(value))
     patchContent(content, data.accounts.length ? data.accounts.map((account) => `
       <article class="github-quota-account" data-account="${escapeHtml(account.login)}">
         <header class="github-quota-identity">
-          <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar" src="https://github.com/${encodeURIComponent(account.login)}.png?size=80" alt="" width="40" height="40"></span>
+          <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar${failedAvatars.has(avatar(account.login)) ? ' broken' : ''}" src="${avatar(account.login)}" alt="" width="40" height="40"></span>
           <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
           ${account.checkedAt ? `<p class="analytics-note">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}</div>
         </header>
