@@ -19,11 +19,22 @@ log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
 }
 
+# Keep the source file bounded too; retained diagnostic events live separately.
+trim_log() {
+  local size
+  size=$(stat -c %s "$log_file") || return
+  if [ "$size" -gt 2097152 ]; then
+    tail -c 1048576 "$log_file" >"$log_file.tmp" && mv "$log_file.tmp" "$log_file" || return
+    exec >>"$log_file" 2>&1
+  fi
+}
+
 # Every command is bounded, so a stalled download fails instead of holding up
 # the CLIs after it.
 run() {
   node /opt/poise/dist/runtime-diagnostic.js "$@"
   local code=$?
+  trim_log || log "could not trim the bootstrap source log"
   if [ "$code" -ne 0 ]; then
     log "command failed (exit $code): $1"
   fi

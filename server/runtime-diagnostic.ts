@@ -30,6 +30,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   const secrets = environmentSecrets()
   const executable = resolved(command)
   let stderr = Buffer.alloc(0); let pending = Buffer.alloc(0); let discarding = false; let truncated = false; let nativeWarning = false
+  let stdoutPending = Buffer.alloc(0); let stdoutDiscarding = false; let stdoutForwarded = 0
   let timedOut = false; let spawnError: NodeJS.ErrnoException | null = null; let captureError: string | null = null
   const addLine = (line: Buffer) => {
     const safe = redact(line.toString(), secrets)
@@ -38,7 +39,13 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     if (bytes.length > 16 * 1024) truncated = true
     stderr = bytes.subarray(Math.max(0, bytes.length - 16 * 1024))
   }
-  const child = spawn(command, args, { detached: true, stdio: ['ignore', options.quiet ? 'ignore' : 'inherit', 'pipe'] })
+  const child = spawn(command, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const forwardStdout = (line: Buffer) => {
+    const safe = Buffer.from(redact(line.toString(), secrets) + '\n')
+    if (stdoutForwarded + safe.length > 64 * 1024) { captureError = 'Bootstrap stdout forwarding exceeded 64 KiB; content excluded'; return }
+    stdoutForwarded += safe.length
+    if (!options.quiet) process.stdout.write(safe)
+  }
   const signal = (value: NodeJS.Signals) => {
     if (!child.pid) return
     try { process.kill(-child.pid, value) }
@@ -47,6 +54,19 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   let killer: ReturnType<typeof setTimeout> | null = null
   const timer = setTimeout(() => { timedOut = true; signal('SIGTERM'); killer = setTimeout(() => signal('SIGKILL'), options.killAfterMs ?? 30_000); killer.unref() }, timeoutMs)
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.stdout?.on('data', (chunk: Buffer) => {
+      let remaining = chunk
+      while (remaining.length) {
+        const end = remaining.indexOf(10); const part = end < 0 ? remaining : remaining.subarray(0, end)
+        if (!stdoutDiscarding && stdoutPending.length + part.length > 64 * 1024) { stdoutDiscarding = true; stdoutPending = Buffer.alloc(0); captureError = 'Oversized bootstrap stdout line excluded' }
+        if (!stdoutDiscarding) stdoutPending = Buffer.concat([stdoutPending, part])
+        if (end < 0) return
+        remaining = remaining.subarray(end + 1)
+        if (!stdoutDiscarding) forwardStdout(stdoutPending)
+        stdoutPending = Buffer.alloc(0); stdoutDiscarding = false
+      }
+    })
+    child.stdout?.on('error', (error: Error) => { captureError = redact(error.message, secrets) })
     child.stderr?.on('data', (chunk: Buffer) => {
       let remaining = chunk
       while (remaining.length) {
@@ -65,6 +85,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   })
   clearTimeout(timer); if (killer) clearTimeout(killer)
   if (pending.length && !discarding) addLine(pending)
+  if (stdoutPending.length && !stdoutDiscarding) forwardStdout(stdoutPending)
   const failedSpawn = spawnError as NodeJS.ErrnoException | null
   const code = timedOut ? 124 : failedSpawn ? failedSpawn.code === 'ENOENT' ? 127 : 126 : result.code ?? 128 + (result.signal ? constants.signals[result.signal] ?? 0 : 0)
   if (!options.quiet && stderr.length) process.stderr.write(stderr.toString())
@@ -79,9 +100,9 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       component: 'provider-bootstrap', operation: 'provider.bootstrap', phase: 'installer_command', level: code !== 0 ? 'error' : 'warning',
       workspace, visibility: 'workspace', container: process.env.HOSTNAME ?? null, release: process.env.POISE_RELEASE || null,
       message: failedSpawn?.message ?? (timedOut ? 'Provider bootstrap command exceeded its deadline' : code !== 0 ? `Provider bootstrap command exited ${code}` : 'Provider bootstrap emitted a native warning'),
-      stderr: stderr.toString(), truncated, exitCode: result.code, signal: result.signal, errno: failedSpawn?.code ?? null, timeoutMs,
+      stderr: stderr.toString(), truncated, exitCode: failedSpawn ? null : result.code, signal: result.signal, errno: failedSpawn?.errno ?? failedSpawn?.code ?? null, timeoutMs,
       context: { configuredExecutable: command, resolvedExecutable: executable, elapsedMs: Date.now() - started, timedOut,
-        stderrCaptureError: captureError, providerStarted: child.pid !== undefined }, resources }, Date.now(), secrets)!
+        captureError, processErrorCode: failedSpawn?.code ?? null, providerStarted: child.pid !== undefined }, resources }, Date.now(), secrets)!
     const path = options.path ?? join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
     let store: DiagnosticStore | null = null
     try { store = new DiagnosticStore(path, diagnosticConfig(process.env).policy); store.append([event]) }
@@ -89,7 +110,14 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
       const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.persistence_unavailable',
         message: error instanceof Error ? error.message : String(error), context: { eventId: event.id } }, Date.now(), secrets)!
       try { (options.write ?? publish)(gap) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
-    } finally { store?.close() }
+    } finally {
+      try { store?.close() }
+      catch (error) {
+        const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.close_failed',
+          message: error instanceof Error ? error.message : String(error) }, Date.now(), secrets)!
+        try { (options.write ?? publish)(gap) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
+      }
+    }
     try { (options.write ?? publish)(event) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
   }
   return code

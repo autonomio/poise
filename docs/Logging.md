@@ -164,3 +164,9 @@ redacts complete lines before truncation, and stores one source event per failed
 command or native Warning. Stdout and arguments are excluded. A diagnostic sink
 or reporter failure does not change the installer exit status. Cwd-filesystem
 measurements are labeled as such; an unobserved affected filesystem stays null.
+
+Bootstrap stdout is redacted during forwarding and capped at 64 KiB per command,
+while its diagnostic event excludes stdout entirely. The bootstrap source file
+is trimmed between commands above 2 MiB, retaining its latest 1 MiB; one bounded
+command can temporarily add its 64 KiB stdout and 16 KiB stderr. Durable events
+remain in the separate retained store after trimming.

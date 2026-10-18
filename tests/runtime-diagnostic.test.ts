@@ -42,3 +42,13 @@ it('does not change installer status when diagnostic persistence or reporting fa
     expect(await captureRuntimeCommand(process.execPath, ['-e', 'process.exit(7)'], { path: storePath, workspace: 'alice', quiet: true, write: () => { throw new Error('reporter offline') } })).toBe(7)
   } finally { vi.restoreAllMocks() }
 })
+
+
+it('records missing executable evidence and bounds oversized stdout without retaining it', async () => {
+  const events: LogEvent[] = []; const options = { path: path(), workspace: 'alice', quiet: true, write: (event: LogEvent) => events.push(event) }
+  expect(await captureRuntimeCommand('/missing/poise-bootstrap-executable', [], options)).toBe(127)
+  expect(events[0]).toMatchObject({ exitCode: null, context: { processErrorCode: 'ENOENT', providerStarted: false } })
+  expect(await captureRuntimeCommand(process.execPath, ['-e', "process.stdout.write('private-payload'.repeat(10000))"], options)).toBe(0)
+  expect(events.at(-1)).toMatchObject({ source: 'collection', severity: 'warning' })
+  expect(JSON.stringify(events)).not.toContain('private-payload')
+})
