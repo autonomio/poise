@@ -211,11 +211,11 @@ export class EditorReviews {
     const located = this.location(review)
     patchContent(this.panel, `<div class="editor-annotation-row"><strong>Review · ${escape(review.site)}</strong><button type="button" data-action="close" aria-label="Close review">×</button></div>
       <a href="${link(review.prUrl)}" target="_blank" rel="noopener noreferrer">PR #${review.pr}</a>
-      <span class="editor-review-state">${review.resolved ? 'Resolved' : review.outdated ? 'Outdated · unresolved' : review.kind === 'thread' ? 'Unresolved' : 'Document feedback'}</span>
+      <span class="editor-review-state">${review.resolved ? 'Resolved' : review.outdated ? 'Outdated · unresolved' : review.kind === 'thread' ? 'Unresolved' : 'Document feedback'}${this.data.stale ? ' · Cached' : ''}</span>
       ${review.anchor ? `<blockquote>${escape(review.anchor.quote)}</blockquote>` : ''}
       ${!located ? `<p class="editor-review-location">${escape(review.anchor ? 'Passage changed or ambiguous — comment retained here.' : review.location ?? 'Document feedback')}</p>` : ''}
       <div class="editor-review-messages">${review.messages.map((message) => `<article data-key="${escape(message.id)}"><a href="${link(message.url)}" target="_blank" rel="noopener noreferrer">@${escape(message.author)}</a><time datetime="${escape(message.createdAt)}">${escape(new Date(message.createdAt).toLocaleString())}</time><p>${escape(message.body)}</p></article>`).join('')}</div>
-      ${this.error ? `<p role="alert">${escape(this.error)}</p>` : ''}
+      ${[...this.data.problems, ...(this.error ? [this.error] : [])].map((problem) => `<p role="alert">${escape(problem)}</p>`).join('')}
       ${review.canReply ? `<label>Reply on GitHub<textarea aria-label="Reply on GitHub" class="editor-annotation-text" maxlength="65536"${this.busy ? ' disabled' : ''}></textarea></label>` : ''}
       <div class="editor-review-actions">${review.canReply ? `<button type="button" data-action="reply"${this.busy ? ' disabled' : ''}>Reply on GitHub</button>` : ''}
       ${review.canResolve && !review.resolved ? `<button type="button" data-action="resolve"${this.busy ? ' disabled' : ''}>Resolve thread</button>` : ''}

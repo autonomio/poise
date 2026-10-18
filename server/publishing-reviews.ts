@@ -13,7 +13,7 @@ interface Comment { id: string, author: { login: string } | null, body: string, 
 interface InlineComment extends Comment { originalCommit: { oid: string } | null, originalLine: number | null, originalStartLine: number | null }
 interface Thread {
   id: string, path: string, isResolved: boolean, isOutdated: boolean, diffSide: string,
-  viewerCanReply: boolean, viewerCanResolve: boolean, comments: Page<InlineComment>
+  startDiffSide: string | null, viewerCanReply: boolean, viewerCanResolve: boolean, comments: Page<InlineComment>
 }
 interface Pull {
   id: string, number: number, url: string, state: string, locked: boolean,
@@ -33,7 +33,7 @@ const sources = new Map<string, Promise<string | null>>()
 const MESSAGE_FIELDS = 'id body url createdAt author { login }'
 const INLINE_FIELDS = `${MESSAGE_FIELDS} originalCommit { oid } originalLine originalStartLine`
 const PAGE_INFO = 'pageInfo { hasNextPage endCursor }'
-const THREAD_FIELDS = `id path isResolved isOutdated diffSide viewerCanReply viewerCanResolve comments(first: 50) { nodes { ${INLINE_FIELDS} } ${PAGE_INFO} }`
+const THREAD_FIELDS = `id path isResolved isOutdated diffSide startDiffSide viewerCanReply viewerCanResolve comments(first: 50) { nodes { ${INLINE_FIELDS} } ${PAGE_INFO} }`
 const PULL_QUERY = `query ArticleReview($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name, followRenames: true) {
     databaseId nameWithOwner pullRequest(number: $number) {
@@ -156,7 +156,7 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord): Prom
     const item: ArticleReview = { ...common, id: thread.id, kind: 'thread', path: thread.path, resolved: thread.isResolved, outdated: thread.isOutdated,
       canReply: thread.viewerCanReply, canResolve: thread.viewerCanResolve, messages: messages.map(messageOf) }
     item.location = thread.diffSide === 'LEFT' ? 'Removed text' : 'File or metadata feedback'
-    if (thread.path === record.path && thread.diffSide === 'RIGHT' && first.originalCommit && first.originalLine) {
+    if (thread.path === record.path && thread.diffSide === 'RIGHT' && thread.startDiffSide !== 'LEFT' && first.originalCommit && first.originalLine) {
       try {
         const source = await sourceFor(session, repository.nameWithOwner, thread.path, first.originalCommit.oid)
         if (source) item.anchor = anchorFromSource(source, first.originalStartLine ?? first.originalLine, first.originalLine)
@@ -189,6 +189,7 @@ async function refresh(me: string, record: PublishRecord, force: boolean): Promi
       return save(key, { snapshot, nextAt: Date.now() + REVIEW_INTERVAL_MS, failures: 0 })
     } catch (error) {
       if (!(error instanceof GitHubError || error instanceof HttpError)) throw error
+      if (error instanceof GitHubError && error.retryAt) setMeta(budgetKey(me), String(error.retryAt))
       const failures = old.failures + 1
       const nextAt = Math.max(Date.now() + Math.min(REVIEW_INTERVAL_MS * 2 ** Math.min(failures - 1, 4), 60 * 60_000), error instanceof GitHubError ? error.retryAt ?? 0 : 0)
       return save(key, { ...old, nextAt, failures, problem: error.message })

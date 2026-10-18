@@ -124,7 +124,7 @@ async function request(session: GitHubSession, method: string, endpoint: string,
 
 function fail(answer: Answer, what: string): never {
   const retry = Number(answer.headers['retry-after'])
-  const reset = Number(answer.headers['x-ratelimit-reset']) * 1000
+  const reset = answer.headers['x-ratelimit-remaining'] === '0' ? Number(answer.headers['x-ratelimit-reset']) * 1000 : 0
   const limited = answer.status === 429 || answer.headers['x-ratelimit-remaining'] === '0'
     || /rate limit/i.test(messageOf(answer.body, ''))
   const retryAt = limited || retry > 0 ? Math.max(Date.now() + (retry > 0 ? retry * 1000 : 60_000), reset || 0) : undefined
