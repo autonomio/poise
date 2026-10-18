@@ -89,6 +89,9 @@ class DiagnosticStreamCase(TestCase):
             '{"version":1,"context":' + '[' * 2000 + '0' + ']' * 2000 + '}',
             '{"version":2,"stderr":"unsupported evidence"}',
             '{"stderr":"unversioned evidence"}',
+            '{"version":true}',
+            'null',
+            '',
         ]
         ids = []
         for raw in malformed:

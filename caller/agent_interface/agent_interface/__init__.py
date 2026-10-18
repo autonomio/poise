@@ -521,8 +521,9 @@ def diagnostics(after: int = 0, limit: int = 3) -> dict:
         entry.update(seq=row["seq"], error=row["error"], started_at_precise=utc_stamp(row["started_at"]),
                      completed_at=utc_stamp(row["ended_at"]) if row["ended_at"] else None)
         try:
-            evidence = json.loads(row["diagnostic"]) if row["diagnostic"] else None
-            if evidence is not None and (not isinstance(evidence, dict) or evidence.get("version") != 1):
+            raw = row["diagnostic"]
+            evidence = json.loads(raw) if raw is not None else None
+            if raw is not None and (not isinstance(evidence, dict) or isinstance(evidence.get("version"), bool) or evidence.get("version") != 1):
                 raise ValueError("diagnostic must be a supported version 1 object")
             # Python's decoder accepts NaN/Infinity and overflowing exponents.
             # The stream must remain finite JSON for its JavaScript consumer.
