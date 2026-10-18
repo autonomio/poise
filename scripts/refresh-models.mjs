@@ -1,5 +1,5 @@
-import { environmentSecrets, redact } from '../gateway/src/diagnostics/redaction.mjs'
 #!/usr/bin/env node
+import { environmentSecrets, redact } from '../gateway/src/diagnostics/redaction.mjs'
 // Shared by the daily job and Settings: update real CLIs before discovery.
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'

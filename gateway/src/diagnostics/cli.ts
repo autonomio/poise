@@ -6,10 +6,10 @@ import { DiagnosticStore, type Coverage } from './store.js'
 import { environmentSecrets, normalize, redact } from './contract.js'
 import { nativeDiagnostic } from './sources.js'
 
-interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; writtenAt: string; sources: Coverage[] }
+interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
 
 /** Operator access is Docker/host ownership, never a workspace browser assertion. */
-export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n')): Promise<void> {
+export async function runOperator(args: string[], write: (line: string) => void = (line) => process.stdout.write(line + '\n'), input: AsyncIterable<Buffer | string> = process.stdin): Promise<void> {
   const [command = 'health', ...options] = args
   const path = join(process.env.POISE_GATEWAY_DATA ?? '/data', 'logging.db')
   const { policy } = diagnosticConfig(process.env)
@@ -26,9 +26,11 @@ export async function runOperator(args: string[], write: (line: string) => void 
     let reader: DiagnosticStore | null = null
     try {
       reader = new DiagnosticStore(path, policy, Date.now, true)
+      const sources = reader.readCoverage(access)
+      const partial = (journal?.dropped ?? 0) > 0 || (journal?.rejected ?? 0) > 0 || [...sources, ...(journal?.sources ?? [])].some((source) => source.status !== 'connected')
       const status = journalError ? 'partial' : journal?.sinkError ? 'unavailable' : journal?.stopped ? 'stopped'
-        : !journal?.writtenAt || Date.now() - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : 'connected'
-      write(JSON.stringify({ version: 1, status, journalError, journal, sources: reader.readCoverage(access), bounds: reader.bounds(access), policy }))
+        : !journal?.writtenAt || Date.now() - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : partial ? 'partial' : 'connected'
+      write(JSON.stringify({ version: 1, status, journalError, journal, sources, bounds: reader.bounds(access), policy }))
     } catch (error) {
       write(JSON.stringify({ version: 1, status: 'unavailable', error: redact(error instanceof Error ? error.message : String(error), environmentSecrets()),
         journalError, journal: journal ? { ...journal, sources: journal.sources?.filter((source) => source.workspace === null || source.workspace === access.workspace) } : null, policy }))
@@ -51,11 +53,14 @@ export async function runOperator(args: string[], write: (line: string) => void 
       else { write(JSON.stringify({ type: 'metadata', ...page, events: undefined })); for (const event of page.events) write(JSON.stringify({ type: 'event', event })) }
     } else if (command === 'ingress') {
       if (options.length) throw new Error('ingress reads one bounded JSON record from stdin')
-      let text = ''
-      for await (const chunk of process.stdin) {
-        text += String(chunk)
-        if (Buffer.byteLength(text) > 64 * 1024) throw new Error('Ingress record exceeds 64 KiB')
+      let size = 0; const chunks: Buffer[] = []
+      for await (const chunk of input) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        size += bytes.length
+        if (size > 64 * 1024) throw new Error('Ingress record exceeds 64 KiB')
+        chunks.push(bytes)
       }
+      const text = Buffer.concat(chunks).toString('utf8')
       const row = JSON.parse(text) as { request?: { host?: string }; request_id?: string }
       const domain = process.env.POISE_DOMAIN
       const host = row.request?.host?.split(':')[0].toLowerCase()

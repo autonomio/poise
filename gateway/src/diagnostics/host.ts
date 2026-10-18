@@ -54,9 +54,10 @@ export class HostJournal {
           input.message = input.message.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]')
           input.context = { sourceCursor: row.__CURSOR, unit: row._SYSTEMD_UNIT ?? null, transport: row._TRANSPORT ?? null }
           const event = normalize(input)
-          this.runtime.query((db) => db.commitDelivery(event ? [event] : [], 'host-journal', String(row.__CURSOR)))
+          const rejected = this.runtime.deliver(event ? [event] : [], 'host-journal', String(row.__CURSOR))
           sourceError = null
-          this.runtime.observe('host-journal', 'kernel', null)
+          if (rejected) this.runtime.partial('host-journal', 'kernel', null, 'Native evidence rejected; historical collection gap')
+          else this.runtime.observe('host-journal', 'kernel', null)
         } catch (error) { sourceError = String(error); this.runtime.observe('host-journal', 'kernel', null, sourceError); child.kill('SIGTERM'); return }
       }
     })

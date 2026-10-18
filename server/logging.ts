@@ -74,7 +74,7 @@ async function collectCaller(): Promise<void> {
       const input = callerDiagnostic(row, workspace)
       if (input && !diagnostic(input)) throw new Error('Caller diagnostic delivery is buffered or unavailable')
     }
-    runtime.flush()
+    while (runtime.health().queued) if (!runtime.flush()) break
     // Do not acknowledge a Caller completion until its durable local transaction succeeds.
     if (runtime.health().error || runtime.health().queued) throw new Error('Caller diagnostic checkpoint waits for durable ingestion')
     sequence = page.cursor

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { diagnostic, diagnosticFailure, diagnosticPage, fatalDiagnostic, loggingRuntime, startLogging, stopLogging } from '../server/logging'
 import { runFile } from '../server/process'
+import * as processes from '../server/process'
 
 let directory = ''
 afterEach(async () => { await stopLogging(); vi.restoreAllMocks(); vi.unstubAllEnvs(); if (directory) rmSync(directory, { recursive: true, force: true }) })
@@ -68,4 +69,15 @@ it('keeps application startup operational when its Caller checkpoint cannot be r
   vi.spyOn(process.stderr, 'write').mockReturnValue(true)
   expect(() => startLogging()).not.toThrow()
   expect(loggingRuntime()!.health().sources.some((source) => source.source === 'caller' && source.error)).toBe(true)
+})
+
+it('checkpoints Caller completions after quarantining evidence above the local storage budget', async () => {
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, cursor: 3, hasMore: false, backfillPending: false,
+    events: [{ id: 'a'.repeat(32), error: 'source failure', diagnostic: { version: 1, severity: 'error', stderr: 'x'.repeat(16000) } }, { id: 'b'.repeat(32), error: 'later precise cause' }] }), stderr: '' })
+  vi.stubEnv('POISE_LOG_MAX_BYTES', '8192')
+  start()
+  await vi.waitFor(() => expect(readFileSync(join(directory, 'logging.db.caller'), 'utf8')).toBe('3'))
+  expect(run).toHaveBeenCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false })).events.some((event) => event.message === 'later precise cause')).toBe(true)
+  expect(loggingRuntime()!.health().rejected).toBeGreaterThan(0)
 })

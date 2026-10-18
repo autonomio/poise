@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runOperator } from '../src/diagnostics/cli.js'
 import { HostJournal } from '../src/diagnostics/host.js'
+import { DiagnosticStore } from '../src/diagnostics/store.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 
 const directories: string[] = []
@@ -59,4 +60,39 @@ describe('native host collection without touching host journals', () => {
       expect(runtime.query((db) => db.query({ workspace: 'operator', operator: true }, { source: 'kernel' })).total).toBe(2)
     } finally { resumed.stop(); runtime.stop() }
   })
+})
+
+it('reports fresh source failures and recorded loss as partial operator coverage', async () => {
+  const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path)
+  const db = new DiagnosticStore(join(path, 'logging.db')); db.close()
+  for (const state of [{ dropped: 1, sources: [] }, { rejected: 1, sources: [] }, { dropped: 0, sources: [{ workspace: null, status: 'unavailable' }] }]) {
+    writeFileSync(join(path, 'logging.db.coverage.json'), JSON.stringify({ version: 1, stopped: false, writtenAt: new Date().toISOString(), sinkError: null, ...state }))
+    const lines: string[] = []; await runOperator(['health'], (line) => lines.push(line))
+    expect(JSON.parse(lines[0]).status).toBe('partial')
+  }
+})
+
+it('preserves ingress Unicode split between stdin chunks', async () => {
+  const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path); vi.stubEnv('POISE_DOMAIN', 'poise.test')
+  const bytes = Buffer.from(JSON.stringify({ request: { host: 'poise.test' }, level: 'error', msg: 'native 障 cause' }))
+  const split = bytes.indexOf(Buffer.from('障')) + 1
+  async function* chunks() { yield bytes.subarray(0, split); yield bytes.subarray(split) }
+  const lines: string[] = []; await runOperator(['ingress'], (line) => lines.push(line), chunks())
+  await runOperator(['query'], (line) => lines.push(line))
+  expect(JSON.parse(lines[1]).events[0].message).toBe('native 障 cause')
+})
+
+it('advances past an oversized host record under the minimum storage budget', async () => {
+  const path = directory(); const executable = join(path, 'journal-fixture')
+  const rows = [{ __CURSOR: 'large', PRIORITY: 3, _TRANSPORT: 'kernel', MESSAGE: 'x'.repeat(2500) }, { __CURSOR: 'later', PRIORITY: 3, _TRANSPORT: 'kernel', MESSAGE: 'later native cause' }]
+  writeFileSync(executable, `#!${process.execPath}\nfor(const row of ${JSON.stringify(rows)})process.stdout.write(JSON.stringify(row)+'\\n');setInterval(()=>{},1000)\n`)
+  chmodSync(executable, 0o700)
+  const runtime = new DiagnosticRuntime({ path: join(path, 'logging.db'), policy: { maxBytes: 4096, maxEvents: 100, retentionMs: 86400000 }, report: () => undefined })
+  runtime.query((db) => db.commitDelivery([], 'host-journal', 'existing'))
+  const host = new HostJournal(runtime, executable); host.start()
+  try {
+    await vi.waitFor(() => expect(runtime.query((db) => db.checkpoint('host-journal'))).toBe('later'))
+    expect(runtime.query((db) => db.query({ workspace: 'operator', operator: true })).events.some((event) => event.message === 'later native cause')).toBe(true)
+    expect(runtime.health().rejected).toBeGreaterThan(0)
+  } finally { host.stop(); runtime.stop() }
 })

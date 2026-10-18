@@ -133,9 +133,8 @@ export class EnvironmentCollectors {
           if (event) events.push(event)
         } else excluded++
       }
-      for (let i = 0; i < events.length; i += 100) this.runtime.query((db) => db.append(events.slice(i, i + 100)))
-      this.runtime.query((db) => db.commitDelivery([], key, String(until)))
-      this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, excluded ? 'Unstructured source output excluded to protect user content; structured diagnostic coverage only' : null)
+      const rejected = this.runtime.deliver(events, key, String(until))
+      this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, excluded || rejected ? 'Unstructured source output excluded to protect user content; structured diagnostic coverage only' : null)
     } catch (error) {
       if (/bound|exceeds|tail/i.test(String(error))) {
         try { this.runtime.query((db) => db.commitDelivery([], key, String(until))) }
@@ -174,9 +173,9 @@ export class EnvironmentCollectors {
         const event = normalize(input)
         if (event) events.push(event)
       }
-      for (let i = 0; i < events.length; i += 100) this.runtime.query((db) => db.append(events.slice(i, i + 100)))
-      this.runtime.query((db) => db.commitDelivery([], key, String(until)))
-      this.runtime.observe('docker-events', 'docker', null)
+      const rejected = this.runtime.deliver(events, key, String(until))
+      if (rejected) this.runtime.partial('docker-events', 'docker', null, 'Native evidence rejected; historical collection gap')
+      else this.runtime.observe('docker-events', 'docker', null)
     } catch (error) {
       if (/bound|exceeds|limit reached/i.test(String(error))) {
         try { this.runtime.query((db) => db.commitDelivery([], key, String(until))) }
@@ -219,7 +218,7 @@ export class EnvironmentCollectors {
           if (warning) events.push(warning)
         }
       }
-      this.runtime.query((db) => db.commitDelivery(events, key, page.cursor))
+      rejected += this.runtime.deliver(events, key, page.cursor)
       if (page.coverage.status === 'unavailable' || page.coverage.status === 'initializing' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
       else if (rejected || page.coverage.status === 'partial' || ('hasMore' in page && page.hasMore)) this.runtime.partial(key, 'poise', handle, 'Workspace is reachable; historical gaps or pending backfill limit completeness')
       else this.runtime.observe(key, 'poise', handle)

@@ -11,6 +11,7 @@ interface Journal {
   stopped: boolean
   dropped: number
   droppedSince: string | null
+  rejected?: number
   sinkError: string | null
   sinkSince: string | null
   sources: Coverage[]
@@ -67,6 +68,7 @@ export class DiagnosticRuntime {
         const journal = JSON.parse(readFileSync(path, 'utf8')) as Journal
         if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > 256
           || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped) || journal.dropped < 0) throw new Error('Invalid collection coverage journal')
+        this.rejected = Number.isSafeInteger(journal.rejected) && journal.rejected! >= 0 ? journal.rejected! : 0
         this.dropped = journal.dropped
         this.droppedSince = journal.droppedSince ?? null
         this.sinkError = journal.sinkError ?? null
@@ -198,6 +200,30 @@ export class DiagnosticRuntime {
     }
   }
 
+  /** Quarantine permanent record failures while keeping the source checkpoint atomic with accepted evidence. */
+  deliver(events: readonly LogEvent[], key: string, cursor: string): number {
+    let remaining = [...events]
+    const rejected: Error[] = []
+    for (;;) {
+      try { this.query((store) => store.commitDelivery(remaining, key, cursor)); break }
+      catch (error) {
+        if (!(error instanceof DiagnosticEventError || error instanceof DiagnosticConflictError)) throw error
+        const event = remaining.find((event) => event.id === error.eventId)
+        if (!event) throw error
+        remaining = remaining.filter((event) => event.id !== error.eventId)
+        rejected.push(error)
+        if (event.source !== 'collection' || event.operation !== 'record.rejected') {
+          const warning = normalize({ id: 'record.rejected:' + event.id, time: null, source: 'collection', operation: 'record.rejected',
+            level: 'warning', workspace: event.workspace, message: this.message(error), context: { rejectedEventId: event.id } }, this.now(), this.secrets)
+          if (warning) remaining.push(warning)
+        }
+      }
+    }
+    for (const error of rejected) this.reject(error)
+    if (rejected.length) this.saveJournal(true)
+    return rejected.length
+  }
+
   flush(): boolean {
     if (this.stopped || this.now() < this.retryAt) return false
     const batch = this.queue.slice(0, 100)
@@ -263,7 +289,7 @@ export class DiagnosticRuntime {
     if (!path || (!force && this.now() - this.journalAt < 1000)) return
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, droppedSince: this.droppedSince,
+      const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, rejected: this.rejected, droppedSince: this.droppedSince,
         sinkError: this.sinkError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
       const payload = JSON.stringify(journal)
       if (Buffer.byteLength(payload) > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')

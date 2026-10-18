@@ -2,8 +2,8 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { DockerClient } from '../src/docker.js'
+import { describe, expect, it, vi } from 'vitest'
+import { DockerClient, type TaskFailureEvidence } from '../src/docker.js'
 import { dockerLines } from '../src/diagnostics/collectors.js'
 import { normalize } from '../src/diagnostics/contract.js'
 import { workspaceEnvelope } from '../src/diagnostics/sources.js'
@@ -50,3 +50,27 @@ describe.skipIf(!enabled)('durable diagnostics from real Docker sources', () => 
     } finally { store.close(); spawnSync('docker', ['rm', '--force', name]); rmSync(directory, { recursive: true, force: true }) }
   }, 30_000)
 })
+
+it.skipIf(!enabled)('captures a failed release task before removal and preserves its result when reporting fails', async () => {
+  const name = 'poise-task-proof-' + process.pid
+  const endpoint = process.env.DOCKER_HOST ?? JSON.parse(docker('context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}')) as string
+  if (!endpoint.startsWith('unix://')) throw new Error('Docker diagnostic proof requires the selected local Unix socket')
+  let evidence: TaskFailureEvidence | null = null
+  const report = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+  const client = new DockerClient(endpoint.slice('unix://'.length), (record) => {
+    evidence = record
+    expect(docker('inspect', '--format', '{{.State.ExitCode}}', name)).toBe('17')
+    throw new Error('fixture reporter unavailable')
+  })
+  try {
+    const result = await client.runTask(name, { Image: 'node:22-bookworm-slim', User: '10001', Entrypoint: ['node'],
+      Cmd: ['-e', "process.stdout.write('excluded-output');process.stderr.write('release exact cause\\nsecond line');process.exit(17)"], Env: [],
+      Labels: { 'poise.task': 'install-release', 'poise.workspace': 'logproof' },
+      HostConfig: { SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], Memory: 64 * 1024 * 1024, NanoCpus: 1000000000, PidsLimit: 64, Mounts: [], NetworkMode: 'none' } })
+    expect(result).toBe(17); expect(await client.inspectContainer(name)).toBeNull()
+    expect(evidence).toMatchObject({ exitCode: 17, stderrError: null, limits: { memoryBytes: 64 * 1024 * 1024 } })
+    const captured = evidence as TaskFailureEvidence | null
+    const stderr = dockerLines(captured!.stderr!).join('\n')
+    expect(stderr).toContain('release exact cause'); expect(stderr).toContain('second line'); expect(stderr).not.toContain('excluded-output')
+  } finally { report.mockRestore(); spawnSync('docker', ['rm', '--force', name]) }
+}, 30000)

@@ -265,7 +265,8 @@ export class DiagnosticStore {
     this.checkpoint(key)
     if (cursor.length > 1024) throw new Error('Diagnostic checkpoint exceeds its bound')
     return this.db.transaction(() => {
-      const inserted = this.append(events)
+      let inserted = 0
+      for (let i = 0; i < events.length; i += 100) inserted += this.append(events.slice(i, i + 100))
       this.db.prepare('INSERT INTO log_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('checkpoint:' + key, cursor)
       return inserted
     })()

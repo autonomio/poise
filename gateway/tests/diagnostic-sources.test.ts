@@ -1,3 +1,5 @@
+import Database from 'better-sqlite3'
+import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { diagnosticConfig } from '../src/diagnostics/config.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -80,4 +82,33 @@ it('preserves a full gateway cause beyond stdout formatting limits with truthful
   expect(JSON.parse(lines[0]).truncated).toBe(true)
   expect(events[0]?.message).toContain('exact-tail-cause')
   expect(events[0]?.truncated).toBe(false)
+})
+
+it('rolls back all native batches when checkpointing fails and permits fresh enrichment on replay', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'poise-atomic-native-')); directories.push(directory)
+  const path = join(directory, 'history.db'); const store = new DiagnosticStore(path)
+  const control = new Database(path)
+  const records = Array.from({ length: 101 }, (_, i) => normalize({ ...input, id: 'native-' + i, resources: { measuredAt: 'first-inspection' } })!)
+  try {
+    control.exec("CREATE TRIGGER fail_checkpoint BEFORE INSERT ON log_meta WHEN NEW.key='checkpoint:docker-events' BEGIN SELECT RAISE(FAIL,'checkpoint unavailable'); END")
+    expect(() => store.commitDelivery(records, 'docker-events', 'next')).toThrow('checkpoint unavailable')
+    expect(store.query(access).total).toBe(0); expect(store.checkpoint('docker-events')).toBeNull()
+    control.exec('DROP TRIGGER fail_checkpoint')
+    expect(store.commitDelivery(records.map((event) => ({ ...event, resources: { measuredAt: 'second-inspection' } })), 'docker-events', 'next')).toBe(101)
+    expect(store.checkpoint('docker-events')).toBe('next')
+  } finally { control.close(); store.close() }
+})
+
+it('quarantines evidence above the configured storage budget without pinning the source cursor', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'poise-source-budget-')); directories.push(directory)
+  const runtime = new DiagnosticRuntime({ path: join(directory, 'history.db'), policy: { maxBytes: 4096, maxEvents: 100, retentionMs: 86400000 }, report: () => undefined })
+  try {
+    const large = normalize({ ...input, id: 'too-large', stderr: 'x'.repeat(16000) })!
+    expect(runtime.deliver([large], 'workspace:alice', 'after-large')).toBeGreaterThan(0)
+    expect(runtime.query((db) => db.checkpoint('workspace:alice'))).toBe('after-large')
+    const later = normalize({ ...input, id: 'later' })!
+    runtime.deliver([later], 'workspace:alice', 'after-later')
+    expect(runtime.query((db) => db.lookup(access, later.id)).status).toBe('found')
+    expect(runtime.health()).toMatchObject({ status: 'partial', rejected: expect.any(Number) })
+  } finally { runtime.stop() }
 })
