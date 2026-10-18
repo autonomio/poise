@@ -154,3 +154,20 @@ it('replays a legacy unbound Caller checkpoint instead of applying it to an unkn
   await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8'))).toMatchObject({ streamId: 'd'.repeat(32), cursor: 0 }))
   expect(run).toHaveBeenCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))
 })
+
+
+it('retains the first Caller ingestion time without requiring another failure', async () => {
+  const streamId = 'e'.repeat(32)
+  const base = { version: 1, streamId, cursor: 1, hasMore: false, backfillPending: false }
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ ...base, events: [] }), stderr: '' })
+    .mockResolvedValueOnce({ stdout: JSON.stringify({ ...base, events: [{ id: 'f'.repeat(32), error: 'first precise Caller cause' }] }), stderr: '' })
+  start()
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8')).cursor).toBe(1))
+  const ingestedAt = loggingRuntime()!.health().sources.find((source) => source.id === 'caller')?.ingestedAt
+  expect(ingestedAt).toEqual(expect.any(String))
+  expect(loggingRuntime()!.query((db) => db.readCoverage({ workspace: 'alice', operator: false })).find((source) => source.id === 'caller')?.ingestedAt).toBe(ingestedAt)
+  await stopLogging(); startLogging()
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'caller')?.ingestedAt).toBe(ingestedAt)
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(1)
+})

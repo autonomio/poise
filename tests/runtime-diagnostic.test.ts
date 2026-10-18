@@ -93,7 +93,7 @@ it('retains collection loss when a successful command emits only an oversized na
 })
 
 
-it.each(['Authorization', 'Author\x00ization'])('redacts folded bootstrap %s headers across child chunks before durable capture and reporting', async (header) => {
+it.each(['Authorization', 'Author\x00ization', 'API key'])('redacts folded bootstrap %s headers across child chunks before durable capture and reporting', async (header) => {
   const storePath = path(); const events: LogEvent[] = []
   const script = `process.stderr.write(${JSON.stringify(header + ': Bearer\n')});setTimeout(()=>{process.stderr.write(' opaque-folded-value\\n\\tsecond-folded-value\\nfatal: preserved cause');process.exit(9)},20)`
   expect(await captureRuntimeCommand(process.execPath, ['-e', script], { path: storePath, workspace: 'alice', quiet: true, write: (event) => events.push(event) })).toBe(9)

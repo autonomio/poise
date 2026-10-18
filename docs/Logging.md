@@ -267,3 +267,8 @@ Atomic source delivery quarantines only the offending record, preserving the
 first valid occurrence even when conflicting copies share one batch. Successful
 deliveries update the exact source boundary’s last-ingestion time independently
 of later coverage writes; coverage persistence failures remain explicit.
+
+Text capture also redacts spaced API/private-key names using the same key
+separators as structured context. Caller registers coverage before its first
+page is flushed, so the initial successful ingestion is recorded even when no
+later failure arrives.

@@ -438,7 +438,7 @@ it('redacts quoted credential fields in captured diagnostic text', () => {
   for (const secret of ['json-private-key', 'private-password', 'private-client-secret']) expect(value.stderr).not.toContain(secret)
 })
 
-it.each(['id_token_hint', 'idTokenHint', 'bearerToken', 'BearerToken', 'custom_token', 'customToken'])('redacts recursive %s fields before persistence', (key) => {
+it.each(['api key', 'private key', 'id_token_hint', 'idTokenHint', 'bearerToken', 'BearerToken', 'custom_token', 'customToken'])('redacts recursive %s fields before persistence', (key) => {
   const secret = 'opaque-nested-credential-not-configured'
   const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', workspace: 'alice', message: 'provider rejected',
     context: { nested: { [key]: secret, inputLimitBytes: 123 } }, resources: { nested: { [key]: secret, freeBytes: 456 } } }, NOW, [])!
@@ -449,7 +449,7 @@ it.each(['id_token_hint', 'idTokenHint', 'bearerToken', 'BearerToken', 'custom_t
   expect(value.resources).toEqual({ nested: { [key]: '[redacted]', freeBytes: 456 } })
 })
 
-it.each(['access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
+it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key', 'private/key', 'access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
   const secret = 'opaque-value-not-present-in-environment'
   for (const field of [`{"phase":"auth","${key}":"${secret}"}`, JSON.stringify({ body: JSON.stringify({ [key]: secret }) }), `{'${key}': '${secret}'}`, `${key}=${secret}`]) {
     const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected', stderr: field }, NOW, [])!

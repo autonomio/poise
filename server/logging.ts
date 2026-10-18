@@ -94,6 +94,7 @@ async function collectCaller(): Promise<void> {
     }
     if (page.cursor < sequence) throw new Error('Caller diagnostic sequence moved backwards within one stream')
     callerStream = page.streamId
+    runtime.observe('caller', 'caller', workspace, page.hasMore || page.backfillPending ? 'Caller historical backfill is still pending' : null)
     for (const row of page.events) {
       const input = callerDiagnostic(row, workspace)
       if (input) {
