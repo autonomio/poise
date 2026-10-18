@@ -13,7 +13,7 @@ export async function runOperator(args: string[], write: (line: string) => void 
   const [command = 'health', ...options] = args
   const path = join(process.env.POISE_GATEWAY_DATA ?? '/data', 'logging.db')
   const { policy } = diagnosticConfig(process.env)
-  const access = { workspace: 'operator', operator: true }
+  const access = { workspace: null, operator: true }
   if (command === 'health') {
     let journal: JournalHealth | null = null
     let journalError: string | null = null

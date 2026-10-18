@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runOperator } from '../src/diagnostics/cli.js'
 import { HostJournal } from '../src/diagnostics/host.js'
+import { normalize } from '../src/diagnostics/contract.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 
@@ -95,4 +96,18 @@ it('advances past an oversized host record under the minimum storage budget', as
     expect(runtime.query((db) => db.query({ workspace: 'operator', operator: true })).events.some((event) => event.message === 'later native cause')).toBe(true)
     expect(runtime.health().rejected).toBeGreaterThan(0)
   } finally { host.stop(); runtime.stop() }
+})
+
+it('gives host operator commands no workspace identity, including a real owner named operator', async () => {
+  const path = directory(); vi.stubEnv('POISE_GATEWAY_DATA', path)
+  const db = new DiagnosticStore(join(path, 'logging.db'))
+  const privateEvent = normalize({ id: 'private-operator-account', level: 'error', source: 'caller', workspace: 'operator', operation: 'private.failure', message: 'owner-only-cause' })!
+  db.append([privateEvent]); db.coverage({ id: 'private', source: 'caller', workspace: 'operator', status: 'unavailable', observedAt: null,
+    ingestedAt: null, availableFrom: null, error: 'owner-only-coverage', gaps: [] }); db.close()
+  const lines: string[] = []
+  for (const args of [['query'], ['export'], ['event', privateEvent.id], ['health']]) await runOperator(args, (line) => lines.push(line))
+  expect(JSON.parse(lines[0]).total).toBe(0)
+  expect(JSON.stringify(lines)).not.toContain('owner-only-cause')
+  expect(JSON.stringify(lines)).not.toContain('owner-only-coverage')
+  expect(JSON.parse(lines[2]).status).toBe('unavailable')
 })

@@ -5,7 +5,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { isDeepStrictEqual } from 'node:util'
 import { scopePrefix, SEVERITIES, type LogEvent, type Severity } from './contract.js'
 
-export interface LogAccess { workspace: string; operator: boolean }
+export interface LogAccess { workspace: string | null; operator: boolean }
 export interface LogFilter {
   severities?: Severity[]
   from?: string
@@ -194,7 +194,7 @@ export class DiagnosticStore {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Logging page size must be between 1 and 100')
     if (filter.workspace && !access.operator && filter.workspace !== access.workspace) throw new Error('Logging workspace scope is forbidden')
     const clauses = ['ingested_at >= ?', levels.length ? `severity IN (${levels.map(() => '?').join(',')})` : '0']
-    const values: Array<string | number> = [new Date(this.now() - this.policy.retentionMs).toISOString(), ...levels]
+    const values: Array<string | number | null> = [new Date(this.now() - this.policy.retentionMs).toISOString(), ...levels]
     clauses.push(access.operator ? "(visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))"
       : "workspace=? AND visibility IN ('workspace','infrastructure')")
     values.push(access.workspace)
