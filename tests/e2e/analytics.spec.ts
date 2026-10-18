@@ -138,7 +138,8 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   const flow = topline
   const perPr = view.getByRole('region', { name: 'Per merged pull request' })
   const quota = view.getByRole('region', { name: 'GitHub API · Live' })
-  await expect(topline.locator('.analytics-label')).toHaveText(['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Time to first review', 'Time to merge', 'Issues opened', 'Issues closed'])
+  const cardOrder = ['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Time to first review', 'Time to merge', 'Issues opened', 'Issues closed']
+  await expect(topline.locator('.analytics-label')).toHaveText(cardOrder)
   await expect(perPr.locator('.analytics-label')).toHaveText(['Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent'])
   // Seconds matter: agents review within minutes.
   await expect(value(page, 'Time to first review')).toHaveText('1m 15s')
@@ -149,9 +150,13 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(quota.locator('.github-quota-bucket')).toHaveCount(2)
   // Productivity fills two rows of four, with the smaller per-PR row below.
   expect(await view.locator('main').evaluate((main) => main.getBoundingClientRect().width)).toBeGreaterThan(1200)
-  const tops = await topline.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => Math.round(tile.getBoundingClientRect().top)))
-  expect(new Set(tops).size).toBe(2)
-  expect(new Set(await lefts(topline, '.analytics-tile')).size).toBe(4)
+  const placed = await topline.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => {
+    const box = tile.getBoundingClientRect()
+    return { label: tile.querySelector('.analytics-label')!.textContent, top: Math.round(box.top), left: Math.round(box.left) }
+  }))
+  expect(new Set(placed.map(tile => tile.top)).size).toBe(2)
+  expect(new Set(placed.map(tile => tile.left)).size).toBe(4)
+  expect(placed.sort((a, b) => a.top - b.top || a.left - b.left).map(tile => tile.label)).toEqual(cardOrder)
   expect(new Set(await lefts(perPr, '.analytics-tile')).size).toBe(5)
   const accounts = await quota.locator('.github-quota-account').evaluateAll((items) => items.map((item) => item.getBoundingClientRect().top))
   expect(new Set(accounts).size).toBe(1)
@@ -189,7 +194,7 @@ test('choosing Analytics again from the menu returns to Today', async ({ page })
   ])
 })
 
-test('keeps the topline on one row beside a docked notification rail', async ({ page }) => {
+test('keeps Productivity in two rows beside a docked notification rail', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await workspace(page)
   await page.addInitScript(() => localStorage.setItem('poise-notification-rail', JSON.stringify({ docked: true, open: true })))
@@ -264,7 +269,7 @@ test('holds each chart\'s place while the past year loads, and says when it cann
   await page.route('**/api/analytics/history?**', async (route) => { await held; await route.fallback() })
   await page.goto('/')
   await openAnalytics(page)
-  const tile = page.getByRole('region', { name: 'Productivity' }).locator('.analytics-tile').first()
+  const tile = page.getByRole('region', { name: 'Productivity' }).locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Issues opened$/ }) })
   await expect(value(page, 'Issues opened')).toHaveText('12')
   await expect(tile.locator('.analytics-history')).toHaveAttribute('aria-busy', 'true')
   const pending = (await tile.boundingBox())!.height
