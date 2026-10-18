@@ -19,7 +19,7 @@ export function redact(value, secrets = []) {
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
   const marker = /\[redacted(?: header(?: continuation)?| credential)?\]/g
   const variants = [...new Set(secrets.filter((secret) => secret.length > 0).flatMap((secret) =>
-    [cleanText(secret), Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')])).filter((secret) => secret.length > 0)].sort((a, b) => b.length - a.length)
+    [cleanText(secret), Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')]).filter((secret) => secret.length > 0))].sort((a, b) => b.length - a.length)
   if (!variants.length) return value
   const escaped = variants.map((secret) => secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   // One pass protects existing markers and avoids expanding them with short secrets.
