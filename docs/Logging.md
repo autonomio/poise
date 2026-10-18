@@ -207,3 +207,10 @@ one record) is quarantined with a collection Warning when it fits and a durable
 rejection count regardless. Accepted siblings and their native source checkpoint
 commit together. A sink or checkpoint transaction failure instead preserves the
 cursor for retry; native inspection metadata is not committed ahead of it.
+
+
+`npm run check:gateway-docker` runs the real Engine workspace and source-history
+proofs from a Node 22 container on the Engine host network. This also works when
+a macOS checkout cannot directly route to Docker Desktop's private bridge IPs.
+Only the isolated test runner receives the Docker socket; production workspaces
+retain their existing restricted mounts and networks.
