@@ -170,3 +170,11 @@ while its diagnostic event excludes stdout entirely. The bootstrap source file
 is trimmed between commands above 2 MiB, retaining its latest 1 MiB; one bounded
 command can temporarily add its 64 KiB stdout and 16 KiB stderr. Durable events
 remain in the separate retained store after trimming.
+
+CLI-update and model-discovery failures carry bounded redacted process evidence
+through their existing reports, including configured/resolved executable paths,
+exit/signal/errno, deadlines and elapsed time. The JavaScript updater and the
+application use the same canonical redactor in `diagnostics/redaction.mjs`.
+Workspace images ship that module for standalone maintenance scripts. Local
+production build stamps include shared diagnostic sources, preventing a stale
+server bundle after those sources change.

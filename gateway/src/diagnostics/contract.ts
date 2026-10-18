@@ -1,3 +1,5 @@
+import { environmentSecrets, redact, SECRET_KEY } from './redaction.mjs'
+export { environmentSecrets, redact } from './redaction.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 
 export const LOG_VERSION = 1
@@ -79,37 +81,9 @@ export interface LogEvent {
 }
 
 const PRIVATE_KEY = /^(?:prompt|prompts|content|body|responses?|stdout|argv|args|arguments|environment|env|messages|conversation|attachments|reasoning|inputs?|outputs?|payloads?|requests?)$/i
-const SECRET_KEY = /authorization|cookie|password|secret|credential|(?:^|[_-])token$|^(?:access|refresh|id|auth|api|session)Token$|^auth$|^bearer$|api.?key|private.?key/i
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const scopePrefix = (workspace: string | null, visibility: string) => hash(JSON.stringify([workspace, visibility])).slice(0, 16)
 
-export function redact(value: string, secrets: readonly string[] = []): string {
-  for (const secret of [...secrets].filter((item) => item.length >= 8).sort((a, b) => b.length - a.length)) {
-    for (const encoded of [secret, Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')]) value = value.split(encoded).join('[redacted]')
-  }
-  return value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]')
-    .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
-    .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
-    .replace(/(https?:\/\/)[^\s/]+@/g, '$1[redacted]@')
-    .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-}
-
-export function environmentSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
-  const secrets: string[] = []
-  for (const [key, value] of Object.entries(env)) {
-    if (!value || value.length < 8 || !(SECRET_KEY.test(key) || /TOKEN|KEY|AUTH|GIT_CONFIG_VALUE/i.test(key))) continue
-    secrets.push(value)
-    const basic = /authorization:\s*basic\s+([A-Za-z0-9+/=]+)/i.exec(value)
-    if (basic) {
-      secrets.push(basic[1])
-      const decoded = Buffer.from(basic[1], 'base64').toString('utf8')
-      const colon = decoded.indexOf(':')
-      if (colon >= 0) secrets.push(decoded.slice(colon + 1))
-    }
-  }
-  return secrets
-}
 
 export function severity(level: string | number): Severity | null | 'invalid' {
   const value = String(level).toLowerCase()

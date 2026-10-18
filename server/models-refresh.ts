@@ -29,13 +29,21 @@ export function refreshModelCatalog(): Promise<Record<string, unknown>> {
     let report: unknown
     try { report = JSON.parse(stdout) } catch { throw new Error('The model check returned an unreadable report') }
     if (!report || typeof report !== 'object' || !('families' in report) || !report.families || typeof report.families !== 'object' || Array.isArray(report.families)) throw new Error('The model check returned an invalid report')
+    if ('error' in report && typeof report.error === 'string') {
+      const evidence = 'diagnostic' in report && report.diagnostic && typeof report.diagnostic === 'object' ? report.diagnostic as Record<string, unknown> : {}
+      diagnostic({ level: 'error', operation: 'models.discovery', phase: 'catalog_refresh', message: report.error,
+        stderr: typeof evidence.stderr === 'string' ? evidence.stderr : null, truncated: evidence.truncated === true,
+        exitCode: typeof evidence.exitCode === 'number' ? evidence.exitCode : null, signal: typeof evidence.signal === 'string' ? evidence.signal : null,
+        errno: typeof evidence.errno === 'number' || typeof evidence.errno === 'string' ? evidence.errno : null,
+        timeoutMs: typeof evidence.timeoutMs === 'number' ? evidence.timeoutMs : null, context: { configuredExecutable: evidence.configuredExecutable ?? null, cwd: evidence.cwd ?? null, elapsedMs: evidence.elapsedMs ?? null } })
+    }
     const updates = 'cli_updates' in report && report.cli_updates && typeof report.cli_updates === 'object' ? report.cli_updates as Record<string, Record<string, unknown>> : {}
     for (const [family, value] of Object.entries(report.families)) {
       if (value && typeof value === 'object' && 'status' in value && value.status !== 'ok') diagnostic({
         level: 'warning', operation: 'models.discovery', component: family,
         message: 'error' in value && typeof value.error === 'string' ? value.error : 'Model discovery did not return a healthy result',
-        context: { family, status: value.status, reportPath: catalogReportPath(), configuredExecutable: process.env[family.toUpperCase() + '_CLI'] ?? null,
-          resolvedExecutable: updates[family]?.path ?? null, launchExecutable: updates[family]?.launchPath ?? null, phase: 'catalog_discovery' },
+        context: { family, status: value.status, reportPath: catalogReportPath(), configuredExecutable: updates[family]?.configuredExecutable ?? process.env[family.toUpperCase() + '_CLI'] ?? null,
+          resolvedExecutable: updates[family]?.resolvedPath ?? null, launchExecutable: updates[family]?.launchPath ?? null, phase: 'catalog_discovery' },
       })
     }
     return report as Record<string, unknown>
