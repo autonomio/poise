@@ -1,5 +1,5 @@
 import type { LogEvent, Severity } from '../gateway/src/diagnostics/contract'
-import type { Coverage, DiagnosticStore, LogFilter, LogPolicy } from '../gateway/src/diagnostics/store'
+import type { Coverage, LogFilter, LogPolicy, LoggingPage as CanonicalLoggingPage } from '../gateway/src/diagnostics/query-contract'
 import { readLoggingTime } from '../gateway/src/diagnostics/query-time'
 import { workspaceMode } from './workspace-mode'
 import { GITHUB_QUOTA_REFRESH_MS } from './github-quota'
@@ -9,7 +9,7 @@ export const LOGGING_SOURCES = ['poise', 'caller', 'gateway', 'docker', 'kernel'
 export const loggingEventId = (value: string): boolean => /^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(value)
 export const loggingIncidentId = (value: string): boolean => /^inc_[a-f0-9]{16}_[a-f0-9]{64}$/.test(value)
 export const loggingCallId = (value: string): boolean => /^[a-f0-9]{32}$/.test(value)
-export type LoggingPage = ReturnType<DiagnosticStore['query']>
+export type LoggingPage = CanonicalLoggingPage
 export type LoggingEvent = LogEvent & { occurrences?: number }
 export type LoggingQuery = LogFilter & { scope?: 'workspace' | 'instance' }
 export interface LoggingAccess { endpoint: string; isAdmin: boolean; owner: string }

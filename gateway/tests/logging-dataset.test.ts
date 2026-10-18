@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { normalize, type LogEvent } from '../src/diagnostics/contract.js'
+import { LoggingQueryPool } from '../src/diagnostics/query-pool.js'
 import { executeLoggingRead } from '../src/diagnostics/query-worker.js'
 import { DiagnosticStore, DEFAULT_LOG_POLICY, type LogFilter } from '../src/diagnostics/store.js'
 import { LOGGING_RESPONSE_BYTES, type LoggingRead } from '../src/diagnostics/query-types.js'
 
-it('queries 100,000 retained records with independent filter/count/export and snapshot parity', () => {
+it('queries 100,000 retained records with independent filter/count/export and snapshot parity', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'logging-100k-'))
   const now = Date.now()
   const path = join(dir, 'logging.db')
@@ -61,6 +62,11 @@ it('queries 100,000 retained records with independent filter/count/export and sn
     expect(lines[0]).toMatchObject({ total: 100, exported: 100, truncated: false, resumeCursor: null })
     expect(lines.slice(1).map((line) => line.event.id)).toEqual(expected.map((event) => event.id))
     expect(exported.body).not.toContain('never-search-secret'); expect(exported.body).not.toContain('bob-private-cause')
+    const pool = new LoggingQueryPool()
+    try {
+      const lease = await pool.read({ ...request, filter: { callId: events[7].callId! } }, 'alice', new AbortController().signal, () => { throw new Error('Bounded worker timed out on the 100k fixture') })
+      expect(JSON.parse(lease.reply.body).total).toBe(100); lease.release()
+    } finally { await pool.close() }
     const bounded = executeLoggingRead({ ...request, operation: 'export' })
     const header = JSON.parse(bounded.body.split('\n')[0])
     expect(header).toMatchObject({ exported: 1000, truncated: true, resumeCursor: expect.any(String) })
