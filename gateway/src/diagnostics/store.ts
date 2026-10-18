@@ -36,6 +36,10 @@ export interface Coverage {
 }
 export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
 export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, maxBytes: 64 * 1024 * 1024, maxEvents: 50_000 }
+export const MAX_COVERAGE_SOURCES = 256
+export const MAX_COVERAGE_RECORD_BYTES = 64 * 1024
+// Coverage rows and their SQLite page/index overhead cannot consume event headroom.
+const COVERAGE_PAGE_RESERVE_BYTES = 2 * MAX_COVERAGE_SOURCES * MAX_COVERAGE_RECORD_BYTES
 interface EventRow { id: string; sort_time: string; payload: string }
 interface Cursor { kind: 'page' | 'watermark' | 'delivery'; high: number; time?: string; id?: string; filter: string }
 
@@ -67,7 +71,8 @@ export class DiagnosticStore {
       this.db.pragma('cache_size = -2048')
       this.db.pragma('wal_autocheckpoint = 128')
       this.db.pragma('journal_size_limit = 8388608')
-      this.db.pragma(`max_page_count = ${Math.ceil((policy.maxBytes * 2 + 1024 * 1024) / 4096)}`)
+      const pageBytes = this.db.pragma('page_size', { simple: true }) as number
+      this.db.pragma(`max_page_count = ${Math.ceil((policy.maxBytes * 2 + COVERAGE_PAGE_RESERVE_BYTES + 1024 * 1024) / pageBytes)}`)
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS log_events (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, incident_id TEXT NOT NULL,
@@ -173,9 +178,14 @@ export class DiagnosticStore {
   }
 
   coverage(value: Coverage): void {
+    if (!value.id || value.id.length > 256 || (value.workspace !== null && value.workspace.length > 512)) throw new Error('Logging coverage identity exceeds its bound')
     const payload = JSON.stringify({ ...value, gaps: value.gaps.slice(-32).map((gap) => ({ ...gap, reason: gap.reason.slice(0, 128) })) })
-    if (Buffer.byteLength(payload) > 64 * 1024) throw new Error('Logging coverage exceeds its bound')
-    this.db.prepare('INSERT INTO log_coverage VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,payload=excluded.payload').run(value.id, value.workspace, payload)
+    if (Buffer.byteLength(payload) > MAX_COVERAGE_RECORD_BYTES) throw new Error('Logging coverage exceeds its bound')
+    this.db.transaction(() => {
+      const count = (this.db.prepare('SELECT COUNT(*) AS count FROM log_coverage').get() as { count: number }).count
+      if (count >= MAX_COVERAGE_SOURCES && !this.db.prepare('SELECT 1 FROM log_coverage WHERE id=?').get(value.id)) throw new Error('Logging coverage source limit of 256 reached')
+      this.db.prepare('INSERT INTO log_coverage VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,payload=excluded.payload').run(value.id, value.workspace, payload)
+    }).immediate()
   }
 
   readCoverage(access: LogAccess): Coverage[] {

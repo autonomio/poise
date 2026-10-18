@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { environmentSecrets, normalize, redact, SOURCES, type DiagnosticInput, type LogEvent } from './contract.js'
-import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, type Coverage, type LogPolicy } from './store.js'
+import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, MAX_COVERAGE_SOURCES, type Coverage, type LogPolicy } from './store.js'
 
 // Covers 256 sources with 32 Unicode gap reasons and bounded source errors.
 export const MAX_COVERAGE_JOURNAL_BYTES = 8 * 1024 * 1024
@@ -71,7 +71,7 @@ export class DiagnosticRuntime {
       try {
         if (statSync(path).size > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds 8 MiB')
         const journal = JSON.parse(readFileSync(path, 'utf8')) as Journal
-        if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > 256
+        if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > MAX_COVERAGE_SOURCES
           || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped) || journal.dropped < 0) throw new Error('Invalid collection coverage journal')
         this.rejected = Number.isSafeInteger(journal.rejected) && journal.rejected! >= 0 ? journal.rejected! : 0
         this.dropped = journal.dropped
@@ -158,7 +158,7 @@ export class DiagnosticRuntime {
 
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
     id = this.coverageId(id)
-    if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source bound reached')); return }
+    if (!this.sources.has(id) && this.sources.size >= MAX_COVERAGE_SOURCES) { this.reject(new Error('Collection source bound reached')); return }
     this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
       availableFrom: null, error: this.safe(reason), gaps: [] })
     this.saveJournal()
@@ -166,7 +166,7 @@ export class DiagnosticRuntime {
 
   observe(id: string, source: string, workspace: string | null, error: string | null = null): void {
     id = this.coverageId(id)
-    if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source limit of 256 reached')); return }
+    if (!this.sources.has(id) && this.sources.size >= MAX_COVERAGE_SOURCES) { this.reject(new Error('Collection source limit of 256 reached')); return }
     const previous = this.sources.get(id)
     const at = this.iso()
     const reason = error === null ? null : this.safe(error)

@@ -521,3 +521,28 @@ it('persists maximum Unicode coverage plus later losses across clean restart', a
     expect(JSON.parse(lines[0])).toMatchObject({ journalError: null, journal: { dropped } })
   } finally { vi.unstubAllEnvs() }
 })
+
+
+it.each([4096, 8192])('keeps full coverage independent of a %i-byte event budget', (maxBytes) => {
+  const path = join(directory(), 'small-budget.db')
+  const policy = { ...DEFAULT_LOG_POLICY, maxBytes }
+  const first = new DiagnosticStore(path, policy, () => NOW)
+  const coverage = { source: 'kernel', workspace: null, status: 'partial' as const,
+    observedAt: new Date(NOW).toISOString(), ingestedAt: null, availableFrom: null, error: '界'.repeat(16000),
+    gaps: Array.from({ length: 32 }, () => ({ from: new Date(NOW).toISOString(), to: new Date(NOW).toISOString(), reason: '界'.repeat(128) })) }
+  try {
+    first.append([event('before-full-coverage')])
+    for (let i = 0; i < 256; i++) first.coverage({ ...coverage, id: 'source-' + i })
+    expect(first.readCoverage(operator)).toHaveLength(256)
+    expect(() => first.coverage({ ...coverage, id: 'overflow' })).toThrow('source limit')
+    first.coverage({ ...coverage, id: 'source-255', error: 'updated at capacity' })
+    expect(first.append([event('after-full-coverage')])).toBe(1)
+    expect(first.lookup(alice, event('after-full-coverage').id).status).toBe('found')
+  } finally { first.close() }
+  const restored = new DiagnosticStore(path, policy, () => NOW)
+  try {
+    expect(restored.readCoverage(operator)).toHaveLength(256)
+    expect(restored.append([event('after-restart-full-coverage')])).toBe(1)
+    expect(restored.lookup(alice, event('after-restart-full-coverage').id).status).toBe('found')
+  } finally { restored.close() }
+})

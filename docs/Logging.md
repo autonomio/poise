@@ -45,6 +45,12 @@ Unknown and inaccessible IDs share one response; expiry is reported only from
 an authorized tombstone. SQLite's page budget, cache and
 journal are also bounded. Records remain after a source or container disappears.
 Source coverage and its unavailable intervals are separate from event counts.
+SQLite allows up to 256 coverage records of 64 KiB each, with bounded identity
+fields. Its page ceiling includes 32 MiB of separate coverage/index headroom,
+twice the accounted event budget and 1 MiB for other metadata. This is a ceiling,
+not preallocated storage; even a 4 KiB event budget admits subsequent events
+when coverage is full. New sources beyond the cap fail visibly; updates to
+existing sources remain permitted.
 Coverage IDs affected by redaction use stable opaque identities, keeping source
 updates and partial backfills distinct even when their labels redact alike.
 Canonical source names and validated Caller call/correlation IDs keep their
