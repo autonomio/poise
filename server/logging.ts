@@ -26,9 +26,9 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
   try {
     const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
       source: input.source ?? 'poise', workspace, visibility: 'workspace',
-      instance: process.env.POISE_WORKSPACE_HANDLE ?? process.env.POISE_INSTANCE_LABEL ?? 'local',
-      container: process.env.POISE_MODE === 'service' ? process.env.HOSTNAME ?? null : null,
-      release: process.env.POISE_RELEASE || process.env.POISE_SOURCE_SHA || null }, Date.now(), [...environmentSecrets(), ...secrets])
+      instance: input.instance === undefined ? process.env.POISE_WORKSPACE_HANDLE ?? process.env.POISE_INSTANCE_LABEL ?? 'local' : input.instance,
+      container: input.container === undefined ? process.env.POISE_MODE === 'service' ? process.env.HOSTNAME ?? null : null : input.container,
+      release: input.release === undefined ? process.env.POISE_RELEASE || process.env.POISE_SOURCE_SHA || null : input.release }, Date.now(), [...environmentSecrets(), ...secrets])
     if (!event) return null
     const accepted = active.ingest(event)
     // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.

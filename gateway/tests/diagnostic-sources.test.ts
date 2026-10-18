@@ -19,8 +19,9 @@ describe('owned source boundaries', () => {
   it('decodes split Docker frame payloads without turning a stack into occurrences', () => {
     const line = '2026-10-18T10:00:00Z ' + JSON.stringify({ poiseDiagnostic: { message: 'cause\nstack one\nstack two' } }) + '\n'
     const payload = Buffer.from(line)
-    const frame = (part: Buffer) => { const header = Buffer.alloc(8); header[0] = 2; header.writeUInt32BE(part.length, 4); return Buffer.concat([header, part]) }
+    const frame = (part: Buffer, stream = 2) => { const header = Buffer.alloc(8); header[0] = stream; header.writeUInt32BE(part.length, 4); return Buffer.concat([header, part]) }
     expect(dockerLines(Buffer.concat([frame(payload.subarray(0, 20)), frame(payload.subarray(20))]))).toEqual([line.trimEnd()])
+    expect(dockerLines(Buffer.concat([frame(Buffer.from('unrelated unfinished stdout'), 1), frame(payload, 2)]))).toEqual(['unrelated unfinished stdout', line.trimEnd()])
     expect(() => dockerLines(Buffer.from('incomplete'))).toThrow('frame')
     expect(() => dockerLines(frame(Buffer.from('x'.repeat(64 * 1024 + 1))))).toThrow('bound')
   })

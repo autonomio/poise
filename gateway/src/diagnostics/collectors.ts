@@ -27,15 +27,17 @@ export function gatewayDiagnostic(level: string, operation: string, fields: Reco
 
 /** Docker multiplex framing and line bounds are enforced before JSON parsing. */
 export function dockerLines(bytes: Buffer): string[] {
-  const chunks: Buffer[] = []
+  const streams = new Map<number, Buffer[]>()
   let offset = 0
   while (offset < bytes.length) {
     if (bytes.length - offset < 8) throw new Error('Truncated Docker log frame')
     const size = bytes.readUInt32BE(offset + 4)
     if (bytes[offset] > 2 || bytes[offset + 1] || bytes[offset + 2] || bytes[offset + 3] || size > 2 * 1024 * 1024 || offset + 8 + size > bytes.length) throw new Error('Invalid Docker log frame')
-    chunks.push(bytes.subarray(offset + 8, offset + 8 + size)); offset += 8 + size
+    const stream = bytes[offset]
+    if (!streams.has(stream)) streams.set(stream, [])
+    streams.get(stream)!.push(bytes.subarray(offset + 8, offset + 8 + size)); offset += 8 + size
   }
-  const lines = Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean)
+  const lines = [...streams.values()].flatMap((chunks) => Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean))
   if (lines.length > 1000 || lines.some((line) => Buffer.byteLength(line) > 64 * 1024)) throw new Error('Docker log line/count bound exceeded; collection gap')
   return lines
 }

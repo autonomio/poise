@@ -1,3 +1,4 @@
+import { environmentSecrets } from '../gateway/src/diagnostics/redaction.mjs'
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { basename, delimiter, join } from 'node:path'
@@ -399,7 +400,7 @@ export function runFile(
           operation: command + (['auth', 'api', 'sync', 'health', 'build-user', '--refresh-models', '--pr-review'].includes(args[0]) ? '.' + args[0].replace(/^--/, '') : ''),
           cwd: options.cwd ?? null, elapsedMs: Date.now() - startedAt, timeoutMs: timeout,
           stderrAllowed: !(command === 'gh' && args[0] === 'auth' && args[1] === 'token'),
-          secrets: Object.entries(options.env ?? {}).flatMap(([key, value]) => /TOKEN|KEY|AUTH|SECRET|PASSWORD/i.test(key) && value ? [value] : []) })
+          secrets: environmentSecrets(options.env ?? {}) })
       } catch (failure) {
         process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.process_observer.failed', message: failure instanceof Error ? failure.message : 'observer failure' }) + '\n')
       }

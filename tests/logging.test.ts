@@ -82,3 +82,26 @@ it('checkpoints Caller completions after quarantining evidence above the local s
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false })).events.some((event) => event.message === 'later precise cause')).toBe(true)
   expect(loggingRuntime()!.health().rejected).toBeGreaterThan(0)
 })
+
+it('redacts bare encoded and decoded Git credentials supplied only through command-specific configuration', async () => {
+  start()
+  const secret = 'git-overlay-private-credential'
+  const encoded = Buffer.from('x-access-token:' + secret).toString('base64')
+  await expect(runFile(process.execPath, ['-e', `process.stderr.write(${JSON.stringify(encoded + '\n' + secret)});process.exit(9)`],
+    { env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraheader', GIT_CONFIG_VALUE_0: 'AUTHORIZATION: Basic ' + encoded } })).rejects.toThrow('Command failed')
+  loggingRuntime()!.flush()
+  const page = loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }))
+  expect(page.events.some((event) => event.exitCode === 9 && event.stderr?.includes('[redacted]'))).toBe(true)
+  for (const value of [secret, encoded]) expect(JSON.stringify(page)).not.toContain(value)
+})
+
+it('preserves recorded source identity and explicit unknowns during historical Caller backfill', () => {
+  vi.stubEnv('POISE_RELEASE', 'current-release'); vi.stubEnv('HOSTNAME', 'current-container')
+  start()
+  diagnostic({ id: 'old-source', source: 'caller', level: 'error', operation: 'source.identity', message: 'old cause', instance: 'old-instance', container: 'old-container', release: 'old-release' })
+  diagnostic({ id: 'unknown-source', source: 'caller', level: 'error', operation: 'source.identity', message: 'unknown cause', instance: null, container: null, release: null })
+  loggingRuntime()!.flush()
+  const events = loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).events
+  expect(events.find((event) => event.message === 'old cause')).toMatchObject({ instance: 'old-instance', container: 'old-container', release: 'old-release' })
+  expect(events.find((event) => event.message === 'unknown cause')).toMatchObject({ instance: null, container: null, release: null })
+})
