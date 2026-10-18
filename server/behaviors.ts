@@ -197,7 +197,7 @@ function recordBehaviorDeadLetter(claim: BehaviorLaunchClaim, error: string, cal
   const alreadyHeld = databaseListBehaviorIncidents(500)
     .some((incident) => incident.behavior === claim.key && incident.target === target)
   const id = databaseRecordBehaviorDeadLetter(claim, error, callId)
-  behaviorHeld(claim.key, target, alreadyHeld, behaviorErrorMessage(error))
+  behaviorHeld(claim.key, target, alreadyHeld, behaviorErrorMessage(error, Infinity))
   return id
 }
 

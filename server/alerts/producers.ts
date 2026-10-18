@@ -8,6 +8,7 @@
 // Connected accounts opens Settings there. Each alert's notice in the page
 // opens its own target: the view, Settings tab or Chat session it is about.
 
+import { createHash } from 'node:crypto'
 import { CONNECTED_ACCOUNTS_PATH, GITHUB_AUTOMATION_SIGN_IN_TITLE, type AccountId, type ConnectedAccount } from '../accounts/types'
 import type { ClaudeAuthStatus } from '../claude-auth'
 import type { StopReason } from '../chat/protocol'
@@ -152,14 +153,16 @@ function ghAccountsChecked(gh: ConnectedAccount, identities: GitHubIdentities): 
 export function behaviorHeld(behavior: string, target: string, alreadyHeld: boolean, error = ''): void {
   const dedupeKey = `behavior-held:${behavior}:${target}`
   const body = error ? `${clip(error, 240)} Open Behaviors in Poise for details.` : 'Open Behaviors in Poise to see what happened.'
+  const cause = createHash('sha256').update(heldCause(error || body)).digest('hex')
   record(`the ${behavior} alert for ${target}`, () => {
     const previous = openAlerts({ kind: 'behavior_held' }).find((alert) => alert.dedupeKey === dedupeKey)
-    if (!alreadyHeld || (previous && heldCause(previous.body) !== heldCause(body))) resolveAlert(dedupeKey)
+    if (!alreadyHeld || (previous && previous.cause !== cause)) resolveAlert(dedupeKey)
     raiseAlert({
       kind: 'behavior_held',
       dedupeKey,
       title: `${BEHAVIOR_LABELS[behavior] ?? behavior} failed on ${clip(target, 80)}`,
       body,
+      cause,
       path: FRONT_PAGE,
       target: { view: 'behaviors' },
     })
@@ -172,6 +175,7 @@ function heldCause(body: string): string {
   if (/No space left on device|\bENOSPC\b/.test(body)) return 'storage_exhausted'
   return body.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '<id>')
     .replace(/\b[0-9a-f]{32,40}\b/gi, '<id>')
+    .replace(/\b(actual_chars|max_chars)(["']?\s*[:=]\s*)\d+/g, '$1$2<n>')
     .replace(/\b\d+(?:\.\d+)? (bytes|characters|seconds|milliseconds|attempts)\b/gi, '<n> $1')
 }
 

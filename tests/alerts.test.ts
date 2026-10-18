@@ -184,6 +184,21 @@ describe('the alert producers', () => {
     expect(store.openAlerts()[0].dismissedAt).not.toBeNull()
   })
 
+  it('compares complete causes before display truncation without treating wider counts as a new cause', () => {
+    const suffix = ' context from the provider'.repeat(20)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', false, `Provider refused: actual_chars=999999${suffix} cause A`)
+    const first = store.openAlerts()[0]
+    store.dismissAlert(first.seq)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true, `Provider refused: actual_chars=1000000${suffix} cause A`)
+    expect(rows()).toHaveLength(1)
+    expect(store.openAlerts()[0].dismissedAt).not.toBeNull()
+    expect(first.cause).toMatch(/^[0-9a-f]{64}$/)
+
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true, `Provider refused: actual_chars=1000000${suffix} cause B`)
+    expect(rows().map((row) => row.resolved === null)).toEqual([false, true])
+    expect(store.openAlerts()[0].cause).not.toBe(first.cause)
+  })
+
   it('keeps different HTTP failure causes distinct while ignoring attempt IDs', () => {
     producers.behaviorHeld('approve-prs', 'acme/app#12', false, `GitHub 403 for attempt ${'a'.repeat(32)}`)
     producers.behaviorHeld('approve-prs', 'acme/app#12', true, `GitHub 403 for attempt ${'b'.repeat(32)}`)
