@@ -72,13 +72,13 @@ it('keeps application startup operational when its Caller checkpoint cannot be r
 })
 
 it('checkpoints Caller completions after quarantining evidence above the local storage budget', async () => {
-  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, cursor: 3, hasMore: false, backfillPending: false,
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId: 'a'.repeat(32), cursor: 3, hasMore: false, backfillPending: false,
     events: [{ id: 'a'.repeat(32), error: 'source failure', diagnostic: { version: 1, severity: 'error', stderr: 'x'.repeat(16000) } }, { id: 'b'.repeat(32), error: 'later precise cause' }] }), stderr: '' })
   vi.stubEnv('POISE_LOG_MAX_BYTES', '8192')
   vi.stubEnv('POISE_LOG_QUEUE_EVENTS', '1')
   start()
   vi.mocked(process.stderr.write).mockImplementation(() => { throw new Error('fixture forwarding unavailable') })
-  await vi.waitFor(() => expect(readFileSync(join(directory, 'logging.db.caller'), 'utf8')).toBe('3'))
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8'))).toMatchObject({ streamId: 'a'.repeat(32), cursor: 3 }))
   expect(run).toHaveBeenCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false })).events.some((event) => event.message === 'later precise cause')).toBe(true)
   expect(loggingRuntime()!.health().rejected).toBeGreaterThan(0)
@@ -129,4 +129,28 @@ it('isolates synchronous and native stderr transport failures from application w
   await expect(runFile(process.execPath, ['-e', 'process.exit(0)'])).resolves.toMatchObject({ stdout: '' })
   loggingRuntime()!.flush()
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { search: 'source cause' })).total).toBe(1)
+})
+
+
+it('resets a saved Caller cursor when its database identity changes and retains low new completions', async () => {
+  const firstStream = 'a'.repeat(32); const secondStream = 'b'.repeat(32)
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId: firstStream, cursor: 100, events: [], hasMore: false, backfillPending: false }), stderr: '' })
+  const checkpoint = () => JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8')) as { streamId: string; cursor: number }
+  start(); await vi.waitFor(() => expect(checkpoint()).toMatchObject({ streamId: firstStream, cursor: 100 })); await stopLogging()
+  run.mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId: secondStream, cursor: 100, events: [], hasMore: false, backfillPending: false }), stderr: '' })
+  startLogging(); await vi.waitFor(() => expect(checkpoint()).toMatchObject({ streamId: secondStream, cursor: 0 })); await stopLogging()
+  run.mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId: secondStream, cursor: 1, events: [{ id: 'c'.repeat(32), error: 'new database precise cause' }], hasMore: false, backfillPending: false }), stderr: '' })
+  startLogging(); await vi.waitFor(() => expect(checkpoint()).toMatchObject({ streamId: secondStream, cursor: 1 }))
+  expect(run).toHaveBeenLastCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false })).events.some((event) => event.message === 'new database precise cause')).toBe(true)
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'caller')?.gaps.length).toBeGreaterThan(0)
+})
+
+it('replays a legacy unbound Caller checkpoint instead of applying it to an unknown database', async () => {
+  directory = mkdtempSync(join(tmpdir(), 'poise-legacy-caller-'))
+  vi.stubEnv('POISE_DB', join(directory, 'cache.db')); writeFileSync(join(directory, 'logging.db.caller'), '100')
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ version: 1, streamId: 'd'.repeat(32), cursor: 0, events: [], hasMore: false, backfillPending: false }), stderr: '' })
+  vi.spyOn(process.stderr, 'write').mockReturnValue(true); startLogging()
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8'))).toMatchObject({ streamId: 'd'.repeat(32), cursor: 0 }))
+  expect(run).toHaveBeenCalledWith('agent-interface', ['--diagnostics', '0', '3'], expect.any(Object))
 })

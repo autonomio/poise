@@ -16,6 +16,7 @@ let restoreConsole: (() => void) | null = null
 let fatalListener: ((error: Error) => void) | null = null
 let path = ''
 let sequence = 0
+let callerStream: string | null = null
 let workspace = 'local'
 let stderrFailed = false
 const stderrFailure = (error: Error & { code?: unknown }) => {
@@ -69,6 +70,11 @@ export function diagnosticFailure(operation: string, error: unknown, context: Re
     context: { ...context, code: typeof fields?.code === 'string' ? fields.code : null, killed: fields?.killed === true } }, options.secrets)
 }
 
+function saveCallerCheckpoint(): void {
+  writeFileSync(path + '.caller.tmp', JSON.stringify({ version: 1, streamId: callerStream, cursor: sequence }), { mode: 0o600 })
+  renameSync(path + '.caller.tmp', path + '.caller')
+}
+
 async function collectCaller(): Promise<void> {
   if (!active) return
   const runtime = active
@@ -77,9 +83,17 @@ async function collectCaller(): Promise<void> {
     const result = await runFile('agent-interface', ['--diagnostics', String(sequence), '3'], {
       cwd: agentInterfaceRoot(), timeoutMs: 10_000, maxOutputBytes: 512 * 1024, signal: abort.signal,
     })
-    const page = JSON.parse(result.stdout) as { version: number; events: unknown[]; cursor: number; hasMore: boolean; backfillPending: boolean }
-    if (page.version !== 1 || !Array.isArray(page.events) || page.events.length > 3 || !Number.isSafeInteger(page.cursor) || page.cursor < sequence
+    const page = JSON.parse(result.stdout) as { version: number; streamId: string; events: unknown[]; cursor: number; hasMore: boolean; backfillPending: boolean }
+    if (page.version !== 1 || !Array.isArray(page.events) || page.events.length > 3 || !Number.isSafeInteger(page.cursor) || page.cursor < 0
+      || typeof page.streamId !== 'string' || !/^[a-f0-9]{32}$/.test(page.streamId)
       || typeof page.hasMore !== 'boolean' || typeof page.backfillPending !== 'boolean') throw new Error('Caller diagnostic stream is incompatible')
+    if (callerStream && callerStream !== page.streamId) {
+      runtime.observe('caller', 'caller', workspace, 'Caller diagnostic database changed; bounded replay restarted with a historical collection gap')
+      sequence = 0; callerStream = page.streamId; saveCallerCheckpoint()
+      return
+    }
+    if (page.cursor < sequence) throw new Error('Caller diagnostic sequence moved backwards within one stream')
+    callerStream = page.streamId
     for (const row of page.events) {
       const input = callerDiagnostic(row, workspace)
       if (input) {
@@ -92,7 +106,7 @@ async function collectCaller(): Promise<void> {
     // Do not acknowledge a Caller completion until its durable local transaction succeeds.
     if (runtime.health().error || runtime.health().queued) throw new Error('Caller diagnostic checkpoint waits for durable ingestion')
     sequence = page.cursor
-    writeFileSync(path + '.caller.tmp', String(sequence), { mode: 0o600 }); renameSync(path + '.caller.tmp', path + '.caller')
+    saveCallerCheckpoint()
     runtime.observe('caller', 'caller', workspace, page.hasMore || page.backfillPending ? 'Caller historical backfill is still pending' : null)
   } catch (error) {
     if (!abort?.signal.aborted) runtime.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error))
@@ -111,12 +125,15 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   active = new DiagnosticRuntime({ path, workspace, ...diagnosticConfig(process.env) })
   stderrFailed = false
   process.stderr.on('error', stderrFailure)
-  sequence = 0
+  sequence = 0; callerStream = null
   try {
     if (existsSync(path + '.caller')) {
       const raw = readFileSync(path + '.caller', 'utf8').trim()
-      if (!/^\d{1,15}$/.test(raw)) throw new Error('Caller checkpoint is invalid; bounded source replay will restart')
-      sequence = Number(raw)
+      if (/^\d{1,15}$/.test(raw)) throw new Error('Legacy Caller checkpoint has no stream identity; bounded source replay will restart')
+      const checkpoint = JSON.parse(raw) as { version: number; streamId: string; cursor: number }
+      if (checkpoint.version !== 1 || typeof checkpoint.streamId !== 'string' || !/^[a-f0-9]{32}$/.test(checkpoint.streamId)
+        || !Number.isSafeInteger(checkpoint.cursor) || checkpoint.cursor < 0) throw new Error('Caller checkpoint is invalid; bounded source replay will restart')
+      sequence = checkpoint.cursor; callerStream = checkpoint.streamId
     }
   } catch (error) { active.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error)) }
   active.start()

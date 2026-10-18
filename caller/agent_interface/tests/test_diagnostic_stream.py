@@ -58,3 +58,22 @@ class DiagnosticStreamCase(TestCase):
         for cursor, limit in [(-1, 1), (0, 11), (True, 1)]:
             with self.assertRaises(ValueError):
                 agent_interface.diagnostics(cursor, limit)
+
+
+    def test_database_identity_survives_reopen_and_changes_when_database_is_recreated(self):
+        first = self.call()
+        agent_interface.finish(first, "failed", error="original database cause")
+        original = agent_interface.diagnostics()
+        agent_interface.init_db()
+        self.assertEqual(agent_interface.diagnostics()["streamId"], original["streamId"])
+        agent_interface.DB.unlink()
+        agent_interface.init_db()
+        second = self.call()
+        agent_interface.finish(second, "failed", error="replacement database cause")
+        stale = agent_interface.diagnostics(100)
+        self.assertNotEqual(stale["streamId"], original["streamId"])
+        self.assertEqual(stale["events"], [])
+        replay = agent_interface.diagnostics()
+        self.assertEqual(replay["streamId"], stale["streamId"])
+        self.assertEqual([row["id"] for row in replay["events"]], [second])
+        self.assertEqual(replay["cursor"], 1)

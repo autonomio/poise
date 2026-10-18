@@ -112,6 +112,8 @@ def init_db():
             when new.status != 'running' and (coalesce(new.error,'') != '' or new.error_code is not null or new.diagnostic is not null)
             begin insert or ignore into diagnostic_calls(call_id) values(new.id); end;
         """)
+        conn.execute("create table if not exists diagnostic_stream (id integer primary key check(id=1), generation text not null)")
+        conn.execute("insert or ignore into diagnostic_stream values(1,?)", (uuid4().hex,))
 
 
 init_db()
@@ -497,6 +499,9 @@ def diagnostics(after: int = 0, limit: int = 3) -> dict:
     fields = ("id", "model", "status", "pr_id", "repo", "actor", "behavior", "outcome", "head_sha",
               "expected_head", "source", "correlation_id", "action", "error_code")
     with db() as conn:
+        stream_id = conn.execute("select generation from diagnostic_stream where id=1").fetchone()[0]
+        if not isinstance(stream_id, str) or not re.fullmatch(r"[a-f0-9]{32}", stream_id):
+            raise RuntimeError("Caller diagnostic stream identity is invalid")
         conn.execute("""insert or ignore into diagnostic_calls(call_id)
             select c.id from calls c left join diagnostic_calls d on d.call_id=c.id
             where d.call_id is null and c.status != 'running'
@@ -528,7 +533,7 @@ def diagnostics(after: int = 0, limit: int = 3) -> dict:
             entry["error"] = (row["error"] or "")[:2048]
             entry["evidence_unavailable"] = "Stored process diagnostic exceeds the bounded metadata envelope"
         events.append(entry)
-    return {"version": 1, "events": events, "cursor": events[-1]["seq"] if events else after,
+    return {"version": 1, "streamId": stream_id, "events": events, "cursor": events[-1]["seq"] if events else after,
             "hasMore": len(rows) > limit, "backfillPending": bool(backfill)}
 
 

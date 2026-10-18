@@ -161,7 +161,7 @@ error. This is evidence at capture time, never a claim about earlier disk use.
 ### Bounded diagnostic reads
 
 `agent-interface --diagnostics [after-sequence] [limit]` returns version 1
-metadata-only events, a completion cursor, `hasMore` and `backfillPending`.
+metadata-only events, a persistent database `streamId`, a completion cursor, `hasMore` and `backfillPending`. The owner binds its checkpoint to that identity; database replacement restarts bounded replay with a visible collection gap. Legacy unbound checkpoints replay from zero.
 The default page is three events; the maximum is ten. Late-finishing calls
 receive a new completion sequence, so advancing past a running call cannot
 skip its later failure. Legacy terminal calls are indexed in bounded batches.

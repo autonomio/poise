@@ -64,7 +64,7 @@ beforeEach(async () => {
   // Nothing here may reach a CLI: no GitHub account is set, so the check of
   // pull requests has nothing to read.
   mocks.runFile.mockReset().mockImplementation(async (command: string, args: string[]) => {
-    if (command === 'agent-interface' && args[0] === '--diagnostics') return { stdout: JSON.stringify({ version: 1, events: [], cursor: Number(args[1]), hasMore: false, backfillPending: false }) }
+    if (command === 'agent-interface' && args[0] === '--diagnostics') return { stdout: JSON.stringify({ version: 1, streamId: 'f'.repeat(32), events: [], cursor: Number(args[1]), hasMore: false, backfillPending: false }) }
     throw new Error(`Unexpected test command: ${command} ${args.join(' ')}`)
   })
   mocks.spawnDetached.mockReset().mockResolvedValue(undefined)
