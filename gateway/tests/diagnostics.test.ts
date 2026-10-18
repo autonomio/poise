@@ -150,7 +150,7 @@ describe('retained authorized queries', () => {
 
   it('enforces retention and byte/count bounds without duplicate replay evicting history', () => {
     const db = store({ retentionMs: 1000, maxBytes: 100_000, maxEvents: 2 })
-    const old = event('old', { time: new Date(NOW - 2000).toISOString() })
+    const old = { ...event('old', { time: new Date(NOW - 2000).toISOString() }), ingestedAt: new Date(NOW - 2000).toISOString() }
     db.append([old, event('one'), event('two')]); expect(db.query(alice).total).toBe(2)
     db.append([event('one')]); expect(db.query(alice).total).toBe(2)
     expect(db.lookup(alice, old.id).status).toBe('expired')
