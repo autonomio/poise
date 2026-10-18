@@ -46,7 +46,10 @@
     "self-update:doctor": "node scripts/install-self-update.mjs doctor",
     "self-update:disable": "node scripts/install-self-update.mjs disable",
     "self-update:uninstall": "node scripts/install-self-update.mjs uninstall",
-    "self-update:control": "node scripts/self-update/cli.mjs"
+    "self-update:control": "node scripts/self-update/cli.mjs",
+    "check:deployment": "shellcheck -x deploy/*.sh deploy/ci/*.sh && python3 -m unittest discover --start-directory deploy/ci --pattern test_*.py",
+    "check:gateway-image": "docker build -t poise-gateway:diagnostics-check gateway/",
+    "check:runtime-image": "docker build -f deploy/runtime/Dockerfile -t poise-runtime:diagnostics-check . && deploy/runtime/test/smoke.sh contract poise-runtime:diagnostics-check && deploy/runtime/test/smoke.sh offline poise-runtime:diagnostics-check"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
