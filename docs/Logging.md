@@ -282,3 +282,7 @@ preserving its cause and acknowledging the page so later completions continue.
 Routine Info ingress delivery updates observation without erasing the last
 retained ingestion time. Tombstone lookups enforce their age limit even when
 the store is idle or opened read-only.
+
+Text credential detection covers prefixed/suffixed password, secret and key
+names as well as structured fields, without needing the secret value in the
+environment. The truncation marker includes bounded signal and errno text.

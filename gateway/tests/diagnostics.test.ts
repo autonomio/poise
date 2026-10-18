@@ -468,7 +468,7 @@ it.each(['api key', 'private key', 'id_token_hint', 'idTokenHint', 'bearerToken'
   expect(value.resources).toEqual({ nested: { [key]: '[redacted]', freeBytes: 456 } })
 })
 
-it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key', 'private/key', 'access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
+it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key', 'private/key', 'access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key', 'DB_PASSWORD', 'databasePassword', 'DB_PASSWD', 'cloud_client_secret', 'credential_value', 'serviceAuthorization', 'sessionCookie', 'DB_API_KEY', 'DB_PRIVATE_KEY', 'custom.password.value', 'database password value'])('redacts opaque %s fields without configured secret values', (key) => {
   const secret = 'opaque-value-not-present-in-environment'
   for (const field of [`{"phase":"auth","${key}":"${secret}"}`, JSON.stringify({ body: JSON.stringify({ [key]: secret }) }), `{'${key}': '${secret}'}`, `${key}=${secret}`]) {
     const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected', stderr: field }, NOW, [])!
@@ -476,6 +476,19 @@ it.each(['api key', 'API key', 'private key', 'api.key', 'private.key', 'api/key
     expect(JSON.stringify(db.query(alice))).not.toContain(secret)
     expect(redact(redact(field))).toBe(redact(field))
   }
+})
+
+it.each(['signal', 'errno'] as const)('marks byte truncation of persisted %s evidence', (field) => {
+  for (const original of ['x'.repeat(513), '障'.repeat(171)]) {
+    const record = event('bounded-' + field, { [field]: original })
+    expect(Buffer.byteLength(record[field]!)).toBeLessThanOrEqual(512)
+    expect(record[field]).not.toContain('\uFFFD')
+    expect(record.truncated).toBe(true)
+    const db = store(); db.append([record])
+    expect(db.lookup(alice, record.id)).toMatchObject({ status: 'found', event: { [field]: record[field], truncated: true } })
+  }
+  expect(event('exact-' + field, { [field]: 'x'.repeat(512) }).truncated).toBe(false)
+  expect(event('numeric-' + field, { [field]: 9 })).toMatchObject({ [field]: 9, truncated: false })
 })
 
 

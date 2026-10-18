@@ -162,9 +162,8 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     reviewer: nullable(input.reviewer), callId: identifier(input.callId, /^[a-f0-9]{32}$/), requestId: nullable(input.requestId),
     correlationId: identifier(input.correlationId, /^(?:[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i),
     message, cause: (input.cause ?? []).slice(0, 8).map((cause) => clean(cause, 512)), stderr, stack,
-    truncated,
     exitCode: number(input.exitCode), signal: typeof input.signal === 'number' ? number(input.signal) : nullable(input.signal),
     timeoutMs: number(input.timeoutMs), errno: typeof input.errno === 'number' ? number(input.errno) : nullable(input.errno),
-    context, resources,
+    context, resources, truncated,
   }
 }
