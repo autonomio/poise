@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -88,4 +89,19 @@ it('redacts folded bootstrap headers across child chunks before durable capture 
     expect(retained.events[0].stderr).toContain('fatal: preserved cause')
     expect(retained.events[0].exitCode).toBe(9)
   } finally { store.close() }
+})
+
+
+it('kills a TERM-resistant descendant after the direct installer closes its stdio and exits', async () => {
+  const storePath = path(); const directory = join(storePath, '..'); const pidPath = join(directory, 'descendant.pid'); const heartbeat = join(directory, 'heartbeat')
+  const child = `const fs=require('node:fs');process.on('SIGTERM',()=>{});setInterval(()=>fs.writeFileSync(${JSON.stringify(heartbeat)},String(Date.now())),10)`
+  const parent = `const cp=require('node:child_process');const fs=require('node:fs');const child=cp.spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid));process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)`
+  try {
+    expect(await captureRuntimeCommand(process.execPath, ['-e', parent], { path: storePath, workspace: 'alice', timeoutMs: 800, killAfterMs: 100, quiet: true, write: () => undefined })).toBe(124)
+    const stopped = readFileSync(heartbeat, 'utf8')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(readFileSync(heartbeat, 'utf8')).toBe(stopped)
+  } finally {
+    spawnSync('kill', ['-KILL', readFileSync(pidPath, 'utf8')])
+  }
 })

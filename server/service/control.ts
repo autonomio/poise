@@ -1,3 +1,4 @@
+import { DiagnosticCursorError } from '../../gateway/src/diagnostics/store'
 import { diagnosticPage } from '../logging'
 // The service endpoints the container health check and the gateway call
 // (docs/Service-architecture.md, "Service endpoints"). A drain is the drain a
@@ -272,7 +273,12 @@ export function handleServiceApi(req: IncomingMessage, res: ServerResponse, path
     if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return json(res, 405, { error: 'use GET for diagnostics' }) }
     const params = new URL(req.url ?? path, 'http://workspace').searchParams
     if ([...params.keys()].some((key) => key !== 'cursor')) throw new HttpError(400, 'unknown diagnostic delivery parameter')
-    const page = diagnosticPage(params.get('cursor'))
+    let page: ReturnType<typeof diagnosticPage>
+    try { page = diagnosticPage(params.get('cursor')) }
+    catch (error) {
+      if (error instanceof DiagnosticCursorError) return json(res, 409, { error: 'diagnostic_cursor_invalid', message: 'The source no longer accepts this delivery cursor; restart bounded backfill.' })
+      throw error
+    }
     if (Buffer.byteLength(JSON.stringify(page)) > 256 * 1024) throw new HttpError(503, 'diagnostic delivery exceeds 256 KiB')
     return json(res, 200, page)
   }

@@ -227,3 +227,5 @@ failed. Normal supervisor startup chatter remains excluded. Helper/reporting
 unavailability is a collection Warning rather than an invented application cause.
 
 Container discovery includes stopped containers and removes checkpoints only for absent container IDs; retained events survive that cleanup. Operator ingress deduplicates exact record replays, while separate records sharing a request ID retain distinct occurrence IDs. Bootstrap line capture keeps folded credential-header state across child output chunks before reporting or persistence.
+
+A recreated workspace store rejects obsolete delivery cursors explicitly. The authenticated collector records a collection gap, resets only that source checkpoint and resumes bounded retained-history backfill; authentication and other failures do not reset checkpoints. Bootstrap deadlines retain process-group SIGKILL escalation even when the direct child exits first, and await escalation before returning the timeout result.

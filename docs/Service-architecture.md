@@ -737,6 +737,7 @@ and commits its checkpoint only after durable central ingestion. Delivery
 cursors survive ordinary process/container replacement and cannot widen scope.
 No new JWT scope, owner bypass, shared filesystem or public ingest route is
 introduced. A failed source or sink remains explicitly unavailable/partial.
+An obsolete source cursor returns 409 `diagnostic_cursor_invalid`; only this explicit rejection permits resetting that source checkpoint and bounded replay, with a recorded collection gap. Other failures preserve the checkpoint.
 
 The workspace distribution includes the bounded bootstrap diagnostic command and
 its canonical redaction module for standalone maintenance scripts. Installer

@@ -59,6 +59,8 @@ export function dockerLifecycle(value: unknown): DiagnosticInput | null {
     exitCode: Number.isFinite(exitCode) ? exitCode : null, resources: { oomKilled: action === 'oom', memoryLimitBytes: null, cpuLimit: null, pidsLimit: null } }
 }
 
+class WorkspaceCursorError extends Error {}
+
 export class EnvironmentCollectors {
   private timer: ReturnType<typeof setInterval> | null = null
   private pass: Promise<void> | null = null
@@ -209,7 +211,12 @@ export class EnvironmentCollectors {
           res.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 256 * 1024) req.destroy(new Error('Workspace diagnostic delivery exceeds 256 KiB')); else chunks.push(chunk) })
           res.on('error', reject)
           res.on('end', () => {
-            try { if (res.statusCode !== 200) throw new Error(`Workspace diagnostic source answered HTTP ${res.statusCode}`); resolve(JSON.parse(Buffer.concat(chunks).toString())) }
+            try {
+              const text = Buffer.concat(chunks).toString()
+              if (res.statusCode === 409 && cursor && JSON.parse(text)?.error === 'diagnostic_cursor_invalid') throw new WorkspaceCursorError('Workspace diagnostic store rejected its previous cursor; bounded backfill restarted with a historical collection gap')
+              if (res.statusCode !== 200) throw new Error(`Workspace diagnostic source answered HTTP ${res.statusCode}`)
+              resolve(JSON.parse(text))
+            }
             catch (error) { reject(error) }
           })
         })
@@ -231,6 +238,12 @@ export class EnvironmentCollectors {
       if (page.coverage.status === 'unavailable' || page.coverage.status === 'initializing' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
       else if (rejected || page.coverage.status === 'partial' || ('hasMore' in page && page.hasMore)) this.runtime.partial(key, 'poise', handle, 'Workspace is reachable; historical gaps or pending backfill limit completeness')
       else this.runtime.observe(key, 'poise', handle)
-    } catch (error) { this.runtime.observe(key, 'poise', handle, String(error)) }
+    } catch (error) {
+      if (error instanceof WorkspaceCursorError) {
+        this.runtime.observe(key, 'poise', handle, error.message)
+        try { this.runtime.query((db) => db.resetCheckpoint(key)) }
+        catch (failure) { this.runtime.observe(key, 'poise', handle, String(failure)) }
+      } else this.runtime.observe(key, 'poise', handle, String(error))
+    }
   }
 }

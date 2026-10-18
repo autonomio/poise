@@ -39,6 +39,8 @@ export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, max
 interface EventRow { id: string; sort_time: string; payload: string }
 interface Cursor { kind: 'page' | 'watermark' | 'delivery'; high: number; time?: string; id?: string; filter: string }
 
+export class DiagnosticCursorError extends Error {}
+
 export class DiagnosticEventError extends Error {
   constructor(readonly eventId: string, message: string) { super(message) }
 }
@@ -268,6 +270,11 @@ export class DiagnosticStore {
     this.db.prepare(`DELETE FROM log_meta WHERE key GLOB 'checkpoint:docker-log:*'${keys.length ? ` AND key NOT IN (${keys.map(() => '?').join(',')})` : ''}`).run(...keys)
   }
 
+  resetCheckpoint(key: string): void {
+    this.checkpoint(key)
+    this.db.prepare('DELETE FROM log_meta WHERE key=?').run('checkpoint:' + key)
+  }
+
   commitDelivery(events: readonly LogEvent[], key: string, cursor: string): number {
     this.checkpoint(key)
     if (cursor.length > 1024) throw new Error('Diagnostic checkpoint exceeds its bound')
@@ -303,7 +310,7 @@ export class DiagnosticStore {
         || (kind === 'page' && (typeof token.time !== 'string' || !Number.isFinite(Date.parse(token.time))
           || typeof token.id !== 'string' || !/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(token.id)))) throw new Error('Invalid token')
       return token
-    } catch { throw new Error('Logging cursor does not match these filters or authorization') }
+    } catch { throw new DiagnosticCursorError('Logging cursor does not match these filters or authorization') }
   }
 
   bounds(access: LogAccess) {

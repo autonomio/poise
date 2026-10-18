@@ -57,8 +57,12 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     try { process.kill(-child.pid, value) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') captureError = redact(String(error), secrets) }
   }
-  let killer: ReturnType<typeof setTimeout> | null = null
-  const timer = setTimeout(() => { timedOut = true; signal('SIGTERM'); killer = setTimeout(() => signal('SIGKILL'), options.killAfterMs ?? 30_000); killer.unref() }, timeoutMs)
+  let escalation: Promise<void> | null = null
+  const timer = setTimeout(() => {
+    timedOut = true; signal('SIGTERM')
+    // The direct child can exit while a descendant closes stdio and ignores TERM.
+    escalation = new Promise<void>((resolve) => setTimeout(() => { signal('SIGKILL'); resolve() }, options.killAfterMs ?? 30_000))
+  }, timeoutMs)
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.stdout?.on('data', (chunk: Buffer) => {
       let remaining = chunk
@@ -89,7 +93,8 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     child.once('error', (error: NodeJS.ErrnoException) => { spawnError = error })
     child.once('close', (code, signal) => resolve({ code, signal }))
   })
-  clearTimeout(timer); if (killer) clearTimeout(killer)
+  clearTimeout(timer)
+  if (escalation) await escalation
   if (pending.length && !discarding) addLine(pending)
   if (stdoutPending.length && !stdoutDiscarding) forwardStdout(stdoutPending)
   const failedSpawn = spawnError as NodeJS.ErrnoException | null
