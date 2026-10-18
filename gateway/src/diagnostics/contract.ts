@@ -91,7 +91,7 @@ export function redact(value: string, secrets: readonly string[] = []): string {
     .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
     .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
     .replace(/(https?:\/\/)[^\s/]+@/g, '$1[redacted]@')
-    .replace(/([?&](?:token|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
+    .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
 }
 
@@ -108,20 +108,22 @@ export function severity(level: string | number): Severity | null | 'invalid' {
   return 'invalid'
 }
 
-function safeFacts(value: unknown, secrets: readonly string[], depth = 0): unknown {
+function safeFacts(value: unknown, secrets: readonly string[], depth = 0, cut: () => void = () => undefined): unknown {
   if (value == null || typeof value === 'boolean') return value ?? null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value === 'string') return redact(value, secrets).slice(0, 1024)
-  if (depth >= 4) return '[truncated]'
-  if (Array.isArray(value)) return value.slice(0, 16).map((item) => safeFacts(item, secrets, depth + 1))
+  if (typeof value === 'string') { const safe = redact(value, secrets); if (safe.length > 1024) cut(); return safe.slice(0, 1024) }
+  if (depth >= 4) { cut(); return '[truncated]' }
+  if (Array.isArray(value)) { if (value.length > 16) cut(); return value.slice(0, 16).map((item) => safeFacts(item, secrets, depth + 1, cut)) }
   if (typeof value !== 'object') return '[unsupported value]'
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !PRIVATE_KEY.test(key)).slice(0, 32)
-    .map(([key, item]) => [redact(key, secrets).slice(0, 64), SECRET_KEY.test(key) ? '[redacted]' : safeFacts(item, secrets, depth + 1)]))
+  const entries = Object.entries(value).filter(([key]) => !PRIVATE_KEY.test(key))
+  if (entries.length > 32 || entries.some(([key]) => key.length > 64)) cut()
+  return Object.fromEntries(entries.slice(0, 32).map(([key, item]) => [redact(key, secrets).slice(0, 64), SECRET_KEY.test(key) ? '[redacted]' : safeFacts(item, secrets, depth + 1, cut)]))
 }
 
-export function redactFacts(value: Facts | undefined, secrets: readonly string[]): Facts {
-  const safe = safeFacts(value ?? {}, secrets) as Facts
-  return Buffer.byteLength(JSON.stringify(safe)) <= 8192 ? safe : { truncated: true, reason: 'Context exceeds 8 KiB' }
+export function redactFacts(value: Facts | undefined, secrets: readonly string[], cut: () => void = () => undefined): Facts {
+  const safe = safeFacts(value ?? {}, secrets, 0, cut) as Facts
+  if (Buffer.byteLength(JSON.stringify(safe)) <= 8192) return safe
+  cut(); return { truncated: true, reason: 'Context exceeds 8 KiB' }
 }
 
 export function normalize(input: DiagnosticInput, now = Date.now(), secrets: readonly string[] = []): LogEvent | null {
@@ -154,9 +156,11 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const prefix = scopePrefix(workspace, visibility)
   const incidentId = 'inc_' + prefix + '_' + hash(JSON.stringify([workspace, visibility, source, operation, input.account ?? null,
     input.repository ?? null, input.target ?? null, input.behavior ?? null, clean(input.condition ?? message)]))
-  const id = 'evt_' + prefix + '_' + hash(JSON.stringify([workspace, source, input.id ?? randomUUID()]))
+  const id = 'evt_' + prefix + '_' + hash(JSON.stringify([workspace, input.source, input.id ?? randomUUID()]))
   const stderr = input.stderr == null ? null : clean(input.stderr, 16_384)
   const stack = input.stack == null ? null : clean(input.stack, 8192)
+  const context = level === 'invalid' || invalidTime ? { source: clean(input.source), originalOperation: clean(input.operation) } : redactFacts(input.context, secrets, () => { truncated = true })
+  const resources = redactFacts(input.resources, secrets, () => { truncated = true })
   return {
     version: LOG_VERSION, id, incidentId, eventTime, ingestedAt,
     severity: level === 'invalid' || invalidTime ? 'warning' : level, sourceLevel: clean(String(input.level), 64), source,
@@ -168,7 +172,6 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     truncated,
     exitCode: number(input.exitCode), signal: typeof input.signal === 'number' ? number(input.signal) : nullable(input.signal),
     timeoutMs: number(input.timeoutMs), errno: typeof input.errno === 'number' ? number(input.errno) : nullable(input.errno),
-    context: level === 'invalid' || invalidTime ? { source: clean(input.source), originalOperation: clean(input.operation) } : redactFacts(input.context, secrets),
-    resources: redactFacts(input.resources, secrets),
+    context, resources,
   }
 }

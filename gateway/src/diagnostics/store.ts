@@ -120,6 +120,10 @@ export class DiagnosticStore {
         if (!/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[1] !== prefix
           || !new RegExp(`^inc_${prefix}_[a-f0-9]{64}$`).test(event.incidentId)) throw new DiagnosticEventError(event.id, 'Logging event identity is outside its authorized scope')
         if (this.db.prepare('SELECT 1 FROM log_expired WHERE id=?').get(event.id)) continue
+        if (Date.parse(event.ingestedAt) < this.now() - this.policy.retentionMs) {
+          this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(event.id, event.workspace, event.visibility, new Date(this.now()).toISOString())
+          continue
+        }
         const existing = this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(event.id) as { payload: string } | undefined
         if (existing) {
           if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id)
@@ -185,8 +189,8 @@ export class DiagnosticStore {
     const limit = filter.limit ?? 50
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Logging page size must be between 1 and 100')
     if (filter.workspace && !access.operator && filter.workspace !== access.workspace) throw new Error('Logging workspace scope is forbidden')
-    const clauses = [levels.length ? `severity IN (${levels.map(() => '?').join(',')})` : '0']
-    const values: Array<string | number> = [...levels]
+    const clauses = ['ingested_at >= ?', levels.length ? `severity IN (${levels.map(() => '?').join(',')})` : '0']
+    const values: Array<string | number> = [new Date(this.now() - this.policy.retentionMs).toISOString(), ...levels]
     clauses.push(access.operator ? "(visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))"
       : "workspace=? AND visibility IN ('workspace','infrastructure')")
     values.push(access.workspace)
@@ -210,7 +214,7 @@ export class DiagnosticStore {
       if (filter.search.length > 256) throw new Error('Logging search exceeds 256 characters')
       clauses.push("search LIKE ? ESCAPE '\\'"); values.push('%' + filter.search.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%')
     }
-    const filterHash = createHash('sha256').update(JSON.stringify([access, clauses, values])).digest('hex')
+    const filterHash = createHash('sha256').update(JSON.stringify([access, clauses, values.slice(1)])).digest('hex')
     const after = filter.after ? this.openToken(filter.after, 'watermark', filterHash) : null
     if (after) { clauses.push('seq>?'); values.push(after.high) }
     const fingerprint = createHash('sha256').update(JSON.stringify([filterHash, after?.high ?? null])).digest('hex')
@@ -225,7 +229,7 @@ export class DiagnosticStore {
     const page = rows.slice(0, limit)
     const events = page.map((row) => {
       const event = JSON.parse(row.payload) as LogEvent
-      const occurrences = (this.db.prepare('SELECT COUNT(*) AS count FROM log_events WHERE incident_id=?').get(event.incidentId) as { count: number }).count
+      const occurrences = (this.db.prepare('SELECT COUNT(*) AS count FROM log_events WHERE incident_id=? AND ingested_at>=?').get(event.incidentId, new Date(this.now() - this.policy.retentionMs).toISOString()) as { count: number }).count
       return { ...event, occurrences }
     })
     const last = page.at(-1)
@@ -241,8 +245,8 @@ export class DiagnosticStore {
     const after = cursor ? this.openToken(cursor, 'delivery', filter).high : 0
     const predicate = access.operator ? "(visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))"
       : "workspace=? AND visibility IN ('workspace','infrastructure')"
-    const rows = this.db.prepare(`SELECT seq,payload FROM log_events WHERE ${predicate} AND seq>? ORDER BY seq LIMIT ?`)
-      .all(access.workspace, after, limit + 1) as Array<{ seq: number; payload: string }>
+    const rows = this.db.prepare(`SELECT seq,payload FROM log_events WHERE ${predicate} AND seq>? AND ingested_at>=? ORDER BY seq LIMIT ?`)
+      .all(access.workspace, after, new Date(this.now() - this.policy.retentionMs).toISOString(), limit + 1) as Array<{ seq: number; payload: string }>
     const page = rows.slice(0, limit)
     return { version: 1, events: page.map((row) => JSON.parse(row.payload) as LogEvent),
       cursor: this.sealToken({ kind: 'delivery', high: page.at(-1)?.seq ?? after, filter }), hasMore: rows.length > limit }
@@ -291,9 +295,9 @@ export class DiagnosticStore {
   }
 
   bounds(access: LogAccess) {
-    const predicate = access.operator ? "WHERE visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace')"
-      : "WHERE workspace=? AND visibility IN ('workspace','infrastructure')"
-    const parameters = [access.workspace]
+    const predicate = access.operator ? "WHERE (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace')) AND ingested_at>=?"
+      : "WHERE workspace=? AND visibility IN ('workspace','infrastructure') AND ingested_at>=?"
+    const parameters = [access.workspace, new Date(this.now() - this.policy.retentionMs).toISOString()]
     const row = this.db.prepare(`SELECT MIN(sort_time) AS from_time,MAX(sort_time) AS to_time FROM log_events ${predicate}`).get(...parameters) as { from_time: string | null; to_time: string | null }
     return { from: row.from_time, to: row.to_time, retentionAfter: new Date(this.now() - this.policy.retentionMs).toISOString() }
   }
@@ -302,7 +306,10 @@ export class DiagnosticStore {
     if (!/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid Logging event identifier')
     const row = (access.operator ? this.db.prepare("SELECT payload FROM log_events WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
       : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace)) as { payload: string } | undefined
-    if (row) return { status: 'found', event: JSON.parse(row.payload) as LogEvent }
+    if (row) {
+      const event = JSON.parse(row.payload) as LogEvent
+      return Date.parse(event.ingestedAt) >= this.now() - this.policy.retentionMs ? { status: 'found', event } : { status: 'expired' }
+    }
     const expired = (access.operator
       ? this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
       : this.db.prepare("SELECT 1 FROM log_expired WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace))

@@ -264,3 +264,36 @@ describe('collection independence and Caller evidence', () => {
     expect(callerDiagnostic({ ...row, diagnostic: null, outcome: 'changes_requested' }, 'alice')).toBeNull()
   })
 })
+
+describe('reviewed retention and redaction boundaries', () => {
+  it('redacts opaque access-token URLs and marks context/resource truncation', () => {
+    const record = event('opaque-url', { message: 'https://example.com/?access_token=opaque-value',
+      context: { detail: 'x'.repeat(2000) }, resources: { detail: 'x'.repeat(2000) } })
+    expect(JSON.stringify(record)).not.toContain('opaque-value'); expect(record.truncated).toBe(true)
+    expect(event('malformed-source', { level: 'invalid', source: 'one' }).id).not.toBe(event('malformed-source', { level: 'invalid', source: 'two' }).id)
+  })
+
+  it('does not evict valid evidence for an already stale input', () => {
+    const db = store({ retentionMs: 1000, maxEvents: 1, maxBytes: 100_000 })
+    const good = event('retained-good'); db.append([good])
+    db.append([{ ...event('stale-late'), ingestedAt: new Date(NOW - 2000).toISOString() }])
+    expect(db.lookup(alice, good.id).status).toBe('found'); expect(db.query(alice).total).toBe(1)
+  })
+
+  it('enforces retention on idle and read-only stores without waiting for a writer', () => {
+    const path = join(directory(), 'idle.db'); let now = NOW
+    const policy = { retentionMs: 1000, maxEvents: 100, maxBytes: 100_000 }
+    const record = event('idle'); const writer = new DiagnosticStore(path, policy, () => now)
+    writer.append([record]); writer.close(); now += 2000
+    const reader = new DiagnosticStore(path, policy, () => now, true); stores.push(reader)
+    expect(reader.query(alice).total).toBe(0); expect(reader.lookup(alice, record.id).status).toBe('expired')
+    expect(reader.bounds(alice).from).toBeNull(); expect(reader.delivery(alice).events).toHaveLength(0)
+  })
+
+  it('does not recursively enqueue rejection warnings under a tiny byte policy', () => {
+    const runtime = new DiagnosticRuntime({ path: ':memory:', policy: { retentionMs: 1000, maxBytes: 1, maxEvents: 10 }, now: () => NOW, report: () => undefined })
+    runtime.emit({ id: 'too-small', source: 'poise', operation: 'read', level: 'error', message: 'cause' })
+    for (let i = 0; i < 10; i++) runtime.flush()
+    expect(runtime.health()).toMatchObject({ queued: 0, rejected: 1 }); runtime.stop()
+  })
+})

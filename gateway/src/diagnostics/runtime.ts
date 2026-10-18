@@ -133,7 +133,7 @@ export class DiagnosticRuntime {
   private warning(operation: string, id: string, workspace: string | null, message: string): void {
     const event = normalize({ id: operation + ':' + id, time: null, source: 'collection', operation, level: 'warning', workspace, message,
       context: { rejectedEventId: id } }, this.now(), this.secrets)
-    if (event) this.enqueue(event)
+    if (event && Buffer.byteLength(JSON.stringify(event)) * 2 + 1024 <= this.policy.maxBytes) this.enqueue(event)
   }
 
   private reject(error: unknown): void {
@@ -196,7 +196,7 @@ export class DiagnosticRuntime {
         this.queue = this.queue.filter(({ event }) => event.id !== error.eventId)
         for (const entry of rejected) this.queuedBytes -= entry.bytes
         this.reject(error)
-        this.warning('record.rejected', error.eventId, rejected[0]?.event.workspace ?? null, this.message(error))
+        if (!rejected.some(({ event }) => event.source === 'collection' && event.operation === 'record.rejected')) this.warning('record.rejected', error.eventId, rejected[0]?.event.workspace ?? null, this.message(error))
         this.schedule()
         return rejected.length > 0
       }
