@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { environmentSecrets, redact } from './diagnostics/redaction.mjs'
 import http from 'node:http'
 
 export class DockerError extends Error {
@@ -28,6 +30,17 @@ export interface ContainerDetails {
   NetworkSettings: { Networks: Record<string, unknown> }
   /** Volumes and bind mounts, each with its path on the Docker host (Source) and in the container. */
   Mounts?: Array<{ Type: string; Source: string; Destination: string }>
+}
+
+export interface TaskFailureEvidence {
+  id: string
+  name: string
+  container: string | null
+  labels: Record<string, string>
+  exitCode: number
+  stderr: Buffer | null
+  stderrError: string | null
+  limits: { memoryBytes: number; nanoCpus: number; pids: number }
 }
 
 export type ContainerMount =
@@ -91,7 +104,7 @@ const DISK_USAGE_TIMEOUT_MS = 10 * 60_000
  * refuses anything below 1.44, and every field used here is the same in both.
  */
 export class DockerClient {
-  constructor(private readonly socketPath: string) {}
+  constructor(private readonly socketPath: string, private readonly taskFailure?: (evidence: TaskFailureEvidence) => void) {}
 
   async imageId(name: string): Promise<string | null> {
     const response = await this.call('GET', `/images/${encodeURI(name)}/json`, undefined, [404])
@@ -199,11 +212,21 @@ export class DockerClient {
   /** Runs a task container to its end and removes it; resolves with its exit code. */
   async runTask(name: string, spec: TaskSpec): Promise<number> {
     await this.call('DELETE', `/containers/${encodeURIComponent(name)}?force=true`, undefined, [404])
-    await this.call('POST', `/containers/create?name=${encodeURIComponent(name)}`, spec)
+    const created = await this.call('POST', `/containers/create?name=${encodeURIComponent(name)}`, spec)
+    const container = typeof (created.body as { Id?: unknown }).Id === 'string' ? String((created.body as { Id: string }).Id) : null
     try {
       await this.call('POST', `/containers/${encodeURIComponent(name)}/start`)
       const result = await this.call('POST', `/containers/${encodeURIComponent(name)}/wait`, undefined, [], TASK_TIMEOUT_MS)
-      return Number((result.body as { StatusCode?: unknown }).StatusCode ?? -1)
+      const code = Number((result.body as { StatusCode?: unknown }).StatusCode ?? -1)
+      if (code !== 0 && this.taskFailure) {
+        let stderr: Buffer | null = null; let stderrError: string | null = null
+        try { stderr = await this.diagnosticRead(`/containers/${encodeURIComponent(name)}/logs?stdout=0&stderr=1&timestamps=1&tail=1000`, 64 * 1024, 250) }
+        catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
+        try { this.taskFailure({ id: container ?? randomUUID(), name, container, labels: spec.Labels, exitCode: code, stderr, stderrError,
+          limits: { memoryBytes: spec.HostConfig.Memory, nanoCpus: spec.HostConfig.NanoCpus, pids: spec.HostConfig.PidsLimit } }) }
+        catch (error) { process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.task_capture.failed', message: redact(error instanceof Error ? error.message : String(error), environmentSecrets()) }) + '\n') }
+      }
+      return code
     } finally {
       await this.call('DELETE', `/containers/${encodeURIComponent(name)}?force=true`, undefined, [404])
     }

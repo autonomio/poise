@@ -77,7 +77,7 @@ export class DiagnosticStore {
         );
         CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
         CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS log_ingestion ON log_events(ingested_at,id);
+        CREATE INDEX IF NOT EXISTS log_ingestion_seq ON log_events(ingested_at,seq);
         CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
         CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
         CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
@@ -154,14 +154,14 @@ export class DiagnosticStore {
     this.db.prepare('DELETE FROM log_events WHERE ingested_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
     this.evict(reserve)
-    this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
+    this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(Math.max(1, Math.min(this.policy.maxEvents * 2, Math.floor(this.policy.maxBytes / 1024))))
   }
 
   private evict(reserve: number): void {
     let { count, bytes } = this.db.prepare('SELECT count,bytes FROM log_usage WHERE id=1').get() as { count: number; bytes: number }
 
     while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
-      const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY ingested_at,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
+      const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY ingested_at,seq LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
       if (!oldest) break
       this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(oldest.id, oldest.workspace, oldest.visibility, new Date(this.now()).toISOString())
       this.db.prepare('DELETE FROM log_events WHERE id=?').run(oldest.id)

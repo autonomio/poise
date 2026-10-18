@@ -737,3 +737,10 @@ and commits its checkpoint only after durable central ingestion. Delivery
 cursors survive ordinary process/container replacement and cannot widen scope.
 No new JWT scope, owner bypass, shared filesystem or public ingest route is
 introduced. A failed source or sink remains explicitly unavailable/partial.
+
+The workspace distribution includes the bounded bootstrap diagnostic command and
+its canonical redaction module for standalone maintenance scripts. Installer
+output capture preserves command status/deadlines and excludes arguments and
+stdout from diagnostic records. The gateway captures release-task failure
+metadata before removing its short-lived container; retained central evidence
+is independent of that container and its home-volume lifecycle.

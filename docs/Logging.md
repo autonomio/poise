@@ -178,3 +178,10 @@ application use the same canonical redactor in `diagnostics/redaction.mjs`.
 Workspace images ship that module for standalone maintenance scripts. Local
 production build stamps include shared diagnostic sources, preventing a stale
 server bundle after those sources change.
+
+Expiry metadata is also limited by the byte budget (a conservative 1 KiB
+allowance per tombstone), so a small retained-event budget cannot fill the store
+with unlimited expiry history. Once that metadata expires, lookup reports
+unavailable rather than inventing an expiry claim. Release-install tasks capture
+their owned bounded stderr before Docker removes them; configured limits are
+explicitly distinguished from unobserved incident usage.

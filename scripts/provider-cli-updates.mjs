@@ -213,7 +213,7 @@ async function update(provider, options, requestedAt) {
   } catch (error) {
     result.status = 'unavailable'
     result.error = redact(error instanceof Error ? error.message : String(error), environmentSecrets(source))
-    if (error.diagnostic) result.diagnostic = error.diagnostic
+    if (error && typeof error === 'object' && error.diagnostic) result.diagnostic = error.diagnostic
     result.checkedAt = new Date().toISOString()
   } finally {
     if (lock) { try { if (lock.inTransaction) lock.exec('ROLLBACK') } finally { lock.close() } }

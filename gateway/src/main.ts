@@ -1,7 +1,7 @@
 import { diagnosticConfig } from './diagnostics/config.js'
 import { environmentSecrets, redact } from './diagnostics/contract.js'
 import { DiagnosticRuntime } from './diagnostics/runtime.js'
-import { EnvironmentCollectors, gatewayDiagnostic } from './diagnostics/collectors.js'
+import { EnvironmentCollectors, gatewayDiagnostic, diagnosticOwner, dockerLines } from './diagnostics/collectors.js'
 import { HostJournal } from './diagnostics/host.js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -53,7 +53,19 @@ const now = () => Date.now()
 const store = new Store(join(config.dataDir, 'gateway.db'), now)
 store.syncEnvAllowList(config.allowedUsers)
 const keys = loadOrCreateKeys(config.dataDir, log)
-const docker = new DockerClient(config.dockerSocket)
+const docker = new DockerClient(config.dockerSocket, (evidence) => {
+  const workspace = diagnosticOwner(evidence.labels)
+  if (!workspace || evidence.labels['poise.task'] !== 'install-release') return
+  let stderr: string | null = null; let stderrError = evidence.stderrError
+  try { if (evidence.stderr) stderr = dockerLines(evidence.stderr).map((line) => line.slice(line.indexOf(' ') + 1)).join('\n') }
+  catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
+  diagnostics?.emit({ id: 'release-task:' + evidence.id, time: null, source: 'docker', component: 'release-installer', operation: 'release.install', phase: 'installer_exit',
+    level: evidence.exitCode < 0 ? 'warning' : 'error', workspace, visibility: 'infrastructure', container: evidence.container,
+    message: `Release installation task exited ${evidence.exitCode}`, exitCode: evidence.exitCode < 0 ? null : evidence.exitCode,
+    stderr: stderr?.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]') ?? null, context: { taskName: evidence.name, stderrEvidenceUnavailable: stderrError, observedAt: new Date().toISOString() },
+    resources: { configuredMemoryLimitBytes: evidence.limits.memoryBytes, configuredNanoCpus: evidence.limits.nanoCpus, configuredPidsLimit: evidence.limits.pids,
+      measurement: 'configuration submitted to Docker; incident usage not observed' } })
+})
 const workspaceResolvConf = await prepareWorkspaceDns(config, docker)
 if (workspaceResolvConf) log.info('workspace.dns.configured', { resolvers: config.workspaceDns, file: workspaceResolvConf })
 const orchestrator = new Orchestrator({ config, docker, store, keys, log, now, upstream: workspaceUpstream, workspaceResolvConf })

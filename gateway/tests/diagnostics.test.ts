@@ -346,3 +346,11 @@ it('redacts opaque Git configuration credentials in bare encoded and decoded evi
     expect(JSON.stringify(value)).not.toContain(secret); expect(JSON.stringify(value)).not.toContain(encoded)
   } finally { vi.unstubAllEnvs() }
 })
+
+it('keeps expiry metadata within a tiny byte budget under repeated eviction', () => {
+  const db = store({ retentionMs: 30 * 86_400_000, maxBytes: 4096, maxEvents: 1_000_000 })
+  for (let i = 0; i < 1000; i++) db.append([event('tiny-budget-' + i)])
+  expect(db.query(alice).total).toBeGreaterThan(0)
+  expect(db.lookup(alice, event('tiny-budget-0').id).status).toBe('unavailable')
+  expect(db.lookup(alice, event('tiny-budget-999').id).status).toBe('found')
+})
