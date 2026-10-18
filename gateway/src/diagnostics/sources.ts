@@ -46,9 +46,9 @@ export function workspaceEnvelope(value: unknown, workspace: string, now: number
   const row = object(value)
   if (!row || row.version !== 1 || row.workspace !== workspace || row.visibility !== 'workspace'
     || !['critical', 'error', 'warning'].includes(String(row.severity)) || typeof row.id !== 'string'
-    || !/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(row.id)
-    || row.id.split('_')[2] !== scopePrefix(workspace, 'workspace') || typeof row.incidentId !== 'string'
-    || !row.incidentId.startsWith('inc_' + scopePrefix(workspace, 'workspace') + '_')) throw new Error('Workspace diagnostic envelope has an invalid identity or scope')
+    || !/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(row.id)
+    || row.id.split('_')[1] !== scopePrefix(workspace, 'workspace') || typeof row.incidentId !== 'string'
+    || !new RegExp('^inc_' + scopePrefix(workspace, 'workspace') + '_[a-f0-9]{64}$').test(row.incidentId)) throw new Error('Workspace diagnostic envelope has an invalid identity or scope')
   if (typeof row.message !== 'string' || typeof row.operation !== 'string' || typeof row.source !== 'string') throw new Error('Workspace diagnostic envelope is missing its cause or source')
   const event = normalize({
     id: row.id, time: text(row.eventTime), source: row.source, component: text(row.component) ?? undefined,
@@ -69,10 +69,12 @@ export function workspaceEnvelope(value: unknown, workspace: string, now: number
 export function nativeDiagnostic(value: unknown, source: 'ingress' | 'kernel' | 'docker', id: string, workspace: string | null): DiagnosticInput {
   const row = object(value)
   if (!row) return { id, source: 'collection', level: 'warning', workspace, operation: 'record.unreadable', message: `${source} supplied an unreadable record; content was excluded` }
-  const time = source === 'kernel' && typeof row.__REALTIME_TIMESTAMP === 'string'
-    ? new Date(Number(row.__REALTIME_TIMESTAMP) / 1000).toISOString() : text(row.time) ?? text(row.timestamp) ?? null
-  return { id, time, source, level: typeof row.level === 'string' || typeof row.level === 'number' ? row.level : typeof row.PRIORITY === 'string' ? row.PRIORITY : 'unknown',
-    workspace, operation: text(row.event) ?? text(row.logger) ?? source + '.diagnostic',
+  const clock = source === 'kernel' && row.__REALTIME_TIMESTAMP !== undefined ? Number(row.__REALTIME_TIMESTAMP) / 1000
+    : typeof row.ts === 'number' ? row.ts * 1000 : null
+  const time = clock === null ? text(row.time) ?? text(row.timestamp) ?? null
+    : Number.isFinite(clock) && clock >= 0 && clock <= 8.64e15 ? new Date(clock).toISOString() : 'invalid source timestamp'
+  return { id, time, source, level: typeof row.level === 'string' || typeof row.level === 'number' ? row.level : typeof row.PRIORITY === 'string' || typeof row.PRIORITY === 'number' ? row.PRIORITY : 'unknown',
+    workspace, visibility: workspace ? 'infrastructure' : 'operator', operation: text(row.event) ?? text(row.logger) ?? source + '.diagnostic',
     message: text(row.message) ?? text(row.msg) ?? text(row.MESSAGE) ?? 'Source supplied no message',
     requestId: text(row.request_id), container: text(row.container), release: text(row.release),
     context: { method: object(row.request)?.method ?? row.method ?? null, route: text(object(row.request)?.uri)?.split('?')[0] ?? null,

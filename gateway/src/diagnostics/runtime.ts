@@ -1,10 +1,20 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import { environmentSecrets, normalize, redact, type DiagnosticInput, type LogEvent } from './contract.js'
-import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticStore, type Coverage, type LogPolicy } from './store.js'
+import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, type Coverage, type LogPolicy } from './store.js'
 
-interface Journal { writtenAt: string; stopped: boolean; dropped: number; sources: Coverage[] }
+interface Journal {
+  version: 1
+  writtenAt: string
+  stopped: boolean
+  dropped: number
+  droppedSince: string | null
+  sinkError: string | null
+  sinkSince: string | null
+  sources: Coverage[]
+}
 export interface RuntimeOptions {
   path: string
   policy?: LogPolicy
@@ -15,7 +25,7 @@ export interface RuntimeOptions {
   report?: (line: string) => void
 }
 
-/** A broken diagnostic sink cannot throw into an agent, request or gateway. */
+/** Failure domains stay separate: bad queries cannot manufacture sink outages. */
 export class DiagnosticRuntime {
   private store: DiagnosticStore | null = null
   private queue: Array<{ event: LogEvent; bytes: number }> = []
@@ -23,12 +33,21 @@ export class DiagnosticRuntime {
   private timer: ReturnType<typeof setInterval> | null = null
   private scheduled = false
   private retryAt = 0
-  private lastError: string | null = null
+  private sinkError: string | null = null
+  private sinkSince: string | null = null
+  private coverageError: string | null = null
+  private journalError: string | null = null
+  private reportError: string | null = null
+  private rejected = 0
+  private lastRejected: string | null = null
   private lastSuccess: string | null = null
   private journalAt = 0
   private dropped = 0
   private droppedSince: string | null = null
   private stopped = false
+  private draining = false
+  private readonly runId = randomUUID()
+  private sourceSequence = 0
   private readonly sources = new Map<string, Coverage>()
   private readonly now: () => number
   private readonly secrets: readonly string[]
@@ -43,22 +62,34 @@ export class DiagnosticRuntime {
     const path = this.journalPath()
     if (path && existsSync(path)) {
       try {
+        if (statSync(path).size > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
         const journal = JSON.parse(readFileSync(path, 'utf8')) as Journal
-        if (!journal || !Array.isArray(journal.sources) || journal.sources.length > 256
-          || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped)) throw new Error('Invalid collection coverage journal')
+        if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > 256
+          || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped) || journal.dropped < 0) throw new Error('Invalid collection coverage journal')
         this.dropped = journal.dropped
+        this.droppedSince = journal.droppedSince ?? null
+        this.sinkError = journal.sinkError ?? null
+        this.sinkSince = journal.sinkSince ?? null
         for (const source of journal.sources) {
-          if (!source.id || !source.source || !Array.isArray(source.gaps)) throw new Error('Invalid collection source in coverage journal')
-          const value = { ...source, status: 'partial' as const, gaps: source.gaps.slice(-31) }
-          if (!journal.stopped) value.gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
-          this.sources.set(value.id, value)
+          if (!source.id || !source.source || !Array.isArray(source.gaps)) throw new Error('Invalid source in coverage journal')
+          const gaps = source.gaps.slice(-31).map((gap) => ({ ...gap, reason: this.safe(gap.reason, 128) }))
+          // An existing open outage already covers the unobserved restart interval.
+          if (!journal.stopped && !gaps.some((gap) => gap.to === null)) gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
+          this.sources.set(source.id, { ...source, status: source.error ? 'unavailable' : 'partial', gaps })
         }
-      } catch (error) { this.fail(error) }
+      } catch (error) { this.journalError = this.message(error); this.notify('logging.coverage.unavailable', this.journalError) }
     }
   }
 
   private iso(): string { return new Date(this.now()).toISOString() }
   private journalPath(): string | null { return this.options.path === ':memory:' ? null : this.options.path + '.coverage.json' }
+  private safe(value: string, limit = 2048): string { return redact(value, this.secrets).slice(0, limit) }
+  private message(error: unknown): string { return this.safe(error instanceof Error ? error.message : String(error)) }
+
+  private notify(event: string, message: string): void {
+    try { this.report(JSON.stringify({ level: 'error', event, message })); this.reportError = null }
+    catch (error) { this.reportError = this.message(error) }
+  }
 
   start(): void {
     if (this.timer) return
@@ -69,95 +100,139 @@ export class DiagnosticRuntime {
   }
 
   emit(input: DiagnosticInput): string | null {
-    if (this.stopped) return null
+    if (this.stopped || this.draining) return null
     try {
       const event = normalize({ ...input, time: input.time === undefined ? this.iso() : input.time }, this.now(), this.secrets)
-      if (!event) return null
-      const bytes = Buffer.byteLength(JSON.stringify(event))
-      if (this.queue.length >= (this.options.maxQueueEvents ?? 1000)
-        || this.queuedBytes + bytes > (this.options.maxQueueBytes ?? 2 * 1024 * 1024)) {
-        this.dropped++
-        this.droppedSince ??= this.iso()
-        this.saveJournal()
-        return null
-      }
-      this.queue.push({ event, bytes }); this.queuedBytes += bytes
-      this.schedule()
-      return event.id
-    } catch (error) { this.fail(error); return null }
+      return event ? this.enqueue(event) : null
+    } catch (error) { this.reject(error); return null }
+  }
+
+  private enqueue(event: LogEvent): string | null {
+    const existing = this.queue.find((entry) => entry.event.id === event.id)
+    if (existing) {
+      if (isDeepStrictEqual({ ...existing.event, ingestedAt: null }, { ...event, ingestedAt: null })) return event.id
+      this.reject(new Error('Conflicting immutable Logging delivery: ' + event.id))
+      this.warning('identity.conflict', event.id, event.workspace, 'Contradictory delivery rejected; the original occurrence is preserved')
+      return null
+    }
+    const bytes = Buffer.byteLength(JSON.stringify(event))
+    if (this.queue.length >= (this.options.maxQueueEvents ?? 1000) || this.queuedBytes + bytes > (this.options.maxQueueBytes ?? 2 * 1024 * 1024)) {
+      this.dropped++; this.droppedSince ??= this.iso(); this.saveJournal(); return null
+    }
+    this.queue.push({ event, bytes }); this.queuedBytes += bytes
+    this.schedule()
+    return event.id
+  }
+
+  private warning(operation: string, id: string, workspace: string | null, message: string): void {
+    const event = normalize({ id: operation + ':' + id, time: null, source: 'collection', operation, level: 'warning', workspace, message,
+      context: { rejectedEventId: id } }, this.now(), this.secrets)
+    if (event) this.enqueue(event)
+  }
+
+  private reject(error: unknown): void {
+    this.rejected++; this.lastRejected = this.message(error)
+    this.notify('logging.record.rejected', this.lastRejected)
   }
 
   observe(id: string, source: string, workspace: string | null, error: string | null = null): void {
-    if (!this.sources.has(id) && this.sources.size >= 256) { this.fail(new Error('Collection source limit of 256 reached')); return }
+    if (!this.sources.has(id) && this.sources.size >= 256) { this.reject(new Error('Collection source limit of 256 reached')); return }
+    id = this.safe(id, 256)
     const previous = this.sources.get(id)
     const at = this.iso()
-    const reason = error === null ? null : redact(error, this.secrets).slice(0, 2048)
-    const gaps = [...(previous?.gaps ?? [])]
-    if (reason && gaps.at(-1)?.to !== null) gaps.push({ from: at, to: null, reason })
-    if (!reason && gaps.at(-1)?.to === null) gaps[gaps.length - 1] = { ...gaps[gaps.length - 1], to: at }
-    this.sources.set(id, { id, source, workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
+    const reason = error === null ? null : this.safe(error)
+    let gaps = [...(previous?.gaps ?? [])]
+    if (reason && !gaps.some((gap) => gap.to === null)) gaps.push({ from: at, to: null, reason: this.safe(reason, 128) })
+    if (!reason) gaps = gaps.map((gap) => gap.to === null ? { ...gap, to: at } : gap)
+    this.sources.set(id, { id: this.safe(id, 256), source: this.safe(source, 128), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
       observedAt: reason ? previous?.observedAt ?? null : at, ingestedAt: previous?.ingestedAt ?? null,
       availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32) })
     if (reason && previous?.error !== reason) this.emit({ source: 'collection', component: source, level: 'warning', operation: 'source.unavailable',
-      id: `coverage:${id}:${at}`, workspace, message: reason, context: { source, coverageId: id } })
+      id: `coverage:${this.runId}:${++this.sourceSequence}`, workspace, message: reason, context: { source, coverageId: id } })
     this.saveJournal()
   }
 
   health() {
-    return { status: this.lastError ? 'unavailable' : this.lastSuccess === null ? 'initializing' : this.dropped ? 'partial' : 'connected',
-      error: this.lastError, checkedAt: this.iso(), lastIngestionAt: this.lastSuccess,
-      queued: this.queue.length, queuedBytes: this.queuedBytes, dropped: this.dropped,
-      droppedSince: this.droppedSince, sources: [...this.sources.values()], policy: this.policy }
+    const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
+      || [...this.sources.values()].some((source) => source.status !== 'connected')
+    return { status: this.sinkError ? 'unavailable' : partial ? 'partial' : this.lastSuccess === null ? 'initializing' : 'connected',
+      error: this.sinkError, unavailableSince: this.sinkSince, coverageError: this.coverageError, journalError: this.journalError,
+      reportError: this.reportError, rejected: this.rejected, lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
+      queued: this.queue.length, queuedBytes: this.queuedBytes, dropped: this.dropped, droppedSince: this.droppedSince,
+      sources: [...this.sources.values()], policy: this.policy }
+  }
+
+  private connection(): DiagnosticStore {
+    if (this.store) return this.store
+    try { this.store = new DiagnosticStore(this.options.path, this.policy, this.now); return this.store }
+    catch (error) { this.sinkFailure(error); throw error }
   }
 
   query<T>(read: (store: DiagnosticStore) => T): T {
-    try {
-      this.store ??= new DiagnosticStore(this.options.path, this.policy, this.now)
-      return read(this.store)
-    } catch (error) { this.fail(error); throw new Error(this.lastError ?? 'Logging is unavailable') }
-  }
-
-  flush(): void {
-    if (this.now() < this.retryAt) return
-    try {
-      this.store ??= new DiagnosticStore(this.options.path, this.policy, this.now)
-      const batch = this.queue.slice(0, 100)
-      this.store.append(batch.map(({ event }) => event))
-      this.store.prune()
-      for (const source of this.sources.values()) {
-        if (batch.some(({ event }) => event.source === source.source && event.workspace === source.workspace)) source.ingestedAt = this.iso()
-        this.store.coverage(source)
-      }
-      for (const { bytes } of batch) this.queuedBytes -= bytes
-      this.queue.splice(0, batch.length)
-      const recovered = this.lastError
-      this.lastError = null
-      this.lastSuccess = this.iso()
-      this.retryAt = 0
-      if (recovered) this.emit({ source: 'collection', level: 'warning', operation: 'sink.recovered', message: 'Diagnostic collection recovered after an unavailable interval',
-        context: { previousError: recovered, dropped: this.dropped, unavailableSince: this.droppedSince } })
-      this.saveJournal()
-      if (this.queue.length) this.schedule()
-    } catch (error) {
-      if (error instanceof DiagnosticConflictError) {
-        const rejected = this.queue.filter(({ event }) => event.id === error.eventId)
-        this.queue = this.queue.filter(({ event }) => event.id !== error.eventId)
-        for (const entry of rejected) this.queuedBytes -= entry.bytes
-        this.emit({ source: 'collection', level: 'warning', operation: 'identity.conflict', message: error.message,
-          workspace: rejected[0]?.event.workspace, context: { eventId: error.eventId } })
-        this.schedule()
-      } else { this.fail(error); this.retryAt = this.now() + 5000 }
+    const store = this.connection()
+    try { return read(store) }
+    catch (error) {
+      if (typeof (error as { code?: unknown } | null)?.code === 'string' && String((error as { code: string }).code).startsWith('SQLITE_')) this.sinkFailure(error)
+      throw error
     }
   }
 
-  private fail(error: unknown): void {
-    const message = redact(error instanceof Error ? error.message : String(error), this.secrets).slice(0, 2048)
-    if (message !== this.lastError) this.report(JSON.stringify({ level: 'error', event: 'logging.unavailable', message }))
-    this.lastError = message
+  flush(): boolean {
+    if (this.stopped || this.now() < this.retryAt) return false
+    const batch = this.queue.slice(0, 100)
+    let store: DiagnosticStore
+    try {
+      store = this.connection()
+      store.append(batch.map(({ event }) => event))
+    } catch (error) {
+      if (error instanceof DiagnosticConflictError || error instanceof DiagnosticEventError) {
+        const rejected = this.queue.filter(({ event }) => event.id === error.eventId)
+        this.queue = this.queue.filter(({ event }) => event.id !== error.eventId)
+        for (const entry of rejected) this.queuedBytes -= entry.bytes
+        this.reject(error)
+        this.warning('record.rejected', error.eventId, rejected[0]?.event.workspace ?? null, this.message(error))
+        this.schedule()
+        return rejected.length > 0
+      }
+      this.sinkFailure(error); this.retryAt = this.now() + 5000; this.saveJournal(); return false
+    }
+    // The event transaction committed. Coverage failure must not replay or stall it.
+    for (const { bytes } of batch) this.queuedBytes -= bytes
+    this.queue.splice(0, batch.length)
+    const recovered = this.sinkError
+    const unavailableSince = this.sinkSince
+    this.sinkError = null; this.sinkSince = null; this.retryAt = 0; this.lastSuccess = this.iso()
+    try {
+      for (const source of this.sources.values()) {
+        if (batch.some(({ event }) => event.source === source.source && event.workspace === source.workspace)) source.ingestedAt = this.iso()
+        store.coverage(source)
+      }
+      this.coverageError = null
+    } catch (error) {
+      const message = this.message(error)
+      if (message !== this.coverageError) this.notify('logging.coverage.unavailable', message)
+      this.coverageError = message
+    }
+    if (recovered) {
+      const event = normalize({ id: 'sink-recovered:' + this.runId + ':' + this.iso(), source: 'collection', level: 'warning', operation: 'sink.recovered',
+        time: this.iso(), message: 'Diagnostic collection recovered after an unavailable interval',
+        context: { previousError: recovered, unavailableSince, recoveredAt: this.iso(), dropped: this.dropped } }, this.now(), this.secrets)
+      if (event) this.enqueue(event)
+    }
+    this.saveJournal()
+    if (this.queue.length) this.schedule()
+    return batch.length > 0
+  }
+
+  private sinkFailure(error: unknown): void {
+    const message = this.message(error)
+    this.sinkSince ??= this.iso()
+    if (message !== this.sinkError) this.notify('logging.unavailable', message)
+    this.sinkError = message
   }
 
   private schedule(): void {
-    if (this.scheduled || this.stopped) return
+    if (this.scheduled || this.stopped || this.draining) return
     this.scheduled = true
     setImmediate(() => { this.scheduled = false; if (!this.stopped) this.flush() })
   }
@@ -167,21 +242,29 @@ export class DiagnosticRuntime {
     if (!path || (!force && this.now() - this.journalAt < 1000)) return
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      const journal: Journal = { writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, sources: [...this.sources.values()] }
-      writeFileSync(path + '.tmp', JSON.stringify(journal), { mode: 0o600 })
-      renameSync(path + '.tmp', path)
-      this.journalAt = this.now()
-    } catch (error) { this.fail(error) }
+      const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, droppedSince: this.droppedSince,
+        sinkError: this.sinkError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
+      const payload = JSON.stringify(journal)
+      if (Buffer.byteLength(payload) > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
+      writeFileSync(path + '.tmp', payload, { mode: 0o600 }); renameSync(path + '.tmp', path)
+      this.journalAt = this.now(); this.journalError = null
+    } catch (error) {
+      const message = this.message(error)
+      if (message !== this.journalError) this.notify('logging.journal.unavailable', message)
+      this.journalError = message
+    }
   }
 
   stop(): void {
+    if (this.stopped) return
     if (this.timer) clearInterval(this.timer)
-    this.timer = null
-    this.flush()
-    this.stopped = true
-    // Pending bounded records are explicitly lost if shutdown cannot drain.
+    this.timer = null; this.draining = true
+    const deadline = Date.now() + 2000
+    while (this.queue.length && Date.now() < deadline) if (!this.flush()) break
     if (this.queue.length) { this.dropped += this.queue.length; this.droppedSince ??= this.iso() }
+    this.queue = []; this.queuedBytes = 0; this.stopped = true; this.draining = false
     this.saveJournal(true)
-    this.store?.close(); this.store = null
+    try { this.store?.close() } catch (error) { this.sinkFailure(error) }
+    this.store = null
   }
 }

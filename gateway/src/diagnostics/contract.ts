@@ -78,8 +78,8 @@ export interface LogEvent {
   visibility: 'workspace' | 'operator' | 'infrastructure'
 }
 
-const PRIVATE_KEY = /^(?:prompt|prompts|content|body|response|stdout|argv|args|environment|env|messages|conversation|attachments|reasoning)$/i
-const SECRET_KEY = /authorization|cookie|password|secret|credential|access.?token|api.?key|private.?key/i
+const PRIVATE_KEY = /^(?:prompt|prompts|content|body|responses?|stdout|argv|args|arguments|environment|env|messages|conversation|attachments|reasoning|inputs?|outputs?|payloads?|requests?)$/i
+const SECRET_KEY = /authorization|cookie|password|secret|credential|(?:^|[_-])token$|^(?:access|refresh|id|auth|api|session)Token$|^auth$|^bearer$|api.?key|private.?key/i
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const scopePrefix = (workspace: string | null, visibility: string) => hash(JSON.stringify([workspace, visibility])).slice(0, 16)
 
@@ -140,11 +140,11 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const nullable = (value: string | number | null | undefined) => value == null ? null : clean(String(value))
   const number = (value: number | null | undefined) => value != null && Number.isFinite(value) ? value : null
   const time = input.time == null ? null : Date.parse(input.time)
-  const invalidTime = time !== null && !Number.isFinite(time)
+  const invalidTime = time !== null && (!Number.isFinite(time) || time < 0)
   const ingestedAt = new Date(now).toISOString()
   const eventTime = time === null || invalidTime ? null : new Date(time).toISOString()
   const message = level === 'invalid' || invalidTime
-    ? `Collection could not normalize ${clean(input.source)}: ${level === 'invalid' ? 'unknown source severity' : 'invalid source timestamp'}` : clean(input.message, 2048)
+    ? `Collection could not normalize ${clean(input.source)}: ${level === 'invalid' ? 'unknown source severity' : 'invalid source timestamp'}. ${clean(input.message, 1024)}` : clean(input.message, 2048)
   const source = level === 'invalid' || invalidTime ? 'collection' : clean(input.source, 128)
   const operation = level === 'invalid' || invalidTime ? 'normalization.failed' : clean(input.operation, 128)
   const workspace = nullable(input.workspace)
@@ -154,7 +154,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const prefix = scopePrefix(workspace, visibility)
   const incidentId = 'inc_' + prefix + '_' + hash(JSON.stringify([workspace, visibility, source, operation, input.account ?? null,
     input.repository ?? null, input.target ?? null, input.behavior ?? null, clean(input.condition ?? message)]))
-  const id = 'evt_' + String(eventTime ? Date.parse(eventTime) : now) + '_' + prefix + '_' + hash(JSON.stringify([workspace, source, input.container ?? null, input.id ?? randomUUID()]))
+  const id = 'evt_' + prefix + '_' + hash(JSON.stringify([workspace, source, input.id ?? randomUUID()]))
   const stderr = input.stderr == null ? null : clean(input.stderr, 16_384)
   const stack = input.stack == null ? null : clean(input.stack, 8192)
   return {

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { scopePrefix, SEVERITIES, type LogEvent, type Severity } from './contract.js'
 
@@ -20,6 +20,7 @@ export interface LogFilter {
   incidentId?: string
   search?: string
   cursor?: string
+  after?: string
   limit?: number
 }
 export interface Coverage {
@@ -36,7 +37,11 @@ export interface Coverage {
 export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
 export const DEFAULT_LOG_POLICY: LogPolicy = { retentionMs: 30 * 86_400_000, maxBytes: 64 * 1024 * 1024, maxEvents: 50_000 }
 interface EventRow { id: string; sort_time: string; payload: string }
-interface Cursor { high: number; time: string; id: string; filter: string }
+interface Cursor { kind: 'page' | 'watermark'; high: number; time?: string; id?: string; filter: string }
+
+export class DiagnosticEventError extends Error {
+  constructor(readonly eventId: string, message: string) { super(message) }
+}
 
 export class DiagnosticConflictError extends Error {
   constructor(readonly eventId: string) { super('Conflicting immutable Logging event identity: ' + eventId) }
@@ -72,6 +77,7 @@ export class DiagnosticStore {
         );
         CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
         CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS log_ingestion ON log_events(ingested_at,id);
         CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
         CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
         CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
@@ -88,6 +94,7 @@ export class DiagnosticStore {
         CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT OR IGNORE INTO log_meta VALUES ('version','1');
       `)
+      this.db.prepare("INSERT OR IGNORE INTO log_meta VALUES ('cursor_key',?)").run(randomBytes(32).toString('hex'))
       this.checkVersion()
     } catch (error) {
       this.db.close()
@@ -105,13 +112,14 @@ export class DiagnosticStore {
     return this.db.transaction(() => {
       let inserted = 0
       for (const event of events) {
-        if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new Error('Invalid Logging event version or severity')
+        if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new DiagnosticEventError(event.id, 'Invalid Logging event version or severity')
         const payload = JSON.stringify(event)
         const payloadBytes = Buffer.byteLength(payload)
-        if (payloadBytes > 64 * 1024) throw new Error('Logging event exceeds 64 KiB')
+        if (payloadBytes > 64 * 1024) throw new DiagnosticEventError(event.id, 'Logging event exceeds 64 KiB')
         const prefix = scopePrefix(event.workspace, event.visibility)
-        if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[2] !== prefix
-          || !event.incidentId.startsWith(`inc_${prefix}_`)) throw new Error('Logging event identity is outside its authorized scope')
+        if (!/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(event.id) || event.id.split('_')[1] !== prefix
+          || !new RegExp(`^inc_${prefix}_[a-f0-9]{64}$`).test(event.incidentId)) throw new DiagnosticEventError(event.id, 'Logging event identity is outside its authorized scope')
+        if (this.db.prepare('SELECT 1 FROM log_expired WHERE id=?').get(event.id)) continue
         const existing = this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(event.id) as { payload: string } | undefined
         if (existing) {
           if (!isDeepStrictEqual({ ...JSON.parse(existing.payload), ingestedAt: null }, { ...event, ingestedAt: null })) throw new DiagnosticConflictError(event.id)
@@ -121,6 +129,7 @@ export class DiagnosticStore {
           event.requestId, event.operation, event.repository, event.account].filter(Boolean).join('\n').toLowerCase()
         // Account for the searchable projection and a conservative index allowance.
         const bytes = payloadBytes + Buffer.byteLength(search) + 1024
+        if (bytes > this.policy.maxBytes) throw new DiagnosticEventError(event.id, 'Logging event exceeds the configured storage budget')
         this.prune(bytes)
         inserted += this.db.prepare(`INSERT OR IGNORE INTO log_events
           (id,incident_id,sort_time,ingested_at,severity,source,component,workspace,visibility,account,repository,call_id,correlation_id,search,bytes,payload)
@@ -136,25 +145,25 @@ export class DiagnosticStore {
   prune(reserve = 0): void {
     if (reserve > this.policy.maxBytes) throw new Error('Logging event exceeds the configured storage budget')
     const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
-    this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE sort_time < ?').run(new Date(this.now()).toISOString(), cutoff)
-    this.db.prepare('DELETE FROM log_events WHERE sort_time < ?').run(cutoff)
+    this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE ingested_at < ?').run(new Date(this.now()).toISOString(), cutoff)
+    this.db.prepare('DELETE FROM log_events WHERE ingested_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
     let { count, bytes } = this.db.prepare('SELECT count,bytes FROM log_usage WHERE id=1').get() as { count: number; bytes: number }
 
     while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
-      const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY sort_time,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
+      const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY ingested_at,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
       if (!oldest) break
       this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(oldest.id, oldest.workspace, oldest.visibility, new Date(this.now()).toISOString())
       this.db.prepare('DELETE FROM log_events WHERE id=?').run(oldest.id)
       bytes -= oldest.bytes
       count--
     }
-
+    this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
   }
 
   coverage(value: Coverage): void {
-    const payload = JSON.stringify({ ...value, gaps: value.gaps.slice(-32) })
+    const payload = JSON.stringify({ ...value, gaps: value.gaps.slice(-32).map((gap) => ({ ...gap, reason: gap.reason.slice(0, 128) })) })
     if (Buffer.byteLength(payload) > 64 * 1024) throw new Error('Logging coverage exceeds its bound')
     this.db.prepare('INSERT INTO log_coverage VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,payload=excluded.payload').run(value.id, value.workspace, payload)
   }
@@ -190,7 +199,7 @@ export class DiagnosticStore {
         clauses.push(`${column}=?`); values.push(value)
       }
     }
-    for (const [key, sign] of [['from', '>='], ['to', '<=']] as const) {
+    for (const [key, sign] of [['from', '>='], ['to', '<']] as const) {
       if (filter[key] !== undefined) {
         const at = Date.parse(filter[key])
         if (!Number.isFinite(at)) throw new Error(`Invalid Logging ${key} time`)
@@ -201,15 +210,12 @@ export class DiagnosticStore {
       if (filter.search.length > 256) throw new Error('Logging search exceeds 256 characters')
       clauses.push("search LIKE ? ESCAPE '\\'"); values.push('%' + filter.search.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%')
     }
-    const fingerprint = createHash('sha256').update(JSON.stringify([access, clauses, values])).digest('hex')
-    let cursor: Cursor | null = null
-    if (filter.cursor) {
-      if (filter.cursor.length > 1024) throw new Error('Invalid Logging cursor')
-      try { cursor = JSON.parse(Buffer.from(filter.cursor, 'base64url').toString()) as Cursor } catch { throw new Error('Invalid Logging cursor') }
-      if (!cursor || cursor.filter !== fingerprint || !Number.isSafeInteger(cursor.high) || cursor.high < 0
-        || typeof cursor.time !== 'string' || !Number.isFinite(Date.parse(cursor.time)) || typeof cursor.id !== 'string' || !/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(cursor.id)) throw new Error('Logging cursor does not match these filters')
-    }
-    const high = cursor?.high ?? (this.db.prepare('SELECT COALESCE(MAX(seq),0) AS high FROM log_events').get() as { high: number }).high
+    const filterHash = createHash('sha256').update(JSON.stringify([access, clauses, values])).digest('hex')
+    const after = filter.after ? this.openToken(filter.after, 'watermark', filterHash) : null
+    if (after) { clauses.push('seq>?'); values.push(after.high) }
+    const fingerprint = createHash('sha256').update(JSON.stringify([filterHash, after?.high ?? null])).digest('hex')
+    const cursor = filter.cursor ? this.openToken(filter.cursor, 'page', fingerprint) : null
+    const high = cursor?.high ?? (this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='log_events'),0) AS high").get() as { high: number }).high
     clauses.push('seq<=?'); values.push(high)
     const where = clauses.join(' AND ')
     const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM log_events WHERE ${where}`).get(...values) as { count: number }).count
@@ -224,8 +230,36 @@ export class DiagnosticStore {
     })
     const last = page.at(-1)
     return { version: 1, events, total, countKind: 'events', nextCursor: rows.length > limit && last
-      ? Buffer.from(JSON.stringify({ high, time: last.sort_time, id: last.id, filter: fingerprint })).toString('base64url') : null,
+      ? this.sealToken({ kind: 'page', high, time: last.sort_time, id: last.id, filter: fingerprint }) : null,
+    watermark: this.sealToken({ kind: 'watermark', high, filter: filterHash }),
     coverage: this.readCoverage(access), bounds: this.bounds(access), policy: this.policy }
+  }
+
+  private key(): Buffer {
+    const row = this.db.prepare("SELECT value FROM log_meta WHERE key='cursor_key'").get() as { value: string } | undefined
+    if (!row || !/^[a-f0-9]{64}$/.test(row.value)) throw new Error('Logging cursor key is unavailable')
+    return Buffer.from(row.value, 'hex')
+  }
+
+  private sealToken(value: Cursor): string {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', this.key(), iv)
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
+    return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url')
+  }
+
+  private openToken(value: string, kind: Cursor['kind'], filter: string): Cursor {
+    try {
+      if (value.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid encoding')
+      const bytes = Buffer.from(value, 'base64url')
+      const decipher = createDecipheriv('aes-256-gcm', this.key(), bytes.subarray(0, 12))
+      decipher.setAuthTag(bytes.subarray(12, 28))
+      const token = JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString()) as Cursor
+      if (token.kind !== kind || token.filter !== filter || !Number.isSafeInteger(token.high) || token.high < 0
+        || (kind === 'page' && (typeof token.time !== 'string' || !Number.isFinite(Date.parse(token.time))
+          || typeof token.id !== 'string' || !/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(token.id)))) throw new Error('Invalid token')
+      return token
+    } catch { throw new Error('Logging cursor does not match these filters or authorization') }
   }
 
   bounds(access: LogAccess) {
@@ -237,7 +271,7 @@ export class DiagnosticStore {
   }
 
   lookup(access: LogAccess, id: string): { status: 'found'; event: LogEvent } | { status: 'expired' | 'unavailable' } {
-    if (!/^evt_\d+_[a-f0-9]{16}_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid Logging event identifier')
+    if (!/^evt_[a-f0-9]{16}_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid Logging event identifier')
     const row = (access.operator ? this.db.prepare("SELECT payload FROM log_events WHERE id=? AND (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace'))").get(id, access.workspace)
       : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace)) as { payload: string } | undefined
     if (row) return { status: 'found', event: JSON.parse(row.payload) as LogEvent }

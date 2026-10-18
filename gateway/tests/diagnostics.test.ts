@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { normalize, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { DiagnosticStore, DEFAULT_LOG_POLICY } from '../src/diagnostics/store.js'
-import { callerDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.js'
+import { callerDiagnostic, nativeDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.js'
 
 const NOW = Date.parse('2026-10-18T10:00:00Z')
 const alice = { workspace: 'alice', operator: false }
@@ -23,6 +23,29 @@ function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
 }
 
 describe('one diagnostic contract', () => {
+  it('keeps unknown-time identity independent of ingestion time and replacement containers', () => {
+    const input = { id: 'stable-native-id', time: null, level: 'error', source: 'native', operation: 'read', message: 'cause' }
+    expect(normalize(input, NOW)?.id).toBe(normalize({ ...input, container: 'replacement' }, NOW + 5000)?.id)
+    expect(event('pre-epoch', { time: '1960-01-01T00:00:00Z' })).toMatchObject({ source: 'collection', severity: 'warning', eventTime: null })
+  })
+
+  it('validates full event and incident identities at storage and stream boundaries', () => {
+    const original = event('invalid-id'); const db = store()
+    for (const update of [{ id: original.id + 'suffix' }, { incidentId: original.incidentId + 'suffix' }]) {
+      expect(() => db.append([{ ...original, ...update }])).toThrow('scope')
+      expect(() => workspaceEnvelope({ ...original, ...update }, 'alice', NOW, [])).toThrow('scope')
+    }
+  })
+
+  it('preserves native numeric priorities and diagnoses malformed timestamps without throwing', () => {
+    const malformed = nativeDiagnostic({ PRIORITY: 3, __REALTIME_TIMESTAMP: 'not-a-clock', MESSAGE: 'original cause' }, 'kernel', 'journal-id', null)
+    expect(() => normalize(malformed, NOW)).not.toThrow()
+    expect(normalize(malformed, NOW)).toMatchObject({ severity: 'warning', source: 'collection', message: expect.stringContaining('original cause') })
+    const attributed = normalize(nativeDiagnostic({ PRIORITY: 3, MESSAGE: 'kernel cause' }, 'kernel', 'journal-2', 'bob'), NOW)!
+    const db = store(); db.append([attributed])
+    expect(db.query(operator).total).toBe(1); expect(db.query(alice).total).toBe(0)
+    expect(normalize(nativeDiagnostic({ level: 'error', ts: NOW / 1000, msg: 'proxy cause' }, 'ingress', 'request', null), NOW)?.eventTime).toBe(new Date(NOW).toISOString())
+  })
   it('maps native levels and refuses to silently omit malformed levels', () => {
     for (const level of ['fatal', 'Critical', '0', '2']) expect(severity(level)).toBe('critical')
     expect(severity('ERROR')).toBe('error'); expect(severity('warn')).toBe('warning')
@@ -35,10 +58,10 @@ describe('one diagnostic contract', () => {
     const encoded = Buffer.from('x-access-token:' + secret).toString('base64')
     const value = normalize({ id: 'redaction', level: 'error', source: 'caller', operation: 'fetch', workspace: 'alice',
       message: secret, stderr: `Authorization: Basic ${encoded}\nCookie: private-cookie\nhttps://user:password@example.com/?token=private-query\n${encoded}`,
-      context: { prompt: 'private-prompt', stdout: 'private-output', nested: { environment: 'private-env', safe: 'measured' } } }, NOW, [secret])!
+      context: { prompt: 'private-prompt', stdout: 'private-output', arguments: ['private-argument'], responses: { text: 'private-response' }, token: 'opaque-token-value', refresh_token: 'opaque-refresh-value', nested: { environment: 'private-env', safe: 'measured' } } }, NOW, [secret])!
     const db = store(); db.append([value])
     const output = JSON.stringify(db.query(alice))
-    for (const denied of [secret, encoded, 'private-cookie', 'password', 'private-query', 'private-prompt', 'private-output', 'private-env']) expect(output).not.toContain(denied)
+    for (const denied of [secret, encoded, 'private-cookie', 'password', 'private-query', 'private-prompt', 'private-output', 'private-env', 'private-argument', 'private-response', 'opaque-token-value', 'opaque-refresh-value']) expect(output).not.toContain(denied)
     expect(output).toContain('measured')
   })
 
@@ -69,6 +92,24 @@ describe('one diagnostic contract', () => {
 })
 
 describe('retained authorized queries', () => {
+  it('bounds actual bytes and never resurrects a tombstoned replay', () => {
+    const policy = { retentionMs: 100_000, maxBytes: 20_000, maxEvents: 100 }
+    const db = store(policy)
+    const records = Array.from({ length: 8 }, (_, i) => event('large-' + i, { stderr: 's'.repeat(12_000) }))
+    for (const record of records) db.append([record])
+    expect(db.query(alice).total).toBe(1)
+    expect(db.lookup(alice, records[0].id).status).toBe('expired')
+    db.append([records[0]])
+    expect(db.query(alice).events.map((record) => record.id)).toEqual([records.at(-1)!.id])
+  })
+
+  it('ages out ingestion even when source timestamps are far in the future', () => {
+    const policy = { retentionMs: 1000, maxBytes: 100_000, maxEvents: 100 }
+    const db = store(policy)
+    const future = { ...event('future', { time: '2099-01-01T00:00:00Z' }), ingestedAt: new Date(NOW - 2000).toISOString() }
+    db.append([future]); expect(db.lookup(alice, future.id).status).toBe('expired')
+    expect(db.query(alice).total).toBe(0)
+  })
   it('filters the full retained dataset and never accepts lower severities', () => {
     const db = store()
     db.append(Array.from({ length: 80 }, (_, i) => event(String(i), { level: i % 2 ? 'warning' : 'error', source: i === 70 ? 'caller' : 'poise', repository: 'acme/repo' })))
@@ -101,6 +142,10 @@ describe('retained authorized queries', () => {
     const ids = [...first.events, ...second.events, ...third.events].map((row) => row.id)
     expect(new Set(ids).size).toBe(12); expect(third.nextCursor).toBeNull(); expect(second.total).toBe(12)
     expect(db.query(alice).total).toBe(13)
+    expect(db.query(alice, { after: first.watermark }).events.map((row) => row.id)).toEqual([event('late', { time: new Date(NOW - 1).toISOString() }).id])
+    expect(() => db.query(alice, { cursor: first.nextCursor!.slice(0, -3) + 'xyz' })).toThrow('cursor')
+    expect(() => db.query({ workspace: 'bob', operator: false }, { after: first.watermark })).toThrow('cursor')
+    expect(Buffer.from(first.nextCursor!, 'base64url').toString()).not.toContain('high')
   })
 
   it('enforces retention and byte/count bounds without duplicate replay evicting history', () => {
@@ -113,7 +158,7 @@ describe('retained authorized queries', () => {
     expect(() => db.query(alice, { limit: 10000 })).toThrow('page size')
   })
 
-  it('survives store restart and workspace deletion while preserving multiline cause as one event', () => {
+  it('survives store restart while preserving multiline cause as one event', () => {
     const path = join(directory(), 'history.db')
     const original = event('removed-container', { container: 'old-container', stderr: 'fatal: exact cause\nstack line one\nstack line two' })
     const first = new DiagnosticStore(path, DEFAULT_LOG_POLICY, () => NOW); first.append([original]); first.close()
@@ -124,6 +169,67 @@ describe('retained authorized queries', () => {
 })
 
 describe('collection independence and Caller evidence', () => {
+  it('drains more than one batch on shutdown and does not double count loss on restart', () => {
+    const path = join(directory(), 'drain.db')
+    const runtime = new DiagnosticRuntime({ path, now: () => NOW })
+    for (let i = 0; i < 350; i++) runtime.emit({ id: String(i), time: null, level: 'error', source: 'poise', operation: 'read', workspace: 'alice', message: 'cause' })
+    runtime.stop()
+    const db = new DiagnosticStore(path, DEFAULT_LOG_POLICY, () => NOW); stores.push(db)
+    expect(db.query(alice).total).toBe(350)
+    const reopened = new DiagnosticRuntime({ path, now: () => NOW }); expect(reopened.health()).toMatchObject({ dropped: 0, queued: 0 }); reopened.stop()
+  })
+
+  it('separates query validation, coverage failure and reporter failure from sink availability', () => {
+    const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, report: () => { throw new Error('reporter broken') } })
+    expect(() => runtime.query((db) => db.query(alice, { limit: 1000 }))).toThrow('page size')
+    expect(runtime.health().error).toBeNull()
+    const writeCoverage = vi.spyOn(DiagnosticStore.prototype, 'coverage').mockImplementation(() => { throw new Error('coverage only') })
+    try {
+      runtime.observe('source', 'poise', 'alice')
+      runtime.emit({ id: 'coverage-failure', time: null, source: 'poise', operation: 'read', level: 'error', workspace: 'alice', message: 'cause' })
+      expect(() => runtime.flush()).not.toThrow()
+      expect(runtime.health()).toMatchObject({ error: null, queued: 0, coverageError: 'coverage only', reportError: 'reporter broken' })
+      expect(runtime.query((db) => db.query(alice)).total).toBe(1)
+    } finally { writeCoverage.mockRestore(); runtime.stop() }
+  })
+
+  it('quarantines poison input and preserves the first contradictory queued delivery', () => {
+    const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, policy: { ...DEFAULT_LOG_POLICY, maxBytes: 20_000 }, report: () => undefined })
+    const input = { id: 'queued', time: null, source: 'poise', operation: 'read', level: 'error', workspace: 'alice', message: 'original' }
+    runtime.emit(input); runtime.emit({ ...input, message: 'contradiction' })
+    runtime.emit({ ...input, id: 'oversized', stderr: 'large'.repeat(5000), stack: 'stack'.repeat(3000) })
+    runtime.emit({ ...input, id: 'valid-later', message: 'later cause' })
+    for (let i = 0; i < 5; i++) runtime.flush()
+    const records = runtime.query((db) => db.query(alice)).events
+    expect(records.some((record) => record.message === 'later cause')).toBe(true)
+    expect(records.some((record) => record.message === 'original')).toBe(true)
+    expect(records.some((record) => record.message === 'contradiction')).toBe(false)
+    expect(runtime.health()).toMatchObject({ error: null, queued: 0, rejected: 2 })
+    runtime.stop()
+  })
+
+  it('retains prior drop evidence and closes open outages after an unclean restart', () => {
+    const path = join(directory(), 'coverage.db'); let now = NOW
+    const runtime = new DiagnosticRuntime({ path, now: () => now, maxQueueEvents: 1, report: () => undefined })
+    runtime.observe('kernel', 'kernel', null, 'a'.repeat(2048))
+    runtime.emit({ source: 'poise', operation: 'read', level: 'error', message: 'dropped' })
+    now += 1000; runtime.flush()
+    const restarted = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
+    expect(restarted.health()).toMatchObject({ status: 'partial', dropped: 1, droppedSince: new Date(NOW).toISOString() })
+    restarted.observe('kernel', 'kernel', null)
+    expect(restarted.health().sources[0].gaps.every((gap) => gap.to !== null)).toBe(true)
+    restarted.stop(); runtime.stop()
+  })
+
+  it('bounds repeated long source gaps and distinguishes same-clock transitions', () => {
+    const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, report: () => undefined })
+    for (let i = 0; i < 40; i++) { runtime.observe('kernel', 'kernel', null, String(i) + '障'.repeat(2048)); runtime.observe('kernel', 'kernel', null) }
+    runtime.flush()
+    expect(runtime.health()).toMatchObject({ error: null, queued: 0, coverageError: null })
+    expect(runtime.query((db) => db.query(operator)).total).toBe(40)
+    expect(runtime.query((db) => db.readCoverage(operator))[0].gaps).toHaveLength(32)
+    runtime.stop()
+  })
   it('bounds buffering, exposes drops through an independent health path and recovers ingestion', () => {
     const root = directory(); const blocked = join(root, 'blocked'); writeFileSync(blocked, 'not a directory')
     let now = NOW
