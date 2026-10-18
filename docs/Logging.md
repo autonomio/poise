@@ -248,3 +248,7 @@ A recreated workspace store rejects obsolete delivery cursors explicitly. The au
 Caller completion checkpoints include the source database's persistent stream identity. A replaced database causes bounded replay from zero and a retained collection gap, even when its new sequences are below the old checkpoint. Legacy numeric checkpoints replay safely rather than guessing their source identity.
 
 Configured and explicitly supplied nonempty secrets are masked regardless of length, including their Git encodings. Literal replacement protects existing redaction markers. Validated public workspace handles retain their authoritative authorization scope when a short secret overlaps the handle; captured technical text remains redacted. Workspace and Docker diagnostic reads have absolute five-second deadlines in addition to byte and inactivity limits; response trickling cannot keep a collection pass open indefinitely.
+
+The independent coverage journal has an 8 MiB read/write limit, covering the
+maximum 256 sources with 32 bounded Unicode gap reasons per source. Clean
+restarts preserve all retained gaps and accumulated drop counts.

@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { DiagnosticStore, type Coverage } from './store.js'
 import { environmentSecrets, normalize, redact } from './contract.js'
 import { nativeDiagnostic } from './sources.js'
+import { MAX_COVERAGE_JOURNAL_BYTES } from './runtime.js'
 
 interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; coverageError?: string | null; reportError?: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
 
@@ -19,7 +20,7 @@ export async function runOperator(args: string[], write: (line: string) => void 
     let journal: JournalHealth | null = null
     let journalError: string | null = null
     try {
-      if (statSync(path + '.coverage.json').size > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
+      if (statSync(path + '.coverage.json').size > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds 8 MiB')
       journal = JSON.parse(readFileSync(path + '.coverage.json', 'utf8')) as JournalHealth
       if (!journal || journal.version !== 1 || !Array.isArray(journal.sources) || !Number.isFinite(Date.parse(journal.writtenAt))) throw new Error('Coverage journal is incompatible')
       journal.sources = journal.sources.filter((source) => source.workspace === null || source.workspace === access.workspace)

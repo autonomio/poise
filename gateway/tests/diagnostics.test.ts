@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { environmentSecrets, normalize, redact, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
+import { runOperator } from '../src/diagnostics/cli.js'
 import { DiagnosticStore, DEFAULT_LOG_POLICY } from '../src/diagnostics/store.js'
 import { callerDiagnostic, nativeDiagnostic, workspaceEnvelope } from '../src/diagnostics/sources.js'
 
@@ -448,7 +449,7 @@ it.each(['id_token_hint', 'idTokenHint', 'bearerToken', 'BearerToken', 'custom_t
   expect(value.resources).toEqual({ nested: { [key]: '[redacted]', freeBytes: 456 } })
 })
 
-it.each(['access_token', 'refresh_token', 'id_token', 'id_token_hint', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
+it.each(['access_token', 'refresh_token', 'id_token', 'id_token_hint', 'idTokenHint', 'IDTokenHint', 'oauthTokenSecret', 'accessToken', 'session-token', 'device_token', 'oauth_token_secret', 'token', 'auth', 'bearer', 'credentials', 'secret', 'private_key'])('redacts opaque %s fields without configured secret values', (key) => {
   const secret = 'opaque-value-not-present-in-environment'
   for (const field of [`{"phase":"auth","${key}":"${secret}"}`, JSON.stringify({ body: JSON.stringify({ [key]: secret }) }), `{'${key}': '${secret}'}`, `${key}=${secret}`]) {
     const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected', stderr: field }, NOW, [])!
@@ -483,4 +484,40 @@ it('keeps the authoritative owner scope when a short secret overlaps its public 
     expect(store.query({ workspace: 'alice', operator: false }).total).toBe(1)
     expect(store.query({ workspace: 'bob', operator: true }).total).toBe(0)
   } finally { store.close() }
+})
+
+
+it('persists maximum Unicode coverage plus later losses across clean restart', async () => {
+  const root = directory(); const path = join(root, 'logging.db')
+  const options = { path, now: () => NOW, maxQueueEvents: 0, secrets: [], report: () => undefined }
+  const runtime = new DiagnosticRuntime(options)
+  for (let source = 0; source < 256; source++) {
+    for (let gap = 0; gap < 32; gap++) {
+      runtime.observe('source-' + source, 'kernel', null, String(gap) + '界'.repeat(2046))
+      if (gap < 31) runtime.observe('source-' + source, 'kernel', null)
+    }
+  }
+  runtime.emit({ source: 'poise', operation: 'later-drop', level: 'error', message: 'later lost event' })
+  const dropped = runtime.health().dropped
+  expect(dropped).toBeGreaterThan(8192)
+  runtime.stop()
+  const payload = readFileSync(path + '.coverage.json', 'utf8')
+  expect(Buffer.byteLength(payload)).toBeGreaterThan(2 * 1024 * 1024)
+  expect(Buffer.byteLength(payload)).toBeLessThan(8 * 1024 * 1024)
+  expect(runtime.health().journalError).toBeNull()
+  const restored = new DiagnosticRuntime(options)
+  try {
+    expect(restored.health()).toMatchObject({ journalError: null, dropped })
+    expect(restored.health().sources).toHaveLength(256)
+    for (const source of restored.health().sources) {
+      expect(source.gaps).toHaveLength(32)
+      expect(source.gaps.at(-1)?.reason).toBe('31' + '界'.repeat(126))
+    }
+  } finally { restored.stop() }
+  vi.stubEnv('POISE_GATEWAY_DATA', root)
+  try {
+    const lines: string[] = []
+    await runOperator(['health'], (line) => { lines.push(line) })
+    expect(JSON.parse(lines[0])).toMatchObject({ journalError: null, journal: { dropped } })
+  } finally { vi.unstubAllEnvs() }
 })

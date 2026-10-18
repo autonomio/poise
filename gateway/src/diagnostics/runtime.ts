@@ -5,6 +5,9 @@ import { isDeepStrictEqual } from 'node:util'
 import { environmentSecrets, normalize, redact, SOURCES, type DiagnosticInput, type LogEvent } from './contract.js'
 import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, type Coverage, type LogPolicy } from './store.js'
 
+// Covers 256 sources with 32 Unicode gap reasons and bounded source errors.
+export const MAX_COVERAGE_JOURNAL_BYTES = 8 * 1024 * 1024
+
 interface Journal {
   version: 1
   writtenAt: string
@@ -66,7 +69,7 @@ export class DiagnosticRuntime {
     const path = this.journalPath()
     if (path && existsSync(path)) {
       try {
-        if (statSync(path).size > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
+        if (statSync(path).size > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds 8 MiB')
         const journal = JSON.parse(readFileSync(path, 'utf8')) as Journal
         if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > 256
           || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped) || journal.dropped < 0) throw new Error('Invalid collection coverage journal')
@@ -79,7 +82,7 @@ export class DiagnosticRuntime {
         this.sinkSince = journal.sinkSince ?? null
         for (const source of journal.sources) {
           if (!source.id || !source.source || !Array.isArray(source.gaps)) throw new Error('Invalid source in coverage journal')
-          const gaps = source.gaps.slice(-31).map((gap) => ({ ...gap, reason: this.safe(gap.reason, 128) }))
+          const gaps = source.gaps.slice(journal.stopped ? -32 : -31).map((gap) => ({ ...gap, reason: this.safe(gap.reason, 128) }))
           // An existing open outage already covers the unobserved restart interval.
           if (!journal.stopped && !gaps.some((gap) => gap.to === null)) gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
           this.sources.set(source.id, { ...source, status: source.status === 'not-configured' ? 'not-configured' : source.error ? 'unavailable' : 'partial', gaps })
@@ -302,7 +305,7 @@ export class DiagnosticRuntime {
       const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, rejected: this.rejected, droppedSince: this.droppedSince,
         sinkError: this.sinkError, coverageError: this.coverageError, reportError: this.reportError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
       const payload = JSON.stringify(journal)
-      if (Buffer.byteLength(payload) > 2 * 1024 * 1024) throw new Error('Coverage journal exceeds 2 MiB')
+      if (Buffer.byteLength(payload) > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds 8 MiB')
       writeFileSync(path + '.tmp', payload, { mode: 0o600 }); renameSync(path + '.tmp', path)
       this.journalAt = this.now(); this.journalError = null
     } catch (error) {
