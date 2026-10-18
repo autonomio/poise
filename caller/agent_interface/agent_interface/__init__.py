@@ -522,15 +522,15 @@ def diagnostics(after: int = 0, limit: int = 3) -> dict:
                      completed_at=utc_stamp(row["ended_at"]) if row["ended_at"] else None)
         try:
             evidence = json.loads(row["diagnostic"]) if row["diagnostic"] else None
-            if evidence is not None and not isinstance(evidence, dict):
-                raise ValueError("diagnostic must be an object")
+            if evidence is not None and (not isinstance(evidence, dict) or evidence.get("version") != 1):
+                raise ValueError("diagnostic must be a supported version 1 object")
             # Python's decoder accepts NaN/Infinity and overflowing exponents.
             # The stream must remain finite JSON for its JavaScript consumer.
             json.dumps(evidence, allow_nan=False)
             entry["diagnostic"] = evidence
         except (ValueError, TypeError, RecursionError):
             entry["diagnostic"] = None
-            entry["evidence_unavailable"] = "Stored process diagnostic is malformed, non-finite or exceeds bounded decoding limits"
+            entry["evidence_unavailable"] = "Stored process diagnostic is malformed, unsupported, non-finite or exceeds bounded decoding limits"
         if len(json.dumps(entry, allow_nan=False).encode()) > 64 * 1024:
             entry["diagnostic"] = None
             entry["error"] = (row["error"] or "")[:2048]
