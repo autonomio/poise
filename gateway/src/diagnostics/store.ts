@@ -129,7 +129,8 @@ export class DiagnosticStore {
           || !new RegExp(`^inc_${prefix}_[a-f0-9]{64}$`).test(event.incidentId)) throw new DiagnosticEventError(event.id, 'Logging event identity is outside its authorized scope', event)
         if (this.db.prepare('SELECT 1 FROM log_expired WHERE id=?').get(event.id)) continue
         if (Date.parse(event.ingestedAt) < this.now() - this.policy.retentionMs) {
-          this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(event.id, event.workspace, event.visibility, new Date(this.now()).toISOString())
+          this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(event.id, event.workspace, event.visibility,
+            new Date(Date.parse(event.ingestedAt) + this.policy.retentionMs).toISOString())
           continue
         }
         const existing = this.db.prepare('SELECT payload FROM log_events WHERE id=?').get(event.id) as { payload: string } | undefined

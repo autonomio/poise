@@ -140,12 +140,25 @@ describe('retained authorized queries', () => {
     expect(db.query(alice).events.map((record) => record.id)).toEqual([records.at(-1)!.id])
   })
 
-  it('ages out ingestion even when source timestamps are far in the future', () => {
+  it.each([1001, 2000, 2001])('never renews expiry evidence for an initially %i-ms-old ingestion with a future source timestamp', (age) => {
     const policy = { retentionMs: 1000, maxBytes: 100_000, maxEvents: 100 }
-    const db = store(policy)
-    const future = { ...event('future', { time: '2099-01-01T00:00:00Z' }), ingestedAt: new Date(NOW - 2000).toISOString() }
-    db.append([future]); expect(db.lookup(alice, future.id).status).toBe('expired')
+    const path = join(directory(), 'late-ingestion.db'); let now = NOW
+    const db = new DiagnosticStore(path, policy, () => now); stores.push(db)
+    const future = { ...event('future', { time: '2099-01-01T00:00:00Z' }), ingestedAt: new Date(NOW - age).toISOString() }
+    db.append([future])
     expect(db.query(alice).total).toBe(0)
+    const reader = new DiagnosticStore(path, policy, () => now, { readonly: true }); stores.push(reader)
+    for (const view of [db, reader]) {
+      expect(view.lookup(alice, future.id).status).toBe(age <= 2000 ? 'expired' : 'unavailable')
+      expect(view.lookup(operator, future.id).status).toBe(age <= 2000 ? 'expired' : 'unavailable')
+      expect(view.lookup({ workspace: 'bob', operator: false }, future.id).status).toBe('unavailable')
+    }
+    now += policy.retentionMs
+    db.append([future])
+    for (const view of [db, reader]) {
+      expect(view.lookup(alice, future.id).status).toBe('unavailable')
+      expect(view.query(alice).total).toBe(0)
+    }
   })
   it('filters the full retained dataset and never accepts lower severities', () => {
     const db = store()

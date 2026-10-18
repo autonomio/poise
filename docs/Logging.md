@@ -294,6 +294,8 @@ chain or a detected cycle marks the persisted event truncated explicitly.
 
 Age-expiry evidence starts when retention elapses. An idle store or later
 cleanup cannot extend that evidence window beyond one further retention period.
+An initial stale delivery or replay uses the same original ingestion boundary;
+it cannot restart expiry evidence after that window has elapsed.
 
 Release-task stderr reads from the beginning under the independent byte/time
 budget, retaining the first 1,000 decoded stderr lines. Later omitted lines or
