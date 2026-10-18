@@ -196,6 +196,9 @@ with unlimited expiry history. Once that metadata expires, lookup reports
 unavailable rather than inventing an expiry claim. Release-install tasks capture
 their owned bounded stderr before Docker removes them; configured limits are
 explicitly distinguished from unobserved incident usage.
+Start/wait failures capture available stderr before cleanup too. Unknown task
+completion keeps a null exit code and the actual control error; failed evidence
+reads or reporting remain explicit and never replace the task's outcome.
 
 
 ## Storage calibration

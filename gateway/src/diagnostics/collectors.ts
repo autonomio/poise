@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ContainerSummary, DockerClient } from '../docker.js'
+import type { ContainerSummary, DockerClient, TaskFailureEvidence } from '../docker.js'
 import type { Context } from '../context.js'
 import { signAssertion } from '../assertion.js'
 import http from 'node:http'
@@ -40,6 +40,24 @@ export function dockerLines(bytes: Buffer): string[] {
   const lines = [...streams.values()].flatMap((chunks) => Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean))
   if (lines.length > 1000 || lines.some((line) => Buffer.byteLength(line) > 64 * 1024)) throw new Error('Docker log line/count bound exceeded; collection gap')
   return lines
+}
+
+/** Preserve release-task evidence before cleanup, including unknown completion. */
+export function releaseTaskDiagnostic(evidence: TaskFailureEvidence): DiagnosticInput | null {
+  const workspace = diagnosticOwner(evidence.labels)
+  if (!workspace || evidence.labels['poise.task'] !== 'install-release') return null
+  const technical = (value: string) => value.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]')
+  let stderr: string | null = null; let stderrError = evidence.stderrError
+  try { if (evidence.stderr) stderr = dockerLines(evidence.stderr).map((line) => line.slice(line.indexOf(' ') + 1)).join('\n') }
+  catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
+  return { id: 'release-task:' + evidence.id, time: null, source: 'docker', component: 'release-installer', operation: 'release.install', phase: evidence.phase,
+    level: 'error', workspace, visibility: 'infrastructure', container: evidence.container,
+    message: evidence.error ? 'Release installation completion is unknown: ' + technical(evidence.error) : `Release installation task exited ${evidence.exitCode}`,
+    exitCode: evidence.exitCode, stderr: stderr === null ? null : technical(stderr),
+    context: { taskName: evidence.name, controlError: evidence.error === null ? null : technical(evidence.error), stderrEvidenceUnavailable: stderrError === null ? null : technical(stderrError),
+      completionKnown: evidence.phase === 'installer_exit', observedAt: new Date().toISOString() },
+    resources: { configuredMemoryLimitBytes: evidence.limits.memoryBytes, configuredNanoCpus: evidence.limits.nanoCpus, configuredPidsLimit: evidence.limits.pids,
+      measurement: 'configuration submitted to Docker; incident usage not observed' } }
 }
 
 export function dockerLifecycle(value: unknown): DiagnosticInput | null {
@@ -87,6 +105,7 @@ export class EnvironmentCollectors {
 
   private async collect(): Promise<void> {
     const until = Math.floor(Date.now() / 1000) - 1
+    this.runtime.observe('docker-task-reporting', 'collection', null, this.docker.taskCaptureError)
     try {
       const containers = await this.docker.diagnosticContainers()
       if (containers.length > 128) throw new Error('Docker collection exceeds 128 source containers; remaining coverage is unavailable')

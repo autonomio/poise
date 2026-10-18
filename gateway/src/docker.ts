@@ -37,7 +37,9 @@ export interface TaskFailureEvidence {
   name: string
   container: string | null
   labels: Record<string, string>
-  exitCode: number
+  exitCode: number | null
+  phase: 'installer_start' | 'installer_wait' | 'installer_exit'
+  error: string | null
   stderr: Buffer | null
   stderrError: string | null
   limits: { memoryBytes: number; nanoCpus: number; pids: number }
@@ -104,7 +106,9 @@ const DISK_USAGE_TIMEOUT_MS = 10 * 60_000
  * refuses anything below 1.44, and every field used here is the same in both.
  */
 export class DockerClient {
-  constructor(private readonly socketPath: string, private readonly taskFailure?: (evidence: TaskFailureEvidence) => void) {}
+  private reportingError: string | null = null
+  get taskCaptureError(): string | null { return this.reportingError }
+  constructor(private readonly socketPath: string, private readonly taskFailure?: (evidence: TaskFailureEvidence) => void, private readonly taskTimeoutMs = TASK_TIMEOUT_MS) {}
 
   async imageId(name: string): Promise<string | null> {
     const response = await this.call('GET', `/images/${encodeURI(name)}/json`, undefined, [404])
@@ -217,21 +221,37 @@ export class DockerClient {
     const created = await this.call('POST', `/containers/create?name=${encodeURIComponent(name)}`, spec)
     const native = created.body && typeof created.body === 'object' ? created.body as { Id?: unknown } : null
     const container = typeof native?.Id === 'string' ? native.Id : null
+    let phase: TaskFailureEvidence['phase'] = 'installer_start'
     try {
       await this.call('POST', `/containers/${encodeURIComponent(name)}/start`)
-      const result = await this.call('POST', `/containers/${encodeURIComponent(name)}/wait`, undefined, [], TASK_TIMEOUT_MS)
-      const code = Number((result.body as { StatusCode?: unknown }).StatusCode ?? -1)
-      if (code !== 0 && this.taskFailure) {
-        let stderr: Buffer | null = null; let stderrError: string | null = null
-        try { stderr = await this.diagnosticRead(`/containers/${encodeURIComponent(name)}/logs?stdout=0&stderr=1&timestamps=1&tail=1000`, 64 * 1024, 250) }
-        catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
-        try { this.taskFailure({ id: container ?? randomUUID(), name, container, labels: spec.Labels, exitCode: code, stderr, stderrError,
-          limits: { memoryBytes: spec.HostConfig.Memory, nanoCpus: spec.HostConfig.NanoCpus, pids: spec.HostConfig.PidsLimit } }) }
-        catch (error) { process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.task_capture.failed', message: redact(error instanceof Error ? error.message : String(error), environmentSecrets()) }) + '\n') }
-      }
+      phase = 'installer_wait'
+      const result = await this.call('POST', `/containers/${encodeURIComponent(name)}/wait`, undefined, [], this.taskTimeoutMs)
+      const code = result.body && typeof result.body === 'object' ? (result.body as { StatusCode?: unknown }).StatusCode : null
+      if (typeof code !== 'number' || !Number.isSafeInteger(code) || code < 0) throw new Error('Docker task wait returned no valid exit status')
+      phase = 'installer_exit'
+      if (code !== 0) await this.captureTaskFailure(name, spec, container, code, phase, null)
       return code
+    } catch (error) {
+      await this.captureTaskFailure(name, spec, container, null, phase, error instanceof Error ? error.message : String(error))
+      throw error
     } finally {
       await this.call('DELETE', `/containers/${encodeURIComponent(name)}?force=true`, undefined, [404])
+    }
+  }
+
+  private async captureTaskFailure(name: string, spec: TaskSpec, container: string | null, exitCode: number | null, phase: TaskFailureEvidence['phase'], error: string | null): Promise<void> {
+    if (!this.taskFailure) return
+    let stderr: Buffer | null = null; let stderrError: string | null = null
+    try { stderr = await this.diagnosticRead(`/containers/${encodeURIComponent(container ?? name)}/logs?stdout=0&stderr=1&timestamps=1&tail=1000`, 64 * 1024, 250) }
+    catch (failure) { stderrError = failure instanceof Error ? failure.message : String(failure) }
+    try {
+      this.taskFailure({ id: container ?? randomUUID(), name, container, labels: spec.Labels, exitCode, phase, error, stderr, stderrError,
+        limits: { memoryBytes: spec.HostConfig.Memory, nanoCpus: spec.HostConfig.NanoCpus, pids: spec.HostConfig.PidsLimit } })
+      this.reportingError = null
+    } catch (failure) {
+      this.reportingError = redact(failure instanceof Error ? failure.message : String(failure), environmentSecrets()).slice(0, 2048)
+      try { process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.task_capture.failed', message: this.reportingError }) + '\n') }
+      catch (reportFailure) { this.reportingError = (this.reportingError + '; stderr reporting unavailable: ' + redact(String(reportFailure), environmentSecrets())).slice(0, 2048) }
     }
   }
 
