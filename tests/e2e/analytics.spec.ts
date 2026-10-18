@@ -321,6 +321,8 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
     return histogram.getBoundingClientRect().bottom - tile.getBoundingClientRect().bottom
   }))
   expect(Math.max(...overflows)).toBeLessThanOrEqual(-8)
+  const duration = value(page, 'Time to first review')
+  expect(await duration.evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(await duration.evaluate(el => parseFloat(getComputedStyle(el).lineHeight)) + 1)
   await page.screenshot({ path: info.outputPath(`analytics-narrow-${theme}.png`), fullPage: true })
   // A readout wider than a right-column chart stays on the page.
   const closed = view.locator('.analytics-history[data-series="Issues closed"] .analytics-history-plot')
