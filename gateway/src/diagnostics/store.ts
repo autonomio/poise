@@ -82,7 +82,7 @@ export class DiagnosticStore {
         CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
         CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS log_expired (id TEXT PRIMARY KEY, workspace TEXT, visibility TEXT NOT NULL CHECK (visibility IN ('workspace','operator','infrastructure')), expired_at TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS log_expired_time ON log_expired(expired_at);
+        CREATE INDEX IF NOT EXISTS log_expired_order ON log_expired(expired_at DESC,id DESC);
         CREATE TABLE IF NOT EXISTS log_usage (id INTEGER PRIMARY KEY CHECK(id=1), count INTEGER NOT NULL, bytes INTEGER NOT NULL);
         INSERT OR IGNORE INTO log_usage SELECT 1,COUNT(*),COALESCE(SUM(bytes),0) FROM log_events;
         CREATE TRIGGER IF NOT EXISTS log_usage_insert AFTER INSERT ON log_events BEGIN
@@ -111,6 +111,7 @@ export class DiagnosticStore {
     if (events.length > 100) throw new Error('Logging ingestion batch exceeds 100 events')
     return this.db.transaction(() => {
       let inserted = 0
+      this.prune()
       for (const event of events) {
         if (event.version !== 1 || !SEVERITIES.includes(event.severity)) throw new DiagnosticEventError(event.id, 'Invalid Logging event version or severity')
         const payload = JSON.stringify(event)
@@ -134,7 +135,7 @@ export class DiagnosticStore {
         // Account for the searchable projection and a conservative index allowance.
         const bytes = payloadBytes + Buffer.byteLength(search) + 1024
         if (bytes > this.policy.maxBytes) throw new DiagnosticEventError(event.id, 'Logging event exceeds the configured storage budget')
-        this.prune(bytes)
+        this.evict(bytes)
         inserted += this.db.prepare(`INSERT OR IGNORE INTO log_events
           (id,incident_id,sort_time,ingested_at,severity,source,component,workspace,visibility,account,repository,call_id,correlation_id,search,bytes,payload)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(event.id, event.incidentId, event.eventTime ?? event.ingestedAt,
@@ -152,7 +153,11 @@ export class DiagnosticStore {
     this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE ingested_at < ?').run(new Date(this.now()).toISOString(), cutoff)
     this.db.prepare('DELETE FROM log_events WHERE ingested_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
+    this.evict(reserve)
     this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
+  }
+
+  private evict(reserve: number): void {
     let { count, bytes } = this.db.prepare('SELECT count,bytes FROM log_usage WHERE id=1').get() as { count: number; bytes: number }
 
     while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
@@ -163,7 +168,6 @@ export class DiagnosticStore {
       bytes -= oldest.bytes
       count--
     }
-    this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
   }
 
   coverage(value: Coverage): void {
@@ -177,7 +181,7 @@ export class DiagnosticStore {
     return rows.map(({ payload }) => {
       const value = JSON.parse(payload) as Coverage
       return access.operator || value.workspace === access.workspace ? value : {
-        ...value, id: value.source, error: value.error ? 'Source unavailable; an operator can inspect the cause.' : null,
+        ...value, id: 'shared_' + createHash('sha256').update(value.id).digest('hex').slice(0, 16), error: value.error ? 'Source unavailable; an operator can inspect the cause.' : null,
         gaps: value.gaps.map((gap) => ({ ...gap, reason: 'Shared source collection gap' })),
       }
     })

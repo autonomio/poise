@@ -335,3 +335,14 @@ describe('source recovery and unavailable evidence', () => {
     runtime.stop()
   })
 })
+
+
+it('redacts opaque Git configuration credentials in bare encoded and decoded evidence', () => {
+  const secret = 'opaque-git-password'
+  const encoded = Buffer.from('x-access-token:' + secret).toString('base64')
+  vi.stubEnv('GIT_CONFIG_VALUE_0', 'Authorization: Basic ' + encoded)
+  try {
+    const value = event('git-config-secret', { stderr: secret + '\n' + encoded })
+    expect(JSON.stringify(value)).not.toContain(secret); expect(JSON.stringify(value)).not.toContain(encoded)
+  } finally { vi.unstubAllEnvs() }
+})

@@ -96,7 +96,19 @@ export function redact(value: string, secrets: readonly string[] = []): string {
 }
 
 export function environmentSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
-  return Object.entries(env).flatMap(([key, value]) => SECRET_KEY.test(key) || /TOKEN|KEY|AUTH/i.test(key) ? value && value.length >= 8 ? [value] : [] : [])
+  const secrets: string[] = []
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || value.length < 8 || !(SECRET_KEY.test(key) || /TOKEN|KEY|AUTH|GIT_CONFIG_VALUE/i.test(key))) continue
+    secrets.push(value)
+    const basic = /authorization:\s*basic\s+([A-Za-z0-9+/=]+)/i.exec(value)
+    if (basic) {
+      secrets.push(basic[1])
+      const decoded = Buffer.from(basic[1], 'base64').toString('utf8')
+      const colon = decoded.indexOf(':')
+      if (colon >= 0) secrets.push(decoded.slice(colon + 1))
+    }
+  }
+  return secrets
 }
 
 export function severity(level: string | number): Severity | null | 'invalid' {
