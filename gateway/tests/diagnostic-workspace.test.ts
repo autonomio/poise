@@ -57,7 +57,7 @@ it('resumes authenticated bounded backfill after source recreation without reset
     await collector.stop()
     expect(runtime.query((db) => db.lookup({ workspace: 'alice', operator: false }, first.id)).status).toBe('found')
     expect(runtime.health().sources.find((row) => row.id === 'workspace:alice')?.gaps.length).toBeGreaterThan(0)
-    for (const token of assertions) expect(verifyAssertion(token, h.keys.publicKeyBase64)).toMatchObject({ scope: 'admin', sub: 'alice' })
+    for (const token of assertions) expect(verifyAssertion(token, h.keys.publicKeyBase64)).toMatchObject({ scope: 'admin', sub: 'Alice', aud: 'workspace:alice' })
   } finally {
     await collector.stop(); runtime.stop(); source.close(); ctx.agent.destroy()
     await new Promise<void>((resolve) => server.close(() => resolve()))
