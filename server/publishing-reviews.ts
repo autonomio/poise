@@ -135,21 +135,22 @@ async function sourceFor(session: GitHubSession, repo: string, path: string, com
 }
 
 async function readSnapshot(session: GitHubSession, record: PublishRecord, previous?: Snapshot): Promise<Snapshot> {
+  const expectedId = record.repoId ?? previous?.repoId
   const read = (repo: string) => query<PullAnswer>(session, PULL_QUERY, { owner: repo.split('/')[0], name: repo.split('/')[1], number: record.pullRequest.number })
   let result: PullAnswer
-  try { result = await read(previous && previous.repoId === record.repoId ? previous.repo : record.repo) }
+  try { result = await read(previous && previous.repoId === expectedId ? previous.repo : record.repo) }
   catch (error) {
-    if (!(error instanceof GitHubError) || !record.repoId || error.retryAt) throw error
-    const own = await repositoryById(session, record.repoId)
+    if (!(error instanceof GitHubError) || !expectedId || error.retryAt) throw error
+    const own = await repositoryById(session, expectedId)
     result = await read(own.fullName)
   }
-  if (record.repoId && result.repository?.databaseId !== record.repoId) {
-    const own = await repositoryById(session, record.repoId)
+  if (expectedId && result.repository?.databaseId !== expectedId) {
+    const own = await repositoryById(session, expectedId)
     result = await read(own.fullName)
   }
   const repository = result.repository
   const pull = repository?.pullRequest
-  if (!repository || !pull || (record.repoId && repository.databaseId !== record.repoId)) throw new GitHubError('The publication pull request could not be read in its own repository.', 404)
+  if (!repository || !pull || (expectedId && repository.databaseId !== expectedId)) throw new GitHubError('The publication pull request could not be read in its own repository.', 404)
   const threads = await allPages(session, pull.id, 'PullRequest', 'reviewThreads', THREAD_FIELDS, pull.reviewThreads)
   const comments = await allPages(session, pull.id, 'PullRequest', 'comments', MESSAGE_FIELDS, pull.comments)
   const reviews = await allPages(session, pull.id, 'PullRequest', 'reviews', MESSAGE_FIELDS, pull.reviews)
