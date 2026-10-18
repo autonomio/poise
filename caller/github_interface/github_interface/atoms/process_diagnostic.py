@@ -1,5 +1,6 @@
 """Bounded process evidence. Never record argv, stdout, or the environment."""
 import base64
+import binascii
 import errno
 import os
 import re
@@ -19,7 +20,12 @@ def redact(text: str, env: dict[str, str]) -> str:
         match = re.search(r"(?i)authorization: basic ([A-Za-z0-9+/=]+)", value)
         if match:
             secrets.add(match[1])
-            decoded = base64.b64decode(match[1]).decode("utf-8", errors="replace")
+            try:
+                decoded = base64.b64decode(match[1], validate=True).decode("utf-8", errors="replace")
+            except binascii.Error:
+                # Invalid optional encoding still remains in the verbatim
+                # redaction set; it cannot replace the original process error.
+                continue
             if ":" in decoded:
                 secrets.add(decoded.split(":", 1)[1])
     for value in sorted((value for value in secrets if value), key=len, reverse=True):

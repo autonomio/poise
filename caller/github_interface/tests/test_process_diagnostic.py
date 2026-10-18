@@ -5,6 +5,7 @@ import sys
 import tempfile
 from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -82,6 +83,26 @@ class TestProcessDiagnostic(TestCase):
         self.assertEqual(self.failure('init').diagnostic['outcome'], 'missing_executable')
         self.fake('raise SystemExit(128)\n')
         self.assertIn('cause unknown', str(self.failure('fetch')))
+
+    def test_malformed_optional_basic_credential_never_masks_the_git_cause(self):
+        self.env['EXTRA_AUTHORIZATION'] = 'authorization: basic abc'
+        self.fake('import sys\nsys.stderr.write("fatal: permission denied\n")\nsys.exit(128)\n')
+        error = self.failure('fetch')
+        self.assertIn('permission denied', str(error))
+        self.assertEqual(error.diagnostic['exit_code'], 128)
+
+    def test_deadline_during_stderr_drain_cannot_turn_success_into_timeout(self):
+        self.fake('print("completed diff")\n')
+        state = {}
+        def timer(seconds, expire):
+            state['expire'] = expire
+            return SimpleNamespace(start=lambda: None, cancel=lambda: state.update(cancelled=True))
+        def join(**kwargs):
+            if not state.get('cancelled'):
+                state['expire']()
+        reader = SimpleNamespace(start=lambda: None, join=join, is_alive=lambda: False)
+        with patch.object(rd.threading, 'Timer', side_effect=timer), patch.object(rd.threading, 'Thread', return_value=reader):
+            self.assertEqual(rd._git(str(self.root), self.env, 'diff'), b'completed diff\n')
 
     def test_resource_evidence_is_measured_at_failure_and_missing_measurement_is_explicit(self):
         self.fake('import sys\nsys.stderr.write("fatal: No space left on device\\n")\nsys.exit(1)\n')

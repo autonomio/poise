@@ -52,7 +52,8 @@ def _git(cwd: str, env: dict[str, str], *args: str, limit: int = MAX_DIFF_BYTES,
 
         timed_out = threading.Event()
         def expire() -> None:
-            timed_out.set()
+            if process.poll() is None:
+                timed_out.set()
             stop()
 
         reader = threading.Thread(target=capture.drain, args=(process.stderr,), daemon=True)
@@ -65,8 +66,12 @@ def _git(cwd: str, env: dict[str, str], *args: str, limit: int = MAX_DIFF_BYTES,
                 stop()
                 raise ReviewPacketTooLarge(f"{PACKET_LIMIT_CODE}: retained review diff exceeds {limit} bytes")
             process.wait()
-            reader.join()  # The deadline also bounds inherited stderr pipes.
-            if timed_out.is_set() or process.returncode:
+            timer.cancel()
+            reader.join(timeout=1)
+            if reader.is_alive():
+                stop()  # A completed leader may leave inherited stderr open.
+                reader.join(timeout=1)
+            if process.returncode:
                 raise failure(cwd, env, args, started, capture, process=process,
                               timed_out=timed_out.is_set(), timeout=timeout)
             return stdout
