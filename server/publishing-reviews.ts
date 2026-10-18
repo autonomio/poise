@@ -22,6 +22,7 @@ interface Pull {
 interface Quota { remaining: number, resetAt: string, cost: number }
 interface PullAnswer { repository: { databaseId: number, nameWithOwner: string, pullRequest: Pull | null } | null }
 interface Snapshot { reviews: ArticleReview[], checkedAt: string, active: boolean, pullId: string, repo: string, repoId: number }
+interface SnapshotRead { snapshot: Snapshot, problem?: string, retryAt?: number }
 interface Cached { snapshot?: Snapshot, nextAt: number, failures: number, problem?: string }
 
 const PREFIX = 'publishing-reviews:'
@@ -134,7 +135,7 @@ async function sourceFor(session: GitHubSession, repo: string, path: string, com
   try { return await read } catch (error) { sources.delete(key); throw error }
 }
 
-async function readSnapshot(session: GitHubSession, record: PublishRecord, previous?: Snapshot): Promise<Snapshot> {
+async function readSnapshot(session: GitHubSession, record: PublishRecord, previous?: Snapshot): Promise<SnapshotRead> {
   const expectedId = record.repoId ?? previous?.repoId
   const read = (repo: string) => query<PullAnswer>(session, PULL_QUERY, { owner: repo.split('/')[0], name: repo.split('/')[1], number: record.pullRequest.number })
   let result: PullAnswer
@@ -156,6 +157,10 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
   const reviews = await allPages(session, pull.id, 'PullRequest', 'reviews', MESSAGE_FIELDS, pull.reviews)
   const common = { repo: repository.nameWithOwner, site: record.site, pr: pull.number, prUrl: pull.url }
   const items: ArticleReview[] = []
+  const sourceFailures = new Map<string, GitHubError | PostFileError>()
+  const problems = new Set<string>()
+  let unavailable: GitHubError | undefined
+  let retryAt = 0
   for (const thread of threads) {
     const messages = await allPages(session, thread.id, 'PullRequestReviewThread', 'comments', INLINE_FIELDS, thread.comments)
     if (!messages.length) continue
@@ -164,13 +169,24 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
       canReply: thread.viewerCanReply, canResolve: thread.viewerCanResolve, messages: messages.map(messageOf) }
     item.location = thread.diffSide === 'LEFT' ? 'Removed text' : 'File or metadata feedback'
     if (thread.path === record.path && thread.diffSide === 'RIGHT' && thread.startDiffSide !== 'LEFT' && first.originalCommit && first.originalLine) {
+      const sourceKey = `${thread.path}:${first.originalCommit.oid}`
       try {
+        const failure = unavailable ?? sourceFailures.get(sourceKey)
+        if (failure) throw failure
         const source = await sourceFor(session, repository.nameWithOwner, thread.path, first.originalCommit.oid)
         if (source) item.anchor = anchorFromSource(source, first.originalStartLine ?? first.originalLine, first.originalLine)
         if (!source) item.location = 'The reviewed file is no longer available'
       } catch (error) {
         if (!(error instanceof GitHubError || error instanceof PostFileError)) throw error
-        if (error instanceof GitHubError && error.retryAt) throw error
+        sourceFailures.set(sourceKey, error)
+        if (error instanceof GitHubError) {
+          problems.add(`Review passage unavailable: ${error.message}`)
+          if (error.status >= 500 || error.retryAt) unavailable = error
+          if (error.retryAt) {
+            retryAt = Math.max(retryAt, error.retryAt)
+            setMeta(budgetKey(session.me), String(retryAt))
+          }
+        }
         item.location = `Passage unavailable: ${error.message}`
       }
     }
@@ -179,7 +195,8 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
   for (const [kind, rows] of [['comment', comments], ['review', reviews]] as const) {
     for (const comment of rows) if (comment.body.trim()) items.push({ ...common, id: comment.id, kind, resolved: false, outdated: false, canReply: !pull.locked, canResolve: false, messages: [messageOf(comment)], location: 'Document feedback' })
   }
-  return { reviews: items, active: pull.state === 'OPEN', checkedAt: new Date().toISOString(), pullId: pull.id, repo: repository.nameWithOwner, repoId: repository.databaseId }
+  return { snapshot: { reviews: items, active: pull.state === 'OPEN', checkedAt: new Date().toISOString(), pullId: pull.id, repo: repository.nameWithOwner, repoId: repository.databaseId },
+    ...(problems.size ? { problem: [...problems].join(' '), ...(retryAt ? { retryAt } : {}) } : {}) }
 }
 
 async function refresh(me: string, record: PublishRecord, force: boolean, polling = false): Promise<Cached> {
@@ -193,8 +210,10 @@ async function refresh(me: string, record: PublishRecord, force: boolean, pollin
   if (now < old.nextAt && (!force || old.problem || now - Date.parse(old.snapshot?.checkedAt ?? '') < 10_000)) return old
   const read = (async () => {
     try {
-      const snapshot = await readSnapshot(await signIn(me), record, old.snapshot)
-      return save(key, { snapshot, nextAt: Date.now() + REVIEW_INTERVAL_MS, failures: 0 })
+      const { snapshot, problem, retryAt } = await readSnapshot(await signIn(me), record, old.snapshot)
+      const failures = problem ? old.failures + 1 : 0
+      const delay = problem ? Math.min(REVIEW_INTERVAL_MS * 2 ** Math.min(failures - 1, 4), 60 * 60_000) : REVIEW_INTERVAL_MS
+      return save(key, { snapshot, nextAt: Math.max(Date.now() + delay, retryAt ?? 0), failures, ...(problem ? { problem } : {}) })
     } catch (error) {
       if (!(error instanceof GitHubError || error instanceof HttpError)) throw error
       if (error instanceof GitHubError && error.retryAt) setMeta(budgetKey(me), String(error.retryAt))

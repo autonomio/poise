@@ -103,6 +103,19 @@ describe('review positions', () => {
     expect(locateReview('A replacement.', { ...anchor, unique: true })).toBeNull()
     expect(locateReview('First\nRepeated.\nAfter\n\nSecond\nRepeated.\nEnd', { ...anchor, before: 'Second', after: 'End' })).toEqual({ start: 30, end: 39 })
   })
+
+  it('requires complete context lines rather than matching their suffixes or prefixes', () => {
+    const anchor = { quote: 'Repeated.', before: 'Context', after: 'After', unique: false }
+    expect(locateReview('DifferentContext\nRepeated.\nAfterwards\n\nUnrelated\nRepeated.\nElse', anchor)).toBeNull()
+    const text = 'DifferentContext\nRepeated.\nAfterwards\n\nContext\nRepeated.\nAfter'
+    expect(locateReview(text, anchor)?.start).toBe(text.lastIndexOf('Repeated.'))
+  })
+
+  it('maps normalized reviewed passages back to the exact CRLF document offsets', () => {
+    const anchor = api.anchorFromSource(SOURCE.replace(/\n/g, '\r\n'), 7, 8)!
+    const text = '# A question\r\n\r\nOpening paragraph.\r\n\r\nSecond line.\r\nThird line.'
+    expect(locateReview(text, anchor)).toEqual({ start: text.indexOf('Second line.'), end: text.length })
+  })
 })
 
 describe('cached article review synchronization', () => {
@@ -201,6 +214,46 @@ describe('cached article review synchronization', () => {
     const other = await request('/sync', {}, 'other')
     expect(other.body.problems[0]).toContain('API budget')
     expect(mocks.query).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['source', 'repository'])('shares rate-limit backoff from direct %s reads with other publications', async (where) => {
+    const failure = new github.GitHubError('Rate limit exceeded.', 429, Date.now() + 3600_000)
+    if (where === 'source') mocks.file.mockRejectedValue(failure)
+    else {
+      const original = mocks.query.getMockImplementation()!
+      mocks.query.mockImplementation(async (...args: unknown[]) => {
+        const result = await original(...args) as { repository: { databaseId: number } }
+        result.repository.databaseId = 999
+        return result
+      })
+      mocks.repository.mockRejectedValue(failure)
+    }
+    await request('/sync', {})
+    await editor.writeDoc('other', 'Another article')
+    await editor.writePublishLedger('other', { records: [{ ...record(), pullRequest: { number: 8, url: 'https://github.com/acme/site/pull/8' } }] })
+    const other = await request('/sync', {}, 'other')
+    expect(other.body.problems[0]).toContain('API budget')
+    expect(other.body.retryAt).toBe('2026-10-18T11:00:00.000Z')
+    expect(mocks.query).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains new comments after a source timeout, deduplicates failures and increases backoff', async () => {
+    current.reviewThreads.nodes.push(thread('same-source'))
+    mocks.file.mockRejectedValue(new github.GitHubError('Source request timed out.', 502))
+    const first = (await request('/sync', {})).body
+    expect(first.reviews).toHaveLength(4)
+    expect(first.stale).toBe(true)
+    expect(mocks.file).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(Date.now() + REVIEW_INTERVAL_MS)
+    const second = (await request('/sync', {})).body
+    expect(mocks.file).toHaveBeenCalledTimes(2)
+    expect(Date.parse(second.retryAt!) - Date.now()).toBe(REVIEW_INTERVAL_MS * 2)
+    await request('/sync', { force: true })
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+    vi.setSystemTime(Date.now() + REVIEW_INTERVAL_MS * 2)
+    mocks.file.mockResolvedValue({ text: SOURCE, sha: SHA })
+    expect((await request('/sync', {})).body).toMatchObject({ stale: false, problems: [] })
+    expect(mocks.file).toHaveBeenCalledTimes(3)
   })
 
   it('does not attach removed-side or metadata comments to unrelated draft text', async () => {
