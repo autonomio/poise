@@ -119,7 +119,7 @@ function assertInput(input: AlertInput): void {
 }
 
 export function pruneAlerts(now = Date.now()): number {
-  return db.prepare('DELETE FROM alerts WHERE created_at < ? AND (resolved_at IS NOT NULL OR kind = 'chat_turn_finished')').run(new Date(now - ALERT_RETENTION_MS).toISOString()).changes
+  return db.prepare("DELETE FROM alerts WHERE created_at < ? AND (resolved_at IS NOT NULL OR kind = 'chat_turn_finished')").run(new Date(now - ALERT_RETENTION_MS).toISOString()).changes
 }
 
 /** Records an alert unless one for the same key is still unresolved.
