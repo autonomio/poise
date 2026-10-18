@@ -29,6 +29,7 @@ export function loggingWorkspace(): string { return workspace }
 
 export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> & { source?: string }, secrets: readonly string[] = []): string | null {
   if (!active) return null
+  let accepted: string | null = null
   try {
     const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
       source: input.source ?? 'poise', workspace, visibility: 'workspace',
@@ -36,7 +37,8 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
       container: input.container === undefined ? process.env.POISE_MODE === 'service' ? process.env.HOSTNAME ?? null : null : input.container,
       release: input.release === undefined ? process.env.POISE_RELEASE || process.env.POISE_SOURCE_SHA || null : input.release }, Date.now(), [...environmentSecrets(), ...secrets])
     if (!event) return null
-    const accepted = active.ingest(event)
+    accepted = active.ingest(event)
+    if (!accepted) return null
     // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
     if (process.stderr.writableLength < 256 * 1024) {
       if (process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')) { stderrFailed = false; active.observe('forwarding', 'collection', workspace) }
@@ -45,7 +47,7 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
     return accepted
   } catch (error) {
     active?.observe('capture', 'collection', workspace, 'Diagnostic capture failed: ' + (error instanceof Error ? error.name : 'capture failure'))
-    return null
+    return accepted
   }
 }
 
