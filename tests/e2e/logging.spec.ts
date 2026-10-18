@@ -102,6 +102,77 @@ test('real retained Caller evidence supports bounded native filters, expansion, 
   expect(Math.max(0, ...metrics.tasks)).toBeLessThan(350)
 })
 
+test('applies every exact filter and redacted search across the retained dataset', async ({ page }) => {
+  await ready(page)
+  await page.locator('.logging-more summary').click()
+  await page.locator('#logging-search').fill('never-present')
+  await expect(status(page)).toContainText('0 matching retained events')
+  await page.locator('#logging-search').fill('fetch failed')
+  await expect(status(page)).toContainText('120 matching retained events')
+  await page.locator('#logging-account').fill('octocat')
+  await page.locator('#logging-repository').fill('acme/repo')
+  await page.locator('#logging-callId').fill(fixtures[0].callId!)
+  await expect(status(page)).toContainText('1 matching retained events')
+  await page.locator('#logging-callId').fill('')
+  await page.locator('#logging-correlationId').fill('c'.repeat(32))
+  await expect(status(page)).toContainText('0 matching retained events')
+  await page.locator('#logging-correlationId').fill('')
+  await page.locator('#logging-incidentId').fill(fixtures[0].incidentId)
+  await page.locator('#logging-workspace').fill('local')
+  await expect(status(page)).toContainText('120 matching retained events')
+  await page.locator('#logging-search').fill('fixture-secret')
+  await expect(status(page)).toContainText('0 matching retained events')
+  await page.locator('#logging-workspace').fill('bob')
+  await expect(page.locator('#logging-message')).toContainText('belongs to someone else')
+  await expect(rows(page)).toHaveCount(0)
+  await expect(page.locator('#logging-empty')).toBeHidden()
+})
+
+test('uses Settings civil day/week boundaries across the spring DST transition', async ({ page }) => {
+  await ready(page, undefined, 'Europe/Helsinki')
+  await page.clock.setFixedTime(new Date('2026-03-29T12:00:00Z'))
+  const query = async (preset: string) => {
+    const response = page.waitForResponse((reply) => new URL(reply.url()).pathname === '/api/logging')
+    await page.locator(`[data-time="${preset}"]`).click()
+    const url = new URL((await response).url())
+    return [url.searchParams.get('from'), url.searchParams.get('to')]
+  }
+  expect(await query('today')).toEqual(['2026-03-28T22:00:00.000Z', '2026-03-29T21:00:00.000Z'])
+  expect(await query('yesterday')).toEqual(['2026-03-27T22:00:00.000Z', '2026-03-28T22:00:00.000Z'])
+  expect(await query('week')).toEqual(['2026-03-22T22:00:00.000Z', '2026-03-29T21:00:00.000Z'])
+})
+
+test('discards a delayed older filter response and stops polling in a hidden document', async ({ page }) => {
+  await ready(page)
+  let release!: () => void
+  const released = new Promise<void>((resolve) => { release = resolve })
+  let held!: () => void
+  const holding = new Promise<void>((resolve) => { held = resolve })
+  await page.route('**/api/logging?**', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('search') !== 'fetch failed') return route.continue()
+    const response = await route.fetch()
+    const body = await response.json()
+    held(); await released; await route.fulfill({ json: body })
+  })
+  try {
+    await page.locator('#logging-search').fill('fetch failed')
+    await holding
+    await page.locator('#logging-search').fill('critical representative')
+    await expect(status(page)).toContainText('1 matching retained events')
+    release()
+    await expect(rows(page)).toHaveCount(1)
+    await expect(rows(page).first()).toContainText('critical representative')
+    await page.clock.install()
+    let reads = 0
+    page.on('request', (request) => { if (new URL(request.url()).searchParams.has('after')) reads++ })
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')) })
+    await page.clock.runFor(45_000)
+    expect(reads).toBe(0)
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')) })
+    await expect.poll(() => reads).toBe(1)
+  } finally { release() }
+})
+
 test('cold links reveal an event outside the first page, widen bounds, persist view and restore saved filters', async ({ page }) => {
   const target = fixtures[0]
   const path = '/?' + new URLSearchParams({ view: 'logging', event: target.id, from: new Date(Date.now() + 3_600_000).toISOString() })
@@ -195,6 +266,17 @@ for (const theme of ['light', 'dark']) test(`uses native table styles and bounde
   const native = await rows(page).first().evaluate((row) => ({ font: getComputedStyle(row).fontFamily, size: getComputedStyle(row).fontSize, class: row.className }))
   expect(native.class).toBe('agent-row')
   expect(native.font.length).toBeGreaterThan(0)
+  const tableStyle = (selector: string) => page.locator(selector).first().evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { font: style.fontFamily, size: style.fontSize, padding: style.padding, border: style.borderBottom, color: style.color }
+  })
+  const loggingStyle = await tableStyle('#logging-table th')
+  await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+  await expect(page.locator('#swarm-table')).toBeVisible()
+  expect(await tableStyle('#swarm-table th')).toEqual(loggingStyle)
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
+  await page.locator('#menu-popover [data-action="logging"]').click()
+  await expect(rows(page)).toHaveCount(50)
   await rows(page).first().getByRole('button', { name: 'Toggle diagnostic evidence' }).click()
   await page.screenshot({ path: info.outputPath(`${theme}-logging-desktop.png`), fullPage: true })
   await page.setViewportSize({ width: 420, height: 820 })
