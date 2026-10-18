@@ -232,6 +232,9 @@ watchForSignOut()
 // cycle and does not depend on org/me, so leave it alone; refresh the rest.
 window.addEventListener('poise:synced', () => {
   const v = menu.currentView()
+  // Startup reads the durable target after Settings resolves; this earlier
+  // Settings notification must not mount a different view and discard it.
+  if (v !== 'logging' && new URLSearchParams(location.search).get('view') === 'logging') return
   if (v === 'main') refreshMainView()
   else if (v === 'logging') refreshLoggingView()
   else if (v === 'editor') { /* nothing here is scoped by org/me */ }

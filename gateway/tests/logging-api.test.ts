@@ -1,6 +1,6 @@
 import { sign } from 'node:crypto'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalize } from '../src/diagnostics/contract.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
 import { parseLoggingQuery } from '../src/diagnostics/query-parser.js'
@@ -20,7 +20,7 @@ describe('authorized retained diagnostic reads', () => {
     const db = new DiagnosticStore(join(h.config.dataDir, 'logging.db'))
     try { db.append([own, foreign, host]) } finally { db.close() }
   })
-  afterEach(async () => { await h.close() })
+  afterEach(async () => { await h.close(); vi.restoreAllMocks() })
 
   const request = (handle: string, cookie: string, path: string, extra: Record<string, string> = {}) => h.request({
     host: workspaceHost(handle), path: '/_poise/api/logging' + path,
@@ -43,6 +43,7 @@ describe('authorized retained diagnostic reads', () => {
   })
 
   it('requires explicit current admin access and never exposes another owner private record', async () => {
+    vi.spyOn(h.context.deps, 'now').mockReturnValue(h.context.deps.now())
     expect((await request('root', root, '')).json()).toMatchObject({ total: 0 })
     const instance = await request('root', root, '?scope=instance')
     expect(instance.json()).toMatchObject({ total: 1, events: [{ id: host.id }] })

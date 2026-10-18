@@ -103,6 +103,14 @@ test('real retained Caller evidence supports bounded native filters, expansion, 
   expect(metrics.navigation).toBeLessThan(1000)
   expect(metrics.rows).toBeLessThan(200)
   expect(Math.max(0, ...metrics.tasks)).toBeLessThan(350)
+  await page.locator('#view-logging [data-level="error"]').click()
+  await expect(rows(page)).toHaveCount(50)
+  await rows(page).first().getByRole('button', { name: 'Toggle diagnostic evidence' }).click()
+  const run = page.getByRole('button', { name: 'Open Caller run in Swarm', exact: true })
+  const call = await run.getAttribute('data-call')
+  await run.click()
+  await expect(page.locator('#view-swarm')).toContainText('No run found for call ' + call)
+
 })
 
 test('applies every exact filter and redacted search across the retained dataset', async ({ page }) => {
