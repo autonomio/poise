@@ -86,7 +86,7 @@ class DiagnosticStreamCase(TestCase):
             '{"version":1,"context":{"value":Infinity}}',
             '{"version":1,"context":{"value":-Infinity}}',
             '{"version":1,"context":{"value":1e9999}}',
-            '{"version":1,"context":' + '[' * 2000 + '0' + ']' * 2000 + '}',
+            '{"version":1,"context":' + '[' * 40000 + '0' + ']' * 40000 + '}',
             '{"version":2,"stderr":"unsupported evidence"}',
             '{"stderr":"unversioned evidence"}',
             '{"version":true}',
@@ -104,8 +104,8 @@ class DiagnosticStreamCase(TestCase):
         agent_interface.finish(later, "failed", error="later exact cause", diagnostic={"version": 1, "stderr": "later stderr"})
         cursor = 0
         for id_ in ids:
+            page = agent_interface.diagnostics(cursor, 1)
             with self.subTest(id=id_):
-                page = agent_interface.diagnostics(cursor, 1)
                 output = io.StringIO()
                 with patch.object(sys, "argv", ["agent-interface", "--diagnostics", str(cursor), "1"]), patch.object(sys, "stdout", output):
                     agent_interface.main()
@@ -118,7 +118,7 @@ class DiagnosticStreamCase(TestCase):
                 self.assertIn("evidence_unavailable", row)
                 self.assertEqual(row["error"], "known process cause")
                 self.assertGreater(page["cursor"], cursor)
-                cursor = page["cursor"]
+            cursor = page["cursor"]
         final = agent_interface.diagnostics(cursor, 1)
         self.assertEqual(final["events"][0]["id"], later)
         self.assertEqual(final["events"][0]["diagnostic"]["stderr"], "later stderr")
