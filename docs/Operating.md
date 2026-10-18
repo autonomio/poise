@@ -1,11 +1,13 @@
 # Operating Poise
 
-For a signed-in browser, the owner's workspace host offers
-`/_poise/api/logging/export`; append `scope=instance` only for an administrator's
-explicit instance investigation. The response is bounded NDJSON with a metadata
-line containing `truncated` and `resumeCursor`. To continue, send that cursor
-with the same filters. Local installations expose `/api/logging/export` instead;
-the existing operator command remains available without a running workspace.
+Diagnostic HTTP reads are for the owner's same-origin workspace page. Typing or
+bookmarking an export endpoint is refused by the existing browser guards; an
+operator without that page uses the operator command documented in Logging.
+The page's authenticated `/_poise/api/logging/export` request returns bounded
+NDJSON with `truncated` and `resumeCursor` in its metadata line. Continuing an
+export requires the same filters and that opaque cursor. `scope=instance` is
+an explicit administrator choice. Local installations use `/api/logging/export`
+under the local loopback rules; no browser session token is needed there.
 See [Logging](Logging.md) for access, retention, filters and query budgets.
 
 This guide runs Poise as a service on one Linux server, for yourself and a
