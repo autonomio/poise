@@ -272,3 +272,7 @@ Text capture also redacts spaced API/private-key names using the same key
 separators as structured context. Caller registers coverage before its first
 page is flushed, so the initial successful ingestion is recorded even when no
 later failure arrives.
+
+Successful Caller pagination and pending legacy backfill are temporary partial
+coverage, not observation failures. Catch-up clears that state without creating
+an outage gap or a synthetic warning; genuine observed failure gaps remain.

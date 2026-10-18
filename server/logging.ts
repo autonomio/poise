@@ -94,7 +94,11 @@ async function collectCaller(): Promise<void> {
     }
     if (page.cursor < sequence) throw new Error('Caller diagnostic sequence moved backwards within one stream')
     callerStream = page.streamId
-    runtime.observe('caller', 'caller', workspace, page.hasMore || page.backfillPending ? 'Caller historical backfill is still pending' : null)
+    const observePage = () => {
+      if (page.hasMore || page.backfillPending) runtime.partial('caller', 'caller', workspace, 'Caller historical backfill is still pending')
+      else runtime.observe('caller', 'caller', workspace)
+    }
+    observePage()
     for (const row of page.events) {
       const input = callerDiagnostic(row, workspace)
       if (input) {
@@ -108,7 +112,7 @@ async function collectCaller(): Promise<void> {
     if (runtime.health().error || runtime.health().queued) throw new Error('Caller diagnostic checkpoint waits for durable ingestion')
     sequence = page.cursor
     saveCallerCheckpoint()
-    runtime.observe('caller', 'caller', workspace, page.hasMore || page.backfillPending ? 'Caller historical backfill is still pending' : null)
+    observePage()
   } catch (error) {
     if (!abort?.signal.aborted) runtime.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error))
   } finally { abort = null }

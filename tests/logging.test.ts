@@ -171,3 +171,22 @@ it('retains the first Caller ingestion time without requiring another failure', 
   expect(loggingRuntime()!.health().sources.find((source) => source.id === 'caller')?.ingestedAt).toBe(ingestedAt)
   expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(1)
 })
+
+
+it.each([{ hasMore: true, backfillPending: false }, { hasMore: false, backfillPending: true }, { hasMore: true, backfillPending: true }])('clears pending Caller coverage without inventing loss for %j', async (pending) => {
+  const base = { version: 1, streamId: '9'.repeat(32), cursor: 1 }
+  const run = vi.spyOn(processes, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ ...base, ...pending,
+    events: [{ id: '1'.repeat(32), error: 'retained precise cause' }] }), stderr: '' })
+  start()
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(join(directory, 'logging.db.caller'), 'utf8')).cursor).toBe(1))
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'caller')).toMatchObject({ status: 'partial', gaps: [] })
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'collection', search: 'Caller historical backfill' })).total).toBe(0)
+  await stopLogging()
+  run.mockResolvedValue({ stdout: JSON.stringify({ ...base, hasMore: false, backfillPending: false, events: [] }), stderr: '' })
+  startLogging()
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+  loggingRuntime()!.flush()
+  expect(loggingRuntime()!.health().sources.find((source) => source.id === 'caller')).toMatchObject({ status: 'connected', error: null, gaps: [] })
+  expect(loggingRuntime()!.query((db) => db.readCoverage({ workspace: 'alice', operator: false })).find((source) => source.id === 'caller')).toMatchObject({ status: 'connected', error: null, gaps: [] })
+  expect(loggingRuntime()!.query((db) => db.query({ workspace: 'alice', operator: false }, { source: 'caller' })).total).toBe(1)
+})
