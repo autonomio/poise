@@ -103,7 +103,9 @@ async function readQuota(): Promise<void> {
     const data: GithubQuotaReport & { error?: string } = await response.json()
     if (!response.ok || !Array.isArray(data.accounts)) throw new Error(data.error || 'GitHub API quota could not be read.')
     if (generation !== quotaGeneration) return
-    noticeFeed.reportReadErrors('analytics-quota', data.accounts.flatMap((account) => account.error ? [{ key: `quota:${account.login.toLowerCase()}`, title: `GitHub quota for ${account.login} is unavailable`, body: account.error }] : []))
+    const quotaFailures: ReadFailure[] = data.accounts.flatMap((account) => account.error ? [{ key: `quota:${account.login.toLowerCase()}`, title: `GitHub quota for ${account.login} is unavailable`, body: account.error }] : [])
+    if (!data.accounts.length) quotaFailures.push({ key: 'quota:configuration', title: 'GitHub quota needs configured accounts', body: 'Set your GitHub user and automation accounts in Settings → General.', target: { settings: 'general' } })
+    noticeFeed.reportReadErrors('analytics-quota', quotaFailures)
     const now = Date.now()
     const avatar = (login: string) => `https://github.com/${encodeURIComponent(login)}.png?size=80`
     const failedAvatars = new Set(Array.from(content.querySelectorAll<HTMLImageElement>('.github-quota-avatar img.broken'), (img) => img.getAttribute('src')))
@@ -148,8 +150,8 @@ function readFailure(title: string, error: unknown): ReadFailure {
   return { key: `read:${body}`, title, body }
 }
 
-function accountFailures(data: { errors: Array<{ org: string, error: string }> }): ReadFailure[] {
-  return data.errors.map(({ org, error }) => ({ key: `account:${org.toLowerCase()}`, title: `GitHub data for ${org} is unavailable`, body: error }))
+function accountFailures(data: { errors: Array<{ org: string, error: string, stale?: boolean }> }): ReadFailure[] {
+  return data.errors.map(({ org, error, stale }) => ({ key: `account:${org.toLowerCase()}`, title: `GitHub data for ${org} ${stale ? 'is not updating' : 'is unavailable'}`, body: error }))
 }
 
 function historyMarkup(label: string, all: HistorySeries[] | null): string {
@@ -185,9 +187,9 @@ const measurementHelp: Record<string, string> = {
   'Pull requests opened': 'Pull requests created on the selected day.',
   'Closed without merging': 'Pull requests closed on the selected day without being merged.',
   'Time to first review': 'Median elapsed time from opening to the first submitted review by someone other than the author, for first reviews on the selected day.',
-  'Comments': 'Mean conversation and review comments per pull request merged on the selected day.',
+  'Comments': 'Median conversation and review comments per pull request merged on the selected day.',
   'Median lines': 'Median additions plus deletions per pull request merged on the selected day. Withheld when any size is unknown.',
-  'Behaviors': 'Mean completed review and approval behaviors per pull request merged on the selected day.',
+  'Behaviors': 'Median completed review and approval behaviors per pull request merged on the selected day.',
   'Median time': 'Median elapsed time from opening to merge across pull requests merged on the selected day.',
   'Merged by agent': 'Share of pull requests merged on the selected day whose merger was the configured agent account.',
 }

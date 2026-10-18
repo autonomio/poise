@@ -84,6 +84,7 @@ describe('Analytics wording', () => {
       merged: 0,
       mergedByAgent: 0,
       commentsPerPr: null,
+      medianCommentsPerPr: null,
       lines: { total: null, median: null, counted: 0 },
       behaviors: { perPr: null, approvals: 0, reviews: 0, changesRequested: 0 },
       averageTimeToMergeMs: null,
@@ -202,4 +203,10 @@ it('uses the middle daily total, includes zero days, and never substitutes a wee
   expect(tile(buildGroups(day, week), 'Issues opened')).toMatchObject({ trend: { text: '↑ 100%' }, comparison: '7-day median: 2.0 / day' })
   delete week.daily
   expect(tile(buildGroups(day, week), 'Issues opened').trend).toBeUndefined()
+})
+
+it('compares medians consistently even when unchanged populations are strongly skewed', () => {
+  const skewed = report({ commentsPerPr: 34, medianCommentsPerPr: 1, behaviors: { perPr: 34, medianPerPr: 1, approvals: 100, reviews: 1, changesRequested: 1 } })
+  const groups = buildGroups(skewed, skewed)
+  for (const label of ['Comments', 'Behaviors']) expect(tile(groups, label)).toMatchObject({ value: '1.0', trend: { direction: 'neutral', text: '→ 0%' } })
 })

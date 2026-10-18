@@ -79,9 +79,9 @@ Per merged pull request, over the pull requests merged in the range:
 
 | Number | What it is |
 | --- | --- |
-| Comments | Conversation comments and review comments, on average. |
+| Comments | Median conversation comments plus review comments per merged pull request. |
 | Median lines | The median of additions plus deletions. |
-| Behaviors | The reviews and approvals behaviors completed on them, on average, and how many of each. |
+| Behaviors | Median completed review and approval behaviors per merged pull request, with totals by kind in the measurement tooltip. |
 | Median time | The median time from opening to merge; even samples use the mean of the middle pair. |
 | Merged by agent | The share of them the agent account from Settings merged, and how many of how many. With no agent account set it shows — and says so. |
 
@@ -115,7 +115,7 @@ percentage delta and baseline underneath. An unchanged value shows a neutral
 arrow and 0%; a zero baseline uses an absolute change rather than division
 by zero. Without observations, no directional claim is made.
 
-Per-PR comments and behaviors retain their selected-day means and compare with
+Per-PR comments and behaviors show selected-day medians and compare with
 the median across the preceding seven days' merged pull requests. Lines and
 time compare population medians. Agent merges compare shares, explicitly
 labelled “7-day share” because a binary merger's median would lose the share.
@@ -163,8 +163,8 @@ Account, day, baseline, history and quota read failures go to the shared
 notification rail. Repeated account failures across the three Analytics reads
 appear once. They remain accessible after navigating away, can be dismissed,
 and clear once all reporting reads recover. A recurrence after recovery is a
-new notification. These browser read failures are local to the tab and respect
-Settings' Notifications switch; recording, dismissing and clearing them makes
+new notification. These browser read failures are local to the tab and remain accessible in the rail when Notifications are off
+(the switch suppresses their popups); recording, dismissing and clearing them makes
 no API request. Existing server sync alerts continue independently.
 
 ## GitHub API quota

@@ -169,10 +169,10 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
       label: 'Per merged pull request',
       help: 'Over the pull requests merged on the selected day.',
       tiles: [
-        perPr('Comments', pr.commentsPerPr, baseline.pullRequests.medianCommentsPerPr ?? null, formatRate),
+        perPr('Comments', pr.medianCommentsPerPr ?? null, baseline.pullRequests.medianCommentsPerPr ?? null, formatRate),
         perPr('Median lines', lines.counted < pr.merged ? null : lines.median, baseline.pullRequests.lines.counted < baseline.pullRequests.merged ? null : baseline.pullRequests.lines.median, (n) => n === null ? UNKNOWN : formatCount(Math.round(n)), true),
         {
-          ...perPr('Behaviors', behaviors.perPr, baseline.pullRequests.behaviors.medianPerPr ?? null, formatRate),
+          ...perPr('Behaviors', behaviors.medianPerPr ?? null, baseline.pullRequests.behaviors.medianPerPr ?? null, formatRate),
           note: none ? undefined : [
             plural(behaviors.approvals, 'approval', 'approvals'),
             plural(behaviors.reviews, 'review', 'reviews'),

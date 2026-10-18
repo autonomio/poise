@@ -42,7 +42,8 @@ Server notices are unresolved alerts, the same alerts
 [Poise Link](Poise-Link.md) shows on the desktop. Analytics also reports browser
 read failures here as tab-local Poise faults. These failures are shared across
 views, deduplicated across requests, dismissible without a request, and cleared
-on recovery; they follow the Notifications switch. See
+on recovery. They remain accessible when Notifications are off; the switch
+suppresses their popups. See
 [Analytics](Analytics.md#missing-data-and-failures). They come in this order:
 
 1. A Chat agent is waiting for a permission or an answer.

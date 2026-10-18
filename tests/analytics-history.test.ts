@@ -10,7 +10,7 @@ afterEach(() => { vi.useRealTimers() })
 function period(i: number, overrides: Partial<AnalyticsPeriod['pullRequests']> = {}, issues = { opened: 14, closed: 7 }): AnalyticsPeriod {
   const since = new Date(Date.UTC(2026, 0, 5 + 7 * i)).toISOString()
   const until = new Date(Date.UTC(2026, 0, 12 + 7 * i)).toISOString()
-  return { since, until, issues, pullRequests: { opened: 14, closedUnmerged: 7, merged: 7, mergedByAgent: 3, firstReview: { count: 7, medianMs: 60_000 }, commentsPerPr: 2, lines: { total: 700, median: 100, counted: 7 }, behaviors: { perPr: 1, approvals: 7, reviews: 0, changesRequested: 0 }, averageTimeToMergeMs: 3_600_000, medianTimeToMergeMs: 3_600_000, ...overrides } }
+  return { since, until, issues, pullRequests: { opened: 14, closedUnmerged: 7, merged: 7, mergedByAgent: 3, firstReview: { count: 7, medianMs: 60_000 }, commentsPerPr: 2, medianCommentsPerPr: 2, lines: { total: 700, median: 100, counted: 7 }, behaviors: { perPr: 1, medianPerPr: 1, approvals: 7, reviews: 0, changesRequested: 0 }, averageTimeToMergeMs: 3_600_000, medianTimeToMergeMs: 3_600_000, ...overrides } }
 }
 
 describe('the periods', () => {

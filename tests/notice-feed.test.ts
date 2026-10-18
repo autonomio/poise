@@ -243,7 +243,7 @@ describe('saving a choice', () => {
   })
 })
 
-it('shares browser read failures across sources, dismisses locally, clears on recovery and respects notifications off', async () => {
+it('shares browser read failures across sources, dismisses locally, clears on recovery and keeps faults accessible with popups off', async () => {
   let enabled = true
   const request = vi.fn(async () => new Response(JSON.stringify({ enabled, notices: [] }), { status: 200 }))
   const feed = new NoticeFeed(request)
@@ -266,7 +266,8 @@ it('shares browser read failures across sources, dismisses locally, clears on re
   expect(feed.current.notices[0].id).not.toBe(first)
   enabled = false
   await feed.read()
-  expect(feed.current.notices).toEqual([])
+  expect(feed.current.enabled).toBe(false)
+  expect(feed.current.notices).toHaveLength(1)
   enabled = true
   await feed.read()
   expect(feed.current.notices).toHaveLength(1)

@@ -6,7 +6,7 @@
 export const NOTICE_KINDS = ['chat_waiting', 'sign_in_needed', 'behavior_held', 'datastore_sync_failing', 'pr_ready', 'chat_turn_finished', 'github_quota_warning', 'github_quota_exhausted', 'storage_low'] as const
 export type NoticeKind = typeof NOTICE_KINDS[number] | 'read_failed'
 
-export interface ReadFailure { key: string, title: string, body: string }
+export interface ReadFailure { key: string, title: string, body: string, target?: NoticeTarget }
 
 export type NoticeTarget =
   | { view: 'behaviors' }
@@ -201,7 +201,7 @@ export class NoticeFeed {
       const at = new Date().toISOString()
       this.local.set(key, { id: previous?.id ?? `read:${++this.localSequence}`, kind: 'read_failed',
         title: failure.title, body: failure.body, since: previous?.since ?? at, due: previous?.due ?? at,
-        silenceable: false, target: null })
+        silenceable: false, target: failure.target ?? null })
     }
     this.publish()
   }
@@ -290,7 +290,7 @@ export class NoticeFeed {
       const away = this.putAway.get(notice.id)
       return !!away && (away.due === null || away.due === notice.due)
     }
-    const next = { ...this.server, notices: this.server.enabled ? [...this.server.notices.filter((notice) => !hidden(notice)), ...[...this.local.values()].filter((notice) => !this.dismissedLocal.has(notice.id))] : [] }
+    const next = { ...this.server, notices: [...this.server.notices.filter((notice) => !hidden(notice)), ...[...this.local.values()].filter((notice) => !this.dismissedLocal.has(notice.id))] }
     this.state = next
     for (const listener of this.listeners) listener(next)
   }

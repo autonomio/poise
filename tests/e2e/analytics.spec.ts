@@ -405,7 +405,7 @@ test('opens Today with a seven-day comparison and navigates days without changin
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
   await expect(value(page, 'Lines changed')).toHaveText('4,210')
   await expect(value(page, 'Time to merge')).toHaveText('6h')
-  await expect(value(page, 'Comments')).toHaveText('3.3')
+  await expect(value(page, 'Comments')).toHaveText('3.0')
   await expect(value(page, 'Median lines')).toHaveText('—')
   await expect(value(page, 'Behaviors')).toHaveText('2.0')
   await expect(value(page, 'Median time')).toHaveText('6h')
@@ -656,7 +656,7 @@ test('attaches delayed help to measurements, with plain headings and no quota ex
   const tooltip = page.getByRole('tooltip')
   await expect(tooltip).toBeHidden()
   await expect(tooltip).toBeVisible()
-  await expect(tooltip).toContainText('Mean completed review and approval behaviors')
+  await expect(tooltip).toContainText('Median completed review and approval behaviors')
   await expect(figure).toHaveCSS('text-decoration-line', 'none')
   await page.mouse.move(0, 0)
   await expect(tooltip).toBeHidden()
@@ -718,7 +718,7 @@ test('routes repeated account, history and quota failures into global notificati
   await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices: [] } }))
   await page.route('**/api/analytics/history?**', route => {
     const data = history(new URL(route.request().url()).searchParams.get('bounds')!.split(','))
-    data.errors = failed ? [{ org: 'vaquum', error: detail }] : []
+    data.errors = failed ? [{ org: 'vaquum', error: detail, stale: true }] : []
     return route.fulfill({ json: data })
   })
   await page.route('**/api/analytics?**', route => {
@@ -749,6 +749,7 @@ test('routes repeated account, history and quota failures into global notificati
   await page.locator('.nr-bell').click()
   const rail = page.locator('.nr-rail')
   await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(1)
+  await expect(rail).toContainText('GitHub data for vaquum is not updating')
   await expect(rail).toContainText('GitHub authentication is unavailable for octo-agent.')
   await page.screenshot({ path: info.outputPath('analytics-colored-median-notifications.png'), fullPage: true })
   await leaveAnalytics(page)
@@ -763,7 +764,6 @@ test('notifies a shared failed read once outside Analytics and clears it after r
   const state = await workspace(page)
   state.fail = true
   state.historyFails = true
-  await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices: [] } }))
   await page.goto('/')
   await openAnalytics(page)
   await expect(page.locator('#view-analytics .analytics-loader')).toBeHidden()
