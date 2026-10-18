@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ArticleReview, ArticleReviews, ReviewAnchor, ReviewMessage } from '../src/publishing-review'
 import { REVIEW_INTERVAL_MS } from '../src/publishing-review'
-import { getMeta, setMeta } from './db'
+import { db, getMeta, setMeta } from './db'
 import { readDoc, readPublishLedger, type PublishRecord } from './editor'
 import { HttpError, readJson } from './http'
 import { isRepositoryPath, parsePost, PostFileError } from './publishing'
@@ -69,6 +69,15 @@ function keyFor(me: string, record: PublishRecord): string {
 
 function budgetKey(me: string): string { return `${PREFIX}budget:${me.toLowerCase()}` }
 
+/** An in-flight answer must never shorten another publication's wait. */
+function deferAccount(me: string, until: number): number {
+  if (!Number.isFinite(until) || until < 0) throw new GitHubError('GitHub returned an invalid quota reset time.', 502)
+  db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(meta.value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)`)
+    .run(budgetKey(me), String(until))
+  return Number(getMeta(budgetKey(me)))
+}
+
 function checkBudget(me: string): void {
   const until = Number(getMeta(budgetKey(me)))
   if (Date.now() < until) throw new GitHubError('GitHub review refresh is waiting for the account API budget to reset.', 429, until)
@@ -80,10 +89,10 @@ async function query<T>(session: GitHubSession, text: string, variables: Record<
     const result = await queryGitHub<T & { rateLimit?: Quota }>(session, text, variables)
     const quota = result.rateLimit
     // Leave a reserve for publishing and the account's other GitHub activity.
-    if (quota && quota.remaining < 100) setMeta(budgetKey(session.me), String(Date.parse(quota.resetAt)))
+    if (quota && quota.remaining < 100) deferAccount(session.me, Date.parse(quota.resetAt))
     return result
   } catch (error) {
-    if (error instanceof GitHubError && error.retryAt) setMeta(budgetKey(session.me), String(error.retryAt))
+    if (error instanceof GitHubError && error.retryAt) deferAccount(session.me, error.retryAt)
     throw error
   }
 }
@@ -183,8 +192,7 @@ async function readSnapshot(session: GitHubSession, record: PublishRecord, previ
           problems.add(`Review passage unavailable: ${error.message}`)
           if (error.status >= 500 || error.retryAt) unavailable = error
           if (error.retryAt) {
-            retryAt = Math.max(retryAt, error.retryAt)
-            setMeta(budgetKey(session.me), String(retryAt))
+            retryAt = Math.max(retryAt, deferAccount(session.me, error.retryAt))
           }
         }
         item.location = `Passage unavailable: ${error.message}`
@@ -216,9 +224,9 @@ async function refresh(me: string, record: PublishRecord, force: boolean, pollin
       return save(key, { snapshot, nextAt: Math.max(Date.now() + delay, retryAt ?? 0), failures, ...(problem ? { problem } : {}) })
     } catch (error) {
       if (!(error instanceof GitHubError || error instanceof HttpError)) throw error
-      if (error instanceof GitHubError && error.retryAt) setMeta(budgetKey(me), String(error.retryAt))
+      const retryAt = error instanceof GitHubError && error.retryAt ? deferAccount(me, error.retryAt) : 0
       const failures = old.failures + 1
-      const nextAt = Math.max(Date.now() + Math.min(REVIEW_INTERVAL_MS * 2 ** Math.min(failures - 1, 4), 60 * 60_000), error instanceof GitHubError ? error.retryAt ?? 0 : 0)
+      const nextAt = Math.max(Date.now() + Math.min(REVIEW_INTERVAL_MS * 2 ** Math.min(failures - 1, 4), 60 * 60_000), retryAt)
       return save(key, { ...old, nextAt, failures, problem: error.message })
     }
   })()

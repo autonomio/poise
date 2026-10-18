@@ -256,6 +256,34 @@ describe('cached article review synchronization', () => {
     expect(mocks.file).toHaveBeenCalledTimes(3)
   })
 
+  it('never shortens a later account reset when an earlier source request finishes', async () => {
+    let started!: () => void
+    let rejectSource!: (error: Error) => void
+    const sourceStarted = new Promise<void>((resolve) => { started = resolve })
+    mocks.file.mockImplementation(() => new Promise((_resolve, reject) => { rejectSource = reject; started() }))
+    const original = mocks.query.getMockImplementation()!
+    const longReset = Date.now() + 3600_000
+    const shortReset = Date.now() + 10 * 60_000
+    mocks.query.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { number: number }).number === 8) throw new github.GitHubError('Later, longer reset.', 429, longReset)
+      return original(...args)
+    })
+    const earlier = request('/sync', {})
+    await sourceStarted
+    for (const number of [8, 9]) {
+      await editor.writeDoc(`draft-${number}`, `Article ${number}`)
+      await editor.writePublishLedger(`draft-${number}`, { records: [{ ...record(), pullRequest: { number, url: `https://github.com/acme/site/pull/${number}` } }] })
+    }
+    await request('/sync', {}, 'draft-8')
+    rejectSource(new github.GitHubError('Earlier, shorter reset.', 429, shortReset))
+    expect((await earlier).body.retryAt).toBe(new Date(longReset).toISOString())
+    expect(Number(database.getMeta('publishing-reviews:budget:writer'))).toBe(longReset)
+    mocks.file.mockResolvedValue({ text: SOURCE, sha: SHA })
+    vi.setSystemTime(shortReset + 60_000)
+    expect((await request('/sync', {}, 'draft-9')).body.problems[0]).toContain('API budget')
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+  })
+
   it('does not attach removed-side or metadata comments to unrelated draft text', async () => {
     current.reviewThreads.nodes[0].diffSide = 'LEFT'
     current.reviewThreads.nodes.push({ ...thread('metadata'), comments: page([{ ...inline(), originalLine: 2 }]) })
