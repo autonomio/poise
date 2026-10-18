@@ -306,3 +306,31 @@ describe('material cause identity', () => {
     expect(event('context-a', { callId: 'attempt-1', release: 'old', context: { attempts: 1 } }).incidentId).toBe(event('context-b', { callId: 'attempt-2', release: 'new', context: { attempts: 2 } }).incidentId)
   })
 })
+
+
+describe('source recovery and unavailable evidence', () => {
+  it('redacts configured opaque secrets at native and workspace persistence boundaries', () => {
+    vi.stubEnv('POISE_TEST_TOKEN', 'opaque-configured-secret')
+    try {
+      const db = store()
+      const native = normalize(nativeDiagnostic({ PRIORITY: 3, MESSAGE: 'opaque-configured-secret', __REALTIME_TIMESTAMP: '1792317600000000' }, 'docker', 'native-secret', null), NOW)!
+      db.append([native, workspaceEnvelope({ ...event('untrusted-envelope'), message: 'opaque-configured-secret' }, 'alice', NOW, [])])
+      expect(native.eventTime).toBe(new Date(NOW).toISOString())
+      expect(JSON.stringify(db.query(operator))).not.toContain('opaque-configured-secret')
+    } finally { vi.unstubAllEnvs() }
+  })
+
+  it('retains malformed Caller evidence even when no separate error text exists', () => {
+    const input = callerDiagnostic({ id: 'f'.repeat(32), status: 'failed', diagnostic: null, evidence_unavailable: 'Stored evidence is oversized' }, 'alice')
+    expect(input).toMatchObject({ source: 'collection', level: 'warning', operation: 'caller.evidence_unavailable', message: 'Stored evidence is oversized' })
+  })
+
+  it('keeps recovered historical coverage partial rather than unavailable', () => {
+    const runtime = new DiagnosticRuntime({ path: ':memory:', now: () => NOW, report: () => undefined })
+    runtime.observe('workspace:alice', 'poise', 'alice', 'source offline')
+    runtime.partial('workspace:alice', 'poise', 'alice', 'Source is reachable; historical gap remains')
+    const source = runtime.health().sources[0]
+    expect(source.status).toBe('partial'); expect(source.gaps.every((gap) => gap.to !== null)).toBe(true)
+    runtime.stop()
+  })
+})

@@ -43,7 +43,7 @@ diagnostics.start()
 diagnostics.observe('gateway', 'gateway', null)
 process.once('uncaughtException', (error) => {
   diagnostics?.emit({ source: 'gateway', operation: 'process.uncaught', level: 'critical', message: error.message, stack: error.stack })
-  diagnostics?.flush()
+  diagnostics?.stop()
   process.stderr.write(redact(error.stack ?? error.message, environmentSecrets()) + '\n')
   process.exit(1)
 })

@@ -126,7 +126,7 @@ export function redactFacts(value: Facts | undefined, secrets: readonly string[]
   cut(); return { truncated: true, reason: 'Context exceeds 8 KiB' }
 }
 
-export function normalize(input: DiagnosticInput, now = Date.now(), secrets: readonly string[] = []): LogEvent | null {
+export function normalize(input: DiagnosticInput, now = Date.now(), secrets: readonly string[] = environmentSecrets()): LogEvent | null {
   const level = severity(input.level)
   if (level === null) return null
   if (!input.source || !input.operation || typeof input.message !== 'string') throw new Error('Diagnostic needs source, operation and message')

@@ -117,7 +117,14 @@ export class EnvironmentCollectors {
         let row: unknown
         try { row = JSON.parse(content) } catch { excluded++; continue }
         const envelope = row && typeof row === 'object' && 'poiseDiagnostic' in row ? row.poiseDiagnostic : null
-        if (workspace && envelope) events.push(workspaceEnvelope(envelope, workspace, Date.now(), []))
+        if (workspace && envelope) {
+          try { events.push(workspaceEnvelope(envelope, workspace, Date.now(), [])) }
+          catch (error) {
+            excluded++
+            const warning = normalize({ id: 'invalid-envelope:' + hash(line), source: 'collection', operation: 'workspace.envelope_rejected', level: 'warning', workspace, message: error instanceof Error ? error.message : String(error) })
+            if (warning) events.push(warning)
+          }
+        }
         else if (container.Labels['com.docker.compose.service'] === 'caddy') {
           const input = nativeDiagnostic(row, 'ingress', container.Id + ':' + hash(line), null)
           // Never copy HTTP request headers, query strings, payloads or arbitrary route IDs.
@@ -162,7 +169,7 @@ export class EnvironmentCollectors {
               observedOomKilled: typeof detail.State?.OOMKilled === 'boolean' ? detail.State.OOMKilled : null,
               measuredAt: new Date().toISOString(), measurement: 'container configuration/state after the native event' }
             input.context = { imageId: detail.Image ?? null, startedAt: detail.State?.StartedAt ?? null, finishedAt: detail.State?.FinishedAt ?? null }
-          } catch { input.context = { resourceEvidenceUnavailable: true, reason: 'Container inspection unavailable; native event remains authoritative' } }
+          } catch (error) { input.context = { resourceEvidenceUnavailable: true, inspectionError: error instanceof Error ? error.message : String(error) } }
         } else input.context = { resourceEvidenceUnavailable: true, reason: 'Bounded resource-inspection budget exhausted' }
         const event = normalize(input)
         if (event) events.push(event)
@@ -186,7 +193,7 @@ export class EnvironmentCollectors {
       const target = this.context.deps.upstream(handle)
       const { config, keys, now } = this.context.deps
       const path = '/api/service/diagnostics' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')
-      const page = await new Promise<{ version: number; events: unknown[]; cursor: string; coverage: { status: string } }>((resolve, reject) => {
+      const page = await new Promise<{ version: number; events: unknown[]; cursor: string; coverage: { status: string; error?: string | null } }>((resolve, reject) => {
         const req = http.get({ host: target.host, port: target.port, path, agent: false, headers: {
           host: `${handle}.${config.domain}`, 'x-poise-identity': signAssertion(keys.privateKey, { handle, login, scope: 'admin' }, now()),
         } }, (res) => {
@@ -201,9 +208,21 @@ export class EnvironmentCollectors {
         req.setTimeout(5000, () => req.destroy(new Error('Workspace diagnostic source timed out'))); req.on('error', reject)
       })
       if (page.version !== 1 || !Array.isArray(page.events) || page.events.length > 3 || typeof page.cursor !== 'string' || !page.coverage || typeof page.coverage.status !== 'string') throw new Error('Workspace diagnostic delivery is incompatible')
-      const events = page.events.map((event) => workspaceEnvelope(event, handle, Date.now(), []))
+      const events: LogEvent[] = []
+      let rejected = 0
+      for (const row of page.events) {
+        try { events.push(workspaceEnvelope(row, handle, Date.now(), [])) }
+        catch (error) {
+          rejected++
+          const warning = normalize({ id: 'workspace-rejected:' + hash(JSON.stringify(row)), source: 'collection', operation: 'workspace.envelope_rejected',
+            level: 'warning', workspace: handle, message: error instanceof Error ? error.message : String(error) })
+          if (warning) events.push(warning)
+        }
+      }
       this.runtime.query((db) => db.commitDelivery(events, key, page.cursor))
-      this.runtime.observe(key, 'poise', handle, page.coverage.status === 'connected' && !('hasMore' in page && page.hasMore) ? null : 'Workspace reports partial or unavailable diagnostic collection')
+      if (page.coverage.status === 'unavailable' || page.coverage.status === 'initializing' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
+      else if (rejected || page.coverage.status === 'partial' || ('hasMore' in page && page.hasMore)) this.runtime.partial(key, 'poise', handle, 'Workspace is reachable; historical gaps or pending backfill limit completeness')
+      else this.runtime.observe(key, 'poise', handle)
     } catch (error) { this.runtime.observe(key, 'poise', handle, String(error)) }
   }
 }

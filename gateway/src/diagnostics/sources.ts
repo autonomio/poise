@@ -1,4 +1,4 @@
-import { normalize, redact, scopePrefix, type DiagnosticInput, type LogEvent } from './contract.js'
+import { environmentSecrets, normalize, redact, scopePrefix, type DiagnosticInput, type LogEvent } from './contract.js'
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
@@ -14,7 +14,8 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
   const raw = object(row.diagnostic)
   const diagnostic = raw && raw.version === 1 ? raw : null
   const context = object(diagnostic?.context) ?? diagnostic ?? {}
-  const error = text(row.error) ?? ''
+  const unavailable = text(row.evidence_unavailable)
+  const error = text(row.error) ?? unavailable ?? ''
   if (/pull-request head or base changed (?:while building review packet|before checkout|during checkout)\b|pull-request head changed(?: [a-z ]+)?: expected [a-f0-9]{40}, got [a-f0-9]{40}/.test(error)) return null
   if (!diagnostic && !error && !row.error_code) return null
   // A successful review requesting changes is a completed action, not an error.
@@ -22,9 +23,9 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
   const repository = text(row.repo)
   const pr = text(row.pr_id)
   return {
-    id: 'caller:' + row.id, time: text(row.completed_at), source: 'caller', component: text(row.behavior) ?? 'agent-interface',
-    level: diagnostic?.severity === 'error' ? 'error' : ['overloaded', 'rate_limit', 'authentication_failed', 'interrupted'].includes(String(row.error_code)) ? 'warning' : 'error',
-    operation: text(diagnostic?.operation) ?? text(row.behavior) ?? 'call.failed', phase: text(diagnostic?.phase), workspace,
+    id: 'caller:' + row.id, time: text(row.completed_at), source: unavailable && !row.error && !diagnostic ? 'collection' : 'caller', component: text(row.behavior) ?? 'agent-interface',
+    level: unavailable && !row.error && !diagnostic ? 'warning' : diagnostic?.severity === 'error' ? 'error' : ['overloaded', 'rate_limit', 'authentication_failed', 'interrupted'].includes(String(row.error_code)) ? 'warning' : 'error',
+    operation: unavailable && !row.error && !diagnostic ? 'caller.evidence_unavailable' : text(diagnostic?.operation) ?? text(row.behavior) ?? 'call.failed', phase: text(diagnostic?.phase), workspace,
     repository, pr, target: repository && pr ? `${repository}#${pr}` : repository,
     account: text(row.actor), reviewer: text(row.actor), behavior: text(row.behavior), callId: String(row.id),
     correlationId: text(row.correlation_id), container: text(context.container), release: text(context.release),
@@ -45,6 +46,7 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
 
 /** Workspace log envelopes keep their IDs through the authenticated collection boundary. */
 export function workspaceEnvelope(value: unknown, workspace: string, now: number, secrets: readonly string[]): LogEvent {
+  secrets = [...environmentSecrets(), ...secrets]
   const row = object(value)
   if (!row || row.version !== 1 || row.workspace !== workspace || row.visibility !== 'workspace'
     || !['critical', 'error', 'warning'].includes(String(row.severity)) || typeof row.id !== 'string'
@@ -71,7 +73,7 @@ export function workspaceEnvelope(value: unknown, workspace: string, now: number
 export function nativeDiagnostic(value: unknown, source: 'ingress' | 'kernel' | 'docker', id: string, workspace: string | null): DiagnosticInput {
   const row = object(value)
   if (!row) return { id, source: 'collection', level: 'warning', workspace, operation: 'record.unreadable', message: `${source} supplied an unreadable record; content was excluded` }
-  const clock = source === 'kernel' && row.__REALTIME_TIMESTAMP !== undefined ? Number(row.__REALTIME_TIMESTAMP) / 1000
+  const clock = row.__REALTIME_TIMESTAMP !== undefined ? Number(row.__REALTIME_TIMESTAMP) / 1000
     : typeof row.ts === 'number' ? row.ts * 1000 : null
   const time = clock === null ? text(row.time) ?? text(row.timestamp) ?? null
     : Number.isFinite(clock) && clock >= 0 && clock <= 8.64e15 ? new Date(clock).toISOString() : 'invalid source timestamp'

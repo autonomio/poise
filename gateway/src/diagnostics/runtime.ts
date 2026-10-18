@@ -17,6 +17,7 @@ interface Journal {
 }
 export interface RuntimeOptions {
   path: string
+  workspace?: string
   policy?: LogPolicy
   maxQueueBytes?: number
   maxQueueEvents?: number
@@ -165,6 +166,13 @@ export class DiagnosticRuntime {
     this.saveJournal()
   }
 
+  partial(id: string, source: string, workspace: string | null, reason: string): void {
+    this.observe(id, source, workspace)
+    const value = this.sources.get(id)
+    if (value) { value.status = 'partial'; value.error = this.safe(reason) }
+    this.saveJournal()
+  }
+
   health() {
     const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
       || [...this.sources.values()].some((source) => source.status !== 'connected')
@@ -228,7 +236,7 @@ export class DiagnosticRuntime {
     }
     if (recovered) {
       const event = normalize({ id: 'sink-recovered:' + this.runId + ':' + this.iso(), source: 'collection', level: 'warning', operation: 'sink.recovered',
-        time: this.iso(), message: 'Diagnostic collection recovered after an unavailable interval',
+        workspace: this.options.workspace ?? null, time: this.iso(), message: 'Diagnostic collection recovered after an unavailable interval',
         context: { previousError: recovered, unavailableSince, recoveredAt: this.iso(), dropped: this.dropped } }, this.now(), this.secrets)
       if (event) this.enqueue(event)
     }

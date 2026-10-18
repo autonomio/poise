@@ -85,11 +85,16 @@ async function collectCaller(): Promise<void> {
   } finally { abort = null }
 }
 
+export function fatalDiagnostic(error: Error): void {
+  diagnostic({ level: 'critical', operation: 'process.uncaught', message: error.message, stack: error.stack })
+  active?.stop()
+}
+
 export function startLogging(options: { captureFatal?: boolean } = {}): void {
   if (active) return
   workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
-  active = new DiagnosticRuntime({ path, ...diagnosticConfig(process.env) })
+  active = new DiagnosticRuntime({ path, workspace, ...diagnosticConfig(process.env) })
   sequence = 0
   try {
     if (existsSync(path + '.caller')) {
@@ -106,8 +111,7 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   }
   if (options.captureFatal) {
     fatalListener = (error) => {
-      diagnostic({ level: 'critical', operation: 'process.uncaught', message: error.message, stack: error.stack })
-      active?.flush()
+      fatalDiagnostic(error)
       process.exit(1)
     }
     process.once('uncaughtException', fatalListener)
@@ -143,7 +147,7 @@ export function diagnosticPage(cursor: string | null) {
   if (!active) throw new Error('Diagnostic collection has not started')
   const page = active.query((store) => store.delivery({ workspace, operator: false }, cursor))
   const health = active.health()
-  return { ...page, coverage: { status: health.status, dropped: health.dropped, rejected: health.rejected,
+  return { ...page, coverage: { status: health.status, error: health.error, dropped: health.dropped, rejected: health.rejected,
     lastSuccessfulWriteAt: health.lastSuccessfulWriteAt, sources: health.sources.slice(0, 16).map((source) => ({
       source: source.source, status: source.status, observedAt: source.observedAt, availableFrom: source.availableFrom,
     })) } }
