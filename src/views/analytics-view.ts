@@ -268,6 +268,10 @@ function showCursor(label: string, index: number): void {
 }
 
 function hideCursor(label: string): void {
+  if (hoveredSeries === label) {
+    clearTimeout(hoverTimer)
+    hoveredSeries = null
+  }
   cursors.delete(label)
   const plot = plotFor(label)
   plot?.querySelectorAll('.analytics-history-cursor, .analytics-history-point, .analytics-history-tip').forEach((el) => el.remove())

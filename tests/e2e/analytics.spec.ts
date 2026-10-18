@@ -666,3 +666,19 @@ test('caps seven-day quota charts at 168 hours and visibly explains an unset age
   await expect(agent.locator('.analytics-value')).toHaveText('—')
   await expect(agent.locator('.analytics-note')).toHaveText('No agent account in Settings')
 })
+
+test('reopens a chart readout after keyboard focus leaves while the pointer stays inside', async ({ page }) => {
+  await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const plot = page.locator('.analytics-history[data-series="Issues opened"] .analytics-history-plot')
+  const tip = plot.locator('.analytics-history-tip')
+  await plot.hover()
+  await expect(tip).toBeVisible()
+  await plot.focus()
+  await page.keyboard.press('Tab')
+  await expect(tip).toHaveCount(0)
+  const box = (await plot.boundingBox())!
+  await page.mouse.move(box.x + box.width * .6, box.y + box.height / 2)
+  await expect(tip).toBeVisible()
+})
