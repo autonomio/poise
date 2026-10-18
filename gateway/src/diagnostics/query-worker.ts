@@ -48,6 +48,7 @@ function health(request: LoggingRead): LoggingReply {
 }
 
 function exportEvents(db: DiagnosticStore, request: LoggingRead): LoggingReply {
+  const maxEvents = request.filter.limit ?? LOGGING_EXPORT_EVENTS
   const first = db.query(request.access, { ...request.filter, limit: 1 })
   checkEvents(first.events)
   const { events: firstEvents, ...metadata } = first
@@ -56,9 +57,9 @@ function exportEvents(db: DiagnosticStore, request: LoggingRead): LoggingReply {
   let cursor = first.nextCursor
   const metadataBytes = Buffer.byteLength(JSON.stringify(metadata)) + 4096
   if (bytes + metadataBytes > LOGGING_RESPONSE_BYTES) throw new LoggingQueryError(503, 'logging_unavailable', 'Export metadata exceeds its bounded read budget.')
-  while (cursor && lines.length < LOGGING_EXPORT_EVENTS) {
+  while (cursor && lines.length < maxEvents) {
     const before = cursor
-    const page = db.query(request.access, { ...request.filter, cursor: before, limit: Math.min(100, LOGGING_EXPORT_EVENTS - lines.length) })
+    const page = db.query(request.access, { ...request.filter, cursor: before, limit: Math.min(100, maxEvents - lines.length) })
     checkEvents(page.events)
     let included = 0
     for (const event of page.events) {

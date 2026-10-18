@@ -59,6 +59,22 @@ describe('authorized retained diagnostic reads', () => {
     expect((await request('root', root, '?scope=instance')).status).toBe(403)
   })
 
+  it('honors an explicit export limit and resumes without skipping the unused page suffix', async () => {
+    const db = new DiagnosticStore(join(h.config.dataDir, 'logging.db'))
+    const events = Array.from({ length: 15 }, (_, i) => normalize({ id: 'export-limit-' + i, time: new Date(Date.now() + i * 1000).toISOString(),
+      source: 'caller', component: 'export-limit', operation: 'fetch', level: 'error', workspace: 'alice', message: 'export row ' + i })!)
+    try { db.append(events) } finally { db.close() }
+    const first = await request('alice', alice, '/export?component=export-limit&limit=10')
+    expect(first.status).toBe(200)
+    const lines = first.body.trim().split('\n').map((line) => JSON.parse(line))
+    expect(lines[0]).toMatchObject({ exported: 10, truncated: true, resumeCursor: expect.any(String) })
+    expect(lines.slice(1).map((line) => line.event.id)).toEqual(events.slice(5).reverse().map((event) => event.id))
+    const next = await request('alice', alice, '/export?component=export-limit&limit=10&cursor=' + encodeURIComponent(lines[0].resumeCursor))
+    const remaining = next.body.trim().split('\n').map((line) => JSON.parse(line))
+    expect(remaining[0]).toMatchObject({ exported: 5, truncated: false, resumeCursor: null })
+    expect(remaining.slice(1).map((line) => line.event.id)).toEqual(events.slice(0, 5).reverse().map((event) => event.id))
+  })
+
   it.each(['', '/health', '/export', '/events/' + own.id, '?incidentId=' + own.incidentId])('applies browser authentication and exact-origin guards to %s', async (path) => {
     expect((await request('alice', '', path)).status).toBe(401)
     expect((await request('alice', root, path)).status).toBe(403)

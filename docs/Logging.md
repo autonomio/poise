@@ -61,6 +61,8 @@ never exposes other owners' private counts or causes.
 Export is NDJSON, with metadata first, at most 1,000 events and 8 MiB including
 metadata. `resumeCursor` and `truncated` describe bounded partial exports; resume
 with the same filters and that opaque cursor. No CSV or logged URL is executed.
+An explicit HTTP `limit` also caps the exported row count (1–100); omitting it
+uses the export's 1,000-event cap rather than the list's 50-event page size.
 
 Defaults are **up to 30 days**, **64 MiB of accounted event storage**, and **50,000 events**;
 the earliest bound reached expires evidence. Age and eviction use ingestion time,
