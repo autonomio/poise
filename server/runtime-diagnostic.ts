@@ -12,14 +12,18 @@ interface CaptureOptions { path?: string; workspace?: string; timeoutMs?: number
 function resolved(command: string): string | null {
   for (const path of isAbsolute(command) ? [command] : (process.env.PATH ?? '').split(delimiter).map((directory) => join(directory, command))) {
     try { accessSync(path, fsConstants.X_OK); return realpathSync(path) }
-    catch (error) { if (!['ENOENT', 'EACCES', 'ENOTDIR'].includes(String((error as NodeJS.ErrnoException).code))) throw error }
+    catch (error) { if (!['ENOENT', 'EACCES', 'ENOTDIR'].includes(String((error as NodeJS.ErrnoException).code))) return null }
   }
   return null
+}
+function forward(fd: number, value: string | Buffer): string | null {
+  try { writeSync(fd, value); return null }
+  catch (error) { return String((error as NodeJS.ErrnoException).code ?? 'DIAGNOSTIC_OUTPUT_UNAVAILABLE') }
 }
 function publish(event: LogEvent): void {
   const line = JSON.stringify({ poiseDiagnostic: event }) + '\n'
   try { writeSync(3, line) }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error; process.stderr.write(line) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error; writeSync(2, line) }
 }
 
 /** Preserve installer status; neither diagnostic storage nor reporting controls installation. */
@@ -44,7 +48,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     const safe = Buffer.from(redact(line.toString(), secrets) + '\n')
     if (stdoutForwarded + safe.length > 64 * 1024) { captureError = 'Bootstrap stdout forwarding exceeded 64 KiB; content excluded'; return }
     stdoutForwarded += safe.length
-    if (!options.quiet) process.stdout.write(safe)
+    if (!options.quiet) captureError = forward(1, safe) ?? captureError
   }
   const signal = (value: NodeJS.Signals) => {
     if (!child.pid) return
@@ -88,7 +92,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
   if (stdoutPending.length && !stdoutDiscarding) forwardStdout(stdoutPending)
   const failedSpawn = spawnError as NodeJS.ErrnoException | null
   const code = timedOut ? 124 : failedSpawn ? failedSpawn.code === 'ENOENT' ? 127 : 126 : result.code ?? 128 + (result.signal ? constants.signals[result.signal] ?? 0 : 0)
-  if (!options.quiet && stderr.length) process.stderr.write(stderr.toString())
+  if (!options.quiet && stderr.length) captureError = forward(2, stderr) ?? captureError
   if (code !== 0 || nativeWarning || captureError) {
     let resources: Record<string, unknown>
     try {
@@ -99,7 +103,7 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     const event = normalize({ id: 'bootstrap:' + at + ':' + command, time: at, source: captureError && code === 0 ? 'collection' : 'poise',
       component: 'provider-bootstrap', operation: 'provider.bootstrap', phase: 'installer_command', level: code !== 0 ? 'error' : 'warning',
       workspace, visibility: 'workspace', container: process.env.HOSTNAME ?? null, release: process.env.POISE_RELEASE || null,
-      message: failedSpawn?.message ?? (timedOut ? 'Provider bootstrap command exceeded its deadline' : code !== 0 ? `Provider bootstrap command exited ${code}` : 'Provider bootstrap emitted a native warning'),
+      message: failedSpawn?.message ?? (captureError && code === 0 ? 'Bootstrap diagnostic forwarding was incomplete' : timedOut ? 'Provider bootstrap command exceeded its deadline' : code !== 0 ? `Provider bootstrap command exited ${code}` : 'Provider bootstrap emitted a native warning'),
       stderr: stderr.toString(), truncated, exitCode: failedSpawn ? null : result.code, signal: result.signal, errno: failedSpawn?.errno ?? failedSpawn?.code ?? null, timeoutMs,
       context: { configuredExecutable: command, resolvedExecutable: executable, elapsedMs: Date.now() - started, timedOut,
         captureError, processErrorCode: failedSpawn?.code ?? null, providerStarted: child.pid !== undefined }, resources }, Date.now(), secrets)!
@@ -109,22 +113,22 @@ export async function captureRuntimeCommand(command: string, args: string[], opt
     catch (error) {
       const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.persistence_unavailable',
         message: error instanceof Error ? error.message : String(error), context: { eventId: event.id } }, Date.now(), secrets)!
-      try { (options.write ?? publish)(gap) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
+      try { (options.write ?? publish)(gap) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
     } finally {
       try { store?.close() }
       catch (error) {
         const gap = normalize({ source: 'collection', level: 'warning', workspace, operation: 'bootstrap.close_failed',
           message: error instanceof Error ? error.message : String(error) }, Date.now(), secrets)!
-        try { (options.write ?? publish)(gap) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
+        try { (options.write ?? publish)(gap) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
       }
     }
-    try { (options.write ?? publish)(event) } catch { process.stderr.write('Poise bootstrap diagnostic reporting is unavailable\n') }
+    try { (options.write ?? publish)(event) } catch { captureError = forward(2, 'Poise bootstrap diagnostic reporting is unavailable\n') ?? captureError }
   }
   return code
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, ...args] = process.argv.slice(2)
-  if (!command) { process.stderr.write('runtime-diagnostic requires an installer command\n'); process.exitCode = 126 }
+  if (!command) { forward(2, 'runtime-diagnostic requires an installer command\n'); process.exitCode = 126 }
   else process.exitCode = await captureRuntimeCommand(command, args)
 }
