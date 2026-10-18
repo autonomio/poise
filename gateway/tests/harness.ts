@@ -1,7 +1,7 @@
 import { createPublicKey, verify } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import http, { type IncomingHttpHeaders } from 'node:http'
-import { createServer as createNetServer, type AddressInfo } from 'node:net'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from 'vitest'
@@ -146,11 +146,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     spec: { HostConfig: { Mounts: [{ Type: 'volume', Source: GATEWAY_DATA_SOURCE, Target: dataDir }] } },
   })
   const workspace = await startWorkspaceStub()
-  // Keep the failed endpoint reserved: a released ephemeral port can become
-  // another fixture's healthy workspace while this harness is still alive.
-  const unavailable = createNetServer((socket) => socket.destroy())
-  await new Promise<void>((resolve) => unavailable.listen(0, '127.0.0.1', resolve))
-  const unreachablePort = (unavailable.address() as AddressInfo).port
+
 
   const config = loadConfig({
     POISE_DOMAIN: DOMAIN,
@@ -176,7 +172,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const keys = loadOrCreateKeys(dataDir, log)
   const upstream = (handle: string): Upstream => {
     const joined = !options.requireNetwork || docker.containers.get('poise-gateway')?.networks.has(`poise-net-${handle}`) === true
-    return { host: '127.0.0.1', port: workspace.reachable && joined ? workspace.port : unreachablePort }
+    // The stub owns this port for its entire lifetime. A reserved DNS name
+    // represents unreachability without releasing an address another fixture can claim.
+    return { host: workspace.reachable && joined ? '127.0.0.1' : 'unavailable.poise.invalid', port: workspace.port }
   }
   const dockerClient = new DockerClient(config.dockerSocket)
   const workspaceResolvConf = await prepareWorkspaceDns(config, dockerClient)
@@ -247,9 +245,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     openWorkspace,
     close: async () => {
       await gateway.close()
-      await Promise.all([workspace.close(), github.close(), docker.close(),
-        new Promise<void>((resolve, reject) => unavailable.close((error) => error ? reject(error) : resolve())),
-      ])
+      await Promise.all([workspace.close(), github.close(), docker.close()])
       store.close()
       rmSync(dir, { recursive: true, force: true })
     },
