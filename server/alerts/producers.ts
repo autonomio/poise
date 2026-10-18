@@ -12,7 +12,7 @@ import { CONNECTED_ACCOUNTS_PATH, GITHUB_AUTOMATION_SIGN_IN_TITLE, type AccountI
 import type { ClaudeAuthStatus } from '../claude-auth'
 import type { StopReason } from '../chat/protocol'
 import { isServiceMode } from '../service/config'
-import { raiseAlert, resolveAlert, type AlertTarget } from './store'
+import { openAlerts, raiseAlert, resolveAlert, type AlertTarget } from './store'
 
 const FRONT_PAGE = '/'
 /** Datastore sync alerts once it has been failing this long. */
@@ -149,19 +149,27 @@ function ghAccountsChecked(gh: ConnectedAccount, identities: GitHubIdentities): 
 /** A behavior recorded a dead letter for `target`. `alreadyHeld` says whether
  *  the Behaviors view showed an incident for it just before: if not, any
  *  earlier alert for it belongs to an incident that has cleared. */
-export function behaviorHeld(behavior: string, target: string, alreadyHeld: boolean): void {
+export function behaviorHeld(behavior: string, target: string, alreadyHeld: boolean, error = ''): void {
   const dedupeKey = `behavior-held:${behavior}:${target}`
+  const body = error ? `${clip(error, 240)} Open Behaviors in Poise for details.` : 'Open Behaviors in Poise to see what happened.'
   record(`the ${behavior} alert for ${target}`, () => {
-    if (!alreadyHeld) resolveAlert(dedupeKey)
+    const previous = openAlerts({ kind: 'behavior_held' }).find((alert) => alert.dedupeKey === dedupeKey)
+    if (!alreadyHeld || (previous && heldCause(previous.body) !== heldCause(body))) resolveAlert(dedupeKey)
     raiseAlert({
       kind: 'behavior_held',
       dedupeKey,
       title: `${BEHAVIOR_LABELS[behavior] ?? behavior} failed on ${clip(target, 80)}`,
-      body: 'Open Behaviors in Poise to see what happened.',
+      body,
       path: FRONT_PAGE,
       target: { view: 'behaviors' },
     })
   })
+}
+
+// Attempt IDs and changing counts do not make a continuing failure new.
+function heldCause(body: string): string {
+  return body.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '<id>')
+    .replace(/\b[0-9a-f]{32,40}\b/gi, '<id>').replace(/\d+(?:\.\d+)?/g, '<n>')
 }
 
 const datastoreKey = (login: string) => `datastore-sync:${login.toLowerCase()}`

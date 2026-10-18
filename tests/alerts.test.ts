@@ -156,6 +156,34 @@ describe('the alert producers', () => {
     expect(unresolved().map((row) => row.title)).toEqual(['Review New Pull Requests failed on acme/app#12', 'Review New Issues failed on acme/app#3'])
   })
 
+  it('replaces a dismissed held alert when its cause changes and deduplicates continuing causes across restart', async () => {
+    producers.behaviorHeld('approve-prs', 'acme/app#12', false, 'No space left on device')
+    const first = store.openAlerts()[0]
+    store.dismissAlert(first.seq)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true, 'No space left on device')
+    expect(rows()).toHaveLength(1)
+
+    database.closeDatabase()
+    vi.resetModules()
+    database = await import('../server/db')
+    store = await import('../server/alerts/store')
+    producers = await import('../server/alerts/producers')
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true,
+      'Input exceeds the maximum length of 1048576 characters: actual_chars=1171658')
+    expect(rows().map((row) => row.resolved === null)).toEqual([false, true])
+    const next = store.openAlerts()[0]
+    expect(next.seq).toBeGreaterThan(first.seq)
+    expect(next.dismissedAt).toBeNull()
+    expect(next.body).toContain('Input exceeds the maximum length')
+    expect(store.alertsAfter(first.seq)).toHaveLength(1)
+
+    store.dismissAlert(next.seq)
+    producers.behaviorHeld('approve-prs', 'acme/app#12', true,
+      'Input exceeds the maximum length of 1048576 characters: actual_chars=1200000')
+    expect(rows()).toHaveLength(2)
+    expect(store.openAlerts()[0].dismissedAt).not.toBeNull()
+  })
+
   it('alerts when a datastore sync has been failing for 15 minutes, until it succeeds', () => {
     const since = Date.parse('2026-10-03T10:00:00.000Z')
     producers.datastoreSyncFailed('Acme', since, since)
