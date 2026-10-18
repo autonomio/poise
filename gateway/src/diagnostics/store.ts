@@ -48,39 +48,51 @@ export class DiagnosticStore {
     if (!Object.values(policy).every((value) => Number.isSafeInteger(value) && value > 0)) throw new Error('Logging retention and storage limits must be positive integers')
     if (!readOnly && path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new Database(path, { readonly: readOnly, fileMustExist: readOnly })
-    this.db.pragma('busy_timeout = 25')
-    if (readOnly) {
+    try {
+      this.db.pragma('busy_timeout = 25')
+      if (readOnly) {
+        this.checkVersion()
+        return
+      }
+      if (path !== ':memory:') chmodSync(path, 0o600)
+      this.db.pragma('journal_mode = WAL')
+      this.db.pragma('secure_delete = ON')
+      this.db.pragma('cache_size = -2048')
+      this.db.pragma('wal_autocheckpoint = 128')
+      this.db.pragma('journal_size_limit = 8388608')
+      this.db.pragma(`max_page_count = ${Math.ceil((policy.maxBytes * 2 + 1024 * 1024) / 4096)}`)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS log_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, incident_id TEXT NOT NULL,
+          sort_time TEXT NOT NULL, ingested_at TEXT NOT NULL,
+          severity TEXT NOT NULL CHECK (severity IN ('critical','error','warning')),
+          source TEXT NOT NULL, component TEXT NOT NULL, workspace TEXT, visibility TEXT NOT NULL CHECK (visibility IN ('workspace','operator','infrastructure')),
+          account TEXT, repository TEXT, call_id TEXT, correlation_id TEXT, search TEXT NOT NULL,
+          bytes INTEGER NOT NULL, payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
+        CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
+        CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS log_expired (id TEXT PRIMARY KEY, workspace TEXT, visibility TEXT NOT NULL CHECK (visibility IN ('workspace','operator','infrastructure')), expired_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS log_expired_time ON log_expired(expired_at);
+        CREATE TABLE IF NOT EXISTS log_usage (id INTEGER PRIMARY KEY CHECK(id=1), count INTEGER NOT NULL, bytes INTEGER NOT NULL);
+        INSERT OR IGNORE INTO log_usage SELECT 1,COUNT(*),COALESCE(SUM(bytes),0) FROM log_events;
+        CREATE TRIGGER IF NOT EXISTS log_usage_insert AFTER INSERT ON log_events BEGIN
+          UPDATE log_usage SET count=count+1,bytes=bytes+NEW.bytes WHERE id=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS log_usage_delete AFTER DELETE ON log_events BEGIN
+          UPDATE log_usage SET count=count-1,bytes=bytes-OLD.bytes WHERE id=1;
+        END;
+        CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT OR IGNORE INTO log_meta VALUES ('version','1');
+      `)
       this.checkVersion()
-      return
+    } catch (error) {
+      this.db.close()
+      throw error
     }
-    if (path !== ':memory:') chmodSync(path, 0o600)
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('secure_delete = ON')
-    this.db.pragma('cache_size = -2048')
-    this.db.pragma('wal_autocheckpoint = 128')
-    this.db.pragma('journal_size_limit = 8388608')
-    this.db.pragma(`max_page_count = ${Math.ceil((policy.maxBytes * 2 + 1024 * 1024) / 4096)}`)
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS log_events (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, incident_id TEXT NOT NULL,
-        sort_time TEXT NOT NULL, ingested_at TEXT NOT NULL,
-        severity TEXT NOT NULL CHECK (severity IN ('critical','error','warning')),
-        source TEXT NOT NULL, component TEXT NOT NULL, workspace TEXT, visibility TEXT NOT NULL,
-        account TEXT, repository TEXT, call_id TEXT, correlation_id TEXT, search TEXT NOT NULL,
-        bytes INTEGER NOT NULL, payload TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
-      CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
-      CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
-      CREATE INDEX IF NOT EXISTS log_call ON log_events(call_id);
-      CREATE TABLE IF NOT EXISTS log_coverage (id TEXT PRIMARY KEY, workspace TEXT, payload TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS log_expired (id TEXT PRIMARY KEY, workspace TEXT, visibility TEXT NOT NULL, expired_at TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS log_expired_time ON log_expired(expired_at);
-      CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      INSERT OR IGNORE INTO log_meta VALUES ('version','1');
-      INSERT OR IGNORE INTO log_meta VALUES ('expired_through','');
-    `)
-    this.checkVersion()
   }
 
   private checkVersion(): void {
@@ -124,31 +136,21 @@ export class DiagnosticStore {
   prune(reserve = 0): void {
     if (reserve > this.policy.maxBytes) throw new Error('Logging event exceeds the configured storage budget')
     const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
-    this.db.prepare("DELETE FROM log_meta WHERE key LIKE 'expired_through:%' AND value < ?").run(cutoff)
-    const expired = this.db.prepare('SELECT workspace,visibility,MAX(sort_time) AS at FROM log_events WHERE sort_time < ? GROUP BY workspace,visibility').all(cutoff) as Array<{ workspace: string | null; visibility: string; at: string }>
-    for (const value of expired) this.expire(value.workspace, value.visibility, value.at)
     this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE sort_time < ?').run(new Date(this.now()).toISOString(), cutoff)
     this.db.prepare('DELETE FROM log_events WHERE sort_time < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE id IN (SELECT id FROM log_expired ORDER BY expired_at DESC,id DESC LIMIT -1 OFFSET ?)').run(this.policy.maxEvents * 2)
-    let { count, bytes } = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(bytes),0) AS bytes FROM log_events').get() as { count: number; bytes: number }
+    let { count, bytes } = this.db.prepare('SELECT count,bytes FROM log_usage WHERE id=1').get() as { count: number; bytes: number }
 
     while (bytes + reserve > this.policy.maxBytes || count + (reserve ? 1 : 0) > this.policy.maxEvents) {
       const oldest = this.db.prepare('SELECT id,workspace,visibility,sort_time,bytes FROM log_events ORDER BY sort_time,id LIMIT 1').get() as { id: string; workspace: string | null; visibility: string; sort_time: string; bytes: number } | undefined
       if (!oldest) break
       this.db.prepare('INSERT OR IGNORE INTO log_expired VALUES (?,?,?,?)').run(oldest.id, oldest.workspace, oldest.visibility, new Date(this.now()).toISOString())
       this.db.prepare('DELETE FROM log_events WHERE id=?').run(oldest.id)
-      this.expire(oldest.workspace, oldest.visibility, oldest.sort_time)
       bytes -= oldest.bytes
       count--
     }
 
-  }
-
-  private expire(workspace: string | null, visibility: string, through: string): void {
-    for (const key of ['expired_through', 'expired_through:' + scopePrefix(workspace, visibility)]) {
-      this.db.prepare('INSERT INTO log_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)').run(key, through)
-    }
   }
 
   coverage(value: Coverage): void {

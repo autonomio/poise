@@ -128,7 +128,15 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const level = severity(input.level)
   if (level === null) return null
   if (!input.source || !input.operation || typeof input.message !== 'string') throw new Error('Diagnostic needs source, operation and message')
-  const clean = (value: string, limit = 512) => redact(value, secrets).slice(0, limit)
+  let truncated = !!input.truncated || (input.cause?.length ?? 0) > 8
+  const clean = (value: string, limit = 512) => {
+    const bytes = Buffer.from(redact(value, secrets))
+    if (bytes.length <= limit) return bytes.toString()
+    truncated = true
+    let end = limit
+    while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--
+    return bytes.subarray(0, end).toString()
+  }
   const nullable = (value: string | number | null | undefined) => value == null ? null : clean(String(value))
   const number = (value: number | null | undefined) => value != null && Number.isFinite(value) ? value : null
   const time = input.time == null ? null : Date.parse(input.time)
@@ -141,6 +149,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
   const operation = level === 'invalid' || invalidTime ? 'normalization.failed' : clean(input.operation, 128)
   const workspace = nullable(input.workspace)
   const visibility = input.visibility ?? (workspace ? 'workspace' : 'operator')
+  if (!['workspace', 'operator', 'infrastructure'].includes(visibility)) throw new Error('Invalid diagnostic visibility')
   if (visibility === 'workspace' && !workspace) throw new Error('Workspace diagnostics require a workspace identity')
   const prefix = scopePrefix(workspace, visibility)
   const incidentId = 'inc_' + prefix + '_' + hash(JSON.stringify([workspace, visibility, source, operation, input.account ?? null,
@@ -156,7 +165,7 @@ export function normalize(input: DiagnosticInput, now = Date.now(), secrets: rea
     account: nullable(input.account), repository: nullable(input.repository), pr: nullable(input.pr), behavior: nullable(input.behavior),
     reviewer: nullable(input.reviewer), callId: nullable(input.callId), requestId: nullable(input.requestId), correlationId: nullable(input.correlationId),
     message, cause: (input.cause ?? []).slice(0, 8).map((cause) => clean(cause, 512)), stderr, stack,
-    truncated: !!input.truncated || (input.stderr?.length ?? 0) > 16_384 || (input.stack?.length ?? 0) > 8192,
+    truncated,
     exitCode: number(input.exitCode), signal: typeof input.signal === 'number' ? number(input.signal) : nullable(input.signal),
     timeoutMs: number(input.timeoutMs), errno: typeof input.errno === 'number' ? number(input.errno) : nullable(input.errno),
     context: level === 'invalid' || invalidTime ? { source: clean(input.source), originalOperation: clean(input.operation) } : facts(input.context, secrets),

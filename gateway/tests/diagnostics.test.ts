@@ -42,6 +42,14 @@ describe('one diagnostic contract', () => {
     expect(output).toContain('measured')
   })
 
+  it('bounds UTF-8 evidence by bytes rather than characters', () => {
+    const value = event('unicode', { stderr: '障'.repeat(20_000), stack: '障'.repeat(10_000) })
+    expect(Buffer.byteLength(value.stderr!)).toBeLessThanOrEqual(16_384)
+    expect(Buffer.byteLength(value.stack!)).toBeLessThanOrEqual(8192)
+    expect(value.truncated).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(64 * 1024)
+  })
+
   it('preserves occurrence identity while distinguishing workspace and technical scope', () => {
     expect(event('same').id).toBe(event('same').id)
     expect(event('same').id).not.toBe(event('same', { workspace: 'bob' }).id)
