@@ -36,9 +36,9 @@ async function engine(mode: 'timeout' | 'http' | 'malformed' | 'logs' | 'start' 
       events.push('logs'); expect(removed).toBe(false)
       const params = new URL(req.url, 'http://docker').searchParams
       expect(params.get('stdout')).toBe('0'); expect(params.get('stderr')).toBe('1')
-      expect(params.get('tail')).toBe('1000')
+      expect(params.get('tail')).toBe('all')
       if (mode === 'logs' || mode === 'start') return json(503, { message: 'fixture logs unavailable' })
-      const body = Buffer.from(mode === 'tail' ? Array.from({ length: lineCount }, (_, index) => '2026-10-18T00:00:00.000Z ' + (index ? 'x' : 'initial failure cause')).slice(-1000).join('\n') + '\n'
+      const body = Buffer.from(mode === 'tail' ? Array.from({ length: lineCount }, (_, index) => '2026-10-18T00:00:00.000Z ' + (index ? 'x' : 'initial failure cause')).join('\n') + '\n'
         : '2026-10-18T00:00:00.000Z fatal: exact installer cause\n2026-10-18T00:00:00.000Z {"access_token":"opaque-task-credential"}\n')
       const frame = Buffer.alloc(8); frame[0] = 2; frame.writeUInt32BE(body.length, 4)
       res.end(Buffer.concat([frame, body])); return
@@ -88,12 +88,12 @@ it.each([999, 1000, 1001])('persists honest release stderr completeness for %i s
   const reader = new DiagnosticStore(path)
   try {
     const event = reader.query({ workspace: 'logproof', operator: false }).events[0]
-    expect(event).toMatchObject({ exitCode: 17, truncated: lineCount >= 1000,
-      context: { completionKnown: true, stderrTailLimitLines: 1000, stderrTailBoundReached: lineCount >= 1000,
-        stderrEvidenceTruncated: lineCount >= 1000 ? expect.stringContaining('earlier cause lines may be missing') : null } })
+    expect(event).toMatchObject({ exitCode: 17, truncated: lineCount > 1000,
+      context: { completionKnown: true, stderrLineLimit: 1000, stderrLineBoundReached: lineCount > 1000,
+        stderrEvidenceTruncated: lineCount > 1000 ? expect.stringContaining('later cause lines may be missing') : null } })
     expect(Buffer.byteLength(event.stderr!)).toBeLessThan(16_384)
-    if (lineCount > 1000) expect(event.stderr).not.toContain('initial failure cause')
-    else expect(event.stderr).toContain('initial failure cause')
+    expect(event.stderr).toContain('initial failure cause')
+    expect(event.stderr!.split('\n')).toHaveLength(Math.min(lineCount, 1000))
   } finally { reader.close() }
 })
 

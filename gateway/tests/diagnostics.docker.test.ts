@@ -70,16 +70,16 @@ it.skipIf(!enabled).each([2, 1001])('captures a failed release task with %i stde
     expect(result).toBe(17); expect(await client.inspectContainer(name)).toBeNull()
     expect(evidence).toMatchObject({ exitCode: 17, stderrError: null, limits: { memoryBytes: 64 * 1024 * 1024 } })
     const captured = evidence as TaskFailureEvidence | null
-    const stderr = dockerLines(captured!.stderr!).join('\n')
-    if (lineCount === 2) { expect(stderr).toContain('release exact cause'); expect(stderr).toContain('second line') }
-    else { expect(dockerLines(captured!.stderr!)).toHaveLength(1000); expect(stderr).not.toContain('release exact cause') }
-    expect(stderr).not.toContain('excluded-output')
     const record = normalize(releaseTaskDiagnostic(captured!)!)!
+    expect(record.stderr).toContain('release exact cause')
+    if (lineCount === 2) expect(record.stderr).toContain('second line')
+    expect(record.stderr).not.toContain('excluded-output')
+    expect(record.stderr!.split('\n')).toHaveLength(Math.min(lineCount, 1000))
     const store = new DiagnosticStore(':memory:')
     try {
       store.append([record])
       expect(store.lookup({ workspace: 'logproof', operator: false }, record.id)).toMatchObject({ status: 'found', event: {
-        exitCode: 17, truncated: lineCount > 1000, context: { stderrTailBoundReached: lineCount > 1000 } } })
+        exitCode: 17, truncated: lineCount > 1000, context: { stderrLineBoundReached: lineCount > 1000 } } })
     } finally { store.close() }
   } finally { report.mockRestore(); spawnSync('docker', ['rm', '--force', name]) }
 }, 30000)

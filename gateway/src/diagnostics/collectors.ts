@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { TASK_STDERR_TAIL_LINES, type ContainerSummary, type DockerClient, type TaskFailureEvidence } from '../docker.js'
+import { TASK_STDERR_LINE_LIMIT, type ContainerSummary, type DockerClient, type TaskFailureEvidence } from '../docker.js'
 import type { Context } from '../context.js'
 import { signAssertion } from '../assertion.js'
 import http from 'node:http'
@@ -26,7 +26,7 @@ export function gatewayDiagnostic(level: string, operation: string, fields: Reco
 }
 
 /** Docker multiplex framing and line bounds are enforced before JSON parsing. */
-export function dockerLines(bytes: Buffer): string[] {
+function decodedDockerLines(bytes: Buffer): string[] {
   const streams = new Map<number, Buffer[]>()
   let offset = 0
   while (offset < bytes.length) {
@@ -38,7 +38,13 @@ export function dockerLines(bytes: Buffer): string[] {
     streams.get(stream)!.push(bytes.subarray(offset + 8, offset + 8 + size)); offset += 8 + size
   }
   const lines = [...streams.values()].flatMap((chunks) => Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean))
-  if (lines.length > 1000 || lines.some((line) => Buffer.byteLength(line) > 64 * 1024)) throw new Error('Docker log line/count bound exceeded; collection gap')
+  if (lines.some((line) => Buffer.byteLength(line) > 64 * 1024)) throw new Error('Docker log line bound exceeded; collection gap')
+  return lines
+}
+
+export function dockerLines(bytes: Buffer): string[] {
+  const lines = decodedDockerLines(bytes)
+  if (lines.length > 1000) throw new Error('Docker log count bound exceeded; collection gap')
   return lines
 }
 
@@ -47,22 +53,23 @@ export function releaseTaskDiagnostic(evidence: TaskFailureEvidence): Diagnostic
   const workspace = diagnosticOwner(evidence.labels)
   if (!workspace || evidence.labels['poise.task'] !== 'install-release') return null
   const technical = (value: string) => value.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]')
-  let stderr: string | null = null; let stderrError = evidence.stderrError; let tailBoundReached = false
+  let stderr: string | null = null; let stderrError = evidence.stderrError; let lineBoundReached = false
   try {
     if (evidence.stderr) {
-      const lines = dockerLines(evidence.stderr)
-      tailBoundReached = lines.length >= TASK_STDERR_TAIL_LINES
-      stderr = lines.map((line) => line.slice(line.indexOf(' ') + 1)).join('\n')
+      const lines = decodedDockerLines(evidence.stderr)
+      lineBoundReached = lines.length > TASK_STDERR_LINE_LIMIT
+      stderr = lines.slice(0, TASK_STDERR_LINE_LIMIT).map((line) => line.slice(line.indexOf(' ') + 1)).join('\n')
     }
   }
   catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
   return { id: 'release-task:' + evidence.id, time: null, source: 'docker', component: 'release-installer', operation: 'release.install', phase: evidence.phase,
     level: 'error', workspace, visibility: 'infrastructure', container: evidence.container,
     message: evidence.error ? 'Release installation completion is unknown: ' + technical(evidence.error) : `Release installation task exited ${evidence.exitCode}`,
-    exitCode: evidence.exitCode, stderr: stderr === null ? null : technical(stderr), truncated: tailBoundReached,
+    exitCode: evidence.exitCode, stderr: stderr === null ? null : technical(stderr), truncated: lineBoundReached || stderrError !== null,
     context: { taskName: evidence.name, controlError: evidence.error === null ? null : technical(evidence.error), stderrEvidenceUnavailable: stderrError === null ? null : technical(stderrError),
-      stderrTailLimitLines: TASK_STDERR_TAIL_LINES, stderrTailBoundReached: tailBoundReached,
-      stderrEvidenceTruncated: tailBoundReached ? 'Docker stderr tail bound reached; earlier cause lines may be missing' : null,
+      stderrLineLimit: TASK_STDERR_LINE_LIMIT, stderrLineBoundReached: lineBoundReached,
+      stderrEvidenceTruncated: lineBoundReached ? 'Docker stderr line bound reached; later cause lines may be missing'
+        : stderrError !== null ? 'Stderr capture unavailable; completeness is unverified' : null,
       completionKnown: evidence.phase === 'installer_exit', observedAt: new Date().toISOString() },
     resources: { configuredMemoryLimitBytes: evidence.limits.memoryBytes, configuredNanoCpus: evidence.limits.nanoCpus, configuredPidsLimit: evidence.limits.pids,
       measurement: 'configuration submitted to Docker; incident usage not observed' } }

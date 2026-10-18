@@ -32,7 +32,7 @@ export interface ContainerDetails {
   Mounts?: Array<{ Type: string; Source: string; Destination: string }>
 }
 
-export const TASK_STDERR_TAIL_LINES = 1000
+export const TASK_STDERR_LINE_LIMIT = 1000
 
 export interface TaskFailureEvidence {
   id: string
@@ -244,7 +244,7 @@ export class DockerClient {
   private async captureTaskFailure(name: string, spec: TaskSpec, container: string | null, exitCode: number | null, phase: TaskFailureEvidence['phase'], error: string | null): Promise<void> {
     if (!this.taskFailure) return
     let stderr: Buffer | null = null; let stderrError: string | null = null
-    try { stderr = await this.diagnosticRead(`/containers/${encodeURIComponent(container ?? name)}/logs?stdout=0&stderr=1&timestamps=1&tail=${TASK_STDERR_TAIL_LINES}`, 64 * 1024, 250) }
+    try { stderr = await this.diagnosticRead(`/containers/${encodeURIComponent(container ?? name)}/logs?stdout=0&stderr=1&timestamps=1&tail=all`, 64 * 1024, 250) }
     catch (failure) { stderrError = failure instanceof Error ? failure.message : String(failure) }
     try {
       this.taskFailure({ id: container ?? randomUUID(), name, container, labels: spec.Labels, exitCode, phase, error, stderr, stderrError,
