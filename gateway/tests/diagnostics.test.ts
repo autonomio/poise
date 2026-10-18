@@ -147,7 +147,7 @@ describe('retained authorized queries', () => {
     const future = { ...event('future', { time: '2099-01-01T00:00:00Z' }), ingestedAt: new Date(NOW - age).toISOString() }
     db.append([future])
     expect(db.query(alice).total).toBe(0)
-    const reader = new DiagnosticStore(path, policy, () => now, { readonly: true }); stores.push(reader)
+    const reader = new DiagnosticStore(path, policy, () => now, true); stores.push(reader)
     for (const view of [db, reader]) {
       expect(view.lookup(alice, future.id).status).toBe(age <= 2000 ? 'expired' : 'unavailable')
       expect(view.lookup(operator, future.id).status).toBe(age <= 2000 ? 'expired' : 'unavailable')
