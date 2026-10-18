@@ -11,6 +11,7 @@ export interface ReviewAnchor {
   quote: string
   before: string
   after: string
+  unique: boolean
 }
 
 export interface ArticleReview {
@@ -48,7 +49,8 @@ export function locateReview(text: string, anchor: ReviewAnchor): { start: numbe
   for (let at = text.indexOf(anchor.quote); at >= 0; at = text.indexOf(anchor.quote, at + 1)) {
     if ((at === 0 || text[at - 1] === '\n') && (at + anchor.quote.length === text.length || text[at + anchor.quote.length] === '\n')) candidates.push(at)
   }
-  if (candidates.length === 1) return { start: candidates[0], end: candidates[0] + anchor.quote.length }
+  if (candidates.length === 1 && anchor.unique) return { start: candidates[0], end: candidates[0] + anchor.quote.length }
+  if (!anchor.before && !anchor.after) return null
   const contextual = candidates.filter((at) => (!anchor.before || text.slice(0, at).endsWith(`${anchor.before}\n`))
     && (!anchor.after || text.slice(at + anchor.quote.length).startsWith(`\n${anchor.after}`)))
   return contextual.length === 1 ? { start: contextual[0], end: contextual[0] + anchor.quote.length } : null

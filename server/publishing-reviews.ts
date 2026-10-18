@@ -117,7 +117,8 @@ export function anchorFromSource(source: string, start: number, end: number): Re
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < firstBodyLine || end < start || end > lines.length) return undefined
   const quote = lines.slice(start - 1, end).join('\n')
   if (!quote.trim()) return undefined
-  return { quote, before: lines.slice(Math.max(firstBodyLine - 1, start - 3), start - 1).join('\n'), after: lines.slice(end, end + 2).join('\n').trimEnd() }
+  const occurrences = body.split('\n').filter((_, i, all) => all.slice(i, i + end - start + 1).join('\n') === quote).length
+  return { quote, before: lines.slice(Math.max(firstBodyLine - 1, start - 3), start - 1).join('\n'), after: lines.slice(end, end + 2).join('\n').trimEnd(), unique: occurrences === 1 }
 }
 
 async function sourceFor(session: GitHubSession, repo: string, path: string, commit: string): Promise<string | null> {
