@@ -142,7 +142,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(perPr.locator('.analytics-label')).toHaveText(['Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent'])
   // Seconds matter: agents review within minutes.
   await expect(value(page, 'Time to first review')).toHaveText('1m 15s')
-  await expect(flow.locator('[data-help="Faster vs 7-day median"]')).toBeVisible()
+  await expect(flow.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Time to first review$/ }) }).locator('[data-help="Faster vs 7-day median"]')).toBeVisible()
   await expect(flow).toContainText('7-day median: 2m 30s · 3 first reviews')
   await expect(value(page, 'Merged by agent')).toHaveText('75%')
   await expect(perPr.locator('.analytics-value').last()).toHaveAttribute('data-help', /3 of 4 by octo-agent/)
@@ -757,4 +757,23 @@ test('routes repeated account, history and quota failures into global notificati
   await openAnalytics(page)
   await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(0)
   await expect(rail).not.toContainText('GitHub authentication is unavailable for octo-agent.')
+})
+
+test('notifies a shared failed read once outside Analytics and clears it after recovery', async ({ page }) => {
+  const state = await workspace(page)
+  state.fail = true
+  state.historyFails = true
+  await page.route('**/api/notices', route => route.fulfill({ json: { enabled: true, notices: [] } }))
+  await page.goto('/')
+  await openAnalytics(page)
+  await expect(page.locator('#view-analytics .analytics-loader')).toBeHidden()
+  await expect(page.locator('#view-analytics')).not.toContainText('datastore offline')
+  await page.locator('.nr-bell').click()
+  const notices = page.locator('.nr-rail .nr-card').filter({ hasText: 'acme: datastore offline' })
+  await expect(notices).toHaveCount(1)
+  state.fail = false
+  state.historyFails = false
+  await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
+  await expect(value(page, 'Pull requests merged')).toHaveText('0')
+  await expect(notices).toHaveCount(0)
 })

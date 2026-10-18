@@ -135,12 +135,17 @@ async function readQuota(): Promise<void> {
   } catch (error: unknown) {
     if (generation !== quotaGeneration) return
     content.replaceChildren()
-    noticeFeed.reportReadErrors('analytics-quota', [{ key: 'quota', title: 'GitHub quota is unavailable', body: error instanceof Error ? error.message : String(error) }])
+    noticeFeed.reportReadErrors('analytics-quota', [readFailure('GitHub quota is unavailable', error)])
   }
 }
 
 function refreshQuota(): void {
   if (document.visibilityState === 'visible' && active) void readQuota()
+}
+
+function readFailure(title: string, error: unknown): ReadFailure {
+  const body = error instanceof Error ? error.message : String(error)
+  return { key: `read:${body}`, title, body }
 }
 
 function accountFailures(data: { errors: Array<{ org: string, error: string }> }): ReadFailure[] {
@@ -335,7 +340,7 @@ async function readHistory(bounds: string[]): Promise<void> {
   } catch (error) {
     if (generation !== historyGeneration) return
     history = { data: null, error: error instanceof Error ? error.message : String(error) }
-    noticeFeed.reportReadErrors('analytics-history', [{ key: 'analytics-history', title: 'Analytics history is unavailable', body: history.error }])
+    noticeFeed.reportReadErrors('analytics-history', [readFailure('Analytics history is unavailable', error)])
   }
   render()
 }
@@ -377,7 +382,7 @@ async function readAnalytics(): Promise<void> {
     if (generation !== readGeneration) return
     // Numbers from the last day under the next day's name would be wrong.
     groups.innerHTML = ''
-    noticeFeed.reportReadErrors('analytics-day', [{ key: 'analytics', title: 'Analytics is unavailable', body: error instanceof Error ? error.message : String(error) }])
+    noticeFeed.reportReadErrors('analytics-day', [readFailure('Analytics is unavailable', error)])
   } finally {
     if (generation === readGeneration) {
       viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
