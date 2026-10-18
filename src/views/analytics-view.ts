@@ -269,9 +269,14 @@ function showCursor(label: string, index: number): void {
   tip.style.left = `${left - box.left}px`
 }
 
+function cancelHover(): void {
+  clearTimeout(hoverTimer)
+  hoverTimer = undefined
+}
+
 function hideCursor(label: string): void {
   if (hoveredSeries === label) {
-    clearTimeout(hoverTimer)
+    cancelHover()
     hoveredSeries = null
   }
   cursors.delete(label)
@@ -291,10 +296,13 @@ function onPlotPointer(event: PointerEvent): void {
   const rect = plotFor(label)!.getBoundingClientRect()
   hoveredIndex = Math.round((event.clientX - rect.left) / Math.max(1, rect.width) * (count - 1))
   if (hoveredSeries !== label) {
-    clearTimeout(hoverTimer)
+    cancelHover()
     hoveredSeries = label
-    hoverTimer = setTimeout(() => { if (hoveredSeries === label && active) showCursor(label, hoveredIndex) }, 500)
-  } else if (cursors.has(label)) showCursor(label, hoveredIndex)
+    hoverTimer = setTimeout(() => {
+      hoverTimer = undefined
+      if (hoveredSeries === label && active) showCursor(label, hoveredIndex)
+    }, 500)
+  } else if (!hoverTimer) showCursor(label, hoveredIndex)
 }
 
 function onPlotKey(event: KeyboardEvent): void {
@@ -302,7 +310,7 @@ function onPlotKey(event: KeyboardEvent): void {
   const count = history.data?.periods.length ?? 0
   if (!label || !count) return
   if (event.key === 'Escape') {
-    clearTimeout(hoverTimer)
+    cancelHover()
     hoveredSeries = null
     hideCursor(label)
     return
@@ -310,6 +318,7 @@ function onPlotKey(event: KeyboardEvent): void {
   const at = cursors.get(label) ?? count - 1
   const next = event.key === 'ArrowLeft' ? at - 1 : event.key === 'ArrowRight' ? at + 1 : event.key === 'Home' ? 0 : event.key === 'End' ? count - 1 : null
   if (next === null) return
+  cancelHover()
   event.preventDefault()
   showCursor(label, next)
 }
@@ -318,7 +327,7 @@ async function readHistory(bounds: string[]): Promise<void> {
   const generation = ++historyGeneration
   history = { data: null, error: '' }
   cursors.clear()
-  clearTimeout(hoverTimer)
+  cancelHover()
   hoveredSeries = null
   try {
     const res = await fetch(organizationUrl(`/api/analytics/history?${new URLSearchParams({ bounds: bounds.join(',') })}`))
@@ -409,7 +418,7 @@ export function initAnalyticsView(): void {
       const label = plotLabel(event)
       const plot = label ? plotFor(label) : null
       if (label && plot && !plot.contains(event.relatedTarget as Node | null)) {
-        clearTimeout(hoverTimer)
+        cancelHover()
         hoveredSeries = null
         if (document.activeElement !== plot) hideCursor(label)
       }
@@ -417,7 +426,10 @@ export function initAnalyticsView(): void {
     groups.addEventListener('focusin', (event) => {
       const label = plotLabel(event)
       const count = history.data?.periods.length ?? 0
-      if (label && count) showCursor(label, cursors.get(label) ?? count - 1)
+      if (label && count) {
+        cancelHover()
+        showCursor(label, cursors.get(label) ?? count - 1)
+      }
     })
     groups.addEventListener('focusout', (event) => {
       const label = plotLabel(event)
@@ -449,7 +461,7 @@ export function stopAnalyticsRefresh(): void {
   readGeneration++
   quotaGeneration++
   historyGeneration++
-  clearTimeout(hoverTimer)
+  cancelHover()
   hoveredSeries = null
   clearInterval(quotaTimer)
   clearTimeout(midnightTimer)

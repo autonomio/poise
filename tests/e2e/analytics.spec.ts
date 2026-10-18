@@ -686,3 +686,21 @@ test('reopens a chart readout after keyboard focus leaves while the pointer stay
   await page.mouse.move(box.x + box.width * .6, box.y + box.height / 2)
   await expect(tip).toBeVisible()
 })
+
+test('keyboard selection takes precedence over a pending pointer readout', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-09T12:00:00Z') })
+  await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const plot = page.locator('.analytics-history[data-series="Issues opened"] .analytics-history-plot')
+  await expect(plot.locator('.analytics-history-line')).toBeVisible()
+  await page.clock.pauseAt(new Date('2026-10-09T12:01:00Z'))
+  await page.mouse.move(0, 0)
+  await plot.focus()
+  const box = (await plot.boundingBox())!
+  await page.mouse.move(box.x + 1, box.y + box.height / 2)
+  await page.keyboard.press('End')
+  await expect(plot.locator('.analytics-history-tip span')).toHaveText('6 opened · 2 Oct – 8 Oct 2026')
+  await page.clock.runFor(600)
+  await expect(plot.locator('.analytics-history-tip span')).toHaveText('6 opened · 2 Oct – 8 Oct 2026')
+})
