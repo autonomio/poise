@@ -176,7 +176,8 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
         {
           ...perPr('Merged by agent', pr.mergedByAgent === null || none ? null : pr.mergedByAgent / pr.merged * 100, baseline.pullRequests.mergedByAgent === null || !baseline.pullRequests.merged ? null : baseline.pullRequests.mergedByAgent / baseline.pullRequests.merged * 100, (n) => n === null ? UNKNOWN : `${formatRate(n)}%`),
           value: pr.mergedByAgent === null || none ? UNKNOWN : `${Math.round(pr.mergedByAgent / pr.merged * 100)}%`,
-          note: report.agentAccount === null ? 'No agent account in Settings' : none ? undefined : `${formatCount(pr.mergedByAgent ?? 0)} of ${formatCount(pr.merged)} by ${report.agentAccount}`,
+          ...(report.agentAccount === null ? { comparison: 'No agent account in Settings' } : {}),
+          note: report.agentAccount === null || none ? undefined : `${formatCount(pr.mergedByAgent ?? 0)} of ${formatCount(pr.merged)} by ${report.agentAccount}`,
         },
       ],
       note: none ? 'No pull requests were merged in this range.' : undefined,

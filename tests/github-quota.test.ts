@@ -223,6 +223,7 @@ describe('quota chart observations', () => {
     expect(bucket.history?.map((sample) => sample.used)).toEqual([300, 40])
     vi.resetModules()
     quota = await import('../server/github-quota')
+    database = await import('../server/db')
     bucket = quota.quotaBuckets(payload(50, reset + 7200), 'octocat', T0 + 7_200_000)[0]
     expect(bucket.history?.map((sample) => sample.used)).toEqual([300, 40, 50])
     expect(mocks.runFile).not.toHaveBeenCalled()
@@ -239,4 +240,14 @@ describe('quota chart observations', () => {
     expect(hours[22]).toEqual(samples[0])
     expect(hours[23]).toBeNull()
   })
+})
+
+it('retains exactly 168 hourly slots including this hour after a full week', () => {
+  const now = T0 + 30 * 60_000
+  const history = Array.from({ length: 169 }, (_, i) => ({ at: now - (168 - i) * 3_600_000, used: i, remaining: 5000 - i, limit: 5000 }))
+  database.setMeta('github-quota:hours:octocat:core', JSON.stringify(history))
+  const bucket = quota.quotaBuckets(payload(200), 'octocat', now)[0]
+  expect(bucket.history).toHaveLength(168)
+  expect(bucket.history?.[0].at).toBe(now - 167 * 3_600_000)
+  expect(bucket.history?.at(-1)?.used).toBe(200)
 })

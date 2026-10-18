@@ -170,7 +170,7 @@ describe('pull request flow', () => {
     expect(tile(quiet, 'Time to first review').value).toBe('—')
     expect(quiet[0].note).toBe('No pull request had its first review in this range.')
     const unset = analyticsGroups({ ...report({ mergedByAgent: null }), agentAccount: null })
-    expect(tile(unset, 'Merged by agent')).toMatchObject({ value: '—', note: 'No agent account in Settings' })
+    expect(tile(unset, 'Merged by agent')).toMatchObject({ value: '—', comparison: 'No agent account in Settings' })
   })
 })
 

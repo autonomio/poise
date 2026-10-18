@@ -1,8 +1,8 @@
 import { reveal } from '../motion'
 import { patchContent } from '../dom-patch'
 // Analytics — a view of its own, opened from the burger menu rather than the
-// top nav: the selected day's productivity topline with each figure's past
-// year, then pull request flow and the numbers per merged pull request, then
+// top nav: productivity and pull request flow, then the numbers per merged
+// pull request, each with a weekly line and distribution, then
 // live GitHub API quota. Independent of Current's filters.
 import { analyticsGroups, type AnalyticsGroup, type AnalyticsReport } from '../analytics-format'
 import { analyticsDay, analyticsHistoryBounds } from '../analytics-day'
@@ -73,7 +73,7 @@ function histogramMarkup(series: HistorySeries): string {
 }
 
 function quotaCharts(bucket: GithubQuotaBucket, now: number): string {
-  const observations = (bucket.history ?? []).filter((sample) => sample.at >= now - 7 * 86_400_000 && sample.at <= now && sample.limit > 0)
+  const observations = (bucket.history ?? []).filter((sample) => Math.floor(sample.at / 3_600_000) >= Math.floor(now / 3_600_000) - 167 && sample.at <= now && sample.limit > 0)
   const hours = quotaHours(observations, now)
   const time = (at: number) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(at)
   const used = histogram(observations.map((sample) => sample.used / sample.limit * 100), 0, 100)
@@ -110,7 +110,7 @@ async function readQuota(): Promise<void> {
     patchContent(content, data.accounts.length ? data.accounts.map((account) => `
       <article class="github-quota-account" data-account="${escapeHtml(account.login)}">
         <header class="github-quota-identity">
-          <img class="github-quota-avatar last-avatar" src="https://github.com/${encodeURIComponent(account.login)}.png?size=80" alt="" width="40" height="40">
+          <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar" src="https://github.com/${encodeURIComponent(account.login)}.png?size=80" alt="" width="40" height="40"></span>
           <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
           ${account.checkedAt ? `<p class="analytics-note">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}</div>
         </header>
@@ -295,6 +295,12 @@ function onPlotKey(event: KeyboardEvent): void {
   const label = plotLabel(event)
   const count = history.data?.periods.length ?? 0
   if (!label || !count) return
+  if (event.key === 'Escape') {
+    clearTimeout(hoverTimer)
+    hoveredSeries = null
+    hideCursor(label)
+    return
+  }
   const at = cursors.get(label) ?? count - 1
   const next = event.key === 'ArrowLeft' ? at - 1 : event.key === 'ArrowRight' ? at + 1 : event.key === 'Home' ? 0 : event.key === 'End' ? count - 1 : null
   if (next === null) return

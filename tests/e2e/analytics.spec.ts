@@ -246,6 +246,8 @@ test('draws each headline figure\'s past year by 7-day period, ending at the sel
   await expect(tip.locator('span')).toHaveText(/^7 merged · 25 Sept? – 1 Oct 2026$/)
   await page.keyboard.press('Home')
   await expect(tip.locator('span')).toHaveText('0 merged · 10 Oct – 16 Oct 2025')
+  await page.keyboard.press('Escape')
+  await expect(tip).toHaveCount(0)
 
   await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
   await page.locator('#analytics-filters').getByLabel('Organization filter').selectOption('beta')
@@ -311,6 +313,11 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
   expect(Math.max(...clipped)).toBeLessThanOrEqual(1)
   expect(new Set(await lefts(view.getByRole('region', { name: 'Productivity' }), '.analytics-tile')).size).toBe(2)
   await expect(view.locator('.analytics-history-line')).toHaveCount(13)
+  const overflows = await view.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => {
+    const histogram = tile.querySelector('.analytics-histogram')!
+    return histogram.getBoundingClientRect().bottom - tile.getBoundingClientRect().bottom
+  }))
+  expect(Math.max(...overflows)).toBeLessThanOrEqual(-8)
   await page.screenshot({ path: info.outputPath(`analytics-narrow-${theme}.png`), fullPage: true })
   // A readout wider than a right-column chart stays on the page.
   const closed = view.locator('.analytics-history[data-series="Issues closed"] .analytics-history-plot')
@@ -606,7 +613,7 @@ test('shows quota charts from the existing read and centers every organization s
   await expect(view.locator('.quota-hour')).toHaveCount(48)
   await expect(view.locator('.quota-hour-empty')).toHaveCount(0)
   await expect(view.locator('.quota-distribution rect')).toHaveCount(40)
-  await expect(view.locator('.github-quota-avatar').first()).toHaveAttribute('src', 'https://github.com/octocat.png?size=80')
+  await expect(view.locator('.github-quota-avatar img').first()).toHaveAttribute('src', 'https://github.com/octocat.png?size=80')
   expect(reads).toBe(1)
   expect(state.reads).toHaveLength(2)
   expect(state.historyReads).toHaveLength(1)
@@ -633,6 +640,8 @@ test('attaches delayed help to measurements, with plain headings and no quota ex
   await expect(view).not.toContainText('Estimated risk of running out before reset, assuming recent usage continues.')
   await expect(view.locator('.analytics-value[data-help]')).toHaveCount(13)
   const figure = value(page, 'Behaviors')
+  await figure.scrollIntoViewIfNeeded()
+  await page.mouse.move(0, 0)
   await figure.hover()
   const tooltip = page.getByRole('tooltip')
   await expect(tooltip).toBeHidden()
@@ -641,4 +650,19 @@ test('attaches delayed help to measurements, with plain headings and no quota ex
   await expect(figure).toHaveCSS('text-decoration-line', 'none')
   await page.mouse.move(0, 0)
   await expect(tooltip).toBeHidden()
+})
+
+test('caps seven-day quota charts at 168 hours and visibly explains an unset agent', async ({ page }) => {
+  await workspace(page)
+  const quota = quotaReport()
+  const now = Date.parse('2026-10-09T12:00:00Z')
+  quota.accounts[0].buckets[0].history = Array.from({ length: 169 }, (_, i) => ({ at: now - i * 3_600_000, used: 100, remaining: 4900, limit: 5000 }))
+  await page.route('**/api/github-quota', route => route.fulfill({ json: quota }))
+  await page.route('**/api/analytics?**', route => route.fulfill({ json: { ...report(4), agentAccount: null, pullRequests: { ...report(4).pullRequests, mergedByAgent: null } } }))
+  await page.goto('/')
+  await openAnalytics(page)
+  await expect(page.locator('.quota-charts').first()).toContainText('168/168 hours')
+  const agent = page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Merged by agent$/ }) })
+  await expect(agent.locator('.analytics-value')).toHaveText('—')
+  await expect(agent.locator('.analytics-note')).toHaveText('No agent account in Settings')
 })
