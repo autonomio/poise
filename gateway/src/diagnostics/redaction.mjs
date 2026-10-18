@@ -3,13 +3,14 @@ export const SECRET_KEY = /authorization|cookie|password|secret|credential|(?:^|
 
 /** @param {string} value @param {readonly string[]} secrets @returns {string} */
 export function redact(value, secrets = []) {
+  value = value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
   for (const secret of [...secrets].filter((item) => item.length >= 8).sort((a, b) => b.length - a.length)) {
     for (const encoded of [secret, Buffer.from(secret).toString('base64'), Buffer.from(`x-access-token:${secret}`).toString('base64')]) value = value.split(encoded).join('[redacted]')
   }
   return value.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)/g, '[redacted]')
     .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie|(?:x[-_])?api[-_]?key|x-goog-api-key|x-auth-token|x-amz-security-token)\s*[:=][^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gim, '[redacted header]')
     .replace(/\b(?:Basic|Bearer|token)\s+[^\s,;"']+/gi, '[redacted credential]')
-    .replace(/(https?:\/\/)[^\s/]+@/g, '$1[redacted]@')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@')
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|key|secret|password|auth|signature)=)[^\s&#]+/gi, '$1[redacted]')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
 }
@@ -20,10 +21,12 @@ export function environmentSecrets(env = process.env) {
   for (const [key, value] of Object.entries(env)) {
     if (!value || value.length < 8 || !(SECRET_KEY.test(key) || /TOKEN|KEY|AUTH|GIT_CONFIG_VALUE/i.test(key))) continue
     secrets.push(value)
-    const basic = /authorization:\s*basic\s+([A-Za-z0-9+/=]+)/i.exec(value)
+    const authorization = /(?:proxy-)?authorization:\s*(basic|bearer|token)\s+([^\s]+)/i.exec(value)
+    if (authorization) secrets.push(authorization[2])
+    const basic = authorization?.[1].toLowerCase() === 'basic' ? authorization : null
     if (basic) {
-      secrets.push(basic[1])
-      const decoded = Buffer.from(basic[1], 'base64').toString('utf8')
+      secrets.push(basic[2])
+      const decoded = Buffer.from(basic[2], 'base64').toString('utf8')
       const colon = decoded.indexOf(':')
       if (colon >= 0) secrets.push(decoded.slice(colon + 1))
     }

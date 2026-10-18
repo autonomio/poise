@@ -375,3 +375,10 @@ it('retains coverage persistence failure independently in the journal and across
   const restored = new DiagnosticRuntime({ path, now: () => now, report: () => undefined })
   try { expect(restored.health().coverageError).toContain('fixture coverage write unavailable') } finally { restored.stop() }
 })
+
+it('redacts standard credential URLs and decorated API headers before retaining terminal evidence', () => {
+  const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'network failure',
+    stderr: '\x1b[31mX-Api-Key\x1b[0m: decorated-private-key\nsocks5h://user:proxy-private-password@proxy.example\npostgresql://user:database-private-password@db.example' }, NOW, [])!
+  for (const secret of ['decorated-private-key', 'proxy-private-password', 'database-private-password']) expect(value.stderr).not.toContain(secret)
+  expect(value.stderr).toContain('socks5h://[redacted]@proxy.example')
+})
