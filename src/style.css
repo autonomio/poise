@@ -1080,6 +1080,8 @@ tr:hover .review-btn { opacity: 1; }
 .quota-hour-empty { border-bottom: 1px dotted var(--text-tertiary); }
 .quota-charts > .analytics-chart-heading:not(:first-child) { margin-top: var(--sp-4); }
 @container analytics (max-width: 639px) {
+  [data-group="productivity"] .analytics-value { font-size: 1.5rem; }
+  .analytics-arrow { font-size: 1.125rem; }
   [data-group="per-merged-pr"] .analytics-tile:last-child { grid-column: 1 / -1; }
 }
 @container analytics (min-width: 640px) {
