@@ -43,6 +43,8 @@ counts and stored JSON for sizes and merger identity are read only for pull
 requests merged inside the requested window. Openings, closings and first
 reviews do not parse unrelated discussion payloads; year history therefore
 does not hold up day or quota reads while processing its records.
+Involvement membership comes directly from the indexed associations, without
+aggregating the evidence descriptions that the full user view supplies.
 Leaving Analytics stops its reads: a late answer is discarded, and quota is
 not refreshed until it is chosen again.
 

@@ -255,7 +255,7 @@ async function readOrganization(org: Organization, me: string, window: Analytics
         const user = scope[0] === 'user'
         const filters: string[] = []
         if (user) {
-          filters.push('username = ?', 'item_type = ?')
+          filters.push('a.username = ?', 'i.item_type = ?')
           params.push(me, kind)
         } else if (scope[1] === '--author') {
           filters.push('author = ?')
@@ -267,7 +267,9 @@ async function readOrganization(org: Organization, me: string, window: Analytics
           filters.push('updated_at >= ?')
           params.push(new Date(window.since).toISOString().slice(0, 19))
         }
-        return `SELECT ${user ? 'item_ref' : ref} FROM ${user ? 'user_items' : view}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''}`
+        // Only membership is needed. user_items groups all involvement
+        // evidence into explanations before it can return these same IDs.
+        return `SELECT ${user ? 'a.item_id' : ref} FROM ${user ? 'associations a JOIN items i ON i.item_id = a.item_id' : view}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''}`
       })
       // A pending review is not submitted, and an author's own review is a
       // reply. A review counts unless it is known to be the author's: a
