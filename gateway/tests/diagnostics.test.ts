@@ -325,6 +325,12 @@ describe('reviewed retention and redaction boundaries', () => {
     const reader = new DiagnosticStore(path, policy, () => now, true); stores.push(reader)
     expect(reader.query(alice).total).toBe(0); expect(reader.lookup(alice, record.id).status).toBe('expired')
     expect(reader.bounds(alice).from).toBeNull(); expect(reader.delivery(alice).events).toHaveLength(0)
+    now++
+    expect(reader.lookup(alice, record.id).status).toBe('unavailable')
+    const idleWriter = new DiagnosticStore(path, policy, () => now); stores.push(idleWriter)
+    expect(idleWriter.lookup(alice, record.id).status).toBe('unavailable')
+    idleWriter.append([])
+    for (const db of [reader, idleWriter]) expect(db.lookup(alice, record.id).status).toBe('unavailable')
   })
 
   it('does not recursively enqueue rejection warnings under a tiny byte policy', () => {

@@ -157,7 +157,7 @@ export class DiagnosticStore {
   prune(reserve = 0): void {
     if (reserve > this.policy.maxBytes) throw new Error('Logging event exceeds the configured storage budget')
     const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
-    this.db.prepare('INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,? FROM log_events WHERE ingested_at < ?').run(new Date(this.now()).toISOString(), cutoff)
+    this.db.prepare("INSERT OR IGNORE INTO log_expired SELECT id,workspace,visibility,strftime('%Y-%m-%dT%H:%M:%fZ',ingested_at,?) FROM log_events WHERE ingested_at < ?").run(`+${this.policy.retentionMs / 1000} seconds`, cutoff)
     this.db.prepare('DELETE FROM log_events WHERE ingested_at < ?').run(cutoff)
     this.db.prepare('DELETE FROM log_expired WHERE expired_at < ?').run(cutoff)
     this.evict(reserve)
@@ -337,7 +337,8 @@ export class DiagnosticStore {
       : this.db.prepare("SELECT payload FROM log_events WHERE id=? AND workspace=? AND visibility IN ('workspace','infrastructure')").get(id, access.workspace)) as { payload: string } | undefined
     if (row) {
       const event = JSON.parse(row.payload) as LogEvent
-      return Date.parse(event.ingestedAt) >= this.now() - this.policy.retentionMs ? { status: 'found', event } : { status: 'expired' }
+      const age = this.now() - Date.parse(event.ingestedAt)
+      return age <= this.policy.retentionMs ? { status: 'found', event } : { status: age <= this.policy.retentionMs * 2 ? 'expired' : 'unavailable' }
     }
     const cutoff = new Date(this.now() - this.policy.retentionMs).toISOString()
     const expired = (access.operator
