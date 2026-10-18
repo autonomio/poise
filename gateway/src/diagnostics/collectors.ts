@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ContainerSummary, DockerClient, TaskFailureEvidence } from '../docker.js'
+import { TASK_STDERR_TAIL_LINES, type ContainerSummary, type DockerClient, type TaskFailureEvidence } from '../docker.js'
 import type { Context } from '../context.js'
 import { signAssertion } from '../assertion.js'
 import http from 'node:http'
@@ -47,14 +47,22 @@ export function releaseTaskDiagnostic(evidence: TaskFailureEvidence): Diagnostic
   const workspace = diagnosticOwner(evidence.labels)
   if (!workspace || evidence.labels['poise.task'] !== 'install-release') return null
   const technical = (value: string) => value.replace(/\/(?:home|Users)\/[^\s:'"<>]+/g, '[private path]')
-  let stderr: string | null = null; let stderrError = evidence.stderrError
-  try { if (evidence.stderr) stderr = dockerLines(evidence.stderr).map((line) => line.slice(line.indexOf(' ') + 1)).join('\n') }
+  let stderr: string | null = null; let stderrError = evidence.stderrError; let tailBoundReached = false
+  try {
+    if (evidence.stderr) {
+      const lines = dockerLines(evidence.stderr)
+      tailBoundReached = lines.length >= TASK_STDERR_TAIL_LINES
+      stderr = lines.map((line) => line.slice(line.indexOf(' ') + 1)).join('\n')
+    }
+  }
   catch (error) { stderrError = error instanceof Error ? error.message : String(error) }
   return { id: 'release-task:' + evidence.id, time: null, source: 'docker', component: 'release-installer', operation: 'release.install', phase: evidence.phase,
     level: 'error', workspace, visibility: 'infrastructure', container: evidence.container,
     message: evidence.error ? 'Release installation completion is unknown: ' + technical(evidence.error) : `Release installation task exited ${evidence.exitCode}`,
-    exitCode: evidence.exitCode, stderr: stderr === null ? null : technical(stderr),
+    exitCode: evidence.exitCode, stderr: stderr === null ? null : technical(stderr), truncated: tailBoundReached,
     context: { taskName: evidence.name, controlError: evidence.error === null ? null : technical(evidence.error), stderrEvidenceUnavailable: stderrError === null ? null : technical(stderrError),
+      stderrTailLimitLines: TASK_STDERR_TAIL_LINES, stderrTailBoundReached: tailBoundReached,
+      stderrEvidenceTruncated: tailBoundReached ? 'Docker stderr tail bound reached; earlier cause lines may be missing' : null,
       completionKnown: evidence.phase === 'installer_exit', observedAt: new Date().toISOString() },
     resources: { configuredMemoryLimitBytes: evidence.limits.memoryBytes, configuredNanoCpus: evidence.limits.nanoCpus, configuredPidsLimit: evidence.limits.pids,
       measurement: 'configuration submitted to Docker; incident usage not observed' } }

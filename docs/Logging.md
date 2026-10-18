@@ -289,3 +289,7 @@ environment. The truncation marker includes bounded signal and errno text.
 
 Age-expiry evidence starts when retention elapses. An idle store or later
 cleanup cannot extend that evidence window beyond one further retention period.
+
+Release-task stderr capture marks a full 1,000-line Docker tail as truncated,
+with an explicit warning that earlier cause lines may be missing. Short lines
+can reach this bound even when the retained text fits within its byte limit.

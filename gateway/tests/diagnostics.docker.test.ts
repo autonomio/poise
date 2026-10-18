@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { DockerClient, type TaskFailureEvidence } from '../src/docker.js'
-import { dockerLines } from '../src/diagnostics/collectors.js'
+import { dockerLines, releaseTaskDiagnostic } from '../src/diagnostics/collectors.js'
 import { normalize } from '../src/diagnostics/contract.js'
 import { workspaceEnvelope } from '../src/diagnostics/sources.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
@@ -51,8 +51,8 @@ describe.skipIf(!enabled)('durable diagnostics from real Docker sources', () => 
   }, 30_000)
 })
 
-it.skipIf(!enabled)('captures a failed release task before removal and preserves its result when reporting fails', async () => {
-  const name = 'poise-task-proof-' + process.pid
+it.skipIf(!enabled).each([2, 1001])('captures a failed release task with %i stderr lines before removal and preserves its result when reporting fails', async (lineCount) => {
+  const name = 'poise-task-proof-' + process.pid + '-' + lineCount
   const endpoint = process.env.DOCKER_HOST ?? JSON.parse(docker('context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}')) as string
   if (!endpoint.startsWith('unix://')) throw new Error('Docker diagnostic proof requires the selected local Unix socket')
   let evidence: TaskFailureEvidence | null = null
@@ -64,13 +64,22 @@ it.skipIf(!enabled)('captures a failed release task before removal and preserves
   })
   try {
     const result = await client.runTask(name, { Image: 'node:22-bookworm-slim', User: '10001', Entrypoint: ['node'],
-      Cmd: ['-e', "process.stdout.write('excluded-output');process.stderr.write('release exact cause\\nsecond line');process.exit(17)"], Env: [],
+      Cmd: ['-e', `process.stdout.write('excluded-output');process.stderr.write(${JSON.stringify(lineCount === 2 ? 'release exact cause\nsecond line' : 'release exact cause\n' + 'x\n'.repeat(1000))},()=>process.exit(17))`], Env: [],
       Labels: { 'poise.task': 'install-release', 'poise.workspace': 'logproof' },
       HostConfig: { SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], Memory: 64 * 1024 * 1024, NanoCpus: 1000000000, PidsLimit: 64, Mounts: [], NetworkMode: 'none' } })
     expect(result).toBe(17); expect(await client.inspectContainer(name)).toBeNull()
     expect(evidence).toMatchObject({ exitCode: 17, stderrError: null, limits: { memoryBytes: 64 * 1024 * 1024 } })
     const captured = evidence as TaskFailureEvidence | null
     const stderr = dockerLines(captured!.stderr!).join('\n')
-    expect(stderr).toContain('release exact cause'); expect(stderr).toContain('second line'); expect(stderr).not.toContain('excluded-output')
+    if (lineCount === 2) { expect(stderr).toContain('release exact cause'); expect(stderr).toContain('second line') }
+    else { expect(dockerLines(captured!.stderr!)).toHaveLength(1000); expect(stderr).not.toContain('release exact cause') }
+    expect(stderr).not.toContain('excluded-output')
+    const record = normalize(releaseTaskDiagnostic(captured!)!)!
+    const store = new DiagnosticStore(':memory:')
+    try {
+      store.append([record])
+      expect(store.lookup({ workspace: 'logproof', operator: false }, record.id)).toMatchObject({ status: 'found', event: {
+        exitCode: 17, truncated: lineCount > 1000, context: { stderrTailBoundReached: lineCount > 1000 } } })
+    } finally { store.close() }
   } finally { report.mockRestore(); spawnSync('docker', ['rm', '--force', name]) }
 }, 30000)

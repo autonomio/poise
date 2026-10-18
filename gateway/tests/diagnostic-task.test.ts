@@ -19,7 +19,7 @@ const spec: TaskSpec = { Image: 'fixture', User: '10001', Entrypoint: ['installe
   Labels: { 'poise.task': 'install-release', 'poise.workspace': 'logproof' },
   HostConfig: { SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], Memory: 64 * 1024 * 1024, NanoCpus: 1_000_000_000, PidsLimit: 64, Mounts: [], NetworkMode: 'none' } }
 
-async function engine(mode: 'timeout' | 'http' | 'malformed' | 'logs' | 'start') {
+async function engine(mode: 'timeout' | 'http' | 'malformed' | 'logs' | 'start' | 'tail', lineCount = 2) {
   const directory = mkdtempSync(join(tmpdir(), 'poise-task-')); directories.push(directory)
   const socket = join(directory, 'docker.sock'); const events: string[] = []; let created = false; let removed = false
   const server = http.createServer((req, res) => {
@@ -30,14 +30,16 @@ async function engine(mode: 'timeout' | 'http' | 'malformed' | 'logs' | 'start')
     if (req.url?.endsWith('/wait')) {
       events.push('wait')
       if (mode === 'timeout') return
-      return mode === 'malformed' ? json(200, {}) : json(503, { message: 'fixture wait failed' })
+      return mode === 'tail' ? json(200, { StatusCode: 17 }) : mode === 'malformed' ? json(200, {}) : json(503, { message: 'fixture wait failed' })
     }
     if (req.url?.startsWith('/containers/native-task-id/logs?')) {
       events.push('logs'); expect(removed).toBe(false)
       const params = new URL(req.url, 'http://docker').searchParams
       expect(params.get('stdout')).toBe('0'); expect(params.get('stderr')).toBe('1')
+      expect(params.get('tail')).toBe('1000')
       if (mode === 'logs' || mode === 'start') return json(503, { message: 'fixture logs unavailable' })
-      const body = Buffer.from('2026-10-18T00:00:00.000Z fatal: exact installer cause\n2026-10-18T00:00:00.000Z {"access_token":"opaque-task-credential"}\n')
+      const body = Buffer.from(mode === 'tail' ? Array.from({ length: lineCount }, (_, index) => '2026-10-18T00:00:00.000Z ' + (index ? 'x' : 'initial failure cause')).slice(-1000).join('\n') + '\n'
+        : '2026-10-18T00:00:00.000Z fatal: exact installer cause\n2026-10-18T00:00:00.000Z {"access_token":"opaque-task-credential"}\n')
       const frame = Buffer.alloc(8); frame[0] = 2; frame.writeUInt32BE(body.length, 4)
       res.end(Buffer.concat([frame, body])); return
     }
@@ -71,6 +73,27 @@ it.each(['timeout', 'http', 'malformed', 'logs', 'start'] as const)('retains rel
     else expect(event.stderr).toContain('fatal: exact installer cause')
     expect(JSON.stringify(event)).not.toContain('opaque-task-credential')
     expect(reader.query({ workspace: 'other', operator: false }).total).toBe(0)
+  } finally { reader.close() }
+})
+
+it.each([999, 1000, 1001])('persists honest release stderr completeness for %i short lines', async (lineCount) => {
+  const fixture = await engine('tail', lineCount), path = join(fixture.directory, 'logging.db')
+  const runtime = new DiagnosticRuntime({ path, report: () => undefined })
+  const client = new DockerClient(fixture.socket, (evidence) => {
+    expect(fixture.removed()).toBe(false); observeReleaseTask(runtime, evidence)
+  })
+  try { await expect(client.runTask('release-proof', spec)).resolves.toBe(17) }
+  finally { await runtime.stop() }
+  expect(fixture.removed()).toBe(true)
+  const reader = new DiagnosticStore(path)
+  try {
+    const event = reader.query({ workspace: 'logproof', operator: false }).events[0]
+    expect(event).toMatchObject({ exitCode: 17, truncated: lineCount >= 1000,
+      context: { completionKnown: true, stderrTailLimitLines: 1000, stderrTailBoundReached: lineCount >= 1000,
+        stderrEvidenceTruncated: lineCount >= 1000 ? expect.stringContaining('earlier cause lines may be missing') : null } })
+    expect(Buffer.byteLength(event.stderr!)).toBeLessThan(16_384)
+    if (lineCount > 1000) expect(event.stderr).not.toContain('initial failure cause')
+    else expect(event.stderr).toContain('initial failure cause')
   } finally { reader.close() }
 })
 
