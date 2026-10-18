@@ -296,7 +296,12 @@ export async function workspaceUpgrade(ctx: Context, req: IncomingMessage, socke
     proto: ctx.scheme,
     dropAuthorization: auth.scope === 'link',
   })
-  proxyUpgrade(req, socket, head, ctx.deps.upstream(owner.handle), headers, (error) => {
+  const target = ctx.deps.upstream(owner.handle)
+  const requestStarted = performance.now()
+  const requestId = randomUUID()
+  const evidence = () => ({ requestId, method: 'GET', route: path.startsWith('/api/') ? path.split('/').slice(0, 3).join('/') : '/',
+    upstream: `${target.host}:${target.port}`, container: target.host, durationMs: Math.round(performance.now() - requestStarted), disconnect: 'upstream upgrade failure' })
+  proxyUpgrade(req, socket, head, target, headers, (error) => {
     // Runs inside a socket event: a throw here would escape every handler and stop the gateway.
     try {
       if (isUnreachable(error)) {
@@ -306,7 +311,7 @@ export async function workspaceUpgrade(ctx: Context, req: IncomingMessage, socke
         rejectUpgrade(socket, 503, STARTING, { 'retry-after': '2' })
         return
       }
-      log.error('proxy.upgrade.failed', { handle: owner.handle, error: error.message })
+      log.error('proxy.upgrade.failed', { handle: owner.handle, error: error.message, errno: error.code ?? null, ...evidence() })
       rejectUpgrade(socket, 502, { error: 'bad_gateway', message: 'The connection to the workspace failed.' })
     } catch (failure) {
       log.error('proxy.failure.unanswered', { handle: owner.handle, error: errorMessage(failure) })
