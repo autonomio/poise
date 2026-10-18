@@ -86,7 +86,7 @@ class TestProcessDiagnostic(TestCase):
 
     def test_malformed_optional_basic_credential_never_masks_the_git_cause(self):
         self.env['EXTRA_AUTHORIZATION'] = 'authorization: basic abc'
-        self.fake('import sys\nsys.stderr.write("fatal: permission denied\n")\nsys.exit(128)\n')
+        self.fake('import sys\nsys.stderr.write("fatal: permission denied\\n")\nsys.exit(128)\n')
         error = self.failure('fetch')
         self.assertIn('permission denied', str(error))
         self.assertEqual(error.diagnostic['exit_code'], 128)
