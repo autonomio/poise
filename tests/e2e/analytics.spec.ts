@@ -325,6 +325,7 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
   await page.screenshot({ path: info.outputPath(`analytics-narrow-${theme}.png`), fullPage: true })
   // A readout wider than a right-column chart stays on the page.
   const closed = view.locator('.analytics-history[data-series="Issues closed"] .analytics-history-plot')
+  await closed.scrollIntoViewIfNeeded()
   const plot = (await closed.boundingBox())!
   await page.mouse.move(plot.x + plot.width - 1, plot.y + plot.height / 2)
   await expect(closed.locator('.analytics-history-tip')).toBeVisible()
