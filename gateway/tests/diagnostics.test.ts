@@ -388,3 +388,9 @@ it('extracts command-specific bearer credentials before retaining bare stderr va
   const event = normalize({ source: 'poise', operation: 'git.fetch', level: 'error', message: 'fetch failed', stderr: 'overlay-private-credential' }, NOW, secrets)!
   expect(event.stderr).toBe('[redacted]')
 })
+
+it('redacts quoted credential fields in captured diagnostic text', () => {
+  const value = normalize({ source: 'poise', operation: 'provider.failed', level: 'error', message: 'provider rejected',
+    stderr: '{"X-Api-Key":"json-private-key"}\npassword=private-password\nclient_secret: private-client-secret' }, NOW, [])!
+  for (const secret of ['json-private-key', 'private-password', 'private-client-secret']) expect(value.stderr).not.toContain(secret)
+})
