@@ -127,3 +127,10 @@ Critical event and then exits with the existing failure status. Structured
 stderr forwarding is capped by backpressure; local durable backfill remains
 independent. Source records beyond Docker/window or native-line bounds produce
 explicit historical gaps and do not pin later collection behind poison input.
+
+Incident identity hashes the full redacted material cause, independently of the
+short displayed summary and changing attempt/release/resource context. Native
+journal collection uses `--all` with a bounded field projection and `--no-tail`,
+so journalctl's default 4 KiB null substitution and ten-record follow tail do
+not silently discard replayable evidence. See the upstream
+[journalctl contract](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html).

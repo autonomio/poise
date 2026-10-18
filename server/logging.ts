@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { agentInterfaceRoot } from '../scripts/caller.mjs'
@@ -23,16 +23,16 @@ export function loggingWorkspace(): string { return workspace }
 export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> & { source?: string }, secrets: readonly string[] = []): string | null {
   if (!active) return null
   try {
-  const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
-    source: input.source ?? 'poise', workspace, visibility: 'workspace',
-    instance: process.env.POISE_INSTANCE_LABEL ?? (process.env.POISE_MODE === 'service' ? 'service' : 'local'),
-    release: process.env.POISE_SOURCE_SHA ?? null }, Date.now(), [...environmentSecrets(), ...secrets])
-  if (!event) return null
-  const accepted = active.ingest(event)
-  // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
-  if (process.stderr.writableLength < 256 * 1024) process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
-  else active.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding is backpressured; durable backfill remains available')
-  return accepted
+    const event = normalize({ ...input, time: input.time === undefined ? new Date().toISOString() : input.time,
+      source: input.source ?? 'poise', workspace, visibility: 'workspace',
+      instance: process.env.POISE_INSTANCE_LABEL ?? (process.env.POISE_MODE === 'service' ? 'service' : 'local'),
+      release: process.env.POISE_SOURCE_SHA ?? null }, Date.now(), [...environmentSecrets(), ...secrets])
+    if (!event) return null
+    const accepted = active.ingest(event)
+    // Structured, redacted envelopes are the only workspace stdout admitted by the gateway.
+    if (process.stderr.writableLength < 256 * 1024) process.stderr.write(JSON.stringify({ poiseDiagnostic: event }) + '\n')
+    else active.observe('forwarding', 'collection', workspace, 'Structured stderr forwarding is backpressured; durable backfill remains available')
+    return accepted
   } catch (error) {
     process.stderr.write(JSON.stringify({ level: 'error', event: 'logging.capture.failed', message: error instanceof Error ? error.name : 'capture failure' }) + '\n')
     return null
@@ -42,7 +42,14 @@ export function diagnostic(input: Omit<DiagnosticInput, 'source' | 'workspace'> 
 export function diagnosticFailure(operation: string, error: unknown, context: Record<string, unknown> = {}, options: { level?: 'error' | 'warning'; secrets?: readonly string[]; stderr?: boolean } = {}): string | null {
   const value = error instanceof Error ? error : new Error(typeof error === 'string' ? error : 'Operation failed without an Error')
   const fields = error as { stderr?: unknown; code?: unknown; signal?: unknown; errno?: unknown; killed?: unknown } | null
-  return diagnostic({ level: options.level ?? 'error', operation, message: value.message, stack: value.stack,
+  const cause: string[] = []
+  const seen = new Set<Error>()
+  let underlying: unknown = value.cause
+  while (underlying instanceof Error && !seen.has(underlying) && cause.length < 8) { seen.add(underlying); cause.push(underlying.message); underlying = underlying.cause }
+  const identity = (key: string) => typeof context[key] === 'string' ? context[key] as string : null
+  return diagnostic({ level: options.level ?? 'error', operation, cause, account: identity('account'), repository: identity('repository'),
+    callId: identity('callId'), correlationId: identity('correlationId'), requestId: identity('requestId'), phase: identity('phase'),
+    timeoutMs: typeof context.timeoutMs === 'number' ? context.timeoutMs : null, message: value.message, stack: value.stack,
     stderr: options.stderr === false ? null : typeof fields?.stderr === 'string' ? fields.stderr : null,
     exitCode: typeof fields?.code === 'number' ? fields.code : null,
     signal: typeof fields?.signal === 'string' ? fields.signal : null,
@@ -69,8 +76,8 @@ async function collectCaller(): Promise<void> {
     // Do not acknowledge a Caller completion until its durable local transaction succeeds.
     if (runtime.health().error || runtime.health().queued) throw new Error('Caller diagnostic checkpoint waits for durable ingestion')
     sequence = page.cursor
-    writeFileSync(path + '.caller', String(sequence), { mode: 0o600 })
-    runtime.observe('caller', 'caller', workspace, page.backfillPending ? 'Caller historical backfill is still pending' : null)
+    writeFileSync(path + '.caller.tmp', String(sequence), { mode: 0o600 }); renameSync(path + '.caller.tmp', path + '.caller')
+    runtime.observe('caller', 'caller', workspace, page.hasMore || page.backfillPending ? 'Caller historical backfill is still pending' : null)
   } catch (error) {
     if (!abort?.signal.aborted) runtime.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error))
   } finally { abort = null }
@@ -81,11 +88,14 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   workspace = process.env.POISE_WORKSPACE_HANDLE ?? 'local'
   path = join(process.env.POISE_DB ? dirname(process.env.POISE_DB) : join(homedir(), '.poise'), 'logging.db')
   active = new DiagnosticRuntime({ path })
-  if (existsSync(path + '.caller')) {
-    const raw = readFileSync(path + '.caller', 'utf8').trim()
-    if (/^\d{1,15}$/.test(raw)) sequence = Number(raw)
-    else active.observe('caller', 'caller', workspace, 'Caller checkpoint is invalid; bounded source replay will restart')
-  } else sequence = 0
+  sequence = 0
+  try {
+    if (existsSync(path + '.caller')) {
+      const raw = readFileSync(path + '.caller', 'utf8').trim()
+      if (!/^\d{1,15}$/.test(raw)) throw new Error('Caller checkpoint is invalid; bounded source replay will restart')
+      sequence = Number(raw)
+    }
+  } catch (error) { active.observe('caller', 'caller', workspace, error instanceof Error ? error.message : String(error)) }
   active.start()
   setProcessFailureObserver((error, evidence) => diagnosticFailure(evidence.operation, error, { executable: evidence.executable, configuredCommand: evidence.command, cwd: evidence.cwd, elapsedMs: evidence.elapsedMs, timeoutMs: evidence.timeoutMs }, { secrets: evidence.secrets, stderr: evidence.stderrAllowed }))
   active.observe('application', 'poise', workspace)
@@ -101,9 +111,10 @@ export function startLogging(options: { captureFatal?: boolean } = {}): void {
   const error = console.error; const warn = console.warn
   const capture = (level: 'error' | 'warning', args: unknown[]) => {
     const header = typeof args[0] === 'string' && /^\[[a-z][\w-]*\]/i.test(args[0]) ? args[0] : null
+    if (!header) { (level === 'error' ? error : warn)(...args); return }
     const failure = args.find((arg) => arg instanceof Error)
     if (failure) diagnosticFailure('application.' + (header?.match(/^\[([^\]]+)\]/)?.[1] ?? 'error'), failure, { componentMessage: header }, { level })
-    else diagnostic({ level, operation: 'application.message', message: header ?? 'Unstructured application diagnostic; payload excluded' })
+    else diagnostic({ level, operation: 'application.message', message: [header, ...args.slice(1).filter((arg) => typeof arg === 'string' || typeof arg === 'number')].join(' ') })
   }
   console.error = (...args: unknown[]) => capture('error', args)
   console.warn = (...args: unknown[]) => capture('warning', args)

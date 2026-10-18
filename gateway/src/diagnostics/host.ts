@@ -20,7 +20,7 @@ export class HostJournal {
     let cursor: string | null
     try { cursor = this.runtime.query((db) => db.checkpoint('host-journal')) }
     catch (error) { this.runtime.observe('host-journal', 'kernel', null, String(error)); return }
-    const args = ['--follow', '--no-pager', '--output=json', '--priority=warning', ...(cursor ? ['--after-cursor=' + cursor] : ['--since=-1 minute']), '_TRANSPORT=kernel', '+', '_SYSTEMD_UNIT=docker.service']
+    const args = ['--follow', '--no-tail', '--all', '--no-pager', '--output=json', '--output-fields=MESSAGE,PRIORITY,_TRANSPORT,_SYSTEMD_UNIT', '--priority=warning', ...(cursor ? ['--after-cursor=' + cursor] : ['--since=-1 minute']), '_TRANSPORT=kernel', '+', '_SYSTEMD_UNIT=docker.service']
     const child = spawn(this.executable, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
     let pending = Buffer.alloc(0)
@@ -55,6 +55,7 @@ export class HostJournal {
           input.context = { sourceCursor: row.__CURSOR, unit: row._SYSTEMD_UNIT ?? null, transport: row._TRANSPORT ?? null }
           const event = normalize(input)
           this.runtime.query((db) => db.commitDelivery(event ? [event] : [], 'host-journal', String(row.__CURSOR)))
+          sourceError = null
           this.runtime.observe('host-journal', 'kernel', null)
         } catch (error) { sourceError = String(error); this.runtime.observe('host-journal', 'kernel', null, sourceError); child.kill('SIGTERM'); return }
       }
@@ -62,6 +63,10 @@ export class HostJournal {
     child.stderr?.on('data', (chunk: Buffer) => {
       sourceError = chunk.subarray(0, 2048).toString()
       this.runtime.observe('host-journal', 'kernel', null, sourceError)
+      if (/failed to seek.*cursor|cursor.*not found/i.test(sourceError)) {
+        try { this.runtime.query((db) => db.commitDelivery([], 'host-journal', '')) }
+        catch (error) { this.runtime.observe('host-journal', 'kernel', null, String(error)) }
+      }
     })
     child.once('error', (error) => this.runtime.observe('host-journal', 'kernel', null, error.message))
     child.once('close', (code, signal) => {
