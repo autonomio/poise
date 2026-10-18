@@ -270,7 +270,7 @@ def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, wa
             if not final:
                 schema_path = root / "receipt.schema.json"
                 schema_path.write_text(json.dumps({"type": "object", "additionalProperties": False,
-                    "required": ["received"], "properties": {"received": {"type": "integer", "const": index}}}))
+                    "required": ["received"], "properties": {"received": {"type": "integer", "enum": [index]}}}))
         if len(part) > CODEX_MAX_INPUT_CHARS:
             raise InvalidVerdict("Codex review fragment exceeds its input limit")
         command_args = args.copy()

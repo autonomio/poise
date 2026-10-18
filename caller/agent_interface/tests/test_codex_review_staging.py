@@ -22,7 +22,7 @@ class TestCodexReviewStaging(TestCase):
             commands.append(command)
             timeouts.append(kwargs["timeout"])
             schema = json.loads(Path(command[command.index("--output-schema") + 1]).read_text())
-            stage = schema["properties"].get("received", {}).get("const")
+            stage = schema["properties"].get("received", {}).get("enum", [None])[0]
             result = {"received": stage} if stage else {"action": "approve", "comments": []}
             thread = THREAD
             events = [{"type": "thread.started", "thread_id": thread}]
