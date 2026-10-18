@@ -753,9 +753,14 @@ test('routes repeated account, history and quota failures into global notificati
   await expect(rail).toContainText('GitHub authentication is unavailable for octo-agent.')
   await page.screenshot({ path: info.outputPath('analytics-colored-median-notifications.png'), fullPage: true })
   await leaveAnalytics(page)
+  await page.locator('.nr-bell').click()
+  await expect(rail).toBeVisible()
   await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(1)
   failed = false
   await openAnalytics(page)
+  await expect(value(page, 'Time to merge')).toHaveText('6h')
+  await page.locator('.nr-bell').click()
+  await expect(rail).toBeVisible()
   await expect(rail.locator('.nr-card').filter({ hasText: detail })).toHaveCount(0)
   await expect(rail).not.toContainText('GitHub authentication is unavailable for octo-agent.')
 })
@@ -775,5 +780,7 @@ test('notifies a shared failed read once outside Analytics and clears it after r
   state.historyFails = false
   await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
   await expect(value(page, 'Pull requests merged')).toHaveText('0')
+  await page.locator('.nr-bell').click()
+  await expect(page.locator('.nr-rail')).toBeVisible()
   await expect(notices).toHaveCount(0)
 })
