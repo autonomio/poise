@@ -186,3 +186,34 @@ test('switching documents during a GitHub reply does not suspend the new documen
     await expect(panel).toContainText('Another site')
   } finally { release() }
 })
+
+for (const action of ['reply', 'resolve'] as const) test(`an earlier sync cannot undo a successful ${action}`, async ({ page }) => {
+  const { data } = await editorWithReviews(page)
+  const old = structuredClone(data)
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const syncStarted = new Promise<void>((resolve) => { started = resolve })
+  await page.route('**/api/editor/doc/draft/reviews/sync', async (route) => { started(); await held; await route.fulfill({ json: old }) })
+  const delivered = page.waitForResponse((response) => response.url().endsWith('/reviews/sync'))
+  await page.locator('.editor-review-list summary').click()
+  await page.getByRole('button', { name: 'Refresh reviews' }).click()
+  await syncStarted
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  try {
+    await page.locator('.editor-review-mark').first().click()
+    if (action === 'reply') {
+      await panel.getByLabel('Reply on GitHub', { exact: true }).fill('A retained reply.')
+      await panel.getByRole('button', { name: 'Reply on GitHub', exact: true }).click()
+      await expect(panel).toContainText('A retained reply.')
+    } else {
+      await panel.getByRole('button', { name: 'Resolve thread', exact: true }).click()
+      await expect(panel.locator('.editor-review-state')).toHaveText('Resolved')
+    }
+  } finally { release() }
+  await (await delivered).finished()
+  // Let the delivered fetch and its render complete before checking the retained state.
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  if (action === 'reply') await expect(panel).toContainText('A retained reply.')
+  else await expect(panel.locator('.editor-review-state')).toHaveText('Resolved')
+})

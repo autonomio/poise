@@ -23,6 +23,7 @@ export class EditorReviews {
   private timer?: ReturnType<typeof setTimeout>
   private pending?: Promise<void>
   private generation = 0
+  private revision = 0
   private running = false
   private selected: string | null = null
   private actions = new Set<string>()
@@ -83,6 +84,7 @@ export class EditorReviews {
 
   async load(slug: string): Promise<void> {
     const generation = ++this.generation
+    const revision = this.revision
     this.running = true
     this.slug = slug
     this.data = empty()
@@ -92,11 +94,11 @@ export class EditorReviews {
     this.render()
     try {
       const data = await this.request(slug)
-      if (generation !== this.generation) return
+      if (generation !== this.generation || revision !== this.revision) return
       this.data = data
       this.render()
     } catch (error) {
-      if (generation !== this.generation) return
+      if (generation !== this.generation || revision !== this.revision) return
       this.error = (error as Error).message
       this.render()
     }
@@ -127,15 +129,16 @@ export class EditorReviews {
       return
     }
     const generation = this.generation
+    const revision = this.revision
     const slug = this.slug!
     const operation = (async () => {
       try {
         const data = await this.request(slug, '/sync', { force, poll: polling })
-        if (generation !== this.generation) return
+        if (generation !== this.generation || revision !== this.revision) return
         this.data = data
         this.error = ''
       } catch (error) {
-        if (generation !== this.generation) return
+        if (generation !== this.generation || revision !== this.revision) return
         this.error = (error as Error).message
       } finally {
         if (generation === this.generation) this.render()
@@ -251,6 +254,7 @@ export class EditorReviews {
     const body = this.drafts.get(review.id) ?? ''
     if (action === 'reply' && !body.trim()) { this.error = 'Write a reply first.'; this.renderPanel(); return }
     this.actions.add(slug)
+    this.revision++
     this.error = ''
     this.renderPanel()
     try {
@@ -261,6 +265,7 @@ export class EditorReviews {
     } catch (error) { if (generation === this.generation) this.error = (error as Error).message }
     finally {
       this.actions.delete(slug)
+      if (this.slug === slug) this.revision++
       if (generation === this.generation) { this.render(); this.schedule() }
       else if (this.slug === slug) { this.render(); void this.synchronize() }
     }

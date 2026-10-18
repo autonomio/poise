@@ -116,6 +116,16 @@ describe('review positions', () => {
     const text = '# A question\r\n\r\nOpening paragraph.\r\n\r\nSecond line.\r\nThird line.'
     expect(locateReview(text, anchor)).toEqual({ start: text.indexOf('Second line.'), end: text.length })
   })
+
+  it('preserves Markdown hard-break spaces and blank lines in following context', () => {
+    const source = '---\ntitle: "Question"\n---\n\nStart A\nRepeated.\nAfter  \n\nOther A\n\nStart B\nRepeated.\nAfter\n\nOther B\n'
+    const anchor = api.anchorFromSource(source, 6, 6)!
+    expect(anchor.after).toBe('After  \n')
+    const changed = '# Question\n\nEdited start\nRepeated.\nAfter  \n\nOther A\n\nStart A\nRepeated.\nAfter\n\nOther B'
+    expect(locateReview(changed, anchor)).toBeNull()
+    const unchanged = changed.replace('Edited start', 'Start A')
+    expect(locateReview(unchanged, anchor)?.start).toBe(unchanged.indexOf('Repeated.'))
+  })
 })
 
 describe('cached article review synchronization', () => {

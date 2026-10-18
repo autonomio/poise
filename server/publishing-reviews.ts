@@ -124,11 +124,12 @@ export function anchorFromSource(source: string, start: number, end: number): Re
   const bodyStart = text.trimEnd().length - body.length
   const firstBodyLine = text.slice(0, bodyStart).split('\n').length
   const lines = text.split('\n')
+  const contextLines = text.endsWith('\n') ? lines.slice(0, -1) : lines
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < firstBodyLine || end < start || end > lines.length) return undefined
   const quote = lines.slice(start - 1, end).join('\n')
   if (!quote.trim()) return undefined
-  const occurrences = body.split('\n').filter((_, i, all) => all.slice(i, i + end - start + 1).join('\n') === quote).length
-  return { quote, before: lines.slice(Math.max(firstBodyLine - 1, start - 3), start - 1).join('\n'), after: lines.slice(end, end + 2).join('\n').trimEnd(), unique: occurrences === 1 }
+  const occurrences = contextLines.slice(firstBodyLine - 1).filter((_, i, all) => all.slice(i, i + end - start + 1).join('\n') === quote).length
+  return { quote, before: lines.slice(Math.max(firstBodyLine - 1, start - 3), start - 1).join('\n'), after: contextLines.slice(end, end + 2).join('\n'), unique: occurrences === 1 }
 }
 
 async function sourceFor(session: GitHubSession, repo: string, path: string, commit: string): Promise<string | null> {
