@@ -204,6 +204,37 @@ describe('cached article review synchronization', () => {
     expect((await request('/sync', {})).body.reviews[0].repo).toBe('acme/renamed')
     expect(mocks.repository).toHaveBeenCalledWith(expect.objectContaining({ me: 'writer' }), 42)
   })
+
+  it('paginates threads, their replies, discussion comments and review summaries', async () => {
+    current.reviewThreads.pageInfo = { hasNextPage: true, endCursor: 'threads-next' }
+    current.reviewThreads.nodes[0].comments.pageInfo = { hasNextPage: true, endCursor: 'replies-next' }
+    current.comments.pageInfo = { hasNextPage: true, endCursor: 'comments-next' }
+    current.reviews.pageInfo = { hasNextPage: true, endCursor: 'reviews-next' }
+    const original = mocks.query.getMockImplementation()!
+    mocks.query.mockImplementation(async (...args: unknown[]) => {
+      const text = String(args[1])
+      const variables = args[2] as { id: string, after: string }
+      if (!text.includes('ArticleReviewPage')) return original(...args)
+      if (variables.id === 'thread-1') return { node: { comments: page([inline('reply-page-2')]) } }
+      if (variables.after === 'threads-next') return { node: { reviewThreads: page([thread('thread-page-2')]) } }
+      if (variables.after === 'comments-next') return { node: { comments: page([comment('discussion-page-2')]) } }
+      return { node: { reviews: page([comment('review-page-2')]) } }
+    })
+    const result = (await request('/sync', {})).body
+    expect(result.reviews.map((item) => item.id)).toEqual(['thread-1', 'thread-page-2', 'comment-1', 'discussion-page-2', 'review-1', 'review-page-2'])
+    expect(result.reviews[0].messages.map((item) => item.id)).toEqual(['inline-1', 'reply-page-2'])
+    expect(mocks.query).toHaveBeenCalledTimes(5)
+  })
+
+  it('reports malformed pagination without replacing previously cached feedback', async () => {
+    await request('/sync', {})
+    vi.setSystemTime(Date.now() + REVIEW_INTERVAL_MS)
+    current.reviewThreads.pageInfo = { hasNextPage: true, endCursor: null }
+    const result = (await request('/sync', {})).body
+    expect(result.reviews).toHaveLength(3)
+    expect(result.stale).toBe(true)
+    expect(result.problems[0]).toContain('pagination cursor')
+  })
 })
 
 describe('explicit review actions', () => {
