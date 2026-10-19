@@ -629,7 +629,12 @@ function onChange(event: Event): void {
   if (key) {
     if (!column.checked && preferences[key]) { column.checked = true; return }
     preferences.columns = column.checked ? [...preferences.columns.filter((name) => name !== key), key] : preferences.columns.filter((name) => name !== key)
-    persist(); render(); return
+    if (link) {
+      const saved = loadPreferences()
+      saved.columns = column.checked ? [...saved.columns.filter((name) => name !== key), key] : saved.columns.filter((name) => name !== key)
+      persist(saved)
+    } else persist()
+    render(); return
   }
   const select = event.target as HTMLSelectElement
   if (select.id === 'logging-source') { preferences.source = select.value; filtersChanged() }

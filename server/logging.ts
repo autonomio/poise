@@ -191,8 +191,8 @@ export function diagnosticPage(cursor: string | null) {
   if (!active) throw new Error('Diagnostic collection has not started')
   const page = active.query((store) => store.delivery({ workspace, operator: false }, cursor))
   const health = active.health()
-  return { ...page, coverage: { status: health.status, error: health.error, dropped: health.dropped, rejected: health.rejected,
+  return { ...page, coverage: { status: health.status, currentStatus: health.currentStatus, error: health.error, dropped: health.dropped, rejected: health.rejected,
     lastSuccessfulWriteAt: health.lastSuccessfulWriteAt, sources: health.sources.slice(0, 16).map((source) => ({
-      source: source.source, status: source.status, observedAt: source.observedAt, availableFrom: source.availableFrom,
+      source: source.source, status: source.status, currentStatus: source.currentStatus, observedAt: source.observedAt, availableFrom: source.availableFrom,
     })) } }
 }

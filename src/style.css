@@ -3244,6 +3244,7 @@ tr:hover .stop-btn { opacity: 1; }
   #logging-filters { gap: var(--sp-2); }
   #logging-filters .search-input { width: 125px; min-width: 60px; }
   #logging-filters .range-picker button { padding-inline: var(--sp-2); }
+  #view-logging tr.agent-expand-row > td { overflow: visible; }
   #view-logging tr.agent-expand-row > td > * { position: sticky; left: var(--sp-4); width: calc(100vw - 72px); max-width: calc(100vw - 72px); }
 }
 .logging-pagination { display: flex; align-items: center; gap: var(--sp-3); margin-block: var(--sp-4); }
