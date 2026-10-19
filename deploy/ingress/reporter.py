@@ -28,13 +28,14 @@ class ReplayWindow:
 
     def __init__(self):
         self.source = None
+        self.start = None
         self.until = None
 
-    def limit(self, container, checkpoint, end):
+    def bounds(self, container, checkpoint, start, end):
         source = (container, checkpoint)
         if self.source != source:
-            self.source, self.until = source, end
-        return min(end, self.until)
+            self.source, self.start, self.until = source, start, end
+        return self.start, min(end, self.until)
 
 
 def iso(value):
@@ -128,10 +129,10 @@ def projected(line, domain, start, end, occurrence=0):
     return record
 
 
-def retained_boundary(container):
+def retained_boundary(container, timeout=3):
     """Read only Docker's first retained timestamp, never materialize its history."""
     with subprocess.Popen(["/usr/bin/docker", "logs", "--timestamps", container], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + timeout
         prefix = bytearray()
         try:
             with selectors.DefaultSelector() as ready:
@@ -176,7 +177,7 @@ def collect(config, hello, now=None, window=None):
     initial = max(end - dt.timedelta(days=30), min(instant(retained), end)) if retained else end - dt.timedelta(minutes=5)
     start = instant(cursor["until"]) if cursor and cursor["container"] == container else initial
     # Catch up a stopped reader in finite windows; do not pretend old replay is current.
-    end = window.limit(container, checkpoint, min(end, start + dt.timedelta(days=30)))
+    start, end = window.bounds(container, checkpoint, instant(iso(start)), instant(iso(min(end, start + dt.timedelta(days=30)))))
     batch = {"version": 1, "challenge": hello.get("challenge"), "expected": checkpoint, "container": container, "from": iso(start), "until": iso(end), "state": "complete", "records": []}
     batch["retainedFrom"] = retained
     deadline = time.monotonic() + 12
@@ -191,6 +192,12 @@ def collect(config, hello, now=None, window=None):
             lines = raw.splitlines()
             if len(lines) > MAX_LINES:
                 raise ReadBound("source window exceeds 1000 records")
+            after = retained_boundary(container, timeout=min(3, max(0.01, deadline - time.monotonic())))
+            if retained is not None and after is None:
+                batch["state"] = "bounded"
+                batch["records"] = []
+                break
+            batch["retainedFrom"] = after
             records = []
             repeats = {}
             for line in lines:
@@ -212,24 +219,28 @@ def collect(config, hello, now=None, window=None):
                 helper = Path(__file__).resolve().parents[2] / "test-results/ingress/projection.cjs"
             with subprocess.Popen(["node", str(helper), domain], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
                 try:
-                    batch["records"] = json.loads(capture(process, payload, min(2, max(0.01, deadline - time.monotonic())), MAX_BYTES))
+                    records = json.loads(capture(process, payload, min(2, max(0.01, deadline - time.monotonic())), MAX_BYTES))
                 finally:
                     if process.poll() is None:
                         process.kill()
                         process.wait()
-            if len(json.dumps(batch).encode()) > MAX_BYTES:
+            if any(len(json.dumps(record).encode()) > 64 * 1024 for record in records):
+                raise ReadBound("redacted source record exceeds 64 KiB")
+            if len(json.dumps({**batch, "records": records}).encode()) > MAX_BYTES:
                 raise ReadBound("source delivery exceeds 1 MiB")
+            batch["records"] = records
             break
         except ReadBound:
             if (end - start).total_seconds() <= 1:
                 batch["state"] = "bounded"
                 batch["records"] = []
                 break
-            end = start + (end - start) / 2
+            end = instant(iso(start + (end - start) / 2))
             window.until = end
             batch["until"] = iso(end)
         except RuntimeError:
             batch["state"] = "unavailable"
+            batch["records"] = []
             break
     return batch
 

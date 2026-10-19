@@ -179,6 +179,57 @@ class IngressTests(unittest.TestCase):
         self.assertLessEqual(durations[-1], 2)
         self.assertGreater(len(durations), 4)
 
+    def test_initial_replay_anchor_survives_budget_expiry_and_a_moving_retention_cutoff(self):
+        clock = [0]
+        def source(argv, **_options):
+            if "inspect" in argv:
+                return CONTAINER.encode()
+            start = reporter.instant(argv[argv.index("--since") + 1])
+            end = reporter.instant(argv[argv.index("--until") + 1])
+            clock[0] += 3
+            if (end - start).total_seconds() > 2 * 86400:
+                raise reporter.ReadBound("source window is still too large")
+            return b""
+        hello = {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}
+        window = reporter.ReplayWindow()
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=reporter.iso(NOW - dt.timedelta(days=40))), patch.object(reporter.time, "monotonic", side_effect=lambda: clock[0]):
+            first = reporter.collect(CONFIG, hello, NOW, window)
+            later = NOW + dt.timedelta(days=3)
+            second = reporter.collect(CONFIG, {**hello, "issuedAt": reporter.iso(later)}, later, window)
+        self.assertEqual(first["state"], "unavailable")
+        self.assertEqual(second["state"], "complete")
+        self.assertEqual(second["from"], first["from"])
+        self.assertEqual(second["until"], first["until"])
+        self.assertLess(reporter.instant(second["from"]), reporter.instant(second["until"]))
+
+    def test_rotation_during_a_read_refreshes_the_retention_boundary(self):
+        def source(argv, **_options):
+            return CONTAINER.encode() if "inspect" in argv else line() + b"\n"
+        old, new = reporter.iso(NOW - dt.timedelta(minutes=10)), reporter.iso(NOW - dt.timedelta(seconds=10))
+        cursor = json.dumps({"container": CONTAINER, "until": "2026-10-19T09:59:30.000Z"}, separators=(",", ":"))
+        for after in (new, None):
+            with self.subTest(after=after), patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", side_effect=[old, after]):
+                batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": cursor}, NOW)
+            self.assertEqual(batch["state"], "complete" if after else "bounded")
+            if after:
+                self.assertEqual(batch["retainedFrom"], new)
+                self.assertGreater(reporter.instant(batch["retainedFrom"]), reporter.instant(batch["from"]))
+            else:
+                self.assertEqual(batch["records"], [])
+
+    def test_redaction_expansion_obeys_the_gateway_per_record_bound(self):
+        raw = line(message="?x " * 5000, stamp="2026-10-19T09:59:30.100000000Z") + b"\n"
+        self.assertLess(len(raw), 64 * 1024)
+        def source(argv, **_options):
+            return CONTAINER.encode() if "inspect" in argv else raw
+        cursor = json.dumps({"container": CONTAINER, "until": "2026-10-19T09:59:30.000Z"}, separators=(",", ":"))
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None):
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": cursor}, NOW)
+        self.assertEqual(batch["state"], "bounded")
+        self.assertEqual(batch["records"], [])
+        self.assertLessEqual((reporter.instant(batch["until"]) - reporter.instant(batch["from"])).total_seconds(), 1)
+        self.assertLess(reporter.instant("2026-10-19T09:59:30.100Z"), reporter.instant(batch["until"]))
+
     def test_source_failure_is_explicit_and_domain_mismatch_stops_before_read(self):
         def unavailable(argv, **_options):
             if "inspect" in argv:
