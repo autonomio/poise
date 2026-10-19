@@ -236,6 +236,12 @@ describe('the numbers', () => {
     })
   })
 
+  it('does not treat unavailable review aggregates as zero reviews', () => {
+    const report = computeAnalytics({ window: WEEK, issues: [], behaviors: [], prs: [pr(1, '2026-10-05T00:00:00Z', '2026-10-06T00:00:00Z', { review_summary: undefined })] })
+    expect(report.pullRequests.workReview.rounds).toEqual({ median: null, counted: 0, missingReviews: 0, distribution: [] })
+    expect(report.pullRequests.workReview.changesRequested).toEqual({ prs: null, reviews: null, dismissed: null, counted: 0 })
+  })
+
   it('counts pull requests opened and closed without merging inside the window', () => {
     const report = computeAnalytics({ window: WEEK, issues: [], behaviors: [], prs: [
       pr(1, '2026-10-05T00:00:00Z', null),                                              // opened on the first instant

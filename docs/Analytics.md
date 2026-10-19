@@ -218,7 +218,8 @@ Each chart's highest value is named above it; the redundant “52 weeks” and
 focusing it and using the arrow keys, Home and End, shows a period's value,
 what it is made of (such as "8 merged" or "Mean of 8 PRs") and its dates.
 The readout explains the chart and its period boundaries. Below each line,
-ten equal-width bins show the distribution of known weekly values. Empty
+ten equal-width bins show the distribution of known weekly values (Review
+rounds instead shows the selected day's per-PR counts). Empty
 periods stay unknown for metrics that require observations; zero event
 counts remain zero. Hover or focus explains the distribution. There is no
 history table.
@@ -257,7 +258,8 @@ and histogram use weekly shares; histogram bounds stay at 0–100%.
 
 Both friction cards show the preceding seven-day cohort's median or share and
 PR count beneath the delta, matching the other cards. Changes use relative
-percentages, not percentage points. Decreases are green, increases red and
+percentages, not percentage points; a positive share against a zero baseline
+has no relative delta. Decreases are green, increases red and
 unchanged values neutral. Definitions, coverage and review-state caveats are
 in measurement tooltips. No merges produce unknown medians and shares.
 Existing local SQLite reads supply these metrics; collection, dependencies,

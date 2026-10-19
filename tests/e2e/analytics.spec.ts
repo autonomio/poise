@@ -263,6 +263,9 @@ test('choosing Analytics again from the menu returns to Today', async ({ page })
   await view.getByRole('button', { name: 'Previous day' }).click()
   await expect(view.locator('.analytics-date')).toHaveText('Yesterday')
   await expect(value(page, 'Pull requests merged')).toHaveText('0')
+  await expect(value(page, 'Work type')).toHaveText('—')
+  await expect(value(page, 'Review rounds')).toHaveText('—')
+  await expect(value(page, 'Change-request share')).toHaveText('—')
   await openAnalytics(page)
   await expect(view.locator('.analytics-date')).toHaveText('Today')
   await expect(view.getByRole('button', { name: 'Next day' })).toBeDisabled()
@@ -271,6 +274,24 @@ test('choosing Analytics again from the menu returns to Today', async ({ page })
     { since: '2026-10-09T00:00:00.000Z', until: '2026-10-10T00:00:00.000Z', org: null },
     { since: '2026-10-02T00:00:00.000Z', until: '2026-10-09T00:00:00.000Z', org: null },
   ])
+})
+
+test('keeps missing review identities in tooltips while showing known change-request incidence', async ({ page }) => {
+  await workspace(page)
+  await page.route('**/api/analytics?**', async (route) => {
+    const data = report(4)
+    data.pullRequests.workReview!.rounds = { median: null, counted: 3, missingReviews: 2, distribution: [{ rounds: 3, prs: 3 }] }
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  const figure = value(page, 'Review rounds')
+  await expect(figure).toHaveText('—')
+  await expect(figure).toHaveAttribute('data-help', /Exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities/)
+  await expect(value(page, 'Change-request share')).toHaveText('75.0%')
+  await figure.focus()
+  await expect(page.getByRole('tooltip')).toContainText('3 of 4 merged PRs')
+  await expect(page.getByRole('region', { name: 'Work & review' })).not.toContainText('lack commit identities')
 })
 
 test('keeps Productivity in two rows beside a docked notification rail', async ({ page }) => {

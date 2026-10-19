@@ -221,7 +221,7 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
         },
         {
           label: 'Change-request share', value: percent(share),
-          trend: complete ? metricTrend(share, previousShare, undefined, 'share', false, true) : undefined,
+          trend: complete && !(previousShare === 0 && share !== 0) ? metricTrend(share, previousShare, undefined, 'share', false, true) : undefined,
           comparison: `7-day share: ${percent(previousShare)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}`,
           note: work ? `${work.changesRequested.prs ?? UNKNOWN} of ${pr.merged} merged PRs with change requests; ${work.changesRequested.reviews ?? UNKNOWN} change-request reviews. Review-state coverage: ${work.changesRequested.counted} of ${pr.merged} PRs. ${work.changesRequested.dismissed ?? UNKNOWN} dismissed reviews have unknown previous states and are not inferred as change requests.` : 'Review-state data is unavailable.',
         },

@@ -67,6 +67,9 @@ describe('work and review analytics', () => {
     expect(tile(buildGroups(day, week), 'Change-request share').trend).toBeUndefined()
     const empty = report({ merged: 0, workReview: work(0, 0, null) })
     expect(tile(buildGroups(empty, week), 'Change-request share').value).toBe('—')
+    const zero = report({ workReview: work(4, 0) })
+    expect(tile(buildGroups(report({ workReview: work(4, 1) }), zero), 'Change-request share').trend).toBeUndefined()
+    expect(tile(buildGroups(zero, zero), 'Change-request share').trend).toMatchObject({ direction: 'neutral', text: '→ 0%' })
   })
 })
 
