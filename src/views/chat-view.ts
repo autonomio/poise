@@ -522,7 +522,22 @@ function upsertRecord(record: SessionRecord, opts: { pending?: boolean } = {}): 
   return e
 }
 
-async function loadSessions(): Promise<void> {
+let sessionLoad: Promise<void> | null = null
+let sessionReloadRequested = false
+
+function loadSessions(): Promise<void> {
+  sessionReloadRequested = true
+  if (sessionLoad) return sessionLoad
+  sessionLoad = (async () => {
+    do {
+      sessionReloadRequested = false
+      await readSessions()
+    } while (sessionReloadRequested)
+  })().finally(() => { sessionLoad = null })
+  return sessionLoad
+}
+
+async function readSessions(): Promise<void> {
   const discoveryAtRequest = discoveryRevision
   try {
     const { sessions: list } = await chatClient.listSessions()
