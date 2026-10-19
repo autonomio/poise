@@ -60,6 +60,7 @@ import {
   type PermissionOption, type PromptInput, type Question, type SessionContext, type SessionRecord, type SessionStatus, type StopReason, type WorkspaceState,
 } from './protocol'
 import * as storage from './storage'
+import { internalTurn } from './control-store'
 import { pgidAlive, pidAlive, signalGroup, spawnWorker, workerIdentityMatches, type WorkerHandle } from './worker'
 import { createClaudeAdapter } from './adapters/claude'
 import { createCodexAdapter } from './adapters/codex'
@@ -1693,7 +1694,7 @@ export class ChatRuntime extends EventEmitter {
       let adapter = session.adapter!
       const isFirst = !storage.findEvent(record.id, (e) => e.type === 'turn.started')
       // A change session is titled by its request, not by the runbook's first line.
-      if ((record.title === 'New session' || (isFirst && !record.contextResetSeq)) && !record.selfChangeId) {
+      if ((record.title === 'New session' || (isFirst && !record.contextResetSeq)) && !record.selfChangeId && !internalTurn(turn.id)) {
         record.title = (input.text.split('\n')[0] || record.title).slice(0, TITLE_CHARS) || record.title
         this.saveRecord(session)
         this.emit_(record.id, { type: 'session.updated', session: record })

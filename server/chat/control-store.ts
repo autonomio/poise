@@ -18,6 +18,7 @@ db.exec(`
     UNIQUE(instance, recipient, event_key)
   );
   CREATE INDEX IF NOT EXISTS chat_control_pending ON chat_control_inbox(instance, state, recipient, seq);
+  CREATE INDEX IF NOT EXISTS chat_control_pending_seq ON chat_control_inbox(instance, state, seq);
   CREATE TABLE IF NOT EXISTS chat_control_watches (
     id TEXT PRIMARY KEY, instance TEXT NOT NULL, owner TEXT NOT NULL,
     targets TEXT NOT NULL, instruction TEXT NOT NULL, interval_ms INTEGER NOT NULL,
@@ -83,12 +84,13 @@ export function inbox(instance: string, recipient: string, after = 0): InternalM
   return db.prepare(`SELECT seq, recipient, sender, body, created_at, state, turn_id FROM chat_control_inbox
     WHERE instance = ? AND recipient = ? AND seq > ? ORDER BY seq LIMIT 100`).all(instance, recipient, after) as InternalMessage[]
 }
-export function pending(instance: string): InternalMessage[] {
-  return db.prepare(`SELECT seq, recipient, sender, body, created_at, state, turn_id FROM chat_control_inbox
-    WHERE instance = ? AND state = 'pending'
+export function pending(instance: string, afterSeq = 0): InternalMessage[] {
+  const page = db.prepare(`SELECT seq, recipient, sender, body, created_at, state, turn_id FROM chat_control_inbox
+    WHERE instance = ? AND state = 'pending' AND seq > ?
       AND recipient IN (SELECT id FROM chat_sessions WHERE status = 'idle')
       AND recipient NOT IN (SELECT session FROM chat_control_paused WHERE instance = ?)
-    ORDER BY seq LIMIT 100`).all(instance, instance) as InternalMessage[]
+    ORDER BY seq LIMIT 100`).all(instance, afterSeq, instance) as InternalMessage[]
+  return page.length || !afterSeq ? page : pending(instance)
 }
 export function pauseDelivery(instance: string, session: string): void {
   db.prepare('INSERT OR IGNORE INTO chat_control_paused VALUES(?, ?)').run(instance, session)

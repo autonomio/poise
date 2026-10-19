@@ -144,6 +144,7 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await until(() => workers.every(id => prompts.has(id)))
     expect(new Set([parent.id, ...workers].map(id => runtime.get(id)?.checkout)).size).toBe(4)
     expect(store.children(runtime.instance)).toHaveLength(3)
+    expect(workers.map(id => runtime.get(id)?.title)).toEqual(['Worker 0', 'Worker 1', 'Worker 2'])
     expect(runtime.get(parent.id)?.status).toBe('running')
     finishes.get(workers[0])!({ stopReason: 'end_turn' })
     await until(() => runtime.get(workers[0])?.status === 'idle')
@@ -339,6 +340,19 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     runtime.endDrain()
     await runtime.delete(parent.id)
     expect(store.bindings(runtime.instance)).toHaveLength(0)
+  })
+
+  it('advances past a full page of messages blocked by a deferred task queue', async () => {
+    const blocked = await manager(), recipient = await manager()
+    await runtime.enqueue(blocked.id, randomUUID(), { text: 'Deferred user task', attachments: [], mentions: [] })
+    for (let i = 0; i < 100; i++) store.message(runtime.instance, blocked.id, 'fixture', `Pending context ${i}`)
+    store.message(runtime.instance, recipient.id, 'fixture', 'Deliver this context')
+    await control.tick()
+    await control.tick()
+    await until(() => prompts.has(recipient.id))
+    expect(prompts.has(blocked.id)).toBe(false)
+    expect(store.inbox(runtime.instance, recipient.id)[0].state).toBe('admitted')
+    expect(store.inbox(runtime.instance, blocked.id).every(m => m.state === 'pending')).toBe(true)
   })
 
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
