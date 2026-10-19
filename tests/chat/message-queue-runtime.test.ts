@@ -457,7 +457,9 @@ it('QC2: can select a work mode immediately after changing to an agent that supp
   expect(w.c.adapters.at(-1)?.options).toMatchObject({ mode: 'plan' })
   expect(revived.get(w.s.id)?.mode).toBe('plan')
   expect(w.c.calls).toHaveLength(0)
-})
+  // Real Git setup and mode startup, then stop/recover/resume, are two
+  // checkout lifecycles; allow their aggregate time under full-suite load.
+}, 25_000)
 
 for (const model of ['grok-4.6-high', 'opus-5-max', 'gpt-6-astra-max', 'muse-spark-1.3-contributor-max']) {
   it(`context: reset starts ${model} with no native resume or previous transcript`, async () => {
