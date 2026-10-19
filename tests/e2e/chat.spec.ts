@@ -2934,9 +2934,10 @@ test('CLI refresh: an unavailable latest version stays visible independently of 
   await expect(page.locator('.chat-cli-warning')).toHaveCSS('color', 'rgb(168, 121, 43)')
   await page.getByRole('button', { name: 'Hide activity', exact: true }).click()
   await expect(page.locator('.chat-cli-warning')).toBeVisible()
+  const subscriptionsBeforeReload = sock.framesOf('subscribe').length
   await page.reload(); await expect(page.locator('.chat-cli-warning')).toHaveText(warning)
   await expect(page.locator('.chat-cli-warning')).toHaveCSS('color', 'rgb(168, 121, 43)')
-  await sock.subscribed('s1')
+  await expect.poll(() => sock.framesOf('subscribe').length).toBeGreaterThan(subscriptionsBeforeReload)
   sock.push('s1', { type: 'error', message: 'Actual provider failure', recoverable: true })
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
