@@ -36,7 +36,7 @@ const OPERATIONS = {
 }
 const APIS = {
   '/api/current': 'Current cards: GET, POST.',
-  '/api/gh': 'Cached GitHub work: POST with operation=list and record_type=pr|issue.',
+  '/api/gh': 'Cached GitHub work: POST with operation=list and record_type=pull_request|issue.',
   '/api/agent-logs': 'Swarm and running agent calls: GET.',
   '/api/behaviors': 'Behavior configuration, health and diagnostics: GET; POST /api/behaviors/<key> to configure.',
   '/api/chat/sessions': 'Chat sessions: GET. Session detail and transcript: /api/chat/sessions/<id>.',
@@ -152,7 +152,7 @@ export class ChatControl {
     return [
       '[Poise native control]',
       `Your Poise chat ID is ${id}. Use your native shell tool to run:`,
-      `${JSON.stringify(process.execPath)} ${JSON.stringify(join(POISE_ROOT, 'scripts/poise-chat-control.mjs'))} ${JSON.stringify(config)} '<JSON request>'`,
+      `Command argv: ${JSON.stringify([process.execPath, join(POISE_ROOT, 'scripts/poise-chat-control.mjs'), config])}. Append the JSON request as one argument, or pass it on stdin. Use proper shell quoting if invoking through a shell.`,
       'Start with {"operation":"help"}. You can create chats, read transcripts, send messages, schedule supervision, claim work, and call Poise APIs with {"operation":"api","path":"/api/behaviors","method":"GET"}.',
       'Every mutation needs a requestId UUID. Retain it on retries; changing it can execute the action again. An uncertain result requires inspection, never blind replay.',
       'Create workers and supervise them only for the user-authorized task. A worker has an independent workspace. It inherits your model, Safe mode and Auto-merge choice; provide its actual task and required repository context.',
@@ -330,11 +330,12 @@ export class ChatControl {
     return { operations, details: '/api/behaviors', bounded: true }
   }
 
-  async stop(): Promise<void> {
+  async stop(runtimeStopped?: Promise<void>): Promise<void> {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
-    this.runtime.off('event', this.onEvent); this.runtime.off('deleted', this.onDeleted)
     await this.running
+    await runtimeStopped
+    this.runtime.off('event', this.onEvent); this.runtime.off('deleted', this.onDeleted)
     if (this.root) await rm(await this.root, { recursive: true, force: true })
   }
 }

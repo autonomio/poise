@@ -21,6 +21,8 @@ let control: ChatControl
 let server: Server
 let origin: string
 let clock: number
+let instance: string
+let workspaceRoot: string
 let store: typeof import('../server/chat/control-store')
 let storage: typeof import('../server/chat/storage')
 let database: typeof import('../server/db')
@@ -56,7 +58,7 @@ async function until(check: () => boolean) {
 }
 async function config(id: string) {
   const context = await control.context(id)
-  const path = /"([^"\n]+\.json)" '<JSON request>'/.exec(context)?.[1]
+  const path = /"([^"\n]+\.json)"/.exec(context)?.[1]
   if (!path) throw new Error('native control connection missing')
   return { path, ...JSON.parse(await readFile(path, 'utf8')) as { token: string, sessionId: string, origin: string } }
 }
@@ -76,6 +78,20 @@ async function manager(agent: 'grok' | 'claude' | 'codex' | 'muse' = 'grok') {
   if (!model) throw new Error(`fixture lacks ${agent}`)
   return runtime.create({ agent, model: model.identity, title: 'Manager', deferStart: true })
 }
+function makeRuntime() {
+  return new Runtime({ instance, instanceLabel: 'test', callerTurns: null, catalog: async () => CATALOG,
+    adapters: { grok: adapter, claude: adapter, codex: adapter, muse: adapter }, requireClaudeReady: async () => {}, probeAgent: async () => ({ ok: true }),
+    localWorkspaceRoot: workspaceRoot, idleTimeoutMinutes: () => 0, controlContext: id => control.context(id) })
+}
+async function restart() {
+  const stopped = runtime.stop()
+  await control.stop(stopped)
+  runtime = makeRuntime()
+  control = new Control(runtime, { ci, now: () => clock })
+  control.attach(server)
+  await runtime.recover()
+  control.start()
+}
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'poise-control-test-'))
@@ -91,9 +107,9 @@ beforeEach(async () => {
   clock = Date.now()
   prompts.clear(); finishes.clear(); hosts.clear(); steers.clear()
   ci.mockReset().mockResolvedValue({ head: 'a'.repeat(40), failing: [] })
-  runtime = new Runtime({ instance: `control:${randomUUID()}`, instanceLabel: 'test', callerTurns: null, catalog: async () => CATALOG,
-    adapters: { grok: adapter, claude: adapter, codex: adapter, muse: adapter }, requireClaudeReady: async () => {}, probeAgent: async () => ({ ok: true }),
-    localWorkspaceRoot: join(root, randomUUID()), idleTimeoutMinutes: () => 0, controlContext: id => control.context(id) })
+  instance = `control:${randomUUID()}`
+  workspaceRoot = join(root, randomUUID())
+  runtime = makeRuntime()
   control = new Control(runtime, { ci, now: () => clock })
   server = createServer((req, res) => {
     if (req.url === '/api/chat/control') { void control.handle(req, res); return }
@@ -179,9 +195,7 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
   it('persists supervision and inbox admission across runtime reconstruction without catch-up bursts or prompt replay', async () => {
     const parent = await manager(), child = await manager()
     const { watchId } = await command(parent.id, { operation: 'supervise', sessionIds: [child.id], intervalMinutes: 10, instruction: 'Inspect progress and provide needed context' })
-    await control.stop()
-    control = new Control(runtime, { ci, now: () => clock })
-    control.attach(server); control.start()
+    await restart()
     clock += 31 * 60_000
     await control.tick()
     await until(() => prompts.has(parent.id))
@@ -192,6 +206,12 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await control.tick()
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     expect(store.watches(runtime.instance)[0].next_at).toBe(clock + 10 * 60_000)
+    const count = prompts.get(parent.id)!.length
+    store.message(runtime.instance, parent.id, 'fixture', 'Another task after the interrupted turn')
+    await restart()
+    await control.tick()
+    expect(prompts.get(parent.id)).toHaveLength(count)
+    expect(store.inbox(runtime.instance, parent.id).at(-1)?.state).toBe('pending')
     await command(parent.id, { operation: 'unsupervise', watchId })
     expect(store.watches(runtime.instance)[0].enabled).toBe(0)
   })
