@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { parse } from 'yaml'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -155,5 +158,32 @@ describe('GitHub client', () => {
 
   it('requires a token loader', () => {
     expect(() => createGitHubClient({ fetch: async () => response(200, {}) })).toThrow(/loadToken/)
+  })
+})
+
+
+describe('required workflow aggregate', () => {
+  const { jobs } = parse(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'))
+  const program = jobs.verify.steps[0].run.match(/^node -e '([\s\S]+)'\s*$/)[1]
+  const results = Object.fromEntries(jobs.verify.needs.map((name) => [name, { result: 'success' }]))
+  const run = (results) => spawnSync(process.execPath, ['-e', program], {
+    env: { ...process.env, RESULTS: JSON.stringify(results) }, encoding: 'utf8',
+  })
+
+  it('binds self-update to every CI prerequisite, including jobs skipped after failure', () => {
+    expect(REQUIRED_CONTEXTS).toEqual([jobs.verify.name])
+    expect(jobs.verify.if).toBe('${{ always() }}')
+    expect(jobs.verify.needs.toSorted()).toEqual(Object.keys(jobs).filter((name) => name !== 'verify').toSorted())
+    expect(run(results).status).toBe(0)
+  })
+
+  it.each(['failure', 'skipped', 'cancelled', undefined])('rejects a prerequisite with result %s', (result) => {
+    for (const name of jobs.verify.needs) {
+      expect(run({ ...results, [name]: { result } }).status).not.toBe(0)
+    }
+  })
+
+  it('rejects missing gate evidence', () => {
+    expect(run({}).status).not.toBe(0)
   })
 })

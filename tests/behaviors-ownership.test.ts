@@ -5,7 +5,6 @@ import { mocks, pr, HEAD_SHA, loadModules, arrangeCli, agentLog, fixture } from 
 
 describe('launch ownership and resolution', () => {
 
-
   it('never overlaps initial review and approval for the same PR', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T11:40:00.000Z'))
@@ -69,7 +68,6 @@ describe('launch ownership and resolution', () => {
     expect(mocks.spawnDetached.mock.calls[1][1]).toContain('--pr-approve')
   })
 
-
   it('does not infer a clean outcome from a legacy process exit', async () => {
     arrangeCli(false, false, { requestedReviewers: ['review-bot'] })
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -100,7 +98,6 @@ describe('launch ownership and resolution', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
 
-
   it('coalesces sibling-process lock contention without opening a breaker', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -121,7 +118,6 @@ describe('launch ownership and resolution', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('requires a fresh live auth gate before a scheduled worker launch', async () => {
     arrangeCli(false)
@@ -145,7 +141,6 @@ describe('launch ownership and resolution', () => {
     expect(mocks.authStatus).toBe('degraded')
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
-
 
   it('keeps one durable in-flight worker per PR', async () => {
     const secondPr = {
@@ -182,7 +177,6 @@ describe('launch ownership and resolution', () => {
     )
   })
 
-
   it('keeps GitHub-only unblocking active during a Claude auth outage', async () => {
     arrangeCli(false, false, { unresolvedConversationCount: 1 })
     const { database: db, behaviors: runtime } = await loadModules()
@@ -210,7 +204,6 @@ describe('launch ownership and resolution', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
 
-
   it('does not retain idle resolution polls as successful runs', async () => {
     arrangeCli(false, false, { unresolvedConversationCount: 1, resolveUnresolvedCount: 1 })
     const { database: db, behaviors: runtime } = await loadModules()
@@ -229,7 +222,6 @@ describe('launch ownership and resolution', () => {
       state: 'completed', outcome: 'waiting', activity: 'settled',
     })))
   })
-
 
   it.each(['absent', 'healthy', 'failed'] as const)('preserves resolution execution with %s real ledger capture', async (mode) => {
     arrangeCli(false, false, { unresolvedConversationCount: 1, resolveUnresolvedCount: 1 })
@@ -280,7 +272,6 @@ describe('launch ownership and resolution', () => {
       await observer?.stop()
     }
   })
-
 
   it.each([
     { resolveResolvedCount: 1, status: 'completed' },

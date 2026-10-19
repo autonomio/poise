@@ -5,7 +5,7 @@ import { afterEach, beforeEach, vi } from 'vitest'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 
 // Reading Caller's local model catalog is not external work: no GitHub call,
-// no launch. The pause assertions below ignore it.
+// no launch. The pause assertions ignore it.
 function externalCalls(): unknown[][] {
   return mocks.runFile.mock.calls.filter(([command, args]: any[]) => !(command === 'agent-interface' && args[0] === '--models'))
 }

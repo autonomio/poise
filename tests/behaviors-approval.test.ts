@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, loadModules, arrangeCli, recordComp
 
 describe('approval eligibility and review activity', () => {
 
-
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,
@@ -28,7 +27,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--approve-pr')).toBe(false)
   })
 
-
   it('waits for a response when the latest change request has no author engagement', async () => {
     arrangeCli(true, false, {}, {
       status: false,
@@ -47,7 +45,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
   })
-
 
   it('starts inspection when requested threads are resolved without a commit or reply', async () => {
     arrangeCli(true, false, {}, {
@@ -78,7 +75,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--approve-pr')).toBe(false)
   })
 
-
   it.each([
     { resolved_request_threads: '2', response_count: 3 },
     { resolved_request_threads: 2, response_count: 1 },
@@ -96,7 +92,6 @@ describe('approval eligibility and review activity', () => {
       expect.objectContaining({ behavior: 'approve-prs', target: `${pr.repo}#17:check` }),
     ])
   })
-
 
   it.each([
     { author_pr_comments_after_request: -1 },
@@ -118,7 +113,6 @@ describe('approval eligibility and review activity', () => {
       expect.objectContaining({ behavior: 'approve-prs', target: `${pr.repo}#17:check` }),
     ])
   })
-
 
   it('approves a requested clean review on the next scan without a CI gate', async () => {
     vi.useFakeTimers()
@@ -171,7 +165,6 @@ describe('approval eligibility and review activity', () => {
     )).toBe(false)
   })
 
-
   it('waits for a busy per-PR lock instead of silently starving an eligible approval', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -190,7 +183,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain('--pr-approve')
   })
 
-
   it('waits for a busy per-PR lock before initial review', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -208,7 +200,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain('--pr-review')
   })
 
-
   it('does not take a resolver mutation lock when there are no conversations', async () => {
     arrangeCli(false)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -220,7 +211,6 @@ describe('approval eligibility and review activity', () => {
     expect(claim).not.toHaveBeenCalled()
     expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--resolve-nonblocking-conversations-if-ready')).toBe(false)
   })
-
 
   it('does not debounce recent PR activity', async () => {
     vi.useFakeTimers()
@@ -240,7 +230,6 @@ describe('approval eligibility and review activity', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('uses a completed approval as the basis for approving a later head', async () => {
     vi.useFakeTimers()
@@ -296,7 +285,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(NEXT_HEAD_SHA)
   })
 
-
   it('does not reapprove while another reviewer owns an unresolved conversation', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -350,7 +338,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
 
-
   it('launches eligible approvals independently across PRs', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -389,7 +376,6 @@ describe('approval eligibility and review activity', () => {
     )
   })
 
-
   it('does not approve a clean review while a review conversation is unresolved', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -405,7 +391,6 @@ describe('approval eligibility and review activity', () => {
 
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
-
 
   it('evaluates approval after a third-party conversation becomes outdated', async () => {
     vi.useFakeTimers()
@@ -429,7 +414,6 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain('--pr-approve')
   })
 
-
   it('does not approve addressed changes while another reviewer owns an unresolved conversation', async () => {
     arrangeCli(true, false, {
       unresolvedConversationCount: 2,
@@ -445,7 +429,6 @@ describe('approval eligibility and review activity', () => {
 
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
-
 
   it('approves on the next scan after another reviewer dismisses a change request', async () => {
     vi.useFakeTimers()
@@ -471,7 +454,6 @@ describe('approval eligibility and review activity', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('requires an open non-draft PR but not a separate review request', async () => {
     const activity: ReviewActivityFixture = {
@@ -504,7 +486,6 @@ describe('approval eligibility and review activity', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('does not treat a changes-requested review outcome as clean', async () => {
     arrangeCli(false, false, { requestedReviewers: ['review-bot'] })

@@ -4,7 +4,6 @@ import { mocks, pr, HEAD_SHA, externalCalls, loadModules, restartModules, arrang
 
 describe('startup snapshots and recovery', () => {
 
-
   it('preserves the startup ledger and catches a PR opened during downtime', async () => {
     arrangeCli(false)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -24,7 +23,6 @@ describe('startup snapshots and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(db.claimSeen('review-new-prs', `${pr.repo}#${pr.number}`)).toBe(false)
   })
-
 
   it('migrates v2 in place and reviews a PR first seen during downtime', async () => {
     const downtimePr = {
@@ -54,7 +52,6 @@ describe('startup snapshots and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(`#${downtimePr.number}`)
   })
-
 
   it('re-arms a snapshot-only PR after a failed reviewer attempt', async () => {
     vi.useFakeTimers()
@@ -86,7 +83,6 @@ describe('startup snapshots and recovery', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(`#${pr.number}`)
   })
 
-
   it('re-arms a snapshot-only PR missed by a mature runtime', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-30T06:21:21.370Z'))
@@ -117,7 +113,6 @@ describe('startup snapshots and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(`#${pr.number}`)
   })
-
 
   it.each(['missing', 'duplicate'] as const)('holds ambiguous snapshot recovery (%s) while unrelated fresh PRs start', async (corruption) => {
     vi.useFakeTimers()
@@ -165,7 +160,6 @@ describe('startup snapshots and recovery', () => {
     expect(loaded.database.listBehaviorIncidents()).toEqual([])
   })
 
-
   it('takes the anti-flood snapshot only when the startup ledger is missing', async () => {
     arrangeCli(false)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -191,7 +185,6 @@ describe('startup snapshots and recovery', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
     expect(db.claimSeen('review-new-prs', `${pr.repo}#${pr.number}`)).toBe(false)
   })
-
 
   it('rearms the scheduler while a behavior scan is still busy', async () => {
     vi.useFakeTimers()

@@ -4,7 +4,6 @@ import { mocks, pr, HEAD_SHA, loadModules, restartModules, arrangeCli, agentLog,
 
 describe('review panel scheduling and recovery', () => {
 
-
   it('reviews a new pull request with every reviewer Behaviors asks for, at once', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -39,7 +38,6 @@ describe('review panel scheduling and recovery', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
   })
-
 
   it.each(['review-new-prs', 'approve-prs'] as const)('isolates a %s max-turns failure while fresh work runs in the same cycle', async (behavior) => {
     vi.useFakeTimers()
@@ -83,7 +81,6 @@ describe('review panel scheduling and recovery', () => {
     expect(mocks.spawnDetached.mock.calls[2][1]).toContain('#17')
   })
 
-
   it.each(['review-new-prs', 'approve-prs'] as const)('ignores a persisted legacy %s worker cooldown after restart', async (behavior) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-02T06:00:00.000Z'))
@@ -108,7 +105,6 @@ describe('review panel scheduling and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain('#17')
   })
-
 
   it('records a completed sibling while the failed reviewer is waiting to retry', async () => {
     vi.useFakeTimers()
@@ -155,7 +151,6 @@ describe('review panel scheduling and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
   })
 
-
   it('runs non-Claude panel members while Claude is unavailable and resumes only its missing slot', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -180,7 +175,6 @@ describe('review panel scheduling and recovery', () => {
     const resumed = mocks.spawnDetached.mock.calls[2][1] as string[]
     expect(resumed[resumed.indexOf('--model') + 1]).toBe('opus-5-xhigh')
   })
-
 
   it('resumes an admitted Claude secondary after the primary completes and a restart without widening the old panel', async () => {
     vi.useFakeTimers()
@@ -232,7 +226,6 @@ describe('review panel scheduling and recovery', () => {
     expect(modules.database.hasSeen('review-new-prs', `${pr.repo}#${pr.number}:tertiary`)).toBe(false)
   })
 
-
   it('does not send extra reviewers after a pull request the primary already reviewed', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -255,7 +248,6 @@ describe('review panel scheduling and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(4)
     expect(mocks.spawnDetached.mock.calls.slice(1).every((call) => (call[1] as string[]).includes('#18'))).toBe(true)
   })
-
 
   it('relaunches a dead reviewer once the siblings\' reviews are accounted for', async () => {
     vi.useFakeTimers()

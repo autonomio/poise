@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, loadModules, arrangeCli, fixture } from './behavio
 
 describe('claim lifecycle and snapshots', () => {
 
-
   it('releases a review claim when the detached launch fails', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockRejectedValue(new Error('missing agent-interface'))
@@ -20,7 +19,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(db.claimSeen('review-new-prs', `${pr.repo}#${pr.number}`)).toBe(true)
   })
 
-
   it('retains the claim for an intentional review skip', async () => {
     arrangeCli(true)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -35,7 +33,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
     expect(db.claimSeen('review-new-prs', `${pr.repo}#${pr.number}`)).toBe(false)
   })
-
 
   it('retains a review claim when an accepted worker exits until its durable result arrives', async () => {
     vi.useFakeTimers()
@@ -67,7 +64,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
   })
 
-
   it('does not let an old worker failure release a newer claim generation', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -94,7 +90,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(db.releaseSeenOwned('review-new-prs', target, newerOwner!)).toBe(true)
   })
 
-
   it('turns a successful worker lease into a terminal seen marker', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -118,7 +113,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
 
-
   it('releases an approval claim when pre-launch work fails', async () => {
     arrangeCli(true, true)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -132,7 +126,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
     expect(db.claimSeen('approve-prs', target)).toBe(true)
   })
-
 
   it('marks an empty snapshot so the first later PR triggers', async () => {
     fixture.listedPrs = []
@@ -153,7 +146,6 @@ describe('claim lifecycle and snapshots', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
 
-
   it('does not review a draft and triggers when it becomes ready', async () => {
     fixture.listedPrs = [{ ...pr, draft: 1 }]
     arrangeCli(false)
@@ -172,7 +164,6 @@ describe('claim lifecycle and snapshots', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('snapshots every existing PR without per-head source calls', async () => {
     const secondPr = {

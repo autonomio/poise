@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, restartModules, agentLog, launchReviewBeforeCrash,
 
 describe('durable launch reconciliation', () => {
 
-
   it('links a unique running review call after restart and renews without duplicate launch', async () => {
     const launched = await launchReviewBeforeCrash()
     const callId = 'a'.repeat(32)
@@ -50,7 +49,6 @@ describe('durable launch reconciliation', () => {
     expect(db.listBehaviorDeadLetters()).toEqual([])
   })
 
-
   it.each(['review-new-prs', 'approve-prs'] as const)('quarantines only the corrupt %s launch across restart and registration expiry', async (behavior) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -79,7 +77,6 @@ describe('durable launch reconciliation', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
 
-
   it('reconciles healthy exact results beside an unidentified row without releasing a missing launch', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -106,7 +103,6 @@ describe('durable launch reconciliation', () => {
     expect(mocks.spawnDetached.mock.calls[2][1]).toContain('#19')
   })
 
-
   it.each(['id', 'correlation_id'] as const)('holds an apparent success when a quarantined row duplicates its %s', async (duplicateField) => {
     const launched = await launchReviewBeforeCrash()
     const completed = agentLog({
@@ -130,7 +126,6 @@ describe('durable launch reconciliation', () => {
     expect(db.listBehaviorDeadLetters()).toEqual([expect.objectContaining({ target: launched.target })])
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
-
 
   it('alerts once per held cause and renews a dismissed alert when the cause changes', async () => {
     vi.useFakeTimers()
@@ -180,7 +175,6 @@ describe('durable launch reconciliation', () => {
     expect(fresh).toEqual({ body: 'Input exceeds the maximum length of 1048576 characters Open Behaviors in Poise for details.', dismissed_at: null })
   })
 
-
   it('requires an unambiguous failed call before recovering a no-action failure', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -200,7 +194,6 @@ describe('durable launch reconciliation', () => {
     expect(mocks.spawnDetached.mock.calls[1][1]).toContain('#18')
     expect(launched.database.hasSeen('review-new-prs', launched.target)).toBe(true)
   })
-
 
   it('retires a false dead letter when its exact durable call completes', async () => {
     const launched = await launchReviewBeforeCrash()
@@ -236,7 +229,6 @@ describe('durable launch reconciliation', () => {
       SELECT retired_at FROM behavior_dead_letters WHERE call_id = ?
     `).pluck().get(callId)).toEqual(expect.any(String))
   })
-
 
   it('caps an unknown worker state by local launch time despite a future timestamp', async () => {
     vi.useFakeTimers()
@@ -282,7 +274,6 @@ describe('durable launch reconciliation', () => {
       }),
     ])
   })
-
 
   it('turns a completed approval found after restart into a terminal claim', async () => {
     const launched = await launchApprovalBeforeCrash()

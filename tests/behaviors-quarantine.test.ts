@@ -33,7 +33,6 @@ describe('durable behavior quarantine', () => {
     expect(loaded.database.listBehaviorDeadLetters()).toHaveLength(1)
   })
 
-
   it('keeps an invalid reviewer incident visible through exit callbacks, read failures, and sibling completion', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -82,7 +81,6 @@ describe('durable behavior quarantine', () => {
     ])
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
-
 
   it.each((['review-new-prs', 'approve-prs'] as const).flatMap((behavior) =>
     (['completed', 'superseded', 'missing-error', 'wrong-head', 'wrong-pair'] as const)
@@ -164,7 +162,6 @@ describe('durable behavior quarantine', () => {
     expect(loaded.database.listBehaviorDeadLetters()).toEqual([])
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it.each(['review-new-prs', 'approve-prs'] as const)('applies the ordinary %s running limit after its log feed recovers', async (behavior) => {
     vi.useFakeTimers({ toFake: ['Date'] })

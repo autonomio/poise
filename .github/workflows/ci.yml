@@ -125,4 +125,4 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          node -e 'const results = JSON.parse(process.env.RESULTS); for (const [gate, result] of Object.entries(results)) { console.log(`${gate}: ${result.result}`); if (result.result !== "success") process.exitCode = 1 }'
+          node -e 'const results = JSON.parse(process.env.RESULTS); if (!Object.keys(results).length) throw new Error("No gate results"); for (const [gate, result] of Object.entries(results)) { console.log(gate + ": " + result.result); if (result.result !== "success") process.exitCode = 1 }'

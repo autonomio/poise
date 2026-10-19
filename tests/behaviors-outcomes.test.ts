@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, restartModules, arrangeCli, agentLo
 
 describe('review outcome evidence and registration', () => {
 
-
   it.each(['valid', 'head', 'actor', 'source', 'receipt', 'pending', 'unclaimed', 'missing-inventory', 'running', 'quarantine', 'late-quarantine', 'ambiguous', 'claimed-sibling'])('explicit operator retry preserves publication and ownership guards (%s)', async (variant) => {
     const launched = await launchReviewBeforeCrash()
     const failed = agentLog({ id: 'f'.repeat(32), started_at: launched.requestedAt, started_at_precise: launched.requestedAt,
@@ -48,7 +47,6 @@ describe('review outcome evidence and registration', () => {
       expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     }
   })
-
 
   it.each(['valid', 'head', 'actor', 'source', 'model', 'receipt', 'old', 'ambiguous', 'claimed', 'newest-claimed', 'posted-original'])('reconciles a held review only from a verified explicit replay (%s)', async (variant) => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -112,7 +110,6 @@ describe('review outcome evidence and registration', () => {
     }
   })
 
-
   it.each(['model_output_limit', 'review_budget_exhausted', 'review_recovery_failed', 'review_contract_violation', 'review_provider_blocked', 'stopped'])('holds %s across restarts, without blocking another PR or a new head', async (code) => {
     const behavior = 'approve-prs' as 'review-new-prs' | 'approve-prs'
     const launched = behavior === 'review-new-prs'
@@ -147,7 +144,6 @@ describe('review outcome evidence and registration', () => {
     await modules.behaviors.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
   })
-
 
   it('recovers a terminal failed approval only after GitHub proves no reviewer action', async () => {
     vi.useFakeTimers()
@@ -184,7 +180,6 @@ describe('review outcome evidence and registration', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
 
-
   it('releases a superseded review without degradation and reviews the current head', async () => {
     const launched = await launchReviewBeforeCrash()
     fixture.agentLogs = [agentLog({
@@ -210,7 +205,6 @@ describe('review outcome evidence and registration', () => {
       nativeId: launched.correlationId, state: 'superseded', stateSource: 'native',
     }))
   })
-
 
   it('waits through bounded registration grace before retrying a missing call', async () => {
     vi.useFakeTimers()
@@ -244,7 +238,6 @@ describe('review outcome evidence and registration', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
-
 
   it('retains an ambiguous post-watermark review registration without retrying', async () => {
     const launched = await launchReviewBeforeCrash()

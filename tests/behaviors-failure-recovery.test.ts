@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, loadModules, restartModules, arrang
 
 describe('worker failure classification and recovery', () => {
 
-
   it('recovers a failed review only after GitHub proves no reviewer action', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T12:00:00.000Z'))
@@ -55,7 +54,6 @@ describe('worker failure classification and recovery', () => {
     ])
   })
 
-
   it.each([HEAD_SHA, NEXT_HEAD_SHA])('recovers a closed legacy review when Caller later proves preflight no-action, head=%s', async (headSha) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
@@ -89,7 +87,6 @@ describe('worker failure classification and recovery', () => {
     await modules.behaviors.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
-
 
   it.each([
     ['httpx.ReadTimeout', 'network_interruption'],
@@ -141,7 +138,6 @@ describe('worker failure classification and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
 
-
   it('rehydrates a truncated warning only from the exact Caller attempt, preserving its retry clock', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
@@ -170,7 +166,6 @@ describe('worker failure classification and recovery', () => {
       diagnostic: { severity: 'info', code: 'provider_capacity' },
       error: 'Selected model is at capacity. Please try a different model.' })
   })
-
 
   it('binds a legacy failure summary to the newest attempt instead of overwriting it with an older cause', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -210,7 +205,6 @@ describe('worker failure classification and recovery', () => {
     }))
   })
 
-
   it('hides an old transient approval warning only after later authoritative completion, retaining held evidence and history', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
@@ -243,7 +237,6 @@ describe('worker failure classification and recovery', () => {
       diagnostic: { severity: 'warning', code: 'held_result' },
     })])
   })
-
 
   it.each([{ receipts: null }, { receipts: [] }])('classifies the first issue-review timeout from its recorded posting state: %j', async ({ receipts }) => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -281,7 +274,6 @@ describe('worker failure classification and recovery', () => {
     }))
   })
 
-
   it.each(['review-new-prs', 'approve-prs'] as const)('holds an oversized %s packet across restart until the head changes', async (behavior) => {
     const launched = behavior === 'review-new-prs'
       ? await launchReviewBeforeCrash() : await launchApprovalBeforeCrash()
@@ -316,7 +308,6 @@ describe('worker failure classification and recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
   })
 
-
   it('allows an explicit model change after a bounded no-action failure', async () => {
     const launched = await launchApprovalBeforeCrash()
     fixture.agentLogs = [agentLog({
@@ -338,7 +329,6 @@ describe('worker failure classification and recovery', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('gpt-6-astra-ultra')
     expect(args[args.indexOf('--recovery-model') + 1]).toBe('opus-5-xhigh')
   })
-
 
   it('resumes a whole failed panel atomically through its normal scheduler', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })

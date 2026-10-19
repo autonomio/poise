@@ -42,7 +42,6 @@ describe('provider preparation and authentication', () => {
     expect(runtime.getBehaviorsRuntimeHealth().failures.filter(row => row.kind === 'operation')).toEqual([])
   })
 
-
   it.each(['review-new-prs', 'approve-prs'] as const)('parallel provider preparation: %s retains a peer reservation through ordinary launch work', async (behavior) => {
     vi.useFakeTimers()
     vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
@@ -120,7 +119,6 @@ describe('provider preparation and authentication', () => {
     expect(runtime.getBehaviorsRuntimeHealth().failures.filter(row => row.kind === 'operation')).toEqual([])
   })
 
-
   it('pauses Claude-backed behaviors before external work and resumes once authenticated', async () => {
     arrangeCli(false)
     mocks.spawnDetached.mockResolvedValue(undefined)
@@ -140,7 +138,6 @@ describe('provider preparation and authentication', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   // A drain (the release controller's or the gateway's) pauses background
   // admission: a scheduled tick must not launch until it is lifted.
@@ -166,7 +163,6 @@ describe('provider preparation and authentication', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
   })
-
 
   it('pauses approval work and resumes it once authenticated', async () => {
     arrangeCli(true)

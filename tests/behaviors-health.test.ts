@@ -3,7 +3,6 @@ import { mocks, pr, HEAD_SHA, loadModules, restartModules, arrangeCli, datastore
 
 describe('scan health and dependency recovery', () => {
 
-
   it('preserves stale health evidence from exit 1, blocks work and recovers without resetting claims', async () => {
     const { database: db, behaviors: runtime } = await loadModules()
     db.setMeta('me', 'poise-user')
@@ -27,7 +26,6 @@ describe('scan health and dependency recovery', () => {
     expect(runtime.getBehaviorsRuntimeHealth()).toMatchObject({ status: 'ok', failures: [], datastore: { status: 'healthy' } })
   })
 
-
   it('never accepts healthy output from a command that failed', async () => {
     const { database: db, behaviors: runtime } = await loadModules()
     db.setMeta('me', 'poise-user')
@@ -41,7 +39,6 @@ describe('scan health and dependency recovery', () => {
     expect(mocks.runFile).toHaveBeenCalledOnce()
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
-
 
   it('retries a failed scan immediately so dependency recovery clears health', async () => {
     vi.useFakeTimers()
@@ -74,7 +71,6 @@ describe('scan health and dependency recovery', () => {
       failures: [],
     })
   })
-
 
   it.each(['review-new-prs', 'approve-prs', 'resolve-unblocking'] as const)(
     'isolates %s eligibility errors through restart and clears them after a successful no-op',
@@ -119,7 +115,6 @@ describe('scan health and dependency recovery', () => {
     },
   )
 
-
   it.each(['review-new-prs', 'approve-prs'] as const)('isolates a missing checkout during %s without blocking another repository', async (behavior) => {
     fixture.listedPrs = [pr, { ...pr, repo: 'Vaquum/healthy', number: 18, url: 'https://github.com/Vaquum/healthy/pull/18' }]
     arrangeCli(behavior === 'approve-prs')
@@ -141,7 +136,6 @@ describe('scan health and dependency recovery', () => {
       status: 'ok', failures: [{ behavior, kind: 'operation', target: `${pr.repo}#17:check`, error: 'checkout unavailable' }],
     })
   })
-
 
   it.each(['review-new-prs', 'approve-prs', 'resolve-unblocking'] as const)('preserves %s check history while another operation owns the PR', async (behavior) => {
     vi.useFakeTimers()
@@ -174,7 +168,6 @@ describe('scan health and dependency recovery', () => {
     expect(JSON.parse(db.getMeta(failureKey)!)).toMatchObject({ consecutiveFailures: 3, error: 'check still failing', nextRetryAtMs: Date.now() + 240_000 })
   })
 
-
   it('clears an approval check diagnostic without resetting its worker retry', async () => {
     arrangeCli(false)
     const { database: db, behaviors: runtime } = await loadModules()
@@ -194,7 +187,6 @@ describe('scan health and dependency recovery', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
 
-
   it('treats a typed resolver head supersession as a safe no-op', async () => {
     arrangeCli(false, false, { resolveSuperseded: true, unresolvedConversationCount: 1 })
     const { database: db, behaviors: runtime } = await loadModules()
@@ -210,7 +202,6 @@ describe('scan health and dependency recovery', () => {
     })
     expect(runtime.getResolveUnblockingLastFired()).toBeNull()
   })
-
 
   it('logs the exact resolver blockers for unresolved conversations', async () => {
     arrangeCli(false, false, {
@@ -230,7 +221,6 @@ describe('scan health and dependency recovery', () => {
       `[behaviors] resolve-unblocking waiting on ${pr.repo}#${pr.number}: reviewer_not_approved_current_head`,
     )
   })
-
 
   it('clears a recovered scan failure when the scan launches a worker', async () => {
     arrangeCli(false)
@@ -252,7 +242,6 @@ describe('scan health and dependency recovery', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
   })
-
 
   it('preserves an existing breaker when shutdown aborts a behavior scan', async () => {
     mocks.runFile.mockImplementation(async (

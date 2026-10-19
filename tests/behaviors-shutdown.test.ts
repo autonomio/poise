@@ -5,7 +5,6 @@ import { mocks, pr, HEAD_SHA, externalCalls, loadModules, arrangeCli, datastoreH
 
 describe('disable and shutdown admission', () => {
 
-
   it('waits for an in-flight tick to stop before acknowledging disable', async () => {
     const scan = deferred<{ stdout: string, stderr: string }>()
     mocks.runFile.mockImplementation((command: string, args: string[]) => {
@@ -39,7 +38,6 @@ describe('disable and shutdown admission', () => {
     expect(db.hasSeen('review-new-prs', '__snapshot_v3__')).toBe(true)
   })
 
-
   it('resumes with PRs that appeared while review was disabled', async () => {
     fixture.listedPrs = []
     arrangeCli(false)
@@ -59,7 +57,6 @@ describe('disable and shutdown admission', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(`#${pr.number}`)
   })
-
 
   it.each(['review-new-prs', 'approve-prs'] as const)('settles admitted %s work when operation ownership is lost before spawn', async (behavior) => {
     arrangeCli(behavior === 'approve-prs')
@@ -89,7 +86,6 @@ describe('disable and shutdown admission', () => {
       error: expect.stringContaining('operation ownership was lost'),
     }))
   })
-
 
   // The enabled flag is re-read immediately before the head-SHA lookup, but
   // that lookup is a subprocess. Nothing checked again between it returning and
@@ -125,7 +121,6 @@ describe('disable and shutdown admission', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
     expect(runtime.isEnabled('review-new-prs')).toBe(false)
   })
-
 
   // The ceiling decides which pull requests get acted on. A tick fans out over
   // every open PR and each one waits on auth, a checkout resolve and the
@@ -164,7 +159,6 @@ describe('disable and shutdown admission', () => {
     const args = mocks.spawnDetached.mock.calls[0][1] as string[]
     expect(args[args.indexOf('--p') + 1]).toBe('p0')
   })
-
 
   it('does not launch after disable during the final auth gate', async () => {
     arrangeCli(false)
