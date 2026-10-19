@@ -46,6 +46,17 @@ describe('retained exact-key association', () => {
       expect(db.query(access).total).toBe(2)
     } finally { db.close() }
   })
+  it.each(['precise\nprovider cause', 'precise\tprovider cause'])('matches decoded control characters symmetrically: %j', (message) => {
+    const db = new DiagnosticStore(':memory:')
+    try {
+      const provider = JSON.stringify({ type: 'turn.failed', error: { message } })
+      const event = caller('a'.repeat(32), provider)
+      db.append([event])
+      expect(joinEvidence(db, access, [{ eventId: event.id, callId: event.callId!, source: 'caller', correlationId, cause: provider }])[0].evidence?.eventId).toBe(event.id)
+      expect(joinEvidence(db, access, [{ eventId: event.id, source: 'caller', cause: 'a different provider cause' }])[0].evidence).toBeUndefined()
+    } finally { db.close() }
+  })
+
   it('bounds exact retained history and labels additional occurrences', () => {
     const db = new DiagnosticStore(':memory:')
     try {

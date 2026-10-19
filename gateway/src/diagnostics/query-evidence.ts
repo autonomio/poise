@@ -28,10 +28,11 @@ function matches(event: LogEvent, selector: EvidenceSelector): boolean {
   if (selector.from && (event.eventTime ?? event.ingestedAt) < selector.from) return false
   if (selector.context && Object.entries(selector.context).some(([key, value]) => event.context[key] !== value)) return false
   if (selector.cause !== undefined) {
-    const expected = materialFailureCause(failureCause(selector.cause))
+    const canonicalCause = (value: string) => materialFailureCause(failureCause(value).replace(/[\x00-\x1f\x7f]/g, ' '))
+    const expected = canonicalCause(selector.cause)
     const tail = event.stderr?.trim().split('\n').pop()?.trim()
     const candidates = [event.message, event.stderr ?? '', tail ? `${event.message}: ${tail}` : event.message]
-    if (!candidates.some((cause) => materialFailureCause(failureCause(cause).replace(/[\x00-\x1f\x7f]/g, ' ')) === expected)) return false
+    if (!candidates.some((cause) => canonicalCause(cause) === expected)) return false
   }
   return true
 }
