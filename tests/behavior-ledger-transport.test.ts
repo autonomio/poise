@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,16 +50,25 @@ describe('bounded behavior ledger transport', () => {
     expect(reply.body.health.status).toBe('incomplete')
   })
 
-  it('bounds read admission and returns unavailable on a stalled worker', async () => {
-    const observer = await fixture(`port.postMessage({ready:true,health,pending:[]}); port.on('message',()=>{});`,
+  it('bounds read admission and recovers after a queued health-read deadline', async () => {
+    const observer = await fixture(`
+      port.postMessage({ready:true,health,pending:[]});
+      let delayed=true;
+      port.on('message',request=>{
+        const reply=()=>port.postMessage({id:request.id,status:200,body:{version:1,health},pending:[]});
+        if(request.operation==='capture') setTimeout(reply,40);
+        else if(request.operation==='read'&&delayed) { delayed=false; setTimeout(reply,40); }
+        else reply();
+      });`,
       { readLimit: 1, readTimeoutMs: 50 })
-    const first = observer.read({ operation: 'list' })
+    observer.capture(admission)
+    const first = observer.read({ operation: 'health' })
     expect((await observer.read({ operation: 'list' })).status).toBe(429)
-    expect((await first).status).toBe(503)
+    expect(await first).toMatchObject({ status: 200, body: { health: { status: 'unavailable' } } })
     expect(() => observer.capture(admission)).not.toThrow()
-    const status = await observer.read({ operation: 'health' })
-    expect(status.status).toBe(200)
-    expect(status.body.health.status).toBe('unavailable')
+    await vi.waitFor(async () => {
+      expect(await observer.read({ operation: 'health' })).toMatchObject({ status: 200, body: { health: { status: 'ok', pending: 0, dropped: 0 } } })
+    }, { timeout: 1500, interval: 25 })
   })
 
   it('keeps a failed startup observational and health readable', async () => {

@@ -131,7 +131,9 @@ export class BehaviorLedgerObserver {
       const captured = JSON.parse(serialized) as LedgerObservation
       this.captures++
       this.captureBytes += bytes
-      if (captured.type === 'admit') this.admitted.set(captured.nativeId, null)
+      if (captured.type === 'admit' && ['review-new-prs', 'approve-prs', 'review-new-issues'].includes(captured.behavior)) {
+        this.admitted.set(captured.nativeId, null)
+      }
       this.queue.push({ id: ++this.sequence, operation: 'capture', observation: captured, bytes })
       this.pump()
     } catch { this.lose(1) }
@@ -150,8 +152,10 @@ export class BehaviorLedgerObserver {
   }
 
   private unavailable(request: LedgerRead, error = 'ledger_unavailable'): { status: number; body: LedgerReply } {
+    const health = this.projectedHealth()
+    if (health.status !== 'stopped') health.status = 'unavailable'
     return { status: request.operation === 'health' ? 200 : 503,
-      body: { version: 1, health: this.projectedHealth(), ...(request.operation === 'health' ? {} : { error }) } }
+      body: { version: 1, health, ...(request.operation === 'health' ? {} : { error }) } }
   }
 
   read(request: LedgerRead): Promise<{ status: number; body: LedgerReply }> {
@@ -163,12 +167,11 @@ export class BehaviorLedgerObserver {
       const job: Job = { id: ++this.sequence, operation: 'read', request, bytes: 0, resolve: resolveReply }
       job.timer = setTimeout(() => {
         if (!job.resolve) return
-        this.reads--
+        // A late active reply still owns its bounded worker slot until it arrives.
+        if (this.active !== job) this.reads--
         job.resolve(this.unavailable(request, 'ledger_read_timeout'))
         job.resolve = undefined
         this.queue = this.queue.filter((candidate) => candidate !== job)
-        // Terminate a stuck SQLite worker; its unclosed epoch records the gap.
-        if (this.active === job) this.fail()
       }, this.options.readTimeoutMs ?? 2_000)
       this.queue.push(job)
       this.pump()
@@ -194,9 +197,9 @@ export class BehaviorLedgerObserver {
       }
       if (message.status >= 400 && job.observation?.type === 'loss') { this.fail(); return }
     }
+    if (job.operation === 'read') this.reads--
     if (job.resolve) {
       clearTimeout(job.timer)
-      if (job.operation === 'read') this.reads--
       job.resolve({ status: message.status, body: { ...message.body, health: this.projectedHealth() } })
     }
     this.pump()
@@ -234,9 +237,9 @@ export class BehaviorLedgerObserver {
     this.captureBytes = 0
     this.admitted.clear()
     for (const job of jobs) {
+      if (job.operation === 'read') this.reads--
       if (!job.resolve) continue
       clearTimeout(job.timer)
-      if (job.operation === 'read') this.reads--
       job.resolve(this.unavailable(job.request ?? { operation: 'health' }))
     }
   }

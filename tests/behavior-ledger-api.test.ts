@@ -253,3 +253,15 @@ it('requires the original correlation even after a Caller call ID is known', asy
   ledger.observeAgentSnapshot({ entries: [entry], quarantined: [] })
   expect((await call(`${PREFIX}/${record.id}`)).body.record).toMatchObject({ state: 'completed', activity: 'settled', outcome: 'clean' })
 })
+
+it('keeps direct work out of Caller snapshots before the admission is acknowledged', async () => {
+  const nativeId = randomUUID()
+  ledger.captureBehaviorAdmission({ admissionKey: nativeId, nativeId, behavior: 'merge-prs', source: 'poise:merge-prs',
+    owner: 'octocat', actor: 'octobot', repository: 'example/project', number: 11, head: 'd'.repeat(40), startedAt: new Date().toISOString() })
+  ledger.observeAgentSnapshot({ entries: [], quarantined: [] })
+  const records = (await call(`${PREFIX}?limit=100`)).body.records!
+  const record = records.find((row) => row.kind === 'firing' && row.behavior === 'merge-prs' && row.target.number === 11)!
+  expect(record).toMatchObject({ state: 'running', activity: 'running' })
+  ledger.captureBehaviorOutcome({ nativeId, state: 'completed', activity: 'settled', stateSource: 'native', outcome: 'not_ready', completedAt: new Date().toISOString() })
+  expect((await call(`${PREFIX}/${record.id}`)).body.record).toMatchObject({ state: 'completed', activity: 'settled' })
+})

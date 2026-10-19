@@ -1779,6 +1779,8 @@ async function fireReview(
     plannedSlots,
   )) return false
   if (!renewPrOperationOwned(claimId, BEHAVIOR_CLAIM_RENEWAL_MS)) {
+    captureBehaviorOutcome({ nativeId: claimId, state: 'failed', activity: 'settled', stateSource: 'native',
+      outcome: 'preflight_failed', completedAt: new Date().toISOString() })
     throw new Error(`review PR operation ownership was lost for ${pr.repo}#${pr.number}`)
   }
   try { await spawnDetached(AGENT_INTERFACE, args, {
@@ -2615,6 +2617,8 @@ async function fireApprove(
     actor,
   )) return false
   if (!renewPrOperationOwned(claimId, BEHAVIOR_CLAIM_RENEWAL_MS)) {
+    captureBehaviorOutcome({ nativeId: claimId, state: 'failed', activity: 'settled', stateSource: 'native',
+      outcome: 'preflight_failed', completedAt: new Date().toISOString() })
     throw new Error(`approval PR operation ownership was lost for ${pr.repo}#${pr.number}`)
   }
   try { await spawnDetached(AGENT_INTERFACE, args, {

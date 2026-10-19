@@ -82,6 +82,56 @@ describe('behavior firing ledger store', () => {
     expect(records(db)[0]).toMatchObject({ state: 'held', stateSource: 'native', activity: 'unknown' })
   })
 
+  it('preserves native terminal state, activity and outcome when a delayed Caller row arrives', () => {
+    const db = store()
+    db.capture(admission())
+    complete(db, 'claim-1')
+    const settled = records(db)
+    db.capture(caller('claim-1', { status: 'running', action: null, outcome: null, completedAt: null }))
+    expect(records(db)).toEqual(settled)
+    db.capture(caller('claim-1', { uncertain: true, status: 'running', action: null, outcome: null, completedAt: null, mayRun: true }))
+    expect(records(db)).toEqual(settled)
+    expect(records(db)[0]).toMatchObject({ state: 'completed', activity: 'settled', outcome: 'clean', stateSource: 'native' })
+  })
+
+  it('starts a new-head retry without inheriting the previous verdict or passive state source', () => {
+    const db = store()
+    db.capture(admission())
+    db.capture(caller())
+    const prior = records(db)[0]
+    expect(prior).toMatchObject({ state: 'completed', outcome: 'clean', stateSource: 'caller_observed' })
+    const nextHead = 'c'.repeat(40)
+    db.capture(admission('claim-2', { head: nextHead }))
+    const current = records(db)
+    expect(current[0]).toMatchObject({ id: prior.id, state: 'pending', outcome: null, stateSource: 'native', head: nextHead, completedAt: null })
+    expect(current.at(-1)).toMatchObject({ kind: 'attempt', state: 'pending', outcome: null, stateSource: 'native', head: nextHead, completedAt: null,
+      refs: [{ kind: 'correlation', identity: 'claim-2', availability: 'available' }] })
+  })
+
+  it('uses the latest actual selected-slot completion rather than the latest admission timestamp', () => {
+    const db = store()
+    db.capture(admission('primary-1', { plannedSlots: ['primary', 'secondary'] }))
+    clock += 1000
+    db.capture(admission('secondary-1', { slot: 'secondary', plannedSlots: ['primary', 'secondary'] }))
+    clock += 1000
+    complete(db, 'secondary-1')
+    const secondaryCompleted = stamp()
+    clock += 1000
+    complete(db, 'primary-1')
+    const root = records(db)[0]
+    expect(root).toMatchObject({ state: 'completed', activity: 'settled', completedAt: stamp() })
+    expect(root.completedAt).not.toBe(secondaryCompleted)
+  })
+
+  it('does not project unrelated Caller evidence onto a direct invocation', () => {
+    const db = store()
+    db.capture(admission('direct-1', { admissionKey: 'direct-1', behavior: 'merge-prs', source: 'poise:merge-prs', plannedSlots: [], slot: undefined }))
+    const active = records(db)
+    db.capture(caller('direct-1', { source: 'poise:merge-prs', status: 'running', action: null, outcome: null, completedAt: null }))
+    expect(records(db)).toEqual(active)
+    expect(records(db)[0]).toMatchObject({ state: 'running', activity: 'running', stateSource: 'native' })
+  })
+
   it('does not mistake target similarity or conflicting provenance for authoritative completion', () => {
     const db = store()
     db.capture(admission())

@@ -213,7 +213,7 @@ export class BehaviorLedgerStore {
       || parent.target.number !== input.number || parent.owner !== input.owner) throw new Error('Conflicting ledger admission')
     const direct = DIRECT.has(input.behavior)
     const record: LedgerRecord = { ...parent, id: hash(), kind: 'attempt', parentId: parent.id, head: input.head,
-      slot: direct ? null : input.slot ?? 'primary', actor: input.actor, plannedSlots: [], state: direct ? 'running' : 'pending', activity: direct ? 'running' : 'unknown',
+      slot: direct ? null : input.slot ?? 'primary', actor: input.actor, plannedSlots: [], state: direct ? 'running' : 'pending', stateSource: 'native', activity: direct ? 'running' : 'unknown', outcome: null,
       createdAt: now, startedAt: input.startedAt ?? null, completedAt: null, observedAt: now, revision: 0, omittedAttempts: 0,
       refs: [{ kind: 'correlation', identity: input.nativeId, availability: 'available' }] }
     this.insert(record, null, input.nativeId)
@@ -283,6 +283,8 @@ export class BehaviorLedgerStore {
     const row = this.row(input.nativeId)
     if (!row) return
     const record = recordOf(row)
+    if (DIRECT.has(record.behavior)) return
+    if (row.native_override === 1 && TERMINAL.has(record.state) && record.activity === 'settled') return
     const knownCall = record.refs.find((ref) => ref.kind === 'caller')?.identity
     const exact = input.callId !== null && (!knownCall || knownCall === input.callId)
       && input.repository === record.target.repository && input.number === record.target.number && input.actor?.toLowerCase() === record.actor?.toLowerCase()
@@ -325,9 +327,12 @@ export class BehaviorLedgerStore {
     const activity: LedgerActivity = children.some((child) => child.activity === 'running') ? 'running'
       : selected.some((child) => !child) || children.some((child) => child.activity !== 'settled') ? 'unknown' : 'settled'
     const latest = children[0]
+    const completions = selected.flatMap((child) => child?.completedAt ? [child.completedAt] : [])
+    const completedAt = completions.length === selected.length
+      ? completions.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null : null
     this.put({ ...root, state, activity, stateSource: latest?.stateSource ?? root.stateSource,
       outcome: selected.length === 1 ? selected[0]?.outcome ?? null : null,
-      completedAt: TERMINAL.has(state) && activity === 'settled' ? latest?.completedAt ?? this.time() : null,
+      completedAt: TERMINAL.has(state) && activity === 'settled' ? completedAt : null,
       observedAt: this.time(), head: root.plannedSlots.length > 1 ? null : latest?.head ?? root.head }, row)
   }
   private staleActivities(): void {

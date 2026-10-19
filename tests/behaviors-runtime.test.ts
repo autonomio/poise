@@ -3477,6 +3477,35 @@ describe('behavior launch claims', () => {
     expect(mocks.spawnDetached.mock.calls[0][1]).toContain(`#${pr.number}`)
   })
 
+  it.each(['review-new-prs', 'approve-prs'] as const)('settles admitted %s work when operation ownership is lost before spawn', async (behavior) => {
+    arrangeCli(behavior === 'approve-prs')
+    const { database: db, behaviors: runtime } = await loadModules()
+    runtime.startBehaviorsRuntime()
+    db.setMeta('me', 'poise-user')
+    db.setMeta(`behavior_${behavior.replace(/-/g, '_')}_enabled`, '1')
+    db.setMeta('behavior_review_new_prs_keyver', '3')
+    db.recordSeen('review-new-prs', '__snapshot_v3__')
+    const base = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], options?: { cwd?: string }) => {
+      const result = await base(command, args, options)
+      if (command === 'github-interface' && args[0] === '--head-sha') {
+        db.db.prepare("DELETE FROM behavior_seen WHERE key = 'pr-operation'").run()
+      }
+      return result
+    })
+    await runtime.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    expect(db.listBehaviorLaunchClaims(behavior)).toEqual([])
+    expect(mocks.captureAdmission).toHaveBeenCalledOnce()
+    expect(mocks.captureOutcome).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      nativeId: mocks.captureAdmission.mock.calls[0][0].nativeId,
+      state: 'failed', activity: 'settled', stateSource: 'native', outcome: 'preflight_failed',
+    }))
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+      error: expect.stringContaining('operation ownership was lost'),
+    }))
+  })
+
   // The enabled flag is re-read immediately before the head-SHA lookup, but
   // that lookup is a subprocess. Nothing checked again between it returning and
   // the agent being spawned, so a toggle-off during that window still posted a
