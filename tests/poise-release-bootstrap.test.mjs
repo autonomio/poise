@@ -580,8 +580,10 @@ describe('bootstrap runner (real processes)', () => {
   it('kills the whole group, backgrounded descendants included, on timeout and releases the settled record', async () => {
     const registryPath = join(home, BOOTSTRAP_WORKERS_NAME)
     const { run } = createBootstrapRunner({ registryPath })
-    const failure = await run('sh', ['-c', 'sleep 30 & echo $!; sleep 30'], { env: env(), write: true, staging: '/s', timeoutMs: 400 }).catch((error) => error)
-    expect(failure.message).toMatch(/timed out after 400 ms/)
+    // The gate must cold-start and spawn its descendants before the timeout.
+    const timeoutMs = 2_000
+    const failure = await run('sh', ['-c', 'sleep 30 & echo $!; sleep 30'], { env: env(), write: true, staging: '/s', timeoutMs }).catch((error) => error)
+    expect(failure.message).toContain(`timed out after ${timeoutMs} ms`)
     expect(failure.result).toMatchObject({ timedOut: true, settled: true })
     const orphan = Number(failure.result.stdout.trim())
     expect(orphan).toBeGreaterThan(1)

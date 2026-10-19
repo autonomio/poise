@@ -156,11 +156,13 @@ describe('deferred message execution', () => {
     const file = await w.runtime.saveAttachment(w.s.id, 'notes.txt', Buffer.from('Important attached text'))
     await w.runtime.enqueue(w.s.id, randomUUID(), { text: 'Use the attachment', attachments: [file], mentions: [{ path: 'README.md' }] }, 'opus-5-max')
     w.runtime.prompt(w.s.id, input('First'))
-    await until(() => w.turns().length === 2)
+    // Give each git/SQLite lifecycle its own readiness bound, including handoff.
+    for (let completed = 1; completed <= 2; completed++) await until(() => w.turns().length >= completed)
+    expect(w.turns()).toHaveLength(2)
     expect(w.c.calls[1].input.attachments[0].text).toBe('Important attached text')
     expect(w.c.calls[1].input.mentions).toEqual([{ path: 'README.md' }])
     await expect(w.runtime.enqueue(w.s.id, randomUUID(), { text: 'Forged', attachments: [{ ...file, size: 100 }], mentions: [] })).rejects.toMatchObject({ code: 'invalid' })
-  })
+  }, 20_000)
 
   it.each(['cancelled', 'error'] as const)('does not drain after a %s turn; later successful work continues the untouched tail', async reason => {
     const w = await world({ auto: false })

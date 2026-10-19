@@ -57,5 +57,16 @@ without retries. The unit/integration phase took 151.04s across 171 files;
 are preserved in the split files. Browser test execution was concentrated in
 Chat (219.4s, 148 tests), Analytics (90.0s, 44) and Notices (88.2s, 23).
 
-Use the current PR's Actions timings for the measured result of the parallel
-pipeline. Runner contention and changes to the test inventory affect comparisons.
+[Parallel run 39314409471](https://github.com/autonomio/poise/actions/runs/39314409471)
+completed all Poise CI jobs in 7m03s from the first job start to the aggregate
+completion, versus 21m27s before (67% shorter). Both unit/integration shards
+passed all 2,718 tests, including the original 216 behavior cases; their jobs
+took 83s and 85s including setup/reporting. The longest split behavior file used
+6.76s of assertion time, versus 81.18s for the original file. All 492 browser
+tests passed across four shards, with no retries. These are observed runs, not
+a fixed performance budget; runner contention and test inventory affect timings.
+
+Local profiling also exposed two load-sensitive test bounds. The bootstrap
+process timeout now allows the gate to start before testing descendant cleanup;
+the attachment queue test waits separately for both turns, matching the existing
+FIFO and native-handoff tests. Both retain their original behavioral assertions.
