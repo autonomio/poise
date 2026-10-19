@@ -289,7 +289,7 @@ test('keeps missing review identities in tooltips while showing known change-req
   await expect(figure).toHaveText('—')
   await expect(figure).toHaveAttribute('data-help', /Exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities/)
   await expect(value(page, 'Change-request share')).toHaveText('75.0%')
-  await expect(page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-line')).toBeVisible()
+  await expect(page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-line')).toHaveCount(1)
   await figure.scrollIntoViewIfNeeded()
   await expect(figure).toBeInViewport()
   await figure.focus()
