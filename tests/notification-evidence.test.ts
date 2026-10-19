@@ -53,7 +53,7 @@ describe('retained exact-key association', () => {
       const binding = joinEvidence(db, access, [{ source: 'poise', correlationId }])[0]
       expect(evidenceReferences(binding)).toHaveLength(20)
       expect(binding.evidenceMore).toBe(true)
-      expect(() => joinEvidence(db, access, Array.from({ length: 21 }, () => ({ source: 'poise', correlationId })))).toThrow('twenty')
+      expect(() => joinEvidence(db, access, Array.from({ length: 21 }, () => ({ source: 'poise' as const, correlationId })))).toThrow('twenty')
       expect(db.query(access).total).toBe(25)
     } finally { db.close() }
   })
@@ -141,6 +141,27 @@ describe('read-time producer binding', () => {
     expect((await bindings.noticeEvidence(notices.noticesState())).notices[0].evidence?.eventId).not.toBe(evidence.eventId)
     expect(logging.loggingRuntime()!.query((db) => db.lookup(access, evidence.eventId)).status).toBe('found')
   })
+  it.each([false, true])('binds a quota condition captured while off before its later notice (exhausted=%s)', async (exhausted) => {
+    const quota = await import('../server/github-quota'), notices = await import('../server/alerts/notices'), bindings = await import('../server/notification-evidence')
+    const now = Date.now(), resetAt = new Date(now + 3_600_000).toISOString()
+    database.setMeta('me', 'octocat')
+    database.setMeta('notification_settings', JSON.stringify({ enabled: false }))
+    const account = { login: 'octocat', roles: ['user' as const], checkedAt: new Date(now).toISOString(), error: null,
+      buckets: [{ resource: 'core', label: 'REST API', used: exhausted ? 5000 : 4000, remaining: exhausted ? 0 : 1000, limit: 5000, riskPercent: 90, perMinute: 100, resetAt }] }
+    if (exhausted) logging.diagnostic({ level: 'error', operation: 'github_quota.exhausted', account: 'octocat', target: 'core', condition: resetAt, message: 'GitHub API budget is exhausted' })
+    quota.syncQuotaAlerts([account], now)
+    quota.syncQuotaAlerts([{ ...account, checkedAt: new Date(now + 30_000).toISOString() }], now + 30_000)
+    logging.loggingRuntime()!.flush()
+    expect(notices.noticesState(now + 30_000).notices).toEqual([])
+    database.setMeta('notification_settings', JSON.stringify({ enabled: true }))
+    quota.syncQuotaAlerts([{ ...account, checkedAt: new Date(now + 60_000).toISOString() }], now + 60_000)
+    const notice = (await bindings.noticeEvidence(notices.noticesState(now + 60_000))).notices[0]
+    expect(notice.evidence?.eventId).toMatch(/^evt_/)
+    const stored = logging.loggingRuntime()!.query((db) => db.lookup(access, notice.evidence!.eventId))
+    expect(stored.status).toBe('found')
+    if (stored.status === 'found') expect(stored.event.operation).toBe(exhausted ? 'github_quota.exhausted' : 'github_quota.warning')
+  })
+
   it('joins a pre-launch exception by its exact context; later failures cannot borrow its record', async () => {
     const context = await import('../server/logging-context'), bindings = await import('../server/notification-evidence')
     const identity = { correlationId, behavior: 'review-new-prs', target: 'acme/repo#9', repository: 'acme/repo', account: 'review-bot' }

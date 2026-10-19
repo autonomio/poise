@@ -1,11 +1,11 @@
 import { normalize } from '../gateway/src/diagnostics/contract'
 import type { EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
 import type { EvidenceSelector } from '../gateway/src/diagnostics/query-evidence'
-import type { BehaviorDiagnostics } from '../src/behaviors'
 import type { NoticesState } from './alerts/notices'
 import { openAlerts } from './alerts/store'
 import { getMeta, getBehaviorIncident, db } from './db'
 import { retainedEvidence } from './logging-api'
+import { quotaEvidenceSelector } from './github-quota'
 import { loggingWorkspace } from './logging'
 import { conditionCorrelation } from './logging-context'
 
@@ -38,15 +38,13 @@ export async function noticeEvidence(state: NoticesState): Promise<NoticesState>
       selector = { source: 'poise', correlationId: conditionCorrelation('storage', alert.dedupeKey, notice.since), operation: 'storage.pressure' }
     } else if (alert?.kind === 'datastore_sync_failing') {
       const login = alert.dedupeKey.slice('datastore-sync:'.length)
-      const row = db.prepare('SELECT login,sync_failing_since FROM organizations WHERE lower(login)=?').get(login) as { login: string; sync_failing_since: number } | undefined
-      if (row?.sync_failing_since) selector = { source: 'poise', correlationId: conditionCorrelation('datastore-sync', login, String(row.sync_failing_since)), account: row.login, operation: 'datastore.sync' }
+      const row = db.prepare('SELECT login,sync_failing_since,error FROM organizations WHERE lower(login)=?').get(login) as { login: string; sync_failing_since: number; error: string | null } | undefined
+      if (row?.sync_failing_since) selector = { source: 'poise', correlationId: conditionCorrelation('datastore-sync', login, String(row.sync_failing_since)), account: row.login, operation: 'datastore.sync', ...(row.error ? { cause: row.error } : {}) }
     } else if (alert?.kind === 'github_quota_warning' || alert?.kind === 'github_quota_exhausted') {
       const [, login, resource, reset] = alert.dedupeKey.split(':')
       const account = [getMeta('me'), getMeta('agentAccount')].find((value) => value?.toLowerCase() === login)
       if (account) {
-        const operation = alert.kind === 'github_quota_warning' ? 'github_quota.warning' : 'github_quota.exhausted'
-        const incident = normalize({ level: 'warning', source: 'poise', operation, account, target: resource, condition: new Date(Number(reset)).toISOString(), message: '', workspace: loggingWorkspace() })!
-        selector = { source: 'poise', operation, account, target: resource, incidentId: incident.incidentId, from: new Date(Date.parse(notice.since) - 1000).toISOString() }
+        selector = quotaEvidenceSelector(account, resource, new Date(Number(reset)).toISOString(), alert.kind === 'github_quota_exhausted')
       }
     }
     if (selector && selected.length < 20) selected.push({ index, selector })
@@ -56,7 +54,8 @@ export async function noticeEvidence(state: NoticesState): Promise<NoticesState>
   selected.forEach((row, index) => Object.assign(notices[row.index], found[index]))
   return { ...state, notices }
 }
-export async function behaviorEvidence<T extends Pick<BehaviorDiagnostics, 'failures' | 'deadLetters'>>(diagnostics: T): Promise<T> {
+interface BehaviorEvidenceRow extends EvidenceAttachment { callId?: string | null; correlationId?: string | null; behavior: string; target?: string; error?: string }
+export async function behaviorEvidence<T extends { failures: BehaviorEvidenceRow[]; deadLetters: BehaviorEvidenceRow[] }>(diagnostics: T): Promise<T> {
   const failures = diagnostics.failures.map((row) => ({ ...row }))
   const deadLetters = diagnostics.deadLetters.map((row) => ({ ...row }))
   const selected: Array<{ row: EvidenceAttachment; selector: EvidenceSelector }> = []

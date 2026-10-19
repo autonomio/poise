@@ -140,6 +140,30 @@ describe('identity-scoped reads', () => {
     expect(JSON.stringify(result)).not.toMatch(/token-|ghp_secret/)
   })
 
+  it('suppresses issuance when Off is selected during an in-flight quota read and after restart', async () => {
+    database.setMeta('me', 'octocat')
+    let release: (() => void) | undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    mocks.runFile.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === 'auth') return { stdout: 'test-stored-credential' }
+      await held
+      return { stdout: JSON.stringify(payload(5000)) }
+    })
+    const pending = quota.readGithubQuota()
+    await Promise.resolve()
+    database.setMeta('notification_settings', JSON.stringify({ enabled: false }))
+    release!()
+    expect((await pending).accounts[0].buckets[0].remaining).toBe(0)
+    expect(alerts.openAlerts()).toEqual([])
+    await quota.stopGithubQuotaRuntime()
+    vi.resetModules()
+    quota = await import('../server/github-quota')
+    quota.startGithubQuotaRuntime()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(mocks.runFile).toHaveBeenCalledTimes(4)
+    expect(alerts.openAlerts()).toEqual([])
+  })
+
   it('does not publish results for identities changed during a read', async () => {
     database.setMeta('me', 'octocat')
     mocks.runFile.mockImplementation(async () => {
@@ -174,6 +198,22 @@ describe('quota notifications', () => {
     expect(alerts.openAlerts({ now: T0 + 30_000 })).toEqual([])
     sample([account(500, 80)], T0 + 60_000)
     expect(alerts.openAlerts({ now: T0 + 60_000 })[0].id).not.toBe(before.id)
+  })
+
+  it('resolves a known recovery while off, then requires a new sustained condition', () => {
+    sustained(account(100, 50))
+    const old = alerts.openAlerts()[0]
+    alerts.dismissAlert(old.seq)
+    database.setMeta('notification_settings', JSON.stringify({ enabled: false }))
+    sample([account(200, 0)], T0 + 45_000)
+    expect(alerts.openAlerts()).toEqual([])
+    sample([account(300, 90)], T0 + 60_000)
+    database.setMeta('notification_settings', JSON.stringify({ enabled: true }))
+    sample([account(400, 90)], T0 + 75_000)
+    expect(alerts.openAlerts()).toEqual([])
+    sample([account(500, 90)], T0 + 90_000)
+    expect(alerts.openAlerts()).toMatchObject([{ dismissedAt: null }])
+    expect(alerts.openAlerts()[0].id).not.toBe(old.id)
   })
 
   it('requires 50 percent risk across distinct observations at least 30 seconds apart', () => {

@@ -87,7 +87,9 @@ their numbers without undoing a dismissal or issuing another arrival. A
 warning clears when known risk falls below 50%, exhaustion replaces it, the window
 resets, or the account is removed. Failed reads and insufficient observations
 retain known alerts until reset; they do not claim recovery. Notifications off
-suppresses new quota alerts while diagnostic observation continues. A read uses
+suppresses new quota alerts while diagnostic observation and confirmed condition
+resolution continue. Re-enabling preserves a continuing condition; recovery while
+off rearms its next sustained condition. A read uses
 one credential command and one rate-limit command per distinct configured account
 per read. The background cadence alone is eight commands per account per minute.
 Concurrent Analytics reads share the cache and pending request, but a budget

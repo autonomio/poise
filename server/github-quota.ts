@@ -1,3 +1,6 @@
+import { normalize } from '../gateway/src/diagnostics/contract'
+import type { EvidenceSelector } from '../gateway/src/diagnostics/query-evidence'
+import { loggingWorkspace } from './logging'
 import { diagnostic, diagnosticFailure } from './logging'
 import { GH_STORED_ACCOUNTS_ENV } from './accounts/clis'
 import { openAlerts, raiseAlert, resolveAlert, updateAlertDetails } from './alerts/store'
@@ -131,7 +134,7 @@ async function readAccount(login: string): Promise<Snapshot> {
 
 export const QUOTA_WARNING_RISK_PERCENT = 50
 export const QUOTA_WARNING_SUSTAIN_MS = 30_000
-interface RiskWindow { resetAt: string; since: number | null; lastAt: number; warned: boolean }
+interface RiskWindow { resetAt: string; since: number | null; lastAt: number; warned: boolean; exhaustedSince?: number | null }
 const riskKey = (login: string, resource: string) => `${PREFIX}risk:${login.toLowerCase()}:${resource}`
 const conditionKey = (login: string, bucket: GithubQuotaBucket) => `${PREFIX}${login.toLowerCase()}:${bucket.resource}:${Date.parse(bucket.resetAt)}`
 
@@ -151,12 +154,14 @@ export function observeQuotaConditions(accounts: GithubQuotaAccount[], now = Dat
         const value = object(JSON.parse(raw))
         if (typeof value.resetAt !== 'string' || !Number.isFinite(Date.parse(value.resetAt))
           || (value.since !== null && (typeof value.since !== 'number' || !Number.isFinite(value.since)))
+          || (value.exhaustedSince !== undefined && value.exhaustedSince !== null && (typeof value.exhaustedSince !== 'number' || !Number.isFinite(value.exhaustedSince)))
           || typeof value.lastAt !== 'number' || !Number.isFinite(value.lastAt) || typeof value.warned !== 'boolean') throw new Error('Invalid retained GitHub quota risk interval')
         previous = value as unknown as RiskWindow
       }
       const eligible = bucket.limit > 0 && bucket.remaining > 0 && Date.parse(bucket.resetAt) > now && bucket.riskPercent >= QUOTA_WARNING_RISK_PERCENT
       const state: RiskWindow = previous?.resetAt === bucket.resetAt && previous.lastAt <= at
         ? { ...previous } : { resetAt: bucket.resetAt, since: null, lastAt: at, warned: false }
+      state.exhaustedSince = bucket.remaining === 0 && Date.parse(bucket.resetAt) > now ? state.exhaustedSince ?? at : null
       if (!eligible) { state.since = null; state.warned = false }
       else if (state.since === null) state.since = at
       state.lastAt = Math.max(state.lastAt, at)
@@ -175,7 +180,7 @@ export function observeQuotaConditions(accounts: GithubQuotaAccount[], now = Dat
 }
 
 export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now(), observed?: ReadonlySet<string>): void {
-  if (!getNotificationSettings().enabled) return
+  const enabled = getNotificationSettings().enabled
   const sustained = observed ?? observeQuotaConditions(accounts, now)
   const standing = new Set<string>()
   const existing = new Set(openAlerts({ now }).map((alert) => alert.dedupeKey))
@@ -191,6 +196,7 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
       standing.add(key)
       const title = exhausted ? `GitHub ${bucket.label} quota exhausted for ${account.login}` : `GitHub ${bucket.label} quota may run out for ${account.login}`
       const body = `${account.roles.join(' + ')} account · ${bucket.used.toLocaleString('en-US')} of ${bucket.limit.toLocaleString('en-US')} used. ${exhausted ? 'Requests are blocked.' : `${bucket.riskPercent}% estimated risk before reset at the observed usage rate.`} Resets ${bucket.resetAt}.`
+      if (!enabled) continue
       raiseAlert({
         kind: exhausted ? 'github_quota_exhausted' : 'github_quota_warning', dedupeKey: key,
         title, body,
@@ -243,4 +249,20 @@ export async function stopGithubQuotaRuntime(): Promise<void> {
   clearInterval(timer)
   timer = undefined
   await pass
+}
+
+/** The observed condition begins independently of when Notifications is enabled. */
+export function quotaEvidenceSelector(account: string, resource: string, resetAt: string, exhausted: boolean): EvidenceSelector | null {
+  const raw = getMeta(riskKey(account, resource))
+  if (!raw) return null
+  const state = object(JSON.parse(raw))
+  if (state.resetAt !== resetAt) return null
+  const since = exhausted ? state.exhaustedSince : state.since
+  if (typeof since !== 'number' || !Number.isFinite(since) || since < 0) return null
+  const operation = exhausted ? 'github_quota.exhausted' : 'github_quota.warning'
+  const canonical = normalize({ id: `quota-warning:${account.toLowerCase()}:${resource}:${resetAt}:${since}`, level: 'warning', source: 'poise',
+    operation, account, target: resource, condition: resetAt, message: '', workspace: loggingWorkspace() })!
+  return { source: 'poise', operation, account, target: resource, ...(exhausted
+    ? { incidentId: canonical.incidentId, from: new Date(since).toISOString() }
+    : { eventId: canonical.id }) }
 }
