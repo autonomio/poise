@@ -52,6 +52,7 @@ export const bindWork = db.transaction((instance: string, session: string, targe
   if (existing && existing.session !== session) throw new HttpError(409, `${canonical} is owned by chat ${existing.session}; its owner must release it first`)
   if (existing) return existing
   const result = { target: canonical, session, created_at: Date.now() }
+  db.prepare('DELETE FROM chat_control_observations WHERE instance = ? AND target IN (?, ?)').run(instance, `ci:${canonical}`, `behavior:${canonical}`)
   db.prepare('INSERT INTO chat_work_bindings VALUES(?, ?, ?, ?)').run(instance, canonical, session, result.created_at)
   return result
 })
@@ -73,7 +74,7 @@ export interface InternalMessage {
   seq: number, recipient: string, sender: string, body: string, created_at: number,
   state: 'pending' | 'admitted', turn_id: string | null
 }
-export function message(instance: string, recipient: string, sender: string, body: string, eventKey = randomUUID()): void {
+export function message(instance: string, recipient: string, sender: string, body: string, eventKey: string = randomUUID()): void {
   if (!body.trim() || Buffer.byteLength(body) > 32 * 1024) throw new HttpError(400, 'an internal message needs 1–32768 UTF-8 bytes')
   db.prepare(`INSERT INTO chat_control_inbox(instance, recipient, sender, event_key, body, created_at)
     VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(instance, recipient, event_key) DO NOTHING`).run(instance, recipient, sender, eventKey, body, Date.now())
