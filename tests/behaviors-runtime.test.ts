@@ -11,12 +11,18 @@ function externalCalls(): unknown[][] {
 }
 
 const mocks = vi.hoisted(() => ({
+  captureAdmission: vi.fn(), captureOutcome: vi.fn(), observeSnapshot: vi.fn(),
   runFile: vi.fn(),
   spawnDetached: vi.fn(),
   authStatus: 'authenticated',
   requireAuth: vi.fn(),
   observeAuthFailure: vi.fn(),
   lockContention: false,
+}))
+
+vi.mock('../server/behavior-ledger', () => ({
+  captureBehaviorAdmission: mocks.captureAdmission, captureBehaviorOutcome: mocks.captureOutcome,
+  observeAgentSnapshot: mocks.observeSnapshot, behaviorLedgerHeartbeat: vi.fn(),
 }))
 
 vi.mock('../server/process', () => ({
@@ -460,6 +466,7 @@ async function launchApprovalBeforeCrash() {
 }
 
 beforeEach(async () => {
+  mocks.captureAdmission.mockClear(); mocks.captureOutcome.mockClear(); mocks.observeSnapshot.mockClear()
   tempRoot = await mkdtemp(join(tmpdir(), 'poise-behavior-test-'))
   mocks.runFile.mockReset()
   mocks.spawnDetached.mockReset()
@@ -761,6 +768,10 @@ describe('behavior launch claims', () => {
     ]))
     expect(db.hasSeen('approve-prs',
       `${pr.repo}#17@req=2026-07-10T10:00:00Z/r=2/head=${HEAD_SHA}`)).toBe(true)
+    expect(mocks.captureAdmission).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      behavior: 'approve-prs', nativeId: expect.any(String), plannedSlots: ['primary'],
+      admissionKey: JSON.stringify(['Vaquum', 'approve-prs', `${pr.repo}#17@req=2026-07-10T10:00:00Z/r=2/head=${HEAD_SHA}`]),
+    }))
     expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--approve-pr')).toBe(false)
   })
 
@@ -1405,6 +1416,11 @@ describe('behavior launch claims', () => {
     expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === '--resolve-nonblocking-conversations-if-ready')).toHaveLength(3)
     expect(db.db.prepare('SELECT * FROM behavior_runs').all()).toEqual([])
     expect(runtime.getResolveUnblockingLastFired()).toBeNull()
+    expect(mocks.captureAdmission).toHaveBeenCalledTimes(3)
+    expect(new Set(mocks.captureAdmission.mock.calls.map(([admission]) => admission.nativeId)).size).toBe(3)
+    expect(mocks.captureOutcome.mock.calls.map(([result]) => result)).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({
+      state: 'completed', outcome: 'waiting', activity: 'settled',
+    })))
   })
 
   it.each([
@@ -2432,6 +2448,11 @@ describe('behavior launch claims', () => {
     const launches = mocks.spawnDetached.mock.calls.map((call) => call[1] as string[])
     expect(launches.map((args) => args[args.indexOf('--model') + 1]).sort()).toEqual(['gpt-6-astra-ultra', 'grok-4.6-xhigh', 'opus-5-xhigh'])
     expect(new Set(launches.map((args) => args[args.indexOf('--correlation-id') + 1])).size).toBe(3)
+    const admissions = mocks.captureAdmission.mock.calls.map(([admission]) => admission)
+    expect(admissions).toHaveLength(3)
+    expect(new Set(admissions.map(({ admissionKey }) => admissionKey)).size).toBe(1)
+    expect(new Set(admissions.map(({ nativeId }) => nativeId)).size).toBe(3)
+    expect(admissions.every(({ plannedSlots }) => plannedSlots.join(',') === 'primary,secondary,tertiary')).toBe(true)
     for (const args of launches) {
       expect(args).toEqual(expect.arrayContaining(['--pr-review', `#${pr.number}`, '--expected-head', HEAD_SHA, '--source', 'poise:review-new-prs']))
     }
