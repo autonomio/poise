@@ -51,10 +51,11 @@ let linkBounds: LoggingPage['bounds'] | null = null
 let mountedSearch = ''
 let preferenceWarning = ''
 let message = ''
+let messageTone: 'info' | 'error' = 'info'
 let healthMessage = ''
 let healthReadAt: number | null = null
 let queryUnavailable = false
-let stale = false
+let stale: 'failed' | 'paused' | null = null
 let loading = false
 let lastSuccess: number | null = null
 let newCount = 0
@@ -62,6 +63,10 @@ let rangeChanged = false
 let generation = 0
 let retryAt = 0
 let failures = 0
+function setMessage(text: string, tone: 'info' | 'error' = 'error'): void {
+  message = text
+  messageTone = tone
+}
 let debounce: ReturnType<typeof setTimeout> | null = null
 let stopTick: (() => void) | null = null
 const requests = new Set<AbortController>()
@@ -238,7 +243,7 @@ function shell(): void {
     </div></header><main>
     <h1 class="logging-screen-reader" id="logging-heading" tabindex="-1">Logging</h1>
     <p class="logging-screen-reader" id="logging-status" role="status" aria-live="polite" tabindex="-1"></p>
-    <p class="st-help st-help-error" id="logging-message" role="status" hidden></p>
+    <p class="st-help st-help-info" id="logging-message" role="status" hidden></p>
     <div class="range-picker logging-new" id="logging-new" hidden><button type="button" data-action="new"></button></div>
     <div id="logging-link"></div>
     <div class="logging-table-wrap"><table id="logging-table" aria-label="Retained diagnostic events"><thead id="logging-thead"></thead><tbody id="logging-tbody"></tbody></table></div>
@@ -326,6 +331,8 @@ function render(): void {
     : page ? `${page.total.toLocaleString()} matching retained events${preferences.severities.length ? '' : ' · No severities selected'}${lastSuccess ? ' · Snapshot read ' + date(new Date(lastSuccess).toISOString()) : ''}${stale ? ' · Stale results' : ''}` : linkFailure ? evidenceFailure(linkFailure) : message || 'Diagnostic results have not been read.'
   view.querySelector<HTMLElement>('#logging-count')!.textContent = page ? page.total.toLocaleString() : ''
   const note = view.querySelector<HTMLElement>('#logging-message')!
+  const tone = message && messageTone === 'error' ? 'error' : preferenceWarning ? 'warn' : messageTone
+  note.className = `st-help st-help-${tone}`
   note.textContent = [message, preferenceWarning].filter(Boolean).join(' '); note.hidden = !note.textContent
   view.querySelector<HTMLElement>('#logging-loader')!.hidden = !loading
   view.querySelector<HTMLElement>('#logging-empty')!.hidden = !page || page.events.length > 0 || loading || !!linkFailure
@@ -405,14 +412,14 @@ async function ensureAccess(mine: number): Promise<boolean> {
     const value = await loggingAccess(request.signal)
     if (!current(mine)) return false
     access = value
-    if (!access.isAdmin && preferences.scope === 'instance') { preferences.scope = 'workspace'; message = 'Instance access is unavailable; your workspace is selected.' }
+    if (!access.isAdmin && preferences.scope === 'instance') { preferences.scope = 'workspace'; setMessage('Instance access is unavailable; your workspace is selected.', 'info') }
     return true
   } finally { requests.delete(request) }
 }
 
 async function loadPage(cursor: string | null = null, fresh = true, focusTarget = false, targetPage = pageIndex): Promise<void> {
   const mine = invalidate()
-  loading = true; stale = false; message = ''
+  loading = true; stale = null; setMessage('')
   render()
   const request = controller()
   try {
@@ -439,17 +446,17 @@ async function loadPage(cursor: string | null = null, fresh = true, focusTarget 
   } catch (error) {
     if (!current(mine) || request.signal.aborted) return
     const problem = failure(error)
-    message = problem.status === 400 ? `Invalid diagnostic filters: ${problem.message}` : problem.message
-    stale = !!page
+    setMessage(problem.status === 400 ? `Invalid diagnostic filters: ${problem.message}` : problem.message)
+    stale = page ? 'failed' : null
     if (problem.status !== 400) { queryUnavailable = true; void readHealth(mine) }
-    if (problem.status === 401 || problem.status === 403) { denied(); stale = false }
+    if (problem.status === 401 || problem.status === 403) { denied(); stale = null }
   } finally { requests.delete(request); if (current(mine)) { loading = false; render() } }
 }
 
 async function initialRead(): Promise<void> {
   const mine = invalidate()
   customDraft = null
-  loading = true; page = null; firstSnapshot = null; health = null; healthReadAt = null; healthMessage = ''; queryUnavailable = false; applied = null; linked = null; link = null; linkFailure = null; linkBounds = null; message = ''; newCount = 0; pageIndex = 0; cursors = [null]; mountedSearch = location.search
+  loading = true; page = null; firstSnapshot = null; health = null; healthReadAt = null; healthMessage = ''; queryUnavailable = false; applied = null; linked = null; link = null; linkFailure = null; linkBounds = null; setMessage(''); newCount = 0; pageIndex = 0; cursors = [null]; mountedSearch = location.search
   const request = controller()
   try {
     try { link = parseLoggingLink(location.search) }
@@ -496,19 +503,19 @@ async function initialRead(): Promise<void> {
 async function poll(): Promise<void> {
   if (!active || document.hidden || pageIndex !== 0 || !page || !applied || !access || requests.size || loading || Date.now() < retryAt) return
   try { if (loggingParameters(query()).toString() !== loggingParameters(applied).toString()) { rangeChanged = true; render(); return } }
-  catch (error) { message = 'Diagnostic filters need correction: ' + failure(error).message; render(); return }
+  catch (error) { setMessage('Diagnostic filters need correction: ' + failure(error).message); render(); return }
   const mine = generation; const request = controller()
   try {
     const value = await loggingPage(access, { ...applied, after: page.watermark, limit: 1 }, request.signal)
     if (!current(mine)) return
     newCount = value.total; failures = 0; retryAt = 0; queryUnavailable = false
-    if (stale) message = 'The earlier refresh failed; these results remain a previous snapshot. Refresh or apply new diagnostics to update.'
+    if (stale === 'failed') setMessage('The earlier refresh failed; these results remain a previous snapshot. Refresh or apply new diagnostics to update.')
     render()
     void readHealth(mine)
   } catch (error) {
     if (current(mine) && !request.signal.aborted) {
       const problem = failure(error)
-      stale = true; message = 'Refresh unavailable; previous results are stale. ' + problem.message
+      stale = 'failed'; setMessage('Refresh unavailable; previous results are stale. ' + problem.message)
       queryUnavailable = true
       retryAt = Date.now() + Math.min(120_000, 15_000 * 2 ** Math.min(++failures, 3))
       if (problem.status === 401 || problem.status === 403) denied()
@@ -524,7 +531,7 @@ function refreshCurrent(): void {
 }
 
 function filtersChanged(wait = false): void {
-  invalidate(); clearLinkUrl(); page = null; firstSnapshot = null; linked = null; health = null; expanded.clear(); related.clear(); pageIndex = 0; message = ''; persist(); render()
+  invalidate(); clearLinkUrl(); page = null; firstSnapshot = null; linked = null; health = null; expanded.clear(); related.clear(); pageIndex = 0; setMessage(''); persist(); render()
   if (wait) debounce = setTimeout(() => { debounce = null; void loadPage() }, 250)
   else void loadPage()
 }
@@ -568,8 +575,8 @@ async function exportCurrent(): Promise<void> {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'poise-diagnostics.ndjson'; anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-    message = ''; render()
-  } catch (error) { if (current(mine) && !request.signal.aborted) { message = 'Export failed; no complete download was produced. ' + failure(error).message; render() } }
+    setMessage(''); render()
+  } catch (error) { if (current(mine) && !request.signal.aborted) { setMessage('Export failed; no complete download was produced. ' + failure(error).message); render() } }
   finally { requests.delete(request); button.removeAttribute('aria-busy') }
 }
 
@@ -612,7 +619,7 @@ function onClick(event: Event): void {
     case 'next': if (page?.nextCursor) { cursors[pageIndex + 1] = page.nextCursor; void loadPage(page.nextCursor, false, false, pageIndex + 1) } break
     case 'previous': if (pageIndex > 0) {
       const previous = pageIndex - 1
-      if (previous === 0 && firstSnapshot) { const mine = invalidate(); pageIndex = 0; page = firstSnapshot.page; lastSuccess = firstSnapshot.at; message = ''; stale = false; render(); void readHealth(mine) }
+      if (previous === 0 && firstSnapshot) { const mine = invalidate(); pageIndex = 0; page = firstSnapshot.page; lastSuccess = firstSnapshot.at; setMessage(''); stale = null; render(); void readHealth(mine) }
       else void loadPage(cursors[previous], false, false, previous)
     } break
     case 'related': if (id) void readRelated(id); break
@@ -664,7 +671,7 @@ function onChange(event: Event): void {
 }
 function visibility(): void {
   if (!active) return
-  if (document.hidden) { const pending = loading; invalidate(); if (pending && page) { stale = true; message = 'The pending read was paused when this tab became hidden.' } syncPolling() }
+  if (document.hidden) { const pending = loading; invalidate(); if (pending && page) { stale = 'paused'; setMessage('The pending read was paused when this tab became hidden.', 'info') } syncPolling() }
   else { render(); if (!page && !linkFailure) void initialRead(); else { syncPolling(); if (pageIndex === 0) void poll() } }
 }
 

@@ -5980,6 +5980,7 @@ body:has(#view-chat:not([hidden])) #app { padding-bottom: 0; }
 .chat-tool-status { flex: 0 0 auto; display: inline-flex; }
 .chat-tool-status.ok { color: var(--a3); }
 .chat-tool-status.bad { color: var(--a5); }
+.chat-tool[data-status="cancelled"] .chat-tool-status { color: var(--a4); }
 .chat-tool-status.run { color: var(--text-tertiary); }
 .chat-tool-body {
   border-top: var(--b-hair);

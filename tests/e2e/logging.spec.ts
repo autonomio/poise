@@ -221,6 +221,41 @@ test('discards a delayed older filter response and stops polling in a hidden doc
   } finally { release() }
 })
 
+test('a paused Logging refresh stays neutral while failed reads and exports remain red', async ({ page }) => {
+  await ready(page)
+  let release!: () => void
+  const released = new Promise<void>(resolve => { release = resolve })
+  let held!: () => void
+  const holding = new Promise<void>(resolve => { held = resolve })
+  let fail = false
+  await page.route('**/api/logging?**', async route => {
+    if (new URL(route.request().url()).searchParams.has('after')) return route.continue()
+    if (fail) return route.fulfill({ status: 503, json: { error: 'logging_unavailable', message: 'Fixture read unavailable' } })
+    const response = await route.fetch()
+    const body = await response.json()
+    held(); await released; await route.fulfill({ json: body })
+  })
+  try {
+    await action(page, 'refresh').click(); await holding
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')) })
+    release()
+    const polled = page.waitForResponse(response => new URL(response.url()).pathname === '/api/logging' && new URL(response.url()).searchParams.has('after'))
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')) })
+    await polled
+    const note = page.locator('#logging-message')
+    await expect(note).toHaveText('The pending read was paused when this tab became hidden.')
+    await expect(note).toHaveCSS('color', 'rgb(142, 149, 158)')
+    fail = true
+    await action(page, 'refresh').click()
+    await expect(note).toContainText('Fixture read unavailable')
+    await expect(note).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await page.route('**/api/logging/export**', route => route.fulfill({ status: 503, json: { error: 'logging_unavailable', message: 'Fixture export unavailable' } }))
+    await action(page, 'export').click()
+    await expect(note).toContainText('Export failed; no complete download was produced.')
+    await expect(note).toHaveCSS('color', 'rgb(184, 80, 72)')
+  } finally { release() }
+})
+
 test('cold links reveal an event outside the first page, widen bounds, persist view and restore saved filters', async ({ page }) => {
   const target = fixtures[0]
   const path = '/?' + new URLSearchParams({ view: 'logging', event: target.id, from: new Date(Date.now() + 3_600_000).toISOString() })
