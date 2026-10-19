@@ -301,7 +301,7 @@ export class ChatControl {
       try {
         const ci = await (this.options.ci ?? readWorkCi)(target)
         const data = { kind: 'ci', target: target.url, head: ci.head, failing: ci.failing }
-        this.observe(binding, `ci:${target.url}`, data, now, ci.failing.length > 0, ci.pending === true && !ci.failing.length)
+        this.observe(binding, `ci:${target.url}`, data, now, ci.failing.length > 0, ci.pending === true)
       } catch (error) {
         this.observe(binding, `ci:${target.url}`, { kind: 'ci_unavailable', target: target.url, error: error instanceof Error ? error.message : String(error) }, now, true)
       }

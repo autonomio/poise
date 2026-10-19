@@ -262,6 +262,27 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(3)
   })
 
+  it('retains settled CI evidence during a rerun when another check remains failed', async () => {
+    const parent = await manager()
+    const target = 'https://github.com/acme/app/pull/91'
+    await command(parent.id, { operation: 'bind', target })
+    const first = { name: 'First', state: 'completed', conclusion: 'failure' }
+    const second = { name: 'Second', state: 'completed', conclusion: 'failure' }
+    ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [first, second] })
+    await control.tick()
+    const settled = store.observation(runtime.instance, `ci:${target}`)!.fingerprint
+    ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second], pending: true })
+    clock += 5 * 60_000; await control.tick()
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+    expect(store.observation(runtime.instance, `ci:${target}`)!.fingerprint).toBe(settled)
+    ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second] })
+    clock += 5 * 60_000; await control.tick()
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
+    expect(JSON.parse(store.inbox(runtime.instance, parent.id)[1].body).failing).toEqual([second])
+    clock += 5 * 60_000; await control.tick()
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
+  })
+
   it('lets the recorded manager supply context and answer task questions with durable attribution', async () => {
     const parent = await manager(), outsider = await manager()
     const result = await command(parent.id, { operation: 'create', title: 'Worker', task: 'Use the known target' })

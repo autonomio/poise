@@ -91,8 +91,9 @@ failures and recovery. The monitor calls Caller's existing `--list-failing-ci`
 primitive once per bound PR every five minutes, independent of browsers and
 supervision intervals. On the usual unpaginated path that is three GitHub
 reads per observation, at most 36 per hour per bound PR; pagination/retries
-can add reads. Unbound work adds zero GitHub traffic. Pending checks do not
-wake a chat, unchanged failures deduplicate, and unavailable reads are visible
+can add reads. Unbound work adds zero GitHub traffic. While any check is pending,
+notifications wait and retain the last settled state, including when other
+checks have failed. Unchanged settled failures deduplicate; unavailable reads are visible
 as unknown evidence. These observations confer no merge authority.
 
 Work changes also enter the existing structured diagnostic log with the target,
