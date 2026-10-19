@@ -17,7 +17,8 @@ records. Restore/replay never removes historical gaps.
 Reads have a 1 MiB/1,000-native-record bound, at most 100 projected diagnostics
 per transaction, and a 12-second total replay budget. Projection input includes
 identity and JSON framing in its separate 1 MiB bound. Large
-windows are halved; an irreducible one-second window is recorded as incomplete
+windows are halved; unfinished reductions survive the next poll's replay budget
+in memory until the container or committed checkpoint changes. An irreducible one-second window is recorded as incomplete
 and advanced. Unavailable sources never advance the checkpoint. Native routine
 and unstructured output are excluded by policy. The reader sends no request URI,
 headers, body or unrelated host records. The gateway checks the domain again and

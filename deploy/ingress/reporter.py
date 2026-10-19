@@ -23,6 +23,20 @@ class ReadBound(Exception):
     """The source window must be reduced or recorded as incomplete."""
 
 
+class ReplayWindow:
+    """Keep an unfinished reduction across polls without advancing the source."""
+
+    def __init__(self):
+        self.source = None
+        self.until = None
+
+    def limit(self, container, checkpoint, end):
+        source = (container, checkpoint)
+        if self.source != source:
+            self.source, self.until = source, end
+        return min(end, self.until)
+
+
 def iso(value):
     return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -141,8 +155,9 @@ def retained_boundary(container):
                 process.wait()
 
 
-def collect(config, hello, now=None):
+def collect(config, hello, now=None, window=None):
     now = now or dt.datetime.now(UTC)
+    window = window if window is not None else ReplayWindow()
     domain = config["domain"]
     if hello.get("version") != 1 or hello.get("domain") != domain:
         raise RuntimeError("gateway ingress contract/domain does not match reporter configuration")
@@ -161,7 +176,7 @@ def collect(config, hello, now=None):
     initial = max(end - dt.timedelta(days=30), min(instant(retained), end)) if retained else end - dt.timedelta(minutes=5)
     start = instant(cursor["until"]) if cursor and cursor["container"] == container else initial
     # Catch up a stopped reader in finite windows; do not pretend old replay is current.
-    end = min(end, start + dt.timedelta(days=30))
+    end = window.limit(container, checkpoint, min(end, start + dt.timedelta(days=30)))
     batch = {"version": 1, "challenge": hello.get("challenge"), "expected": checkpoint, "container": container, "from": iso(start), "until": iso(end), "state": "complete", "records": []}
     batch["retainedFrom"] = retained
     deadline = time.monotonic() + 12
@@ -211,6 +226,7 @@ def collect(config, hello, now=None):
                 batch["records"] = []
                 break
             end = start + (end - start) / 2
+            window.until = end
             batch["until"] = iso(end)
         except RuntimeError:
             batch["state"] = "unavailable"
@@ -236,7 +252,7 @@ def read_hello(process):
     return json.loads(result)
 
 
-def deliver(config):
+def deliver(config, window=None):
     argv = ["/usr/bin/ssh", "-F", "/dev/null", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "-o", "IdentityAgent=none",
             "-o", "UserKnownHostsFile=" + config["known_hosts"], "-i", config["identity"], config["target"]]
@@ -244,7 +260,7 @@ def deliver(config):
     with subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
         try:
             hello = read_hello(process)
-            batch = collect(config, hello)
+            batch = collect(config, hello, window=window)
             reply = json.loads(capture(process, json.dumps(batch, separators=(",", ":")).encode(), 8, 4096))
             expected = hello["checkpoint"] if batch["state"] == "unavailable" else json.dumps({"container": batch["container"], "until": batch["until"]}, separators=(",", ":"))
             if reply.get("accepted") is not True or reply.get("checkpoint") != expected:
@@ -275,9 +291,10 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     config = configuration(args.config)
+    window = ReplayWindow()
     previous = None
     while True:
-        reply = deliver(config)
+        reply = deliver(config, window)
         if reply["currentStatus"] != previous and reply["currentStatus"] != "connected":
             LOG.warning("external proxy collection is %s", reply["currentStatus"])
         previous = reply["currentStatus"]

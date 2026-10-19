@@ -152,6 +152,33 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(len(batch["records"]), 50)
         self.assertLess(reporter.instant(batch["until"]), NOW - dt.timedelta(seconds=1))
 
+    def test_budget_expiry_keeps_the_reduced_window_for_the_next_poll(self):
+        clock = [0]
+        durations = []
+        def source(argv, **_options):
+            if "inspect" in argv:
+                return CONTAINER.encode()
+            start = reporter.instant(argv[argv.index("--since") + 1])
+            end = reporter.instant(argv[argv.index("--until") + 1])
+            durations.append((end - start).total_seconds())
+            clock[0] += 3
+            if durations[-1] > 2:
+                raise reporter.ReadBound("source read consumed its deadline")
+            return b""
+        cursor = json.dumps({"container": CONTAINER, "until": "2026-10-19T09:59:30.000Z"}, separators=(",", ":"))
+        hello = {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": cursor}
+        window = reporter.ReplayWindow()
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None), patch.object(reporter.time, "monotonic", side_effect=lambda: clock[0]):
+            first = reporter.collect(CONFIG, hello, NOW, window)
+            second = reporter.collect(CONFIG, hello, NOW, window)
+        self.assertEqual(first["state"], "unavailable")
+        self.assertEqual(first["expected"], cursor)
+        self.assertEqual(second["state"], "complete")
+        self.assertEqual(second["from"], first["from"])
+        self.assertEqual(second["until"], first["until"])
+        self.assertLessEqual(durations[-1], 2)
+        self.assertGreater(len(durations), 4)
+
     def test_source_failure_is_explicit_and_domain_mismatch_stops_before_read(self):
         def unavailable(argv, **_options):
             if "inspect" in argv:
