@@ -8,7 +8,7 @@ import { normalize } from '../gateway/src/diagnostics/contract'
 import { callerDiagnostic } from '../gateway/src/diagnostics/sources'
 import { joinEvidence } from '../gateway/src/diagnostics/query-evidence'
 import { diagnosticEvidence, evidenceReferences } from '../gateway/src/diagnostics/evidence-contract'
-import { behaviorDiagnosticGroups } from '../src/behavior-diagnostics'
+import { behaviorDiagnosticGroups, retainDiagnosticEvidence } from '../src/behavior-diagnostics'
 import { notificationItems, NOTICE_LOOK } from '../src/notification-items'
 import { NOTIFICATION_PLACEMENT } from '../src/notification-placement'
 import { DIAGNOSTIC_PLACEMENT, diagnosticClassification, DIAGNOSTIC_SCOPES } from '../src/behavior-failure-cause'
@@ -217,4 +217,18 @@ describe('read-time producer binding', () => {
     state.failures = []
     expect((await bindings.behaviorEvidence(state)).failures).toEqual([])
   })
+})
+
+it('keeps known links through expiry/outage only for the same immutable attempt and material cause', () => {
+  const previous = diagnostics(), event = caller('a'.repeat(32))
+  const ref = { eventId: event.id, incidentId: event.incidentId, from: '2026-10-19T00:00:00Z', to: '2026-10-19T01:00:00Z' }
+  previous.deadLetters = [{ id: 'incident', behavior: 'review-new-prs', target: 'acme/repo#9', callId: event.callId, correlationId, error: cause,
+    createdAt: '', evidence: ref }]
+  const next = diagnostics()
+  next.deadLetters = previous.deadLetters.map((row) => ({ ...row, evidence: undefined, evidenceStatus: 'unavailable' }))
+  expect(retainDiagnosticEvidence(next, previous).deadLetters[0]).toMatchObject({ evidence: ref, evidenceStatus: 'unavailable' })
+  next.deadLetters[0].error = 'a new material cause'
+  expect(retainDiagnosticEvidence(next, previous).deadLetters[0].evidence).toBeUndefined()
+  next.deadLetters[0].error = cause; next.deadLetters[0].callId = 'b'.repeat(32)
+  expect(retainDiagnosticEvidence(next, previous).deadLetters[0].evidence).toBeUndefined()
 })

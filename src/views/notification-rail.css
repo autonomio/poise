@@ -411,4 +411,4 @@ body.editor-writer-mode .nr-toasts { display: none; }
   .nr-bell, .nr-rail, .nr-toasts { display: none; }
 }
 
-.nr-evidence-note { margin: 8px 0; color: var(--text-muted); font-size: 11px; }
+.nr-evidence-note { margin: 8px 0; color: var(--text-tertiary); font-size: 11px; }

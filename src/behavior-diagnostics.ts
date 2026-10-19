@@ -1,4 +1,5 @@
-import { evidenceAttachment, type EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
+import { evidenceAttachment, keepKnownEvidence, type EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
+import { materialFailureCause } from '../gateway/src/diagnostics/material-cause'
 import type { BehaviorDiagnostics } from './behaviors'
 import { classifyBehaviorDiagnostic, diagnosticClassification, failureCause, type DiagnosticClassification } from './behavior-failure-cause'
 
@@ -103,4 +104,17 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     add(diagnosticClassification(error.code), 'Behaviors', `Status could not be refreshed (${error.message}).`, error.message)
   }
   return [...groups.values()]
+}
+
+/** Current immutable attempt/cause identity is the only key for a known browser reference. */
+export function retainDiagnosticEvidence(next: BehaviorDiagnostics, previous: BehaviorDiagnostics | null): BehaviorDiagnostics {
+  type Row = { behavior: string; target?: string; error?: string; callId?: string | null; correlationId?: string | null } & EvidenceAttachment
+  const identity = (row: Row) => row.callId || row.correlationId
+    ? JSON.stringify([row.behavior, row.target, row.callId, row.correlationId, materialFailureCause(failureCause(row.error ?? ''))]) : null
+  const prior = new Map([...previous?.failures ?? [], ...previous?.deadLetters ?? []].flatMap((row) => {
+    const key = identity(row)
+    return key ? [[key, row] as const] : []
+  }))
+  const retain = <T extends Row>(row: T): T => ({ ...row, ...keepKnownEvidence(row, prior.get(identity(row) ?? '')) })
+  return { ...next, failures: next.failures.map(retain), deadLetters: next.deadLetters.map(retain) }
 }

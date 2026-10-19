@@ -31,3 +31,11 @@ export function evidenceReferences(value: EvidenceAttachment): DiagnosticEvidenc
   const safe = evidenceAttachment(value)
   return [...new Map([...(safe.evidence ? [safe.evidence] : []), ...(safe.evidenceReferences ?? [])].map((ref) => [ref.eventId, ref])).values()].slice(0, 20)
 }
+
+/** A previously validated link can still explain 410 expiry or a sink outage. */
+export function keepKnownEvidence(current: EvidenceAttachment, previous?: EvidenceAttachment): EvidenceAttachment {
+  const safe = evidenceAttachment(current)
+  if (evidenceReferences(safe).length) return safe
+  const known = previous ? evidenceReferences(previous) : []
+  return known.length ? { ...safe, evidence: known[0], evidenceReferences: known } : safe
+}

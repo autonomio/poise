@@ -1,3 +1,4 @@
+import { retainDiagnosticEvidence } from './behavior-diagnostics'
 import type { EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
 // Thin client for the Behaviors view.
 //
@@ -384,7 +385,7 @@ export async function refreshState(): Promise<void> {
     for (const k of keys) {
       ownerByKey[k] = typeof data[k]?.owner === 'string' ? data[k].owner : null
     }
-    diagnostics = data.diagnostics ?? null
+    diagnostics = data.diagnostics ? retainDiagnosticEvidence(data.diagnostics, diagnostics) : null
     stateLoadOk = true
   } catch (error) {
     if (mine !== refreshSequence) return

@@ -592,6 +592,9 @@ for (const width of [1000, 1600]) test(`secondary Logging action preserves the n
   await page.route('**/api/logging/events/**', (route) => route.fulfill({ status: 410, json: { error: 'logging_event_expired', message: 'Expired evidence' } }))
   await page.goto('/')
   await openRail(page); await expand(page, HELD.id)
+  state.notices = [{ ...HELD, evidenceStatus: 'pending' }]
+  await reread(page)
+  await expect(card(page, HELD.id).getByRole('button', { name: 'View in Logging', exact: true })).toBeVisible()
   await card(page, HELD.id).getByRole('button', { name: 'View in Logging', exact: true }).click()
   await expect(page.locator('#view-logging')).toBeVisible()
   await expect(page.locator('#logging-link')).toContainText('evidence has expired')
@@ -682,9 +685,11 @@ test('real producers resolve exact notice, distinct-attempt and pre-launch evide
     expect(two.total).toBe(2)
     produce('held-change')
     const changed = (await (await page.request.get('/api/notices')).json()).notices.find((row: Notice) => row.kind === 'behavior_held') as Notice
+    expect(changed.evidence?.eventId).toMatch(/^evt_/)
     expect(changed.id).not.toBe(first.id)
     expect(changed.evidence?.eventId).not.toBe(first.evidence!.eventId)
     await page.goto('/'); await openRail(page); await expand(page, changed.id)
+    await expect(card(page, changed.id).locator('[data-action="logging"]')).toHaveCount(3)
     await card(page, changed.id).getByRole('button', { name: 'View in Logging', exact: true }).click()
     await expect(page.locator('#view-logging')).toContainText('changed retained cause')
     expect(new URL(page.url()).searchParams.get('event')).toBe(changed.evidence!.eventId)
