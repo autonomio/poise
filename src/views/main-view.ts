@@ -340,8 +340,12 @@ function recordToRow(r: GhRecord): PrRow {
   }
 }
 
-function readMessages(data: { errors?: Array<{ org: string, error: string }>, warnings?: string[] }): string {
-  return [organizationErrors(data), ...(data.warnings || [])].filter(Boolean).join(' ')
+function showHistoryNotices(warnings: string[]): void {
+  const notice = document.getElementById('main-history-notice') as HTMLDetailsElement
+  const messages = [...new Set(warnings)].sort()
+  notice.hidden = !messages.length
+  if (notice.hidden) notice.open = false
+  patchContent(notice, `<summary>History notices (${messages.length})</summary><ul>${messages.map(message => `<li>${escapeHtml(message)}</li>`).join('')}</ul>`)
 }
 
 function updateFilterContext(): void {
@@ -364,6 +368,8 @@ interface SourceState {
   pending: boolean
   error: string
   countError: string
+  warnings: string[]
+  countWarnings: string[]
   loadedAt: number
   revision: number
   failures: number
@@ -390,7 +396,7 @@ function selectedSources(): SourceState[] {
     let source = sources.get(key)
     if (!source) {
       source = { type, payload, rows: [], total: 0, partial: true, done: false, fetching: false,
-        loaded: false, pending: false, error: '', countError: '', loadedAt: 0, revision: 0, failures: 0, retryRefresh: false }
+        loaded: false, pending: false, error: '', countError: '', warnings: [], countWarnings: [], loadedAt: 0, revision: 0, failures: 0, retryRefresh: false }
       sources.set(key, source)
     }
     return source
@@ -416,6 +422,7 @@ function paintSources(): void {
   done = selected.every(source => source.done)
   loader.hidden = !fetching
   showLoadError(selected.flatMap(source => [source.error, source.countError]).filter(Boolean).join(' '))
+  showHistoryNotices(selected.flatMap(source => [...source.warnings, ...source.countWarnings]))
   if (items.length) {
     table.hidden = false
     empty.hidden = true
@@ -469,7 +476,8 @@ async function readCount(source: SourceState, revision: number): Promise<void> {
     const data = await postRead({ ...source.payload, count_only: true })
     if (source.revision !== revision) return
     source.partial = typeof data.count !== 'number' || !!organizationErrors(data) || source.error.startsWith('Some GitHub accounts')
-    source.countError = readMessages(data) || (source.partial ? 'Total count unavailable. Showing available results.' : '')
+    source.countError = organizationErrors(data) || (source.partial ? 'Total count unavailable. Showing available results.' : '')
+    source.countWarnings = data.warnings || []
     if (typeof data.count === 'number') source.total = data.count
     if (!source.partial && source.rows.length >= source.total) source.done = true
   } catch {
@@ -511,8 +519,9 @@ async function readSource(source: SourceState, refresh = false): Promise<void> {
     source.partial = source.pending || !!organizationErrors(data) || (typeof data.count !== 'number' && (offset === 0 || source.partial))
     source.total = typeof data.count === 'number' ? data.count : offset === 0 ? source.rows.length : Math.max(source.total, source.rows.length)
     source.done = !source.pending && (rows.length < limit || (!source.partial && source.rows.length >= source.total))
-    source.error = readMessages(data)
-    if (offset === 0) source.countError = ''
+    source.error = organizationErrors(data)
+    source.warnings = data.warnings || []
+    if (offset === 0) { source.countError = ''; source.countWarnings = [] }
     source.failures = 0
     // Full-history counts start only after the bounded page is painted. They
     // never hold the paging lock, and are read once per query/refresh.

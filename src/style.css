@@ -2174,6 +2174,10 @@ tr:hover .review-btn { opacity: 1; }
 
 .st-help-info  { color: var(--text-tertiary); }
 
+#main-history-notice summary { cursor: pointer; }
+#main-history-notice ul { margin: 4px 0 0; padding-left: 16px; }
+#main-history-notice li { overflow-wrap: anywhere; }
+
 /* Models tab: a place is a label, why, then its default and fallback. */
 .st-sublabel {
   display: block;

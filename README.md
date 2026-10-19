@@ -717,8 +717,9 @@ failure retries with backoff. Errors after the write begins remain held.
 Archive's Actions filter reads workflow runs independently of PR involvement, including
 push and deployment runs after merge. Failed selects GitHub's `failure` conclusion;
 Any includes all conclusions and active runs. It reads at most the latest 100 runs
-per repository for the selected outcome, and reports truncated history and read
-failures. Search and date filters apply within that snapshot. Older runs remain
+per repository for the selected outcome. Truncated-history notices share one
+collapsed disclosure with individual repository details; read failures appear
+separately. Search and date filters apply within that snapshot. Older runs remain
 available in GitHub. Workflow reads start only while Actions is selected, share a
 five-minute cache across pages, counts, search, date and account filters, and make
 one API request per discovered repository per outcome per cache interval.
