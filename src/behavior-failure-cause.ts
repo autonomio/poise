@@ -62,4 +62,3 @@ export function classifyBehaviorDiagnostic(error: string, options: DiagnosticOpt
   }
   return diagnosticClassification('unknown')
 }
-

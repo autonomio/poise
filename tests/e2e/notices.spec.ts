@@ -73,7 +73,7 @@ async function workspace(page: Page, notices: Notice[], options: { enabled?: boo
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const { pathname } = new URL(request.url())
-    if (options.realEvidence && (pathname === '/api/notices' || pathname.startsWith('/api/notices/') || pathname.startsWith('/api/logging'))) return route.continue()
+    if (options.realEvidence && (pathname === '/api/notices' || pathname.startsWith('/api/notices/') || pathname.startsWith('/api/logging') || pathname === '/api/behaviors')) return route.continue()
     if (pathname === '/api/notices') return route.fulfill({ json: answer() })
     const action = /^\/api\/notices\/([^/]+)\/(dismiss|silence)$/.exec(pathname)
     if (action && request.method() === 'POST') {
@@ -634,21 +634,13 @@ test('malformed optional evidence preserves the primary action and query failure
   expect(state.sent).toEqual([])
 })
 
-test('real storage producer resolves retained evidence through the notice API into Logging', async ({ page }) => {
+test('real producers resolve exact notice, distinct-attempt and pre-launch evidence through APIs into Logging', async ({ page }) => {
   const root = resolve('test-results/e2e/notice-source')
   mkdirSync(root, { recursive: true })
   const script = resolve(root, 'source.mjs')
-  await build({ stdin: { contents: `
-    import { startLogging, loggingRuntime, stopLogging } from './server/logging'
-    import { temporaryStorageMeasured, TEMPORARY_STORAGE_GB } from './server/temporary-storage'
-    startLogging()
-    temporaryStorageMeasured(6 * TEMPORARY_STORAGE_GB)
-    if (process.argv[2] !== 'recover') temporaryStorageMeasured(4.9 * TEMPORARY_STORAGE_GB)
-    loggingRuntime().flush()
-    await stopLogging()
-  `, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile: script, logLevel: 'silent' })
+  await build({ entryPoints: [resolve('tests/e2e/fixtures/notification-producer.ts')], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile: script, logLevel: 'silent' })
   const environment = { ...process.env, ...isolatedEnvironment(root, process.env.PATH ?? ''), POISE_DB: resolve('test-results/e2e/cache.db'),
-    POISE_WORKSPACE_HANDLE: 'local', CALLER_BIN_ROOT: resolve('test-results/e2e/caller/bin'), AGENT_INTERFACE_ROOT: resolve('test-results/e2e/caller/agent_interface') }
+    POISE_WORKSPACE_HANDLE: 'local', POISE_NOTICE_FIXTURE_ROOT: root, CALLER_BIN_ROOT: resolve('test-results/e2e/caller/bin'), AGENT_INTERFACE_ROOT: resolve('test-results/e2e/caller/agent_interface') }
   const produce = (mode: string) => execFileSync(process.execPath, [script, mode], { env: environment, stdio: 'pipe' })
   try {
     produce('cross')
@@ -666,5 +658,47 @@ test('real storage producer resolves retained evidence through the notice API in
     produce('recover')
     expect((await (await page.request.get('/api/notices')).json()).notices.some((row: Notice) => row.id === notice.id)).toBe(false)
     expect((await page.request.get('/api/logging/events/' + notice.evidence!.eventId)).status()).toBe(200)
+
+    produce('held-one')
+    const first = (await (await page.request.get('/api/notices')).json()).notices.find((row: Notice) => row.kind === 'behavior_held') as Notice
+    expect(first.evidence?.eventId).toMatch(/^evt_/)
+    await page.goto('/'); await openRail(page); await expand(page, first.id)
+    await card(page, first.id).getByRole('button', { name: 'View in Logging', exact: true }).click()
+    await expect(page.locator('#view-logging')).toContainText('precise retained cause')
+    expect(new URL(page.url()).searchParams.get('event')).toBe(first.evidence!.eventId)
+    await page.request.post(`/api/notices/${first.id}/dismiss`)
+    produce('held-two')
+    expect((await (await page.request.get('/api/notices')).json()).notices.filter((row: Notice) => row.kind === 'behavior_held')).toEqual([])
+    const actual = (await (await page.request.get('/api/behaviors')).json()).diagnostics as BehaviorDiagnostics
+    const attempts = actual.deadLetters.filter((row) => row.target === 'acme/notification-evidence#901')
+    expect(new Set(attempts.map((row) => row.evidence?.eventId)).size).toBe(2)
+    await page.goto('/'); await openRail(page)
+    const diagnostic = rail(page).locator('.nr-card').filter({ hasText: 'precise retained cause' }).first()
+    await diagnostic.locator('.nr-card-head').click()
+    await diagnostic.getByRole('button', { name: 'View in Logging', exact: true }).click()
+    await expect(page.locator('#view-logging')).toContainText('precise retained cause')
+    expect(attempts.some((row) => row.evidence?.eventId === new URL(page.url()).searchParams.get('event'))).toBe(true)
+    const two = await (await page.request.get('/api/logging?source=caller&repository=acme%2Fnotification-evidence')).json()
+    expect(two.total).toBe(2)
+    produce('held-change')
+    const changed = (await (await page.request.get('/api/notices')).json()).notices.find((row: Notice) => row.kind === 'behavior_held') as Notice
+    expect(changed.id).not.toBe(first.id)
+    expect(changed.evidence?.eventId).not.toBe(first.evidence!.eventId)
+    await page.goto('/'); await openRail(page); await expand(page, changed.id)
+    await card(page, changed.id).getByRole('button', { name: 'View in Logging', exact: true }).click()
+    await expect(page.locator('#view-logging')).toContainText('changed retained cause')
+    expect(new URL(page.url()).searchParams.get('event')).toBe(changed.evidence!.eventId)
+    produce('recover')
+    produce('prelaunch')
+    const preparation = (await (await page.request.get('/api/behaviors')).json()).diagnostics as BehaviorDiagnostics
+    const failed = preparation.failures.find((row) => row.target === 'acme/notification-evidence#901:check')!
+    expect(failed?.evidence?.eventId).toMatch(/^evt_/)
+    expect(failed.callId).toBeUndefined()
+    await page.goto('/'); await openRail(page)
+    const preparationCard = rail(page).locator('.nr-card').filter({ hasText: 'prelaunch preparation unavailable' }).first()
+    await preparationCard.locator('.nr-card-head').click()
+    await preparationCard.getByRole('button', { name: 'View in Logging', exact: true }).click()
+    await expect(page.locator('#view-logging')).toContainText('prelaunch preparation unavailable')
+    expect(preparation.failures.flatMap((row) => row.evidenceReferences ?? []).some((ref) => ref.eventId === new URL(page.url()).searchParams.get('event'))).toBe(true)
   } finally { produce('recover') }
 })

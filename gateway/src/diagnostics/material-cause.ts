@@ -55,4 +55,3 @@ export function materialFailureCause(body: string): string {
     .replace(/\b(actual_chars|max_chars)(["']?\s*[:=]\s*)\d+/g, '$1$2<n>')
     .replace(/\b\d+(?:\.\d+)? (bytes|characters|seconds|milliseconds|attempts)\b/gi, '<n> $1')
 }
-
