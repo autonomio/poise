@@ -441,3 +441,8 @@ keep the ordinary 410 expiry, indistinguishable unknown/foreign 404 and honest
 container replacement do not delete retained source evidence.
 
 Ordinary non-diagnostic workspace stdout/JSON is excluded by policy without manufacturing a collection outage. Malformed claimed diagnostic envelopes, read bounds, truncation and transport failures still retain warnings and gaps. Successful observation closes the current gap without deleting historical intervals; pending backfill remains a distinct degraded observation.
+
+The Active loss observation includes authenticated workspace overflow/rejection,
+independently of the gateway queue. Recovery clears that live observation while
+retaining cumulative counters. A legacy producer with recorded loss and no live
+observation remains unknown; a healthy central queue cannot establish its recovery.

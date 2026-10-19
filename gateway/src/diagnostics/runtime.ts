@@ -203,7 +203,7 @@ export class DiagnosticRuntime {
     this.saveJournal()
   }
 
-  mergeHistory(id: string, history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; availableFrom: string | null }): void {
+  mergeHistory(id: string, history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; lossActive?: boolean; availableFrom: string | null }): void {
     const source = this.sources.get(this.coverageId(id))
     if (!source) return // Admission failure is already reported by observe/deliver.
     const gaps = new Map(source.gaps.map((gap) => [gap.from + ':' + gap.reason, gap]))
@@ -216,6 +216,7 @@ export class DiagnosticRuntime {
     source.gaps = ordered.slice(-32)
     source.dropped = Math.max(source.dropped ?? 0, history.dropped)
     source.rejected = Math.max(source.rejected ?? 0, history.rejected)
+    source.lossActive = history.lossActive
     if (history.availableFrom && (!source.availableFrom || history.availableFrom < source.availableFrom)) source.availableFrom = history.availableFrom
     if (source.currentStatus === 'connected' && (source.historyIncomplete || source.gaps.length)) source.status = 'partial'
     this.saveJournal()
@@ -226,12 +227,14 @@ export class DiagnosticRuntime {
     const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
       || required.some((source) => source.status !== 'connected')
     const observations = required.map(currentCoverageStatus)
-    const currentStatus = this.sinkError ? 'unavailable' : this.lossActive || this.journalError || this.coverageError || this.reportError
+    const currentStatus = this.sinkError ? 'unavailable' : this.lossActive || required.some((source) => source.lossActive === true) || this.journalError || this.coverageError || this.reportError
       || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
       : this.lastSuccess === null || observations.includes('initializing') ? 'initializing' : 'connected'
     return { status: this.sinkError ? 'unavailable' : partial ? 'partial' : this.lastSuccess === null ? 'initializing' : 'connected', currentStatus,
       error: this.sinkError, unavailableSince: this.sinkSince, coverageError: this.coverageError, journalError: this.journalError,
-      reportError: this.reportError, rejected: this.rejected, lossActive: this.lossActive, lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
+      reportError: this.reportError, rejected: this.rejected, lossActive: this.lossActive || required.some((source) => source.lossActive === true)
+        ? true : required.some((source) => source.lossActive === undefined && ((source.dropped ?? 0) > 0 || (source.rejected ?? 0) > 0)) ? undefined : false,
+      lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
       queued: this.queue.length, queuedBytes: this.queuedBytes, dropped: this.dropped, droppedSince: this.droppedSince,
       sources: [...this.sources.values()], policy: this.policy }
   }
