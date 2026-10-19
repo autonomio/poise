@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
+function requestIdentity(value) {
+  if (value === undefined) return randomUUID()
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('requestId must be a UUID when supplied')
+  return value
+}
+
 /** One native-shell entry point for every provider; no provider credentials. */
 export async function controlRequest(configPath, input) {
   const config = JSON.parse(await readFile(configPath, 'utf8'))
@@ -16,7 +22,7 @@ export async function controlRequest(configPath, input) {
   if (typeof path !== 'string' || !path.startsWith('/api/') || path.includes('#') || /[\r\n\\]/.test(path)) throw new Error('path must be a local /api/ path')
   const url = new URL(path, origin)
   if (url.origin !== origin.origin || !url.pathname.startsWith('/api/')) throw new Error('API path escaped the local workspace')
-  const requestId = input.requestId || randomUUID()
+  const requestId = requestIdentity(input.requestId)
   const body = api ? input.body : { ...input, requestId }
   if (method === 'GET' && body !== undefined) throw new Error('GET cannot carry a body')
   const encoded = body === undefined ? undefined : JSON.stringify(body)
@@ -53,7 +59,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const input = JSON.parse(raw)
     // Print the retry identity before IO, so a lost response can be inspected
     // and retried with the same ID instead of executing another mutation.
-    input.requestId ??= randomUUID()
+    input.requestId = requestIdentity(input.requestId)
     process.stderr.write(`Poise requestId: ${input.requestId}\n`)
     process.stdout.write(JSON.stringify(await controlRequest(config, input), null, 2) + '\n')
   } catch (error) {

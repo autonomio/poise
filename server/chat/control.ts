@@ -48,7 +48,7 @@ const APIS = {
   '/api/notices': 'Workspace notices: GET.',
 }
 
-export interface CiObservation { head: string, failing: Array<{ name: string, state: string, conclusion?: string | null, url?: string | null }> }
+export interface CiObservation { head: string, pending?: boolean, failing: Array<{ name: string, state: string, conclusion?: string | null, url?: string | null }> }
 /** One existing Caller primitive; no job-log reads or new GitHub client. */
 export async function readWorkCi(target: store.WorkTarget): Promise<CiObservation> {
   const { stdout } = await runFile('github-interface', ['--list-failing-ci', String(target.number), '--repository', target.repo, '--token-user', requireAgentAccount()], {
@@ -59,17 +59,19 @@ export async function readWorkCi(target: store.WorkTarget): Promise<CiObservatio
     || !('repository' in value) || value.repository !== target.repo || !('pull_number' in value) || value.pull_number !== target.number
     || !('failing' in value) || !Array.isArray(value.failing)) throw new Error('Caller returned invalid CI evidence for the bound PR')
   const failing: CiObservation['failing'] = []
+  let pending = false
   for (const item of value.failing) {
     if (!item || typeof item !== 'object' || typeof item.name !== 'string' || typeof item.state !== 'string') throw new Error('Caller returned a malformed CI check')
     const conclusion: unknown = item.conclusion
     const url: unknown = item.url
     if (conclusion !== undefined && conclusion !== null && typeof conclusion !== 'string') throw new Error('Caller returned a malformed CI conclusion')
     if (url !== undefined && url !== null && typeof url !== 'string') throw new Error('Caller returned a malformed CI URL')
+    if (['queued', 'in_progress', 'pending', 'requested', 'waiting'].includes(item.state) || (item.state === 'completed' && conclusion == null)) pending = true
     // The primitive also lists queued and running checks; those never wake an owner.
     if ((item.state === 'completed' && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'].includes(String(conclusion)))
       || ['failure', 'error'].includes(item.state)) failing.push({ name: item.name, state: item.state, conclusion, url })
   }
-  return { head: value.head_sha.toLowerCase(), failing: failing.sort((a, b) => a.name.localeCompare(b.name)) }
+  return { head: value.head_sha.toLowerCase(), pending, failing: failing.sort((a, b) => a.name.localeCompare(b.name)) }
 }
 
 function text(value: unknown, name: string): string {
@@ -286,7 +288,12 @@ export class ChatControl {
       if (previous && now - previous.checked_at < CI_INTERVAL) continue
       try {
         const ci = await (this.options.ci ?? readWorkCi)(target)
-        this.observe(binding, `ci:${target.url}`, { kind: 'ci', target: target.url, ...ci }, now, ci.failing.length > 0)
+        const data = { kind: 'ci', target: target.url, head: ci.head, failing: ci.failing }
+        if (ci.pending && !ci.failing.length && previous) {
+          // A rerun still running is not recovery from the last observed
+          // failure. Retain that state while advancing the shared read clock.
+          store.saveObservation(instance, `ci:${target.url}`, previous.fingerprint, now)
+        } else this.observe(binding, `ci:${target.url}`, data, now, ci.failing.length > 0)
       } catch (error) {
         this.observe(binding, `ci:${target.url}`, { kind: 'ci_unavailable', target: target.url, error: error instanceof Error ? error.message : String(error) }, now, true)
       }
@@ -325,7 +332,7 @@ export class ChatControl {
   private workOperations(target: store.WorkTarget) {
     const operations = db.prepare(`SELECT key, launch_call_id, launch_outcome,
         substr(launch_error, 1, 1000) AS launch_error, substr(launch_quarantine, 1, 1000) AS launch_quarantine FROM behavior_seen
-      WHERE launch_repo = ? AND launch_pr = ? AND ((? = 'issues' AND launch_behavior = 'issue_review') OR (? = 'pull' AND launch_behavior <> 'issue_review'))
+      WHERE launch_repo = ? AND launch_pr = ? AND ((? = 'issues' AND launch_behavior = 'issue_review') OR (? = 'pull' AND COALESCE(launch_behavior, '') <> 'issue_review'))
       ORDER BY key, launch_call_id LIMIT 10`).all(target.repo, target.number, target.kind, target.kind)
     return { operations, details: '/api/behaviors', bounded: true }
   }
