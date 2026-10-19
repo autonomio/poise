@@ -89,8 +89,10 @@ resets, or the account is removed. Failed reads and insufficient observations
 retain known alerts until reset; they do not claim recovery. Notifications off
 suppresses new quota alerts while diagnostic observation continues. A read uses
 one credential command and one rate-limit command per distinct configured account
-per 15-second cache window; two accounts use at most sixteen such commands per
-minute. Concurrent Analytics reads share the same cache and pending request.
+per read. The background cadence alone is eight commands per account per minute.
+Concurrent Analytics reads share the cache and pending request, but a budget
+reset invalidates that cache early; foreground polling can add reads around
+those resets. There is no fixed per-minute command ceiling.
 An exhaustion error clears as soon as GitHub confirms positive remaining
 capacity, even while a new consumption rate is being collected.
 

@@ -160,6 +160,22 @@ describe('quota notifications', () => {
   const sample = (accounts: GithubQuotaAccount[], now: number) => quota.syncQuotaAlerts(accounts.map((entry) => ({ ...entry, checkedAt: new Date(now).toISOString() })), now)
   const sustained = (value: GithubQuotaAccount) => { sample([value], T0); sample([value], T0 + 30_000) }
 
+  it('preserves an upgraded warning and its dismissal without risk history until recovery', () => {
+    const dedupeKey = `github-quota:octocat:core:${reset * 1000}:warning`
+    alerts.raiseAlert({ kind: 'github_quota_warning', dedupeKey, title: 'Existing warning', body: 'Known condition', path: '/' }, T0 - 60_000)
+    const before = alerts.openAlerts({ now: T0 })[0]
+    alerts.dismissAlert(alerts.alertSeq(before.id)!, T0 - 30_000)
+    sample([account(100, 50)], T0)
+    sample([account(200, 50)], T0 + 15_000)
+    expect(alerts.openAlerts({ now: T0 + 15_000 })).toMatchObject([{ id: before.id, dismissedAt: new Date(T0 - 30_000).toISOString() }])
+    sample([account(300, 49)], T0 + 20_000)
+    expect(alerts.openAlerts({ now: T0 + 20_000 })).toEqual([])
+    sample([account(400, 80)], T0 + 30_000)
+    expect(alerts.openAlerts({ now: T0 + 30_000 })).toEqual([])
+    sample([account(500, 80)], T0 + 60_000)
+    expect(alerts.openAlerts({ now: T0 + 60_000 })[0].id).not.toBe(before.id)
+  })
+
   it('requires 50 percent risk across distinct observations at least 30 seconds apart', () => {
     sample([account(100, 49)], T0)
     sample([account(200, 80)], T0 + 15_000)

@@ -178,12 +178,16 @@ export function syncQuotaAlerts(accounts: GithubQuotaAccount[], now = Date.now()
   if (!getNotificationSettings().enabled) return
   const sustained = observed ?? observeQuotaConditions(accounts, now)
   const standing = new Set<string>()
+  const existing = new Set(openAlerts({ now }).map((alert) => alert.dedupeKey))
   for (const account of accounts) {
     for (const bucket of account.buckets) {
       if (bucket.limit === 0 || Date.parse(bucket.resetAt) <= now) continue
       const exhausted = bucket.remaining === 0
-      if (!exhausted && (bucket.riskPercent === null || bucket.riskPercent < QUOTA_WARNING_RISK_PERCENT || !sustained.has(conditionKey(account.login, bucket)))) continue
       const key = `${PREFIX}${account.login.toLowerCase()}:${bucket.resource}:${Date.parse(bucket.resetAt)}:${exhausted ? 'error' : 'warning'}`
+      // An upgrade has no observation history. An unchanged existing condition
+      // keeps its identity and dismissal until an actual recovery.
+      if (!exhausted && (bucket.riskPercent === null || bucket.riskPercent < QUOTA_WARNING_RISK_PERCENT
+        || (!sustained.has(conditionKey(account.login, bucket)) && !existing.has(key)))) continue
       standing.add(key)
       const title = exhausted ? `GitHub ${bucket.label} quota exhausted for ${account.login}` : `GitHub ${bucket.label} quota may run out for ${account.login}`
       const body = `${account.roles.join(' + ')} account · ${bucket.used.toLocaleString('en-US')} of ${bucket.limit.toLocaleString('en-US')} used. ${exhausted ? 'Requests are blocked.' : `${bucket.riskPercent}% estimated risk before reset at the observed usage rate.`} Resets ${bucket.resetAt}.`
