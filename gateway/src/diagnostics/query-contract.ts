@@ -25,6 +25,10 @@ export interface Coverage {
   status: 'connected' | 'unavailable' | 'partial' | 'not-configured'
   currentStatus?: 'connected' | 'unavailable' | 'partial' | 'not-configured' | 'initializing'
   observationExpiresAt?: string
+  optional?: boolean
+  historyIncomplete?: boolean
+  dropped?: number
+  rejected?: number
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null

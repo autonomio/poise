@@ -18,7 +18,7 @@ function checkEvents(events: Array<{ version: number }>): void {
 }
 
 function health(request: LoggingRead): LoggingReply {
-  let collection: { status: string; currentStatus: string; sources: Coverage[]; lossObserved: boolean; checkedAt: string } = {
+  let collection: { status: string; currentStatus: string; sources: Coverage[]; lossObserved: boolean; lossActive?: boolean; checkedAt: string } = {
     status: 'unavailable', currentStatus: 'unavailable', sources: [], lossObserved: false, checkedAt: new Date(request.now).toISOString(),
   }
   try {
@@ -26,21 +26,24 @@ function health(request: LoggingRead): LoggingReply {
     if (statSync(path).size > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds its limit')
     const journal = JSON.parse(readFileSync(path, 'utf8')) as {
       version: number; sources: Coverage[]; writtenAt: string; stopped: boolean; sinkError: string | null;
-      dropped: number; rejected: number; coverageError?: string | null; reportError?: string | null;
+      dropped: number; rejected: number; lossActive?: boolean; coverageError?: string | null; reportError?: string | null;
     }
     if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > 256 || !Number.isFinite(Date.parse(journal.writtenAt))) throw new Error('Unsupported coverage journal')
     const sources = journal.sources.filter((source) => source.workspace === null || source.workspace === request.access.workspace)
       .map((source) => projectCoverage(source, request.access))
     const lossObserved = journal.dropped > 0 || journal.rejected > 0 || !!journal.coverageError || !!journal.reportError
-    const observations = sources.map(currentCoverageStatus)
+      || sources.some((source) => (source.dropped ?? 0) > 0 || (source.rejected ?? 0) > 0)
+    const required = sources.filter((source) => !source.optional)
+    const observations = required.map(currentCoverageStatus)
     const freshness = journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped'
       : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : null
-    collection = { checkedAt: journal.writtenAt, sources, lossObserved,
-      currentStatus: freshness ?? (journal.coverageError || journal.reportError
+    const legacyLoss = (journal.dropped > 0 || journal.rejected > 0) && journal.lossActive === undefined
+    collection = { checkedAt: journal.writtenAt, sources, lossObserved, lossActive: journal.lossActive,
+      currentStatus: freshness ?? (journal.lossActive || journal.coverageError || journal.reportError
         || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
-        : !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'),
+        : legacyLoss || !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'),
       status: journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped' : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale'
-        : lossObserved || sources.some((source) => source.status !== 'connected') ? 'partial' : 'connected' }
+        : lossObserved || required.some((source) => source.status !== 'connected') ? 'partial' : 'connected' }
   } catch {
     // An unread journal is an explicit independent failure, never a healthy empty source list.
     collection.status = 'unavailable'; collection.currentStatus = 'unavailable'
@@ -54,11 +57,13 @@ function health(request: LoggingRead): LoggingReply {
     for (const source of collection.sources) sources.set(source.id, source)
     if (sources.size > 256) throw new Error('Combined collection coverage exceeds its source bound')
     collection.sources = [...sources.values()]
-    if (collection.status === 'connected' && collection.sources.some((source) => source.status !== 'connected')) collection.status = 'partial'
+    const required = collection.sources.filter((source) => !source.optional)
+    if (collection.status === 'connected' && required.some((source) => source.status !== 'connected')) collection.status = 'partial'
     if (collection.currentStatus === 'connected' || collection.currentStatus === 'initializing') {
-      const observations = collection.sources.map(currentCoverageStatus)
+      const unestablished = collection.currentStatus === 'initializing'
+      const observations = required.map(currentCoverageStatus)
       collection.currentStatus = observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
-        : !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'
+        : unestablished || !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'
     }
     return json(200, { version: 1, status: collection.status === 'unavailable' ? 'partial' : collection.status,
       collection, query: { status: 'connected' }, bounds: db.bounds(request.access), policy: request.policy })

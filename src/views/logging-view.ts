@@ -52,6 +52,8 @@ let mountedSearch = ''
 let preferenceWarning = ''
 let message = ''
 let healthMessage = ''
+let healthReadAt: number | null = null
+let queryUnavailable = false
 let stale = false
 let loading = false
 let lastSuccess: number | null = null
@@ -297,8 +299,10 @@ function controls(): void {
 function render(): void {
   controls()
   const tbody = view.querySelector<HTMLElement>('#logging-tbody')!
+  const scrollport = view.querySelector<HTMLElement>('.logging-table-wrap')!
   const focused = document.activeElement instanceof HTMLElement && view.contains(document.activeElement) ? document.activeElement.dataset.focus : undefined
-  const anchor = [...tbody.querySelectorAll<HTMLElement>('tr.agent-row')].find((row) => row.getBoundingClientRect().bottom > 100)
+  const boundary = scrollport.getBoundingClientRect().top + view.querySelector<HTMLElement>('#logging-thead')!.getBoundingClientRect().height
+  const anchor = [...tbody.querySelectorAll<HTMLElement>('tr.agent-row')].find((row) => row.getBoundingClientRect().bottom > boundary)
   const anchorId = anchor?.dataset.id; const anchorTop = anchor?.getBoundingClientRect().top
   const ids = new Set(page?.events.map((event) => event.id) ?? [])
   for (const id of [...expanded]) if (!ids.has(id) && linked?.id !== id) { expanded.delete(id); related.delete(id) }
@@ -339,7 +343,7 @@ function render(): void {
   }
   if (anchorId && anchorTop !== undefined) {
     const next = tbody.querySelector<HTMLElement>(`tr[data-id="${anchorId}"]`)
-    if (next) window.scrollBy({ top: next.getBoundingClientRect().top - anchorTop, behavior: 'instant' as ScrollBehavior })
+    if (next) scrollport.scrollBy({ top: next.getBoundingClientRect().top - anchorTop, behavior: 'instant' as ScrollBehavior })
   }
   syncPolling()
 }
@@ -356,27 +360,34 @@ function renderLink(): void {
     <div class="range-picker"><button type="button" data-action="restore">Browse retained diagnostics</button>${access?.isAdmin && preferences.scope === 'workspace' && linkFailure.status === 404 ? '<button type="button" data-action="link-instance">Use instance scope</button>' : ''}</div></section>`
     : link ? `<section class="logging-linked" aria-label="Linked diagnostic evidence"><h2 class="tp-group-label" tabindex="-1" id="logging-linked-heading">${extra ? 'Linked diagnostic · outside the current page' : 'Linked diagnostic'}</h2><p class="st-help">${escape(linkMessage)}</p><div class="range-picker"><button type="button" data-action="restore">Restore saved filters</button></div>${extra && linked ? detail(linked) : ''}</section>` : '')
 }
+function coverageHistory(source: LoggingPage['coverage'][number]): string {
+  const gaps = source.gaps.length ? `<details><summary aria-label="${source.gaps.length} retained gaps for ${escape(source.id)}">${source.gaps.length}${source.historyIncomplete ? '+' : ''} gaps</summary><ul>${source.gaps.map((gap) => `<li>${escape(date(gap.from))} – ${escape(gap.to ? date(gap.to) : 'Open')}<br>${escape(gap.reason)}</li>`).join('')}</ul></details>` : source.historyIncomplete ? 'Limited' : '—'
+  const loss = [source.dropped ? `≥${source.dropped.toLocaleString()} dropped` : '', source.rejected ? `≥${source.rejected.toLocaleString()} rejected` : ''].filter(Boolean).join(' · ')
+  return gaps + (loss ? `<small>${escape(loss)}</small>` : '')
+}
 function renderHealth(opening = false): void {
   const target = view.querySelector<HTMLElement>('#logging-health')!
   const bounds = page?.bounds ?? linkBounds ?? health?.bounds
   const sources = health?.collection.sources ?? page?.coverage ?? []
-  const state = health?.collection.currentStatus ?? (health?.collection.status === 'partial' ? 'initializing' : health?.collection.status)
+  const healthFresh = !!health && !healthMessage && healthReadAt !== null && performance.now() - healthReadAt <= 60_000
+  const state = health && !healthFresh ? 'stale' : health?.collection.currentStatus ?? (health?.collection.status === 'partial' ? 'initializing' : health?.collection.status)
+  const queryState = queryUnavailable ? 'unavailable' : healthFresh ? health?.query.status : health ? 'stale' : undefined
   const label = (value: string | undefined) => value === 'connected' ? 'Connected' : value === 'partial' ? 'Degraded' : value === 'initializing' ? 'Awaiting observation' : value === 'not-configured' ? 'Not configured' : value ? value[0].toUpperCase() + value.slice(1) : 'Not read'
   const button = view.querySelector<HTMLButtonElement>('#logging-data-button')!
-  button.classList.toggle('has-issue', !!healthMessage || !!state && state !== 'connected' || health?.query.status === 'unavailable')
-  button.title = `Data and collection · ${healthMessage ? 'Health unavailable' : label(state)}`
+  button.classList.toggle('has-issue', queryUnavailable || !!healthMessage || !!state && state !== 'connected' || queryState === 'unavailable')
+  button.title = `Data and collection · ${queryUnavailable ? 'Query unavailable' : healthMessage ? 'Health unavailable' : label(state)}`
   if (!opening && !view.querySelector<HTMLElement>('#logging-data')!.matches(':popover-open')) return
-  patchContent(target, `<dl class="logging-data-facts">${field('Collection now', label(state))}${field('Query service', label(health?.query.status))}
+  patchContent(target, `<dl class="logging-data-facts">${field('Collection now', label(state))}${field('Query service', label(queryState))}
     ${field('Snapshot', lastSuccess ? date(new Date(lastSuccess).toISOString()) : null)}${field('Collection read', health ? date(health.collection.checkedAt) : null)}
-    ${field('Retention boundary', bounds ? date(bounds.retentionAfter) : null)}${field('Earliest retained', bounds?.from ? date(bounds.from) : null)}${field('Latest retained', bounds?.to ? date(bounds.to) : null)}${field('Timezone', effectiveTimezone())}${field('Historical loss recorded', health ? health.collection.lossObserved ? 'Yes' : 'No' : null)}</dl>
+    ${field('Retention boundary', bounds ? date(bounds.retentionAfter) : null)}${field('Earliest retained', bounds?.from ? date(bounds.from) : null)}${field('Latest retained', bounds?.to ? date(bounds.to) : null)}${field('Timezone', effectiveTimezone())}${field('Active loss', healthFresh && health?.collection.lossActive !== undefined ? health.collection.lossActive ? 'Yes' : 'No' : null)}${field('Historical loss recorded', health ? health.collection.lossObserved ? 'Yes' : 'No' : null)}</dl>
     ${healthMessage ? `<p class="st-help st-help-error">${escape(healthMessage)}</p>` : ''}
-    <table class="logging-coverage-table" aria-label="Diagnostic sources"><thead><tr><th>Source</th><th>Current</th><th>Last observed</th><th>History</th></tr></thead><tbody>${sources.map((source) => `<tr><td><span>${escape(source.source)}</span><small>${escape(source.id)}</small></td><td title="${escape(source.error ?? '')}">${escape(label(currentCoverageStatus(source)))}${source.error && currentCoverageStatus(source) !== 'connected' ? `<small>${escape(source.error)}</small>` : ''}</td><td>${escape(source.observedAt ? date(source.observedAt) : '—')}</td><td>${source.gaps.length ? `<details><summary aria-label="${source.gaps.length} retained gaps for ${escape(source.id)}">${source.gaps.length} gaps</summary><ul>${source.gaps.map((gap) => `<li>${escape(date(gap.from))} – ${escape(gap.to ? date(gap.to) : 'Open')}<br>${escape(gap.reason)}</li>`).join('')}</ul></details>` : '—'}</td></tr>`).join('')}</tbody></table>`)
+    <table class="logging-coverage-table" aria-label="Diagnostic sources"><thead><tr><th>Source</th><th>Current</th><th>Last observed</th><th>History</th></tr></thead><tbody>${sources.map((source) => `<tr><td><span>${escape(source.source)}</span><small>${escape(source.id)}</small></td><td title="${escape(source.error ?? '')}">${escape(health && !healthFresh ? 'Stale' : source.optional && currentCoverageStatus(source) === 'not-configured' ? 'Not applicable' : label(currentCoverageStatus(source)))}${source.error && currentCoverageStatus(source) !== 'connected' ? `<small>${escape(source.error)}</small>` : ''}</td><td>${escape(source.observedAt ? date(source.observedAt) : '—')}</td><td>${coverageHistory(source)}</td></tr>`).join('')}</tbody></table>`)
 }
 
 async function readHealth(mine: number): Promise<void> {
   if (!access || !current(mine)) return
   const request = controller()
-  try { const value = await loggingHealth(access, preferences.scope, request.signal); if (current(mine)) { health = value; healthMessage = ''; render() } }
+  try { const value = await loggingHealth(access, preferences.scope, request.signal); if (current(mine)) { health = value; healthReadAt = performance.now(); healthMessage = ''; render() } }
   catch (error) {
     if (current(mine) && !request.signal.aborted) {
       const problem = failure(error)
@@ -411,8 +422,11 @@ async function loadPage(cursor: string | null = null, fresh = true, focusTarget 
     catch (error) { throw new LoggingApiError(400, 'invalid_logging_query', error instanceof Error ? error.message : 'Invalid diagnostic filters.') }
     const value = await loggingPage(access, { ...candidate, ...(cursor ? { cursor } : {}) }, request.signal)
     if (!current(mine)) return
-    if (fresh && applied && loggingParameters(applied).toString() !== loggingParameters(candidate).toString()) related.clear()
-    page = value; applied = candidate; lastSuccess = Date.now(); loading = false; linkFailure = null
+    if (fresh && applied && loggingParameters(applied).toString() !== loggingParameters(candidate).toString()) {
+      related.clear(); view.querySelector<HTMLElement>('.logging-table-wrap')!.scrollTop = 0
+    }
+    if (!fresh || pageIndex !== 0) view.querySelector<HTMLElement>('.logging-table-wrap')!.scrollTop = 0
+    page = value; applied = candidate; lastSuccess = Date.now(); loading = false; linkFailure = null; queryUnavailable = false
     if (fresh) { firstSnapshot = { page: value, at: lastSuccess }; cursors = [null]; pageIndex = 0; newCount = 0; rangeChanged = false; failures = 0; retryAt = 0 }
     else pageIndex = targetPage
     render()
@@ -427,6 +441,7 @@ async function loadPage(cursor: string | null = null, fresh = true, focusTarget 
     const problem = failure(error)
     message = problem.status === 400 ? `Invalid diagnostic filters: ${problem.message}` : problem.message
     stale = !!page
+    if (problem.status !== 400) { queryUnavailable = true; void readHealth(mine) }
     if (problem.status === 401 || problem.status === 403) { denied(); stale = false }
   } finally { requests.delete(request); if (current(mine)) { loading = false; render() } }
 }
@@ -434,7 +449,7 @@ async function loadPage(cursor: string | null = null, fresh = true, focusTarget 
 async function initialRead(): Promise<void> {
   const mine = invalidate()
   customDraft = null
-  loading = true; page = null; firstSnapshot = null; health = null; healthMessage = ''; applied = null; linked = null; link = null; linkFailure = null; linkBounds = null; message = ''; newCount = 0; pageIndex = 0; cursors = [null]; mountedSearch = location.search
+  loading = true; page = null; firstSnapshot = null; health = null; healthReadAt = null; healthMessage = ''; queryUnavailable = false; applied = null; linked = null; link = null; linkFailure = null; linkBounds = null; message = ''; newCount = 0; pageIndex = 0; cursors = [null]; mountedSearch = location.search
   const request = controller()
   try {
     try { link = parseLoggingLink(location.search) }
@@ -470,6 +485,7 @@ async function initialRead(): Promise<void> {
   } catch (error) {
     if (!current(mine) || request.signal.aborted) return
     linkFailure = failure(error)
+    if (linkFailure.status >= 500 || linkFailure.status === 429) queryUnavailable = true
     linkBounds ??= loggingErrorBounds(linkFailure)
     loading = false; render()
     requestAnimationFrame(() => { if (current(mine)) view.querySelector<HTMLElement>('#logging-linked-heading')?.focus({ preventScroll: true }) })
@@ -485,7 +501,7 @@ async function poll(): Promise<void> {
   try {
     const value = await loggingPage(access, { ...applied, after: page.watermark, limit: 1 }, request.signal)
     if (!current(mine)) return
-    newCount = value.total; failures = 0; retryAt = 0
+    newCount = value.total; failures = 0; retryAt = 0; queryUnavailable = false
     if (stale) message = 'The earlier refresh failed; these results remain a previous snapshot. Refresh or apply new diagnostics to update.'
     render()
     void readHealth(mine)
@@ -493,8 +509,10 @@ async function poll(): Promise<void> {
     if (current(mine) && !request.signal.aborted) {
       const problem = failure(error)
       stale = true; message = 'Refresh unavailable; previous results are stale. ' + problem.message
+      queryUnavailable = true
       retryAt = Date.now() + Math.min(120_000, 15_000 * 2 ** Math.min(++failures, 3))
       if (problem.status === 401 || problem.status === 403) denied()
+      else void readHealth(mine)
       render()
     }
   } finally { requests.delete(request) }

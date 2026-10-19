@@ -144,7 +144,7 @@ it('projects current collection state independently of historical gaps and loss 
   const source = { id: 'own-source', source: 'caller', workspace: 'alice', status: 'partial', currentStatus: 'connected',
     observedAt: new Date(now).toISOString(), ingestedAt: null, availableFrom: new Date(now - 1000).toISOString(), error: null as string | null,
     gaps: [{ from: new Date(now - 2000).toISOString(), to: new Date(now - 1000).toISOString(), reason: 'recovered outage' }] }
-  const journal = { version: 1, writtenAt: new Date(now).toISOString(), stopped: false, sinkError: null as string | null, dropped: 2, rejected: 0,
+  const journal = { version: 1, writtenAt: new Date(now).toISOString(), stopped: false, sinkError: null as string | null, dropped: 2, rejected: 0, lossActive: false,
     sources: [source, { ...source, id: 'foreign-source', workspace: 'bob', currentStatus: 'unavailable', error: 'foreign-private-cause' }] }
   const request: LoggingRead = { path, now, policy: DEFAULT_LOG_POLICY, access: { workspace: 'alice', operator: false }, operation: 'health', filter: {} }
   const read = () => { writeFileSync(path + '.coverage.json', JSON.stringify(journal)); return JSON.parse(executeLoggingRead(request).body) }

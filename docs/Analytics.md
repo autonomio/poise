@@ -37,9 +37,10 @@ Analytics does not change Current's filters. The selected calendar date stays
 fixed across midnight; labels and forward navigation refresh when the local
 day changes.
 
-While a day or account loads, previous values are removed immediately and
-the standard three-dot loading indicator appears. The server reads the local
-datastore views directly, without starting a CLI process for each scope.
+When opening Analytics, changing its day or account, or saving Settings,
+previous values are removed immediately and the standard three-dot loading
+indicator appears. The server reads the local datastore views directly,
+without starting a CLI process for each scope.
 Each account read keeps one database snapshot and yields to other server
 work after 64 records or once eight milliseconds of processing have elapsed. Discussion
 counts and stored JSON for sizes and merger identity are read only for pull
@@ -50,6 +51,24 @@ Involvement membership comes directly from the indexed associations, without
 aggregating the evidence descriptions that the full user view supplies.
 Leaving Analytics stops its reads: a late answer is discarded, and quota is
 not refreshed until it is chosen again.
+
+While Analytics and its browser tab are visible, the shared refresh clock
+quietly rereads the selected day's numbers and seven-day baseline from local
+SQLite. It uses the refresh interval from Settings: one minute by default, or
+five minutes. Returning to the visible tab refreshes once; overlapping refreshes
+share the pending read. The selected calendar date stays chosen, and the year
+history is not reread. Quota keeps its separate refresh schedule.
+
+The current values, charts and chart cursor stay in place during refreshes.
+A successful read replaces totals and their pace timestamp together. A failed
+request, or an account becoming unreadable in either report, preserves the
+previous snapshot and reports the failure in Notifications. A snapshot that
+already lacks an account can still refresh its other accounts while the same
+account remains unreadable. Readable stale caches update with the existing
+warning and pace suppression.
+These local reads make no GitHub requests and consume no GitHub API quota.
+They show the datastore's latest stored records; freshness still depends on
+the existing GitHub sync, whose schedule and requests are unchanged.
 
 ## What it counts
 
@@ -114,10 +133,11 @@ use actual milliseconds, including 23- and 25-hour daylight-saving days.
 For example, 10 elapsed hours of a 25-hour day with a 27/day median gives 10.8.
 
 Today's cards retain the actual total and full-day seven-day median and show
-“Typical by now.” Above 110% of that typical value, the total and upward arrow
-are green and the percentage says “ahead of pace.” Below 90%, they are red with
-a downward arrow and “behind pace.” From 90% through 110%, inclusive, the total
-and neutral arrow are white and say “On pace.” Classification and percentages
+“Typical by now.” For counts other than Closed without merging, above 110% of
+that typical value, the total and upward arrow are green and the percentage
+says “ahead of pace.” Below 90%, they are red with a downward arrow and “behind
+pace.” From 90% through 110%, inclusive, the total and neutral arrow are white
+and say “On pace.” Classification and percentages
 use the unrounded typical value; Typical displays one decimal, and percentages
 at most one. An outside-band percentage that would round to 10% displays
 “>10%.” Every positive typical value qualifies, without a minimum count,
@@ -125,24 +145,36 @@ elapsed-time floor or percentage cap. For example, 15 merges against a 27/day
 median after 10 hours of a 24-hour day uses 11.25 to show “Typical by now: 11.3”
 and “33.3% ahead of pace.”
 
-A zero typical value, missing daily data or partial current or baseline
-line-size coverage withholds the affected tile's arrow, percentage and
-directional color. Any read error in either report, including a stale-cache
+Closed without merging treats fewer as better on Today and completed days.
+Today keeps the same inclusive ±10% neutral band; below it, a green downward
+arrow says “below typical,” and above it, a red upward arrow says “above
+typical.” Zero closures against a positive typical is green. When typical is
+zero, zero closures is neutral “On pace”; a positive count is red with an
+upward arrow and absolute increase, without dividing by zero.
+
+Except for that zero-typical closure comparison, a zero typical value withholds
+the arrow, percentage and directional color. Missing daily data or partial
+line-size coverage in either report also withholds these for the affected tile.
+Any read error in either report, including a stale-cache
 warning, withholds these for every Today cumulative tile. Known totals, Typical
 and median remain visible: zero Typical shows 0.0, an unknown baseline shows —,
 and partial current lines retain their count and coverage note beside the known
 baseline context.
 
 Pacing uses the existing baseline response's seven daily totals. Its comparison
-stays with the totals snapshot when history arrives, quota refreshes or the
-clock advances. Each paced value's keyboard-accessible tooltip gives the
-snapshot date, time and Settings timezone; the visible label stays “Typical by
-now.” Opening Analytics, choosing a day or organization, saving Settings and
-crossing midnight use the existing analytics reads to refresh the snapshot.
-Pacing adds no analytics or GitHub reads.
+stays with the totals snapshot between successful local reads, including when
+history arrives or quota refreshes. Each paced value's keyboard-accessible
+tooltip gives the snapshot date, time and Settings timezone; the visible label
+stays “Typical by now.” Opening Analytics, choosing a day or organization,
+saving Settings and the visible refresh clock renew the snapshot. At midnight
+or on returning to the tab, calendar labels, forward navigation and the
+completed-day comparison update even if the local read fails; the retained
+totals keep their selected date. History is not reloaded. Pacing reuses these
+local reads and makes no GitHub requests.
 
-Completed days retain the full-day comparison: activity increases are green,
-decreases red, and an unchanged value has a neutral arrow and 0%. A zero
+Completed days retain the full-day comparison: activity increases are green
+and decreases red, with Closed without merging using the inverse colors.
+An unchanged value has a neutral arrow and 0%. A zero
 baseline uses an absolute change rather than division by zero. The weekly
 history lines and histograms remain unchanged.
 
@@ -153,12 +185,14 @@ means faster; a red upward arrow means slower. The colored arrow sits beside
 the value, with the matching percentage delta and baseline underneath. An
 unchanged value shows a neutral arrow and 0%; a zero baseline uses an absolute
 change rather than division by zero. Without observations, no directional
-claim is made. Durations and per-PR metrics keep these existing comparisons
+claim is made. Durations and per-PR metrics compare full-day observations
 without elapsed-day adjustment or the pacing tolerance.
 
 Per-PR comments and behaviors show selected-day medians and compare with
 the median across the preceding seven days' merged pull requests. Lines and
-time compare population medians. Agent merges compare shares, explicitly
+time compare population medians. For Median lines, a smaller value is green
+with a downward arrow and a larger value is red with an upward arrow; an
+unchanged value is neutral. Agent merges compare shares, explicitly
 labelled “7-day share” because a binary merger's median would lose the share.
 An unreadable account withholds comparisons. A readable cache with a sync
 warning retains the existing completed-day, duration and per-PR comparisons
