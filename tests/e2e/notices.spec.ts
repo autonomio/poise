@@ -489,9 +489,10 @@ test('never tucks away an arrival card the person is using', async ({ page }) =>
   await page.goto('/')
   await expect(bell(page)).toHaveAccessibleName('Notifications')
   const arrival = (n: number): Notice => ({ ...WAITING, id: `arrival-${n}`, title: `Arrival ${n}`, since: iso(10 + n), due: iso(10 + n) })
-  state.notices = [arrival(1)]
+  state.notices = [{ ...arrival(1), evidence: retainedEvidence() }]
   await reread(page)
   const first = page.locator('.nr-toast').filter({ hasText: 'Arrival 1' })
+  await expect(first.locator('[data-action="logging"]')).toHaveCount(0)
   await first.getByRole('button', { name: 'Show' }).focus()
   state.notices = [1, 2, 3, 4].map(arrival)
   await reread(page)
@@ -592,6 +593,10 @@ for (const width of [1000, 1600]) test(`secondary Logging action preserves the n
   await page.route('**/api/logging/events/**', (route) => route.fulfill({ status: 410, json: { error: 'logging_event_expired', message: 'Expired evidence' } }))
   await page.goto('/')
   await openRail(page); await expand(page, HELD.id)
+  await page.evaluate(() => document.body.classList.add('editor-writer-mode'))
+  await expect(rail(page)).toBeHidden()
+  await page.evaluate(() => document.body.classList.remove('editor-writer-mode'))
+  await expect(rail(page)).toBeVisible()
   state.notices = [{ ...HELD, evidenceStatus: 'pending' }]
   await reread(page)
   await expect(card(page, HELD.id).getByRole('button', { name: 'View in Logging', exact: true })).toBeVisible()
@@ -690,6 +695,7 @@ test('real producers resolve exact notice, distinct-attempt and pre-launch evide
     expect(changed.evidence?.eventId).not.toBe(first.evidence!.eventId)
     await page.goto('/'); await openRail(page); await expand(page, changed.id)
     await expect(card(page, changed.id).locator('[data-action="logging"]')).toHaveCount(3)
+    await page.screenshot({ path: test.info().outputPath('retained-evidence-rail.png') })
     await card(page, changed.id).getByRole('button', { name: 'View in Logging', exact: true }).click()
     await expect(page.locator('#view-logging')).toContainText('changed retained cause')
     expect(new URL(page.url()).searchParams.get('event')).toBe(changed.evidence!.eventId)

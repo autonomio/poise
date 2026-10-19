@@ -223,6 +223,16 @@ describe('read-time producer binding', () => {
     expect(second.evidence?.eventId).not.toBe(first.evidence!.eventId)
   })
 
+  it('keeps unqueried attempts pending without claiming additional retained history', async () => {
+    const bindings = await import('../server/notification-evidence')
+    const state = diagnostics()
+    state.deadLetters = Array.from({ length: 21 }, (_, index) => ({ id: String(index), behavior: 'review-new-prs', target: 'acme/repo#9',
+      callId: index.toString(16).padStart(32, '0'), correlationId, error: cause, createdAt: '' }))
+    const current = await bindings.behaviorEvidence(state)
+    expect(current.deadLetters).toHaveLength(21)
+    expect(current.deadLetters.every((row) => row.evidenceStatus === 'pending' && row.evidenceMore !== true && row.evidence === undefined)).toBe(true)
+  })
+
   it('joins a pre-launch exception by its exact context; later failures cannot borrow its record', async () => {
     const context = await import('../server/logging-context'), bindings = await import('../server/notification-evidence')
     const identity = { correlationId, behavior: 'review-new-prs', target: 'acme/repo#9', repository: 'acme/repo', account: 'review-bot' }

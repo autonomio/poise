@@ -64,7 +64,6 @@ export async function behaviorEvidence<T extends { failures: BehaviorEvidenceRow
     if (selector) {
       Object.assign(row, { evidenceStatus: 'pending' })
       if (selected.length < 20) selected.push({ row, selector })
-      else Object.assign(row, { evidenceMore: true })
     }
   }
   const found = await retainedEvidence(selected.map((row) => row.selector))
