@@ -563,6 +563,7 @@ test('keeps pace tied to its data snapshot through elapsed time, history and quo
 
   await leaveAnalytics(page)
   await page.clock.fastForward(4 * 3_600_000)
+  await page.clock.setFixedTime(new Date('2026-10-09T18:00:00Z'))
   state.pacing.merged = 17
   await openAnalytics(page)
   await expect(merged.locator('.analytics-value')).toHaveText('17')
