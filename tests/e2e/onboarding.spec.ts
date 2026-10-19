@@ -246,12 +246,14 @@ test('never opens setup in a workspace that is already set up, and offers to run
 
 test('setup cooldowns are neutral while genuine activation and sync failures stay red', async ({ page }) => {
   const retryAt = new Date(Date.now() + 3_600_000).toISOString()
-  await setupWorkspace(page, { step: 'organizations', me: 'octocat', organizations: [
+  const state = await setupWorkspace(page, { step: 'organizations', me: 'octocat', organizations: [
     { ...organization('waiting-new', 'initializing', 'GitHub cooldown; resuming automatically.'), stage: 'rate-limited', retryAt },
     { ...organization('waiting-ready', 'ready', 'GitHub cooldown; resuming automatically.'), stage: 'rate-limited', retryAt },
     organization('activation-failed', 'error', 'Activation failed: access denied.'),
     organization('sync-failed', 'ready', 'Sync failed: repository read denied.'),
   ] })
+  // Setup retries failed activation once after sign-in; this backend failure persists.
+  await page.route('**/api/organizations/activation-failed/retry', route => route.fulfill({ status: 202, json: { organizations: state.organizations } }))
   await page.goto('/')
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
