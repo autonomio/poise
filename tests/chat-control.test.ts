@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { WebSocket } from 'ws'
 import { CATALOG } from './model-catalog-fixture'
 import type { Adapter, AdapterHost, TurnResult } from '../server/chat/adapters/types'
-import type { Capabilities, PromptInput } from '../server/chat/protocol'
+import type { Capabilities, PromptInput, ServerFrame } from '../server/chat/protocol'
 import type { ChatRuntime } from '../server/chat/runtime'
 import type { ChatControl, CiObservation } from '../server/chat/control'
 
@@ -403,5 +404,25 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
       await expect(executeFile(process.execPath, [script, connection.path, JSON.stringify({ operation: 'create', requestId, title: 'Must not create', task: 'Must not run' })])).rejects.toThrow('requestId must be a UUID')
     }
     expect(storage.listSessions(runtime.instance)).toHaveLength(1)
+  })
+
+  it('announces native-created workers to connected browsers before any subscription exists', async () => {
+    const { ChatSocketServer } = await import('../server/chat/transport')
+    const transport = new ChatSocketServer(runtime)
+    transport.attach(server)
+    const parent = await manager()
+    const socket = new WebSocket(origin.replace('http:', 'ws:') + '/ws/chat')
+    try {
+      await new Promise<void>((done, fail) => { socket.once('open', done); socket.once('error', fail) })
+      const notice = new Promise<Extract<ServerFrame, { kind: 'session.created' }>>((done, fail) => {
+        const timer = setTimeout(() => fail(new Error('missing native session discovery')), 8000)
+        socket.on('message', raw => {
+          const frame = JSON.parse(raw.toString()) as ServerFrame
+          if (frame.kind === 'session.created') { clearTimeout(timer); done(frame) }
+        })
+      })
+      const result = await command(parent.id, { operation: 'create', title: 'Visible worker', task: 'Run the delegated task' })
+      expect((await notice).session).toMatchObject({ id: (result.session as { id: string }).id, title: 'Visible worker', lastSeq: 1 })
+    } finally { socket.terminate(); await transport.close() }
   })
 })

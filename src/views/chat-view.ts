@@ -95,6 +95,7 @@ const queueMutations = new Set<string>()
 const modelUpdates = new Map<string | null, Promise<void>>()
 
 const sessions = new Map<string, SessionEntry>()
+let discoveryRevision = 0
 let order: string[] = []
 let activeId: string | null = null
 let agentsInfo: AgentsResponse | null = null
@@ -522,6 +523,7 @@ function upsertRecord(record: SessionRecord, opts: { pending?: boolean } = {}): 
 }
 
 async function loadSessions(): Promise<void> {
+  const discoveryAtRequest = discoveryRevision
   try {
     const { sessions: list } = await chatClient.listSessions()
     const seen = new Set<string>()
@@ -530,7 +532,7 @@ async function loadSessions(): Promise<void> {
     // pending one the server has not answered for yet stays.
     for (const id of Array.from(sessions.keys())) {
       const e = sessions.get(id)!
-      if (!seen.has(id) && !e.pending) {
+      if (!seen.has(id) && !e.pending && discoveryAtRequest === discoveryRevision) {
         sessions.delete(id)
         order = order.filter((x) => x !== id)
         if (activeId === id) activeId = null
@@ -2085,9 +2087,17 @@ export async function initChatView(): Promise<void> {
     // without a refetch — so these listeners live for the app's lifetime.
     window.addEventListener('poise:models-updated', () => { void loadAgents(true) })
     chatClient.on('switches', acceptSwitches)
+    chatClient.on('session', record => {
+      discoveryRevision++
+      upsertRecord(record)
+      queueRender()
+    })
     chatClient.on('event', onEvent)
     chatClient.on('connection', (state) => {
-      if (state === 'open') void loadSwitches(true).catch(() => undefined)
+      if (state === 'open') {
+        void loadSwitches(true).catch(() => undefined)
+        void loadSessions()
+      }
       const el = viewEl.querySelector<HTMLElement>('.chat-conn')
       if (!el) return
       el.hidden = state === 'open'

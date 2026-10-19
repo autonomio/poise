@@ -395,6 +395,7 @@ export interface ClientFrame {
 
 /** Server → client frames. */
 export type ServerFrame =
+  | { kind: 'session.created', session: SessionRecord }
   | { kind: 'switches.updated', catalogue: ChatSwitches }
   | { kind: 'ack', id: string, ok: true, result?: unknown }
   | { kind: 'ack', id: string, ok: false, error: string, code?: string }

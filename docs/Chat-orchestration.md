@@ -44,6 +44,9 @@ gets its own Poise-owned local Git workspace and checkout lease, so several
 workers can run while their manager is working. Repository work must be set
 up within that worker's workspace using the context supplied in its task.
 Creating a chat does not give it another chat's checkout or native history.
+Workers appear in the sidebar immediately without selecting them or disturbing
+the manager's draft. Reconnecting refreshes the list for creations missed
+while disconnected; discovery never starts a native turn.
 
 Messages wait for an idle turn boundary. They do not steer a busy native turn,
 answer a question, or approve permissions. A manager receives notifications of

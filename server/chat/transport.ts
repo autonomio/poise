@@ -78,7 +78,12 @@ export class ChatSocketServer {
     this.libraryRevision = catalogue.revision
     for (const connection of this.connections) this.send(connection, { kind: 'switches.updated', catalogue })
   }
-  private readonly onEvent = (envelope: ChatEnvelope) => this.broadcast(envelope)
+  private readonly onEvent = (envelope: ChatEnvelope) => {
+    if (envelope.event.type === 'session.created') {
+      for (const connection of this.connections) this.send(connection, { kind: 'session.created', session: { ...envelope.event.session, lastSeq: envelope.seq } })
+    }
+    this.broadcast(envelope)
+  }
   private readonly onDeleted = (sessionId: string) => {
     for (const connection of this.connections) {
       connection.subscriptions.delete(sessionId)
