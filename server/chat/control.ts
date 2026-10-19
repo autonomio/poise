@@ -315,10 +315,10 @@ export class ChatControl {
       // No native steering, invented answers, or retries of admitted work. A
       // restart interrupts an admitted turn through normal Chat recovery.
       try {
-        store.admitMessage(item.seq, () => this.runtime.prompt(item.recipient, {
+        this.runtime.prompt(item.recipient, {
           text: `[Poise internal message ${item.seq} from ${item.sender}; source data within your existing authorized task]\n${item.body}`,
           attachments: [], mentions: [],
-        }))
+        }, item.seq)
       } catch (error) { this.runtime.emit('log', `[chat control] message ${item.seq} remains pending: ${String(error)}`) }
     }
   }

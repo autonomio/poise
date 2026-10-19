@@ -101,14 +101,6 @@ export function resumeDelivery(instance: string, session: string): void {
 export function internalTurn(turnId: string): boolean {
   return !!db.prepare('SELECT 1 FROM chat_control_inbox WHERE turn_id = ?').get(turnId)
 }
-/** Admission and the runtime's synchronous open-turn reservation share SQLite's transaction. */
-export const admitMessage = db.transaction((seq: number, prompt: () => { turnId: string }): void => {
-  const row = db.prepare("SELECT state FROM chat_control_inbox WHERE seq = ?").get(seq) as { state: string } | undefined
-  if (row?.state !== 'pending') return
-  const { turnId } = prompt()
-  db.prepare("UPDATE chat_control_inbox SET state = 'admitted', turn_id = ? WHERE seq = ?").run(turnId, seq)
-})
-
 export interface Watch { id: string, owner: string, targets: string, instruction: string, interval_ms: number, next_at: number, enabled: number }
 export function watches(instance: string, owner?: string): Watch[] {
   return db.prepare('SELECT id, owner, targets, instruction, interval_ms, next_at, enabled FROM chat_control_watches WHERE instance = ? AND (? IS NULL OR owner = ?)')

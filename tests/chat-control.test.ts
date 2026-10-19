@@ -355,6 +355,24 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, blocked.id).every(m => m.state === 'pending')).toBe(true)
   })
 
+  it('starts no native work when the atomic inbox admission write fails', async () => {
+    const parent = await manager()
+    store.message(runtime.instance, parent.id, 'fixture', 'Run this task once')
+    database.db.exec(`CREATE TEMP TRIGGER refuse_control_admission BEFORE UPDATE ON chat_control_inbox
+      WHEN NEW.state = 'admitted' BEGIN SELECT RAISE(ABORT, 'fixture admission write failed'); END`)
+    try {
+      await control.tick()
+      expect(runtime.working()).toBe(0)
+      expect(storage.getOpenTurn(parent.id)).toBeNull()
+      expect(prompts.has(parent.id)).toBe(false)
+      expect(store.inbox(runtime.instance, parent.id)[0].state).toBe('pending')
+    } finally { database.db.exec('DROP TRIGGER refuse_control_admission') }
+    await control.tick()
+    await until(() => prompts.has(parent.id))
+    expect(prompts.get(parent.id)).toHaveLength(1)
+    expect(store.inbox(runtime.instance, parent.id)[0].state).toBe('admitted')
+  })
+
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
     const parent = await manager()
     const connection = await config(parent.id)

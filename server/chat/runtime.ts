@@ -1297,7 +1297,7 @@ export class ChatRuntime extends EventEmitter {
 
   /** Reserve the turn synchronously — before any await — so a second prompt
    *  in the same tick is refused, and persist it before acknowledging. */
-  private reserveTurn(session: LiveSession, queueItem?: QueuedMessage): RunningTurn {
+  private reserveTurn(session: LiveSession, queueItem?: QueuedMessage, internalMessageSeq?: number): RunningTurn {
     if (session.record.contextResetting) throw new ChatError(409, 'The chat is resetting; wait for it to finish.', 'turn_in_progress')
     if (session.turn) throw new ChatError(409, 'a turn is already running; Enter steers it', 'turn_in_progress')
     if (session.record.status === 'closed') throw new ChatError(409, 'the session is closed; resume it first', 'no_turn')
@@ -1306,14 +1306,14 @@ export class ChatRuntime extends EventEmitter {
     const promptReady = new Promise<void>(resolve => { releasePrompt = resolve })
     const turn: RunningTurn = { id: randomUUID(), callId: null, startedAt: Date.now(), abort: new AbortController(), stopping: false, promptReady, releasePrompt }
     turn.abort.signal.addEventListener('abort', releasePrompt, { once: true })
-    storage.reserveQueueTurn(session.record.id, turn.id, queueItem?.id)
+    storage.reserveQueueTurn(session.record.id, turn.id, queueItem?.id, internalMessageSeq)
     if (queueItem) turn.queueItem = queueItem
     session.turn = turn
     if (session.idleTimer) { clearTimeout(session.idleTimer); session.idleTimer = null }
     return turn
   }
 
-  prompt(id: string, input: PromptInput): { turnId: string } {
+  prompt(id: string, input: PromptInput, internalMessageSeq?: number): { turnId: string } {
     this.assertAcceptingWork()
     const session = this.requireLive(id)
     const prompt = this.validatePrompt(id, input)
@@ -1327,7 +1327,7 @@ export class ChatRuntime extends EventEmitter {
     const throughSeq = session.record.lastSeq
     const target = chain.review ? latestReviewTarget(id, throughSeq) : null
     if (chain.review && !target) throw new ChatError(400, 'There is no assistant reply to review yet.', 'invalid')
-    const turn = this.reserveTurn(session)
+    const turn = this.reserveTurn(session, undefined, internalMessageSeq)
     turn.switches = chain.switches
     turn.commandModel = chain.model
     turn.contextAction = chain.context
