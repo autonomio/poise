@@ -191,7 +191,7 @@ export class BehaviorLedgerStore {
         owner: input.owner, actor: input.actor, target: { repository: input.repository, number: input.number,
           ...(input.workflow ? { workflow: { ...input.workflow } } : {}) }, head: plannedSlots.length > 1 ? null : input.head,
         slot: null, plannedSlots: [...plannedSlots], state: 'pending', stateSource: 'native', activity: 'unknown', outcome: null,
-        createdAt: now, startedAt: input.startedAt ?? now, completedAt: null, observedAt: now, revision: 0,
+        createdAt: now, startedAt: input.startedAt ?? null, completedAt: null, observedAt: now, revision: 0,
         refs: [], replayOf: null, omittedAttempts: 0 }
       this.insert(record, input.admissionKey, null)
       root = this.byId(id)!
@@ -201,8 +201,8 @@ export class BehaviorLedgerStore {
       || parent.target.number !== input.number || parent.owner !== input.owner) throw new Error('Conflicting ledger admission')
     const direct = DIRECT.has(input.behavior)
     const record: LedgerRecord = { ...parent, id: hash(), kind: 'attempt', parentId: parent.id, head: input.head,
-      slot: direct ? null : input.slot ?? 'primary', plannedSlots: [], state: direct ? 'running' : 'pending', activity: direct ? 'running' : 'unknown',
-      createdAt: now, startedAt: input.startedAt ?? now, completedAt: null, observedAt: now, revision: 0, omittedAttempts: 0,
+      slot: direct ? null : input.slot ?? 'primary', actor: input.actor, plannedSlots: [], state: direct ? 'running' : 'pending', activity: direct ? 'running' : 'unknown',
+      createdAt: now, startedAt: input.startedAt ?? null, completedAt: null, observedAt: now, revision: 0, omittedAttempts: 0,
       refs: [{ kind: 'correlation', identity: input.nativeId, availability: 'available' }] }
     this.insert(record, null, input.nativeId)
     this.capAttempts(parent.id)
@@ -273,14 +273,14 @@ export class BehaviorLedgerStore {
     const record = recordOf(row)
     const knownCall = record.refs.find((ref) => ref.kind === 'caller')?.identity
     const exact = input.callId !== null && (!knownCall || knownCall === input.callId)
-      && input.repository === record.target.repository && input.number === record.target.number && input.actor === record.actor
+      && input.repository === record.target.repository && input.number === record.target.number && input.actor?.toLowerCase() === record.actor?.toLowerCase()
       && input.source === record.source && input.behavior === cliBehavior[record.behavior as keyof typeof cliBehavior]
       && (input.expectedHead ?? null) === record.head && iso(input.startedAt) && input.startedAt !== null
-      && Date.parse(input.startedAt) >= Date.parse(record.startedAt!) && iso(input.completedAt)
+      && (record.startedAt === null || Date.parse(input.startedAt) >= Date.parse(record.startedAt)) && iso(input.completedAt)
     let state: LedgerState = 'unknown'
     let activity: LedgerActivity = 'unknown'
     let outcome: LedgerRecord['outcome'] = null
-    if (input.status === 'running' || input.status === 'in_progress' || input.mayRun) activity = 'running'
+    if (exact && (input.status === 'running' || input.status === 'in_progress')) activity = 'running'
     if (exact && !input.uncertain && !input.interrupted) {
       if (input.status === 'pending' || input.status === 'queued') state = 'pending'
       else if (input.status === 'running' || input.status === 'in_progress') state = 'running'
@@ -292,11 +292,11 @@ export class BehaviorLedgerStore {
     }
     const refs = [...record.refs]
     if (exact && input.callId && !knownCall) refs.push({ kind: 'caller', identity: input.callId, availability: 'available' })
-    const native = row.native_override === 1
+    const native = row.native_override === 1 && record.state !== 'unknown'
     this.put({ ...record, state: native ? record.state : state, stateSource: native ? 'native' : 'caller_observed',
-      activity: input.uncertain || input.interrupted ? activity === 'running' ? 'running' : 'unknown' : native && record.activity === 'unknown' ? 'unknown' : activity,
-      outcome: native ? record.outcome : outcome, refs, observedAt: this.time(),
-      completedAt: native ? record.completedAt : exact ? input.completedAt : null }, row, false, row.native_override, this.time())
+      activity: activity === 'running' ? 'running' : input.uncertain || input.interrupted || native && record.activity === 'unknown' ? 'unknown' : native && TERMINAL.has(record.state) && record.activity === 'settled' ? 'settled' : activity,
+      outcome: native ? record.outcome : outcome, refs, observedAt: this.time(), startedAt: exact ? input.startedAt : record.startedAt,
+      completedAt: native ? record.completedAt : exact ? input.completedAt : null }, row, false, native ? 1 : 0, this.time())
     this.data.callerObservedAt = this.time()
     if (record.parentId) this.aggregate(record.parentId)
   }
@@ -307,7 +307,7 @@ export class BehaviorLedgerStore {
     const root = recordOf(row)
     const children = this.rows('SELECT * FROM ledger_instances WHERE parent_id=? ORDER BY creation_seq DESC', id).map(recordOf)
     const selected = root.plannedSlots.length ? root.plannedSlots.map((slot) => children.find((child) => child.slot === slot)) : [children[0]]
-    const states = selected.map((child) => child?.state ?? 'pending')
+    const states = selected.map((child) => child?.state === 'superseded' && root.behavior === 'review-new-prs' && root.source === 'poise:review-new-prs' ? 'pending' : child?.state ?? 'pending')
     const state = PRECEDENCE.find((candidate) => states.includes(candidate)) ?? 'pending'
     // Older uncertain attempts still count as caused work; a retry cannot prove they stopped.
     const activity: LedgerActivity = children.some((child) => child.activity === 'running') ? 'running'
@@ -323,7 +323,7 @@ export class BehaviorLedgerStore {
     const roots = new Set<string>()
     for (const row of this.rows('SELECT * FROM ledger_instances WHERE native_id IS NOT NULL AND source_at < ?', cutoff)) {
       const record = recordOf(row)
-      if (record.activity === 'unknown') continue
+      if (record.activity === 'unknown' || (TERMINAL.has(record.state) && record.activity === 'settled')) continue
       this.put({ ...record, activity: 'unknown' }, row)
       if (record.parentId) roots.add(record.parentId)
     }
@@ -410,7 +410,7 @@ export class BehaviorLedgerStore {
       } catch { return { ...this.data, status: 'unavailable', gaps: [...this.data.gaps] } }
     }
     const stale = !this.data.observedAt || this.now() - Date.parse(this.data.observedAt) > LEDGER_STALE_MS
-    const status: LedgerHealth['status'] = !this.db || !this.journalAvailable ? 'unavailable' : this.closed ? 'stopped'
+    const status: LedgerHealth['status'] = this.closed ? 'stopped' : !this.db || !this.journalAvailable ? 'unavailable'
       : stale ? 'stale' : this.data.dropped > 0 || this.data.gaps.length > 0 ? 'incomplete' : 'ok'
     return { ...this.data, status, gaps: [...this.data.gaps] }
   }
@@ -443,7 +443,7 @@ export class BehaviorLedgerStore {
   }
   read(request: LedgerRead): { status: number; body: LedgerReply } {
     const envelope = (extra: Omit<LedgerReply, 'version' | 'health'> = {}): LedgerReply => ({ version: 1, health: this.health(), ...extra })
-    if (request.operation === 'health') return { status: this.health().status === 'unavailable' ? 503 : 200, body: envelope() }
+    if (request.operation === 'health') return { status: 200, body: envelope() }
     try {
       const body = this.connection().transaction(() => {
         const limit = request.operation === 'get' ? 1 : request.limit ?? 50

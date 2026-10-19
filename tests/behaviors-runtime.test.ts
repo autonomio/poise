@@ -3295,6 +3295,9 @@ describe('behavior launch claims', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
     expect(db.listBehaviorDeadLetters()).toEqual([])
+    expect(mocks.captureOutcome).toHaveBeenCalledWith(expect.objectContaining({
+      nativeId: launched.correlationId, state: 'superseded', stateSource: 'native',
+    }))
   })
 
   it('waits through bounded registration grace before retrying a missing call', async () => {

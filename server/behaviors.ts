@@ -802,14 +802,11 @@ function completeClaimSafely(claim: BehaviorLaunchClaim, error: string | null = 
   return completed
 }
 
-function deadLetterClaim(claim: BehaviorLaunchClaim, error: string): boolean {
+function deadLetterClaim(claim: BehaviorLaunchClaim, error: string, observe = true): boolean {
   recordBehaviorDeadLetter(claim, error)
   const completed = completeClaimSafely(claim, error)
-  if (completed) {
-    const nativeId = claim.launchCorrelationId
-    const callId = claim.launchCallId ?? undefined
-    queueMicrotask(() => captureBehaviorOutcome({ nativeId, state: 'held', activity: 'unknown', stateSource: 'native', callId }))
-  }
+  if (completed && observe) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId,
+    state: 'held', activity: 'unknown', stateSource: 'native', callId: claim.launchCallId ?? undefined })
   return completed
 }
 
@@ -1065,6 +1062,9 @@ function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry
     WHERE key = ? AND target = ? AND claim_id = '' AND launch_quarantine = 'unreadable'
       AND launch_call_id = ? AND launch_correlation_id = ? AND launch_requested_at = ?
   `).run(claim.key, claim.target, claim.launchCallId, claim.launchCorrelationId, claim.launchRequestedAt)
+  captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
+    state: 'completed', activity: 'settled', stateSource: 'native', outcome: call.outcome,
+    head: call.head_sha, completedAt: call.completed_at })
   return true
 }
 
@@ -1312,6 +1312,9 @@ async function reconcileBehaviorLaunchClaims(
       || call.error === SUPERSEDED_AGENT_ERROR
     if (superseded) {
       if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
+        captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
+          state: 'superseded', activity: status === 'superseded' ? 'settled' : 'unknown', stateSource: 'native',
+          outcome: 'superseded', head: call.head_sha, completedAt: call.completed_at })
         clearBehaviorFailure(behavior, claim.target)
       }
       console.log(
@@ -1332,11 +1335,15 @@ async function reconcileBehaviorLaunchClaims(
       if (call.error_code === 'review_packet_too_large') {
         // This input cannot improve through retry. Retain the launch proof and
         // block this PR/head only; other targets continue normally.
+        let held = false
         db.transaction(() => {
-          if (deadLetterClaim(claim, message)) {
+          held = deadLetterClaim(claim, message, false)
+          if (held) {
             setMeta(packetBlockKey(behavior, claim.launchRepo, claim.launchPr), claim.launchExpectedHead)
           }
         })()
+        if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
+          state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
@@ -2047,7 +2054,7 @@ async function tickReviewNewPrs(): Promise<void> {
             }
           }
 
-          const accepted = await fireReview(pr, target, claimId, slot, plannedSlots)
+          const accepted = await fireReview(pr, target, claimId, slot, [...plannedSlots])
           if (!accepted) {
             releaseOwnedClaim('review-new-prs', target, claimId)
             return

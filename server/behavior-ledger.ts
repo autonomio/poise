@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { AgentLogSnapshot } from './agent'
+import type { AgentLogSnapshot, LogEntry } from './agent'
 import type {
   LedgerAdmission, LedgerCaller, LedgerHealth, LedgerObservation, LedgerPending, LedgerPolicy,
   LedgerRead, LedgerReply, LedgerResult, LedgerWorkerReply, LedgerWorkerRequest,
@@ -39,6 +39,8 @@ export class BehaviorLedgerObserver {
   private initializing: Promise<void> | null = null
   private ready = false
   private closed = false
+  private stopping = false
+  private stopPromise: Promise<void> | null = null
   private failed = false
   private sequence = 0
   private queue: Job[] = []
@@ -90,16 +92,25 @@ export class BehaviorLedgerObserver {
       const timer = setTimeout(() => { rejectReady(new Error('ledger_start_timeout')); this.fail() }, 2_000)
       worker.on('message', (message: LedgerWorkerReply | { ready: true; health: LedgerHealth; pending: LedgerPending[] }) => {
         if (this.worker !== worker) return
-        if ('ready' in message) {
+        try {
+          if (!message || typeof message !== 'object' || !Array.isArray(message.pending)) throw new Error('Invalid ledger worker reply')
+          if ('ready' in message) {
+            if (!message.health || !Array.isArray(message.health.gaps)) throw new Error('Invalid ledger worker health')
+            clearTimeout(timer)
+            this.ready = true
+            this.health = message.health
+            this.setPending(message.pending)
+            resolveReady()
+            this.pump()
+            return
+          }
+          if (!message.body?.health || !Array.isArray(message.body.health.gaps)) throw new Error('Invalid ledger worker health')
+          this.receive(message)
+        } catch {
           clearTimeout(timer)
-          this.ready = true
-          this.health = message.health
-          this.setPending(message.pending)
-          resolveReady()
-          this.pump()
-          return
+          rejectReady(new Error('ledger_worker_protocol'))
+          this.fail()
         }
-        this.receive(message)
       })
       const fail = () => { clearTimeout(timer); rejectReady(new Error('ledger_worker_stopped')); this.fail() }
       worker.on('error', fail)
@@ -109,17 +120,19 @@ export class BehaviorLedgerObserver {
 
   capture(observation: LedgerObservation): void {
     try {
-      if (this.closed) return
-      const bytes = Buffer.byteLength(JSON.stringify(observation))
+      if (this.closed || this.stopping) return
+      const serialized = JSON.stringify(observation)
+      const bytes = Buffer.byteLength(serialized)
       if (bytes > 4_096 || this.failed || this.captures >= (this.options.captureLimit ?? 1_000)
         || this.captureBytes + bytes > (this.options.captureBytes ?? 2 * 1024 * 1024)) {
         this.lose(1)
         return
       }
+      const captured = JSON.parse(serialized) as LedgerObservation
       this.captures++
       this.captureBytes += bytes
-      if (observation.type === 'admit') this.admitted.set(observation.nativeId, null)
-      this.queue.push({ id: ++this.sequence, operation: 'capture', observation, bytes })
+      if (captured.type === 'admit') this.admitted.set(captured.nativeId, null)
+      this.queue.push({ id: ++this.sequence, operation: 'capture', observation: captured, bytes })
       this.pump()
     } catch { this.lose(1) }
   }
@@ -128,7 +141,7 @@ export class BehaviorLedgerObserver {
 
   private projectedHealth(): LedgerHealth {
     const health = { ...this.health, pending: this.captures, dropped: this.health.dropped + this.unreportedLoss }
-    if (this.closed) health.status = 'stopped'
+    if (this.closed || this.stopping) health.status = 'stopped'
     else if (this.failed) health.status = 'unavailable'
     else if (health.pending || health.dropped || health.gaps.length) {
       if (health.status === 'ok') health.status = 'incomplete'
@@ -142,7 +155,7 @@ export class BehaviorLedgerObserver {
   }
 
   read(request: LedgerRead): Promise<{ status: number; body: LedgerReply }> {
-    if (this.failed || this.closed) return Promise.resolve(this.unavailable(request))
+    if (this.failed || this.closed || this.stopping) return Promise.resolve(this.unavailable(request))
     if (this.reads >= (this.options.readLimit ?? 16)) return Promise.resolve({ status: 429,
       body: { version: 1, health: this.projectedHealth(), error: 'ledger_busy' } })
     this.reads++
@@ -183,7 +196,7 @@ export class BehaviorLedgerObserver {
     }
     if (job.resolve) {
       clearTimeout(job.timer)
-      this.reads--
+      if (job.operation === 'read') this.reads--
       job.resolve({ status: message.status, body: { ...message.body, health: this.projectedHealth() } })
     }
     this.pump()
@@ -223,8 +236,8 @@ export class BehaviorLedgerObserver {
     for (const job of jobs) {
       if (!job.resolve) continue
       clearTimeout(job.timer)
-      this.reads--
-      job.resolve(this.unavailable(job.request!))
+      if (job.operation === 'read') this.reads--
+      job.resolve(this.unavailable(job.request ?? { operation: 'health' }))
     }
   }
 
@@ -233,18 +246,25 @@ export class BehaviorLedgerObserver {
       const pending = new Map([...this.pending, ...this.admitted])
       if (!pending.size) return
       const byCall = new Map([...pending].flatMap(([nativeId, callId]) => callId ? [[callId, nativeId] as const] : []))
-      const seen = new Set<string>()
-      const calls = new Map<string, number>()
-      const correlations = new Map<string, number>()
-      for (const row of snapshot.entries) {
-        calls.set(row.id, (calls.get(row.id) ?? 0) + 1)
-        if (row.correlation_id) correlations.set(row.correlation_id, (correlations.get(row.correlation_id) ?? 0) + 1)
-      }
+      const related = new Map<string, { row: LogEntry; duplicate: boolean }>()
+      // Keep at most one bounded source projection per known pending identity.
       for (const row of snapshot.entries) {
         const nativeId = row.correlation_id && pending.has(row.correlation_id) ? row.correlation_id : byCall.get(row.id)
         if (!nativeId) continue
-        seen.add(nativeId)
-        const quarantined = (calls.get(row.id) ?? 0) > 1 || (correlations.get(nativeId) ?? 0) > 1 || snapshot.quarantined.some((item) => {
+        const prior = related.get(nativeId)
+        if (!prior) related.set(nativeId, { row, duplicate: false })
+        else {
+          prior.duplicate = true
+          if (/^(running|in_progress)$/.test(row.status)) prior.row = row
+        }
+      }
+      const calls = new Map<string, number>()
+      for (const { row } of related.values()) calls.set(row.id, 0)
+      for (const row of snapshot.entries) {
+        if (calls.has(row.id)) calls.set(row.id, calls.get(row.id)! + 1)
+      }
+      for (const [nativeId, { row, duplicate }] of related) {
+        const quarantined = duplicate || (calls.get(row.id) ?? 0) > 1 || snapshot.quarantined.some((item) => {
           if (item.id === row.id || item.correlationId === nativeId) return true
           return !((item.id && item.id !== row.id) || (item.correlationId && item.correlationId !== nativeId)
             || (item.repo && row.repo && item.repo.toLowerCase() !== row.repo.toLowerCase())
@@ -256,44 +276,41 @@ export class BehaviorLedgerObserver {
           behavior: row.behavior, expectedHead: row.expected_head, head: row.head_sha,
           status: row.status, action: row.action, outcome: row.outcome,
           startedAt: row.started_at_precise ?? row.started_at, completedAt: row.completed_at ?? null,
-          uncertain: quarantined, mayRun: quarantined || /^(pending|queued|running|in_progress)$/.test(row.status),
+          uncertain: quarantined, mayRun: /^(running|in_progress)$/.test(row.status),
           interrupted: row.error_code === 'interrupted',
         }
         this.capture(observation)
       }
       for (const [nativeId, callId] of pending) {
-        if (seen.has(nativeId)) continue
-        const suspect = snapshot.quarantined.find((item) => !item.correlationId || item.correlationId === nativeId || item.id === callId)
+        if (related.has(nativeId)) continue
         this.capture({ type: 'caller', nativeId, callId, repository: null, number: null, actor: null,
-          source: null, behavior: null, expectedHead: null, head: null, status: suspect?.status ?? null,
-          action: null, outcome: null, startedAt: null, completedAt: null, uncertain: true, mayRun: !!suspect && /^(pending|queued|running|in_progress)$/.test(suspect.status ?? '') })
+          source: null, behavior: null, expectedHead: null, head: null, status: null,
+          action: null, outcome: null, startedAt: null, completedAt: null, uncertain: true, mayRun: false })
       }
     } catch { this.lose(1) }
   }
 
-  async stop(): Promise<void> {
-    if (this.closed) return
-    // Flush captures through one final ordered read before closing the epoch.
-    const timeout = new Promise<void>((resolveTimeout) => {
-      const timer = setTimeout(resolveTimeout, 2_000)
-      timer.unref()
-    })
-    await Promise.race([(async () => {
-      await this.read({ operation: 'health' })
-      if (!this.worker || this.failed) return
-      await new Promise<void>((resolveClose) => {
-        const worker = this.worker!
-        const id = ++this.sequence
-        const done = (message: LedgerWorkerReply) => {
-          if (message.id !== id) return
-          worker.off('message', done)
-          resolveClose()
-        }
-        worker.on('message', done)
-        worker.ref()
-        worker.postMessage({ id, operation: 'close' } satisfies LedgerWorkerRequest)
-      })
-    })(), timeout])
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopping = true
+      this.stopPromise = this.finishStop()
+    }
+    return this.stopPromise
+  }
+
+  private async finishStop(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (!this.failed) await Promise.race([
+      new Promise<void>((resolveClose) => {
+        this.queue.push({ id: ++this.sequence, operation: 'close', bytes: 0, resolve: () => resolveClose() })
+        this.pump()
+      }),
+      new Promise<void>((resolveTimeout) => {
+        timer = setTimeout(resolveTimeout, 2_000)
+        timer.unref()
+      }),
+    ])
+    clearTimeout(timer)
     this.closed = true
     this.fail()
     if (this.developmentDirectory) rmSync(this.developmentDirectory, { recursive: true, force: true })
