@@ -175,8 +175,11 @@ test('uses Settings civil day/week boundaries across the spring DST transition',
   await ready(page, undefined, 'Europe/Helsinki')
   await page.clock.setFixedTime(new Date('2026-03-29T12:00:00Z'))
   const query = async (preset: string) => {
-    const response = page.waitForResponse((reply) => new URL(reply.url()).pathname === '/api/logging')
     await openFilter(page, 'time')
+    const response = page.waitForResponse((reply) => {
+      const url = new URL(reply.url())
+      return url.pathname === '/api/logging' && url.searchParams.has('from') && !url.searchParams.has('after')
+    })
     await page.locator(`#view-logging [data-time="${preset}"]`).click()
     const url = new URL((await response).url())
     return [url.searchParams.get('from'), url.searchParams.get('to')]
