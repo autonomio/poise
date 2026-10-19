@@ -746,7 +746,7 @@ full scoped event/incident identifiers and severity, re-redacts the envelope,
 and commits its checkpoint only after durable central ingestion. Delivery
 cursors survive ordinary process/container replacement and cannot widen scope.
 No new JWT scope, owner bypass, shared filesystem or public ingest route is
-introduced. A failed source or sink remains explicitly unavailable/partial.
+introduced. A failed source or sink remains explicitly unavailable/partial. Coverage retains its historical `status` and independently reports optional `currentStatus`; runtime and browser-health responses distinguish recovered observation from retained gaps, pending backfill and stale/unread state. Ordinary workspace stdout is outside the structured collection contract and cannot create a false outage. Malformed claimed diagnostic envelopes remain observable failures.
 An obsolete source cursor returns 409 `diagnostic_cursor_invalid`; only this explicit rejection permits resetting that source checkpoint and bounded replay, with a recorded collection gap. Other failures preserve the checkpoint.
 
 The workspace distribution includes the bounded bootstrap diagnostic command and

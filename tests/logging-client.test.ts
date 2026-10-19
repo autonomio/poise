@@ -104,3 +104,11 @@ it('shares a fixed wall-clock 15-second cadence and stops every unsubscribed rea
   expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(2)
   stopSecond(); expect(vi.getTimerCount()).toBe(0)
 })
+
+it('validates current observation independently of historical completeness', async () => {
+  respond({ ...health, collection: { ...health.collection, status: 'partial', currentStatus: 'connected' } })
+  expect((await loggingHealth(access, 'workspace', signal())).collection.currentStatus).toBe('connected')
+  vi.restoreAllMocks()
+  respond({ ...health, collection: { ...health.collection, currentStatus: 'invented' } })
+  await expect(loggingHealth(access, 'workspace', signal())).rejects.toMatchObject({ code: 'logging_incompatible' })
+})

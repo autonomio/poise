@@ -23,11 +23,17 @@ export interface Coverage {
   source: string
   workspace: string | null
   status: 'connected' | 'unavailable' | 'partial' | 'not-configured'
+  currentStatus?: 'connected' | 'unavailable' | 'partial' | 'not-configured' | 'initializing'
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null
   error: string | null
   gaps: Array<{ from: string; to: string | null; reason: string }>
+}
+
+/** A legacy partial record cannot establish whether its source has recovered. */
+export function currentCoverageStatus(source: Coverage): NonNullable<Coverage['currentStatus']> {
+  return source.currentStatus ?? (source.status === 'partial' ? 'initializing' : source.status)
 }
 export interface LogPolicy { retentionMs: number; maxBytes: number; maxEvents: number }
 

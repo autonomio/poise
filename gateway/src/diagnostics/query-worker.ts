@@ -3,6 +3,7 @@ import { parentPort } from 'node:worker_threads'
 import { readFileSync, statSync } from 'node:fs'
 import { DiagnosticCursorError, DiagnosticStore, projectCoverage, type Coverage } from './store.js'
 import { MAX_COVERAGE_JOURNAL_BYTES } from './runtime.js'
+import { currentCoverageStatus } from './query-contract.js'
 import { LoggingQueryError } from './query-parser.js'
 import { LOGGING_EXPORT_EVENTS, LOGGING_RESPONSE_BYTES, type LoggingRead, type LoggingReply, type WorkerReply } from './query-types.js'
 
@@ -17,8 +18,8 @@ function checkEvents(events: Array<{ version: number }>): void {
 }
 
 function health(request: LoggingRead): LoggingReply {
-  let collection: { status: string; sources: Coverage[]; lossObserved: boolean; checkedAt: string } = {
-    status: 'unavailable', sources: [], lossObserved: false, checkedAt: new Date(request.now).toISOString(),
+  let collection: { status: string; currentStatus: string; sources: Coverage[]; lossObserved: boolean; checkedAt: string } = {
+    status: 'unavailable', currentStatus: 'unavailable', sources: [], lossObserved: false, checkedAt: new Date(request.now).toISOString(),
   }
   try {
     const path = request.path + '.coverage.json'
@@ -31,12 +32,18 @@ function health(request: LoggingRead): LoggingReply {
     const sources = journal.sources.filter((source) => source.workspace === null || source.workspace === request.access.workspace)
       .map((source) => projectCoverage(source, request.access))
     const lossObserved = journal.dropped > 0 || journal.rejected > 0 || !!journal.coverageError || !!journal.reportError
+    const observations = sources.map(currentCoverageStatus)
+    const freshness = journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped'
+      : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : null
     collection = { checkedAt: journal.writtenAt, sources, lossObserved,
+      currentStatus: freshness ?? (journal.coverageError || journal.reportError
+        || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
+        : !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'),
       status: journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped' : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale'
         : lossObserved || sources.some((source) => source.status !== 'connected') ? 'partial' : 'connected' }
   } catch {
     // An unread journal is an explicit independent failure, never a healthy empty source list.
-    collection.status = 'unavailable'
+    collection.status = 'unavailable'; collection.currentStatus = 'unavailable'
   }
   let db: DiagnosticStore | null = null
   try {

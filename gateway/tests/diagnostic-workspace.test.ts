@@ -120,3 +120,42 @@ it('applies an absolute Docker read deadline despite continued response activity
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+it('excludes ordinary workspace output without false outages while retaining malformed diagnostic failures', async () => {
+  const h = await startHarness()
+  const directory = mkdtempSync(join(tmpdir(), 'poise-ordinary-output-'))
+  const docker = new DockerClient('/unused-fixture-socket')
+  vi.spyOn(docker, 'diagnosticContainers').mockResolvedValue([{ Id: 'ordinary-output', ImageID: 'sha256:fixture', Names: [], State: 'running', Labels: { 'poise.managed': 'true', 'poise.workspace': 'alice' } }])
+  const event = normalize({ id: 'actual-warning', source: 'poise', level: 'warning', workspace: 'alice', operation: 'fixture.warning', message: 'Actual diagnostic' })!
+  const frame = (line: string) => {
+    const body = Buffer.from(new Date().toISOString() + ' ' + line + '\n')
+    const header = Buffer.alloc(8); header[0] = 2; header.writeUInt32BE(body.length, 4)
+    return Buffer.concat([header, body])
+  }
+  let malformed = false
+  vi.spyOn(docker, 'diagnosticRead').mockImplementation(async (path) => path.startsWith('/events') ? Buffer.alloc(0)
+    : malformed ? frame('{"poiseDiagnostic":null}')
+      : Buffer.concat([frame('Listening on port 5555'), frame('{"result":"private user output"}'), frame(JSON.stringify({ poiseDiagnostic: event }))]))
+  const runtime = new DiagnosticRuntime({ path: join(directory, 'central.db'), report: () => undefined })
+  const collector = new EnvironmentCollectors(runtime, docker, h.context)
+  try {
+    collector.start()
+    await vi.waitFor(() => expect(runtime.health().sources.find((source) => source.id === 'workspace-stream:alice')).toMatchObject({ status: 'connected', currentStatus: 'connected', gaps: [] }))
+    await collector.stop()
+    const records = () => runtime.query((db) => db.query({ workspace: 'alice', operator: false })).events
+    expect(records()).toHaveLength(1)
+    expect(records()[0].id).toBe(event.id)
+    expect(JSON.stringify(records())).not.toContain('private user output')
+    malformed = true; collector.start()
+    await vi.waitFor(() => expect(runtime.health().sources.find((source) => source.id === 'workspace-stream:alice')?.currentStatus).toBe('unavailable'))
+    await collector.stop()
+    expect(records().some((event) => event.operation === 'workspace.envelope_rejected')).toBe(true)
+    malformed = false; collector.start()
+    await vi.waitFor(() => expect(runtime.health().sources.find((source) => source.id === 'workspace-stream:alice')?.currentStatus).toBe('connected'))
+    await collector.stop()
+    const source = runtime.health().sources.find((source) => source.id === 'workspace-stream:alice')!
+    expect(source.status).toBe('partial')
+    expect(source.gaps).toHaveLength(1)
+    expect(source.gaps[0].to).not.toBeNull()
+  } finally { await collector.stop(); runtime.stop(); await h.close(); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() }
+})

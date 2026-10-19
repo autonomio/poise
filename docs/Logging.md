@@ -42,6 +42,10 @@ its retained incident. Source time is displayed in Settings' timezone; missing
 source time is explicitly labeled as ingestion time. Today, Yesterday and This
 week use civil boundaries in that timezone. Custom intervals require UTC offsets.
 
+Column headers own the severity, time, source and exact identity filters. Columns selects optional workspace/account/repository/call/correlation/incident fields; an active filter keeps its field visible until cleared. Search and the event count remain in the native toolbar. Filters stay usable after a failed query.
+
+The normal view contains no retention, snapshot or coverage prose. Data and collection opens a structured inspection panel with retention bounds, timezone, snapshot/read times, current source observation and expandable historical gaps. Current connectivity is independent of historical completeness: a recovered source can be connected now while its retained coverage remains partial. Legacy partial records without current evidence remain unknown until observed again. Historical gaps and normal filtering metadata do not create notifications; genuine collection failures retain their diagnostic evidence.
+
 Expand a row with its evidence button (Enter or Space). Cause, stderr, stack,
 resource units/measurement time and truncation are shown as recorded. Related
 incident/correlation reads use the applied time, severity and access scope,
@@ -392,3 +396,5 @@ leaves a docked rail open. Arrival cards keep their primary controls. Known link
 keep the ordinary 410 expiry, indistinguishable unknown/foreign 404 and honest
 503 unavailable behavior described above. Recovery, Notifications off and
 container replacement do not delete retained source evidence.
+
+Ordinary non-diagnostic workspace stdout/JSON is excluded by policy without manufacturing a collection outage. Malformed claimed diagnostic envelopes, read bounds, truncation and transport failures still retain warnings and gaps. Successful observation closes the current gap without deleting historical intervals; pending backfill remains a distinct degraded observation.

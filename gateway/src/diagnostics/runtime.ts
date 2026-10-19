@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { environmentSecrets, normalize, redact, SOURCES, type DiagnosticInput, type LogEvent } from './contract.js'
 import { DEFAULT_LOG_POLICY, DiagnosticConflictError, DiagnosticEventError, DiagnosticStore, MAX_COVERAGE_SOURCES, type Coverage, type LogPolicy } from './store.js'
+import { currentCoverageStatus } from './query-contract.js'
 
 // Covers 256 sources with 32 Unicode gap reasons and bounded source errors.
 export const MAX_COVERAGE_JOURNAL_BYTES = 8 * 1024 * 1024
@@ -85,7 +86,8 @@ export class DiagnosticRuntime {
           const gaps = source.gaps.slice(journal.stopped ? -32 : -31).map((gap) => ({ ...gap, reason: this.safe(gap.reason, 128) }))
           // An existing open outage already covers the unobserved restart interval.
           if (!journal.stopped && !gaps.some((gap) => gap.to === null)) gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
-          this.sources.set(source.id, { ...source, status: source.status === 'not-configured' ? 'not-configured' : source.error ? 'unavailable' : 'partial', gaps })
+          this.sources.set(source.id, { ...source, status: source.status === 'not-configured' ? 'not-configured' : source.error ? 'unavailable' : 'partial',
+            currentStatus: source.status === 'not-configured' ? 'not-configured' : 'initializing', gaps })
         }
       } catch (error) { this.journalError = this.message(error); this.notify('logging.coverage.unavailable', this.journalError) }
     }
@@ -159,7 +161,7 @@ export class DiagnosticRuntime {
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
     id = this.coverageId(id)
     if (!this.sources.has(id) && this.sources.size >= MAX_COVERAGE_SOURCES) { this.reject(new Error('Collection source bound reached')); return }
-    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', observedAt: null, ingestedAt: null,
+    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', currentStatus: 'not-configured', observedAt: null, ingestedAt: null,
       availableFrom: null, error: this.safe(reason), gaps: [] })
     this.saveJournal()
   }
@@ -174,6 +176,7 @@ export class DiagnosticRuntime {
     if (reason && !gaps.some((gap) => gap.to === null)) gaps.push({ from: at, to: null, reason: this.safe(reason, 128) })
     if (!reason) gaps = gaps.map((gap) => gap.to === null ? { ...gap, to: at } : gap)
     this.sources.set(id, { id, source: this.sourceName(source), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
+      currentStatus: reason ? 'unavailable' : 'connected',
       observedAt: reason ? previous?.observedAt ?? null : at, ingestedAt: previous?.ingestedAt ?? null,
       availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32) })
     if (reason && previous?.error !== reason) this.emit({ source: 'collection', component: source, level: 'warning', operation: 'source.unavailable',
@@ -184,14 +187,18 @@ export class DiagnosticRuntime {
   partial(id: string, source: string, workspace: string | null, reason: string): void {
     this.observe(id, source, workspace)
     const value = this.sources.get(this.coverageId(id))
-    if (value) { value.status = 'partial'; value.error = this.safe(reason) }
+    if (value) { value.status = 'partial'; value.currentStatus = 'partial'; value.error = this.safe(reason) }
     this.saveJournal()
   }
 
   health() {
     const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
       || [...this.sources.values()].some((source) => source.status !== 'connected')
-    return { status: this.sinkError ? 'unavailable' : partial ? 'partial' : this.lastSuccess === null ? 'initializing' : 'connected',
+    const observations = [...this.sources.values()].map(currentCoverageStatus)
+    const currentStatus = this.sinkError ? 'unavailable' : this.journalError || this.coverageError || this.reportError
+      || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
+      : this.lastSuccess === null || observations.includes('initializing') ? 'initializing' : 'connected'
+    return { status: this.sinkError ? 'unavailable' : partial ? 'partial' : this.lastSuccess === null ? 'initializing' : 'connected', currentStatus,
       error: this.sinkError, unavailableSince: this.sinkSince, coverageError: this.coverageError, journalError: this.journalError,
       reportError: this.reportError, rejected: this.rejected, lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
       queued: this.queue.length, queuedBytes: this.queuedBytes, dropped: this.dropped, droppedSince: this.droppedSince,
@@ -281,7 +288,7 @@ export class DiagnosticRuntime {
       const id = delivered ? this.coverageId(delivered.id) : null
       if (events.length && delivered && id && !this.sources.has(id)) {
         if (this.sources.size >= MAX_COVERAGE_SOURCES) this.reject(new Error('Collection source limit of 256 reached'))
-        else this.sources.set(id, { id, source: this.sourceName(delivered.source), workspace: delivered.workspace, status: 'partial',
+        else this.sources.set(id, { id, source: this.sourceName(delivered.source), workspace: delivered.workspace, status: 'partial', currentStatus: 'initializing',
           observedAt: null, ingestedAt: null, availableFrom: null, error: null, gaps: [] })
       }
       for (const source of this.sources.values()) {

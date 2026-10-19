@@ -159,7 +159,7 @@ export class EnvironmentCollectors {
       const since = previous ? Number(previous) : until - 60
       const bytes = await this.docker.diagnosticRead(`/containers/${encodeURIComponent(container.Id)}/logs?stdout=1&stderr=1&timestamps=1&since=${since}&until=${until}&tail=1000`)
       const events: LogEvent[] = []
-      let excluded = 0
+      let invalid = 0
       const lines = dockerLines(bytes)
       if (lines.length >= 1000) throw new Error('Docker log tail bound reached; earlier records may be missing')
       for (const line of lines) {
@@ -171,12 +171,19 @@ export class EnvironmentCollectors {
           continue
         }
         let row: unknown
-        try { row = JSON.parse(content) } catch { excluded++; continue }
-        const envelope = row && typeof row === 'object' && 'poiseDiagnostic' in row ? row.poiseDiagnostic : null
-        if (workspace && envelope) {
-          try { events.push(workspaceEnvelope(envelope, workspace, Date.now(), [])) }
+        try { row = JSON.parse(content) } catch {
+          if (!workspace || /"poiseDiagnostic"\s*:/.test(content)) {
+            invalid++
+            const warning = normalize({ id: 'malformed-envelope:' + hash(line), source: 'collection', operation: 'workspace.envelope_rejected', level: 'warning', workspace,
+              message: 'Malformed structured diagnostic record; original output excluded' })
+            if (warning) events.push(warning)
+          }
+          continue
+        }
+        if (workspace && row && typeof row === 'object' && 'poiseDiagnostic' in row) {
+          try { events.push(workspaceEnvelope(row.poiseDiagnostic, workspace, Date.now(), [])) }
           catch (error) {
-            excluded++
+            invalid++
             const warning = normalize({ id: 'invalid-envelope:' + hash(line), source: 'collection', operation: 'workspace.envelope_rejected', level: 'warning', workspace, message: error instanceof Error ? error.message : String(error) })
             if (warning) events.push(warning)
           }
@@ -187,10 +194,10 @@ export class EnvironmentCollectors {
           input.context = { container: container.Id, originalSource: 'caddy' }
           const event = normalize(input)
           if (event) events.push(event)
-        } else excluded++
+        }
       }
       const rejected = this.runtime.deliver(events, key, String(until), { id: coverage, source: workspace ? 'poise' : 'ingress', workspace })
-      this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, excluded || rejected ? 'Unstructured source output excluded to protect user content; structured diagnostic coverage only' : null)
+      this.runtime.observe(coverage, workspace ? 'poise' : 'ingress', workspace, invalid || rejected ? 'Structured diagnostic records were malformed or rejected; retained coverage is incomplete' : null)
     } catch (error) {
       if (/bound|exceeds|tail/i.test(String(error))) {
         try { this.runtime.query((db) => db.commitDelivery([], key, String(until))) }
@@ -248,7 +255,7 @@ export class EnvironmentCollectors {
       const target = this.context.deps.upstream(handle)
       const { config, keys, now } = this.context.deps
       const path = '/api/service/diagnostics' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')
-      const page = await new Promise<{ version: number; events: unknown[]; cursor: string; coverage: { status: string; error?: string | null } }>((resolve, reject) => {
+      const page = await new Promise<{ version: number; events: unknown[]; cursor: string; hasMore?: boolean; coverage: { status: string; currentStatus?: string; error?: string | null } }>((resolve, reject) => {
         const req = http.get({ host: target.host, port: target.port, path, agent: false, headers: {
           host: `${handle}.${config.domain}`, 'x-poise-identity': signAssertion(keys.privateKey, { handle, login, scope: 'admin' }, now()),
         } }, (res) => {
@@ -282,8 +289,11 @@ export class EnvironmentCollectors {
         }
       }
       rejected += this.runtime.deliver(events, key, page.cursor, { id: key, source: 'poise', workspace: handle })
-      if (page.coverage.status === 'unavailable' || page.coverage.status === 'initializing' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
-      else if (rejected || page.coverage.status === 'partial' || ('hasMore' in page && page.hasMore)) this.runtime.partial(key, 'poise', handle, 'Workspace is reachable; historical gaps or pending backfill limit completeness')
+      const currentStatus = page.coverage.currentStatus ?? page.coverage.status
+      if (!['connected', 'partial', 'unavailable', 'initializing'].includes(currentStatus)) throw new Error('Workspace diagnostic observation status is incompatible')
+      if (currentStatus === 'unavailable' || page.coverage.error) this.runtime.observe(key, 'poise', handle, 'Workspace diagnostic sink is currently unavailable')
+      else if (page.hasMore) this.runtime.partial(key, 'poise', handle, 'Retained diagnostic backfill is still pending')
+      else if (rejected || currentStatus !== 'connected') this.runtime.partial(key, 'poise', handle, 'Workspace diagnostic collection is degraded or has not established current observation')
       else this.runtime.observe(key, 'poise', handle)
     } catch (error) {
       if (error instanceof WorkspaceCursorError) {

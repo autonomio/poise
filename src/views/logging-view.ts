@@ -7,18 +7,26 @@ import {
   type LoggingAccess, type LoggingEvent, type LoggingHealth, type LoggingLink, type LoggingPage, type LoggingQuery,
 } from '../logging'
 import { readLoggingTime } from '../../gateway/src/diagnostics/query-time'
+import { currentCoverageStatus } from '../../gateway/src/diagnostics/query-contract'
 
 const STORAGE = 'poise-logging-filters'
 const EXACT = [
   ['component', 'Component'], ['workspace', 'Workspace'], ['account', 'Account'], ['repository', 'Repository'],
   ['callId', 'Call ID'], ['correlationId', 'Correlation ID'], ['incidentId', 'Incident ID'],
 ] as const
+const COLUMNS = [['time', 'Time'], ['severity', 'Severity'], ['source', 'Source'], ...EXACT,
+  ['target', 'Target'], ['message', 'Message'], ['occurrences', 'Count']] as const
+type Column = typeof COLUMNS[number][0]
+const OPTIONAL = EXACT.filter(([key]) => key !== 'component')
+const BASE_COLUMNS: Column[] = ['time', 'severity', 'source', 'component', 'repository', 'target', 'message', 'occurrences']
+const FILTER_ICON = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3h12L9.5 8v4l-3 1V8L2 3Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>'
+const DATA_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 7v4M8 4.5v.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
 type Exact = typeof EXACT[number][0]
-type Preferences = Record<Exact, string> & { severities: Array<typeof LOGGING_LEVELS[number]>; time: TimeRange | 'custom'; from: string; to: string; source: string; search: string; scope: 'workspace' | 'instance' }
+type Preferences = Record<Exact, string> & { columns: Column[]; severities: Array<typeof LOGGING_LEVELS[number]>; time: TimeRange | 'custom'; from: string; to: string; source: string; search: string; scope: 'workspace' | 'instance' }
 interface Related { loading: boolean; events: LoggingPage['events']; total: number; cursor: string | null; history: Array<string | null>; page: number; error: string; correlation: boolean; first: { events: LoggingPage['events']; total: number; cursor: string | null } | null }
 
 const defaults = (): Preferences => ({ component: '', workspace: '', account: '', repository: '', callId: '', correlationId: '', incidentId: '',
-  severities: [...LOGGING_LEVELS], time: 'all', from: '', to: '', source: '', search: '', scope: 'workspace' })
+  columns: [...BASE_COLUMNS], severities: [...LOGGING_LEVELS], time: 'all', from: '', to: '', source: '', search: '', scope: 'workspace' })
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
 const CHEVRON = '<svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4 2.5l4 3.5-4 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 const absent = (value: unknown) => value === null || value === undefined || value === ''
@@ -77,6 +85,10 @@ function loadPreferences(): Preferences {
     for (const key of [...EXACT.map(([key]) => key), 'from', 'to', 'source', 'search'] as const) {
       if (saved[key] !== undefined && (typeof saved[key] !== 'string' || String(saved[key]).length > (key === 'search' ? 256 : 512))) throw new Error('Invalid saved filter')
       if (typeof saved[key] === 'string') next[key] = saved[key]
+    }
+    if (saved.columns !== undefined) {
+      if (!Array.isArray(saved.columns) || !saved.columns.every((key) => COLUMNS.some(([name]) => name === key))) throw new Error('Invalid saved columns')
+      next.columns = COLUMNS.filter(([key]) => (saved.columns as unknown[]).includes(key) || !OPTIONAL.some(([name]) => name === key)).map(([key]) => key)
     }
     if (!Array.isArray(saved.severities) || !saved.severities.every((level) => LOGGING_LEVELS.includes(level))) throw new Error('Invalid saved severities')
     next.severities = LOGGING_LEVELS.filter((level) => (saved.severities as unknown[]).includes(level))
@@ -179,34 +191,79 @@ function detail(event: LoggingEvent): string {
       ${event.correlationId ? `<button type="button" data-action="correlation" data-row="${event.id}" data-focus="correlation-${event.id}" aria-disabled="${!!r?.loading}">Show correlation</button>` : ''}</div>${relatedMarkup}</section>`
 }
 
+function visibleColumns(): typeof COLUMNS[number][] {
+  for (const [key] of EXACT) if (preferences[key] && !preferences.columns.includes(key)) preferences.columns.push(key)
+  if (preferences.scope === 'instance' && !preferences.columns.includes('workspace')) preferences.columns.push('workspace')
+  return COLUMNS.filter(([key]) => preferences.columns.includes(key))
+}
+function filtered(key: Column): boolean {
+  return key === 'severity' ? preferences.severities.length !== LOGGING_LEVELS.length : key === 'time' ? preferences.time !== 'all'
+    : key === 'source' ? !!preferences.source : EXACT.some(([name]) => name === key && !!preferences[name])
+}
+function header(): string {
+  return '<tr>' + visibleColumns().map(([key, label]) => {
+    const filter = ['time', 'severity', 'source', ...EXACT.map(([key]) => key)].includes(key)
+    return `<th scope="col" id="logging-column-${key}" class="logging-column-${key}">${filter ? `<button type="button" class="logging-column-button${filtered(key) ? ' active' : ''}" id="logging-filter-button-${key}" popovertarget="logging-filter-${key}" aria-label="Filter ${label}${filtered(key) ? ', active' : ''}">${label}${FILTER_ICON}</button>` : label}</th>`
+  }).join('') + '<th scope="col" aria-label="Evidence"></th></tr>'
+}
+function popovers(): string {
+  const pane = (key: string, label: string, body: string) => `<div id="logging-filter-${key}" class="logging-popover" popover="auto" role="group" aria-label="${label} filter" data-trigger="logging-filter-button-${key}"><div class="logging-popover-title">${label}</div>${body}</div>`
+  return pane('severity', 'Severity', `<div class="range-picker logging-filter-options">${LOGGING_LEVELS.map((level) => `<button type="button" data-level="${level}" aria-pressed="true">${level[0].toUpperCase() + level.slice(1)}</button>`).join('')}</div>`)
+    + pane('time', 'Time', `<div class="range-picker logging-filter-options">${[...TIME_RANGES, { key: 'custom', label: 'Custom interval' }].map((range) => `<button type="button" data-time="${range.key}">${range.label}</button>`).join('')}</div>
+      <div class="logging-custom" id="logging-custom" hidden><label>From<input id="logging-from" class="st-input" type="text" aria-label="From, inclusive zoned time" placeholder="2026-10-19T00:00:00+03:00"></label><label>To<input id="logging-to" class="st-input" type="text" aria-label="To, exclusive zoned time" placeholder="2026-10-20T00:00:00+03:00"></label><div class="range-picker"><button type="button" data-action="custom">Apply interval</button></div></div>`)
+    + pane('source', 'Source', `<select id="logging-source" class="st-select" aria-label="Filter Source" autofocus><option value="">All sources</option>${LOGGING_SOURCES.map((source) => `<option value="${source}">${source}</option>`).join('')}</select>`)
+    + EXACT.map(([key, label]) => pane(key, label, `${key === 'workspace' ? '<label id="logging-scope-label" hidden>Access scope<select id="logging-scope" class="st-select"><option value="workspace">Your workspace</option><option value="instance">Instance diagnostics</option></select></label>' : ''}<input class="st-input" id="logging-${key}" data-field="${key}" type="text" maxlength="512" autocomplete="off" aria-label="Filter ${label}" autofocus placeholder="All ${label.toLowerCase()} values"><button type="button" class="logging-clear-filter" data-action="clear-filter" data-field="${key}">Clear filter</button>`)).join('')
+}
+function positionPopover(popup: HTMLElement): void {
+  const trigger = document.getElementById(popup.dataset.trigger ?? '')
+  if (!trigger || !active) { if (popup.matches(':popover-open')) popup.hidePopover(); return }
+  const rect = trigger.getBoundingClientRect()
+  if (rect.right < 0 || rect.left > innerWidth || rect.bottom < 0 || rect.top > innerHeight) { if (popup.matches(':popover-open')) popup.hidePopover(); return }
+  const width = Math.min(popup.id === 'logging-filter-time' ? 340 : popup.id === 'logging-data' ? 620 : 280, innerWidth - 24)
+  popup.style.width = width + 'px'
+  popup.style.left = Math.max(12, Math.min(rect.left, innerWidth - width - 12)) + 'px'
+  popup.style.top = Math.max(12, rect.bottom + 6) + 'px'
+  popup.style.maxHeight = Math.max(100, innerHeight - Math.max(12, rect.bottom + 6) - 12) + 'px'
+}
+function positionPopovers(): void { for (const popup of view.querySelectorAll<HTMLElement>('[popover]:popover-open')) positionPopover(popup) }
+function closePopovers(): void { for (const popup of view.querySelectorAll<HTMLElement>('[popover]:popover-open')) popup.hidePopover() }
 function shell(): void {
-  view.innerHTML = `<header class="view-header" tabindex="-1" aria-label="Logging filters"><div class="filter-cluster" id="logging-filters">
-    <div class="range-picker" role="group" aria-label="Diagnostic severity">${LOGGING_LEVELS.map((level) => `<button type="button" data-level="${level}" aria-pressed="true">${level[0].toUpperCase() + level.slice(1)}</button>`).join('')}</div>
-    <div class="range-picker" role="group" aria-label="Diagnostic time range">${[...TIME_RANGES, { key: 'custom', label: 'Custom interval' }].map((range) => `<button type="button" data-time="${range.key}">${range.label}</button>`).join('')}</div>
-    <label class="logging-compact">Source<select id="logging-source" class="st-select"><option value="">All sources</option>${LOGGING_SOURCES.map((source) => `<option value="${source}">${source}</option>`).join('')}</select></label>
-    <label class="logging-compact" id="logging-scope-label" hidden>Access scope<select id="logging-scope" class="st-select"><option value="workspace">Your workspace</option><option value="instance">Instance diagnostics</option></select></label>
+  view.innerHTML = `<header class="view-header" tabindex="-1" aria-label="Logging controls"><div class="filter-cluster" id="logging-filters">
     <div class="search-cluster"><input class="search-input" id="logging-search" type="search" aria-label="Search redacted diagnostics" placeholder="Search diagnostics…" maxlength="256" autocomplete="off" spellcheck="false"><span class="filter-count" id="logging-count"></span></div>
-    <div class="range-picker" role="group" aria-label="Diagnostic actions"><button type="button" data-action="refresh" data-focus="refresh">Refresh</button><button type="button" data-action="export" data-focus="export" title="Export a fresh matching retained snapshot">Export NDJSON</button></div>
+    <div class="range-picker" role="group" aria-label="Diagnostic actions"><button type="button" data-action="refresh" data-focus="refresh">Refresh</button><button type="button" data-action="export" data-focus="export" title="Export matching retained events">Export</button></div>
+    <button type="button" class="logging-toolbar-button" id="logging-columns-button" popovertarget="logging-columns" aria-label="Choose diagnostic columns" title="Columns"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M6 3v10M10 3v10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button type="button" class="logging-toolbar-button" id="logging-data-button" popovertarget="logging-data" aria-label="Diagnostic data details" title="Data and collection">${DATA_ICON}</button>
     </div></header><main>
-    <div class="logging-custom" id="logging-custom" hidden><label>From · inclusive, with UTC offset<input id="logging-from" class="st-input" type="text" placeholder="2026-10-19T00:00:00+03:00"></label><label>To · exclusive, with UTC offset<input id="logging-to" class="st-input" type="text" placeholder="2026-10-20T00:00:00+03:00"></label><div class="range-picker"><button type="button" data-action="custom">Apply interval</button></div></div>
-    <details class="logging-more"><summary>More filters</summary><div class="logging-exact-fields">${EXACT.map(([key, label]) => `<label>${label}<input class="st-input" id="logging-${key}" data-field="${key}" type="text" maxlength="512" autocomplete="off"></label>`).join('')}</div></details>
-    <h1 class="tp-group-label" id="logging-heading" tabindex="-1">Logging</h1>
-    <p class="st-help" id="logging-status" role="status" aria-live="polite" tabindex="-1"></p>
+    <h1 class="logging-screen-reader" id="logging-heading" tabindex="-1">Logging</h1>
+    <p class="logging-screen-reader" id="logging-status" role="status" aria-live="polite" tabindex="-1"></p>
     <p class="st-help st-help-error" id="logging-message" role="status" hidden></p>
     <div class="range-picker logging-new" id="logging-new" hidden><button type="button" data-action="new"></button></div>
-    <div id="logging-link"></div><div id="logging-health" class="logging-health"></div>
-    <div class="logging-table-wrap"><table id="logging-table" aria-label="Retained diagnostic events"><thead><tr><th>Time</th><th>Severity</th><th>Source</th><th>Component</th><th>Target</th><th>Message</th><th>Occurrences</th><th aria-label="Evidence"></th></tr></thead><tbody id="logging-tbody"></tbody></table></div>
+    <div id="logging-link"></div>
+    <div class="logging-table-wrap"><table id="logging-table" aria-label="Retained diagnostic events"><thead id="logging-thead"></thead><tbody id="logging-tbody"></tbody></table></div>
     <div id="logging-loader" class="loader" role="status" aria-label="Loading diagnostics" hidden><span></span><span></span><span></span></div>
-    <p class="st-help" id="logging-empty" hidden>No matching retained events.</p>
-    <div class="logging-pagination"><div class="range-picker" role="group" aria-label="Diagnostic pages"><button type="button" data-action="previous" data-focus="page-previous">Previous</button><button type="button" data-action="next" data-focus="page-next">Next 50</button></div><span class="st-help" id="logging-page"></span></div>
+    <p class="st-help" id="logging-empty" hidden>No matching events.</p>
+    <div class="logging-pagination"><div class="range-picker" role="group" aria-label="Diagnostic pages"><button type="button" data-action="previous" data-focus="page-previous">Previous</button><button type="button" data-action="next" data-focus="page-next">Next</button></div><span class="filter-count" id="logging-page"></span></div>
+    ${popovers()}
+    <div id="logging-columns" class="logging-popover" popover="auto" role="group" aria-label="Diagnostic columns" data-trigger="logging-columns-button"><div class="logging-popover-title">Columns</div>${OPTIONAL.map(([key, label]) => `<label class="logging-column-option"><input type="checkbox" data-column="${key}">${label}</label>`).join('')}</div>
+    <div id="logging-data" class="logging-popover logging-data" popover="auto" role="region" aria-label="Diagnostic data" data-trigger="logging-data-button"><div class="logging-popover-title">Data and collection</div><div id="logging-health"></div></div>
     </main>`
   view.addEventListener('click', onClick)
   view.addEventListener('input', onInput)
   view.addEventListener('change', onChange)
+  for (const popup of view.querySelectorAll<HTMLElement>('[popover]')) popup.addEventListener('beforetoggle', (event) => { if ((event as Event & { newState: string }).newState === 'open') { if (popup.id === 'logging-data') renderHealth(true); positionPopover(popup) } })
+  window.addEventListener('resize', positionPopovers)
+  window.addEventListener('scroll', positionPopovers, true)
   view.querySelector('#logging-custom')!.addEventListener('keydown', (event) => { if ((event as KeyboardEvent).key === 'Enter') { event.preventDefault(); applyCustom() } })
 }
 
 function controls(): void {
+  const columns = visibleColumns()
+  patchContent(view.querySelector<HTMLElement>('#logging-thead')!, header())
+  for (const input of view.querySelectorAll<HTMLInputElement>('[data-column]')) {
+    input.checked = columns.some(([key]) => key === input.dataset.column)
+    input.disabled = EXACT.some(([key]) => key === input.dataset.column && !!preferences[key])
+    input.title = input.disabled ? 'Clear the column filter before hiding this column' : ''
+  }
   for (const button of view.querySelectorAll<HTMLButtonElement>('[data-level]')) {
     const selected = preferences.severities.some((level) => level === button.dataset.level)
     button.classList.toggle('active', selected); button.setAttribute('aria-pressed', String(selected))
@@ -245,24 +302,31 @@ function render(): void {
   const anchorId = anchor?.dataset.id; const anchorTop = anchor?.getBoundingClientRect().top
   const ids = new Set(page?.events.map((event) => event.id) ?? [])
   for (const id of [...expanded]) if (!ids.has(id) && linked?.id !== id) { expanded.delete(id); related.delete(id) }
+  const columns = visibleColumns()
   const rows = page?.events.map((event) => {
     const open = expanded.has(event.id)
-    return `<tr class="agent-row" data-id="${event.id}"><td class="started-cell"><time datetime="${escape(event.eventTime ?? event.ingestedAt)}" title="${escape((event.eventTime ? 'Source time' : 'Ingestion time; source time not recorded') + ' · ' + effectiveTimezone())}">${escape(date(event.eventTime ?? event.ingestedAt))}</time>${event.eventTime ? '' : '<span class="agent-status-note">Ingested</span>'}</td>
-      <td><span class="agent-status ${event.severity === 'warning' ? 'warn' : 'bad'}"><span class="agent-status-label">${event.severity[0].toUpperCase() + event.severity.slice(1)}</span></span></td><td><span class="agent-behavior">${escape(event.source)}</span></td><td>${escape(event.component || '—')}</td><td class="logging-target">${escape(event.target || '—')}</td><td class="logging-summary">${escape(event.message || '—')}</td><td>${event.occurrences.toLocaleString()} retained occurrences</td>
-      <td class="action-cell"><button type="button" class="expand-btn${open ? ' open' : ''}" id="logging-expand-${event.id}" data-action="expand" data-row="${event.id}" data-focus="expand-${event.id}" aria-label="Toggle diagnostic evidence" aria-expanded="${open}" aria-controls="logging-detail-${event.id}">${CHEVRON}</button></td></tr>
-      ${open ? `<tr class="agent-expand-row" data-expand-for="${event.id}" id="logging-detail-${event.id}"><td colspan="8">${detail(event)}</td></tr>` : ''}`
+    const cells = columns.map(([key]) => {
+      if (key === 'time') return `<td class="started-cell"><time datetime="${escape(event.eventTime ?? event.ingestedAt)}" title="${escape((event.eventTime ? 'Source time' : 'Ingestion time; source time not recorded') + ' · ' + effectiveTimezone())}">${escape(date(event.eventTime ?? event.ingestedAt))}</time>${event.eventTime ? '' : '<span class="agent-status-note">Ingested</span>'}</td>`
+      if (key === 'severity') return `<td><span class="agent-status ${event.severity === 'warning' ? 'warn' : 'bad'}"><span class="agent-status-label">${event.severity[0].toUpperCase() + event.severity.slice(1)}</span></span></td>`
+      if (key === 'occurrences') return `<td class="logging-number" title="Retained occurrences in this incident">${event.occurrences.toLocaleString()}</td>`
+      const value = event[key] || '—'
+      return `<td class="logging-cell logging-cell-${key}" title="${escape(value)}">${escape(value)}</td>`
+    }).join('')
+    return `<tr class="agent-row" data-id="${event.id}">${cells}<td class="action-cell"><button type="button" class="expand-btn${open ? ' open' : ''}" id="logging-expand-${event.id}" data-action="expand" data-row="${event.id}" data-focus="expand-${event.id}" aria-label="Toggle diagnostic evidence" aria-expanded="${open}" aria-controls="logging-detail-${event.id}">${CHEVRON}</button></td></tr>
+      ${open ? `<tr class="agent-expand-row" data-expand-for="${event.id}" id="logging-detail-${event.id}"><td colspan="${columns.length + 1}">${detail(event)}</td></tr>` : ''}`
   }).join('') ?? ''
+
   patchContent(tbody, rows)
   const status = view.querySelector<HTMLElement>('#logging-status')!
   status.textContent = loading ? (page ? 'Refreshing retained diagnostics…' : 'Loading retained diagnostics…')
     : page ? `${page.total.toLocaleString()} matching retained events${preferences.severities.length ? '' : ' · No severities selected'}${lastSuccess ? ' · Snapshot read ' + date(new Date(lastSuccess).toISOString()) : ''}${stale ? ' · Stale results' : ''}` : linkFailure ? evidenceFailure(linkFailure) : message || 'Diagnostic results have not been read.'
-  view.querySelector<HTMLElement>('#logging-count')!.textContent = page ? page.total.toLocaleString() + ' events' : ''
+  view.querySelector<HTMLElement>('#logging-count')!.textContent = page ? page.total.toLocaleString() : ''
   const note = view.querySelector<HTMLElement>('#logging-message')!
-  note.textContent = [message, healthMessage, preferenceWarning].filter(Boolean).join(' '); note.hidden = !note.textContent
+  note.textContent = [message, preferenceWarning].filter(Boolean).join(' '); note.hidden = !note.textContent
   view.querySelector<HTMLElement>('#logging-loader')!.hidden = !loading
   view.querySelector<HTMLElement>('#logging-empty')!.hidden = !page || page.events.length > 0 || loading || !!linkFailure
-  view.querySelector<HTMLElement>('#logging-table')!.hidden = !page
-  view.querySelector<HTMLElement>('#logging-page')!.textContent = page ? `Page ${pageIndex + 1} · at most 50 events per page` : ''
+  view.querySelector<HTMLElement>('#logging-table')!.hidden = false
+  view.querySelector<HTMLElement>('#logging-page')!.textContent = page ? `${pageIndex * 50 + (page.events.length ? 1 : 0)}–${pageIndex * 50 + page.events.length} / ${page.total.toLocaleString()}` : ''
   const fresh = view.querySelector<HTMLElement>('#logging-new')!
   fresh.hidden = pageIndex !== 0 || !page || (!newCount && !rangeChanged)
   fresh.querySelector('button')!.textContent = rangeChanged ? 'Time range changed · refresh diagnostics' : `${newCount.toLocaleString()} new diagnostics`
@@ -271,7 +335,7 @@ function render(): void {
   if (focused) {
     const target = view.querySelector<HTMLElement>(`[data-focus="${focused}"]`)
     if (target && !(target instanceof HTMLButtonElement && target.disabled)) target.focus({ preventScroll: true })
-    else { status.textContent += ' The focused diagnostic or control is no longer available in this snapshot.'; status.focus({ preventScroll: true }) }
+    else { status.textContent += ' The focused diagnostic or control is no longer available in this snapshot.'; view.querySelector<HTMLElement>('.view-header')!.focus({ preventScroll: true }) }
   }
   if (anchorId && anchorTop !== undefined) {
     const next = tbody.querySelector<HTMLElement>(`tr[data-id="${anchorId}"]`)
@@ -292,14 +356,21 @@ function renderLink(): void {
     <div class="range-picker"><button type="button" data-action="restore">Browse retained diagnostics</button>${access?.isAdmin && preferences.scope === 'workspace' && linkFailure.status === 404 ? '<button type="button" data-action="link-instance">Use instance scope</button>' : ''}</div></section>`
     : link ? `<section class="logging-linked" aria-label="Linked diagnostic evidence"><h2 class="tp-group-label" tabindex="-1" id="logging-linked-heading">${extra ? 'Linked diagnostic · outside the current page' : 'Linked diagnostic'}</h2><p class="st-help">${escape(linkMessage)}</p><div class="range-picker"><button type="button" data-action="restore">Restore saved filters</button></div>${extra && linked ? detail(linked) : ''}</section>` : '')
 }
-function renderHealth(): void {
+function renderHealth(opening = false): void {
   const target = view.querySelector<HTMLElement>('#logging-health')!
   const bounds = page?.bounds ?? linkBounds ?? health?.bounds
   const sources = health?.collection.sources ?? page?.coverage ?? []
-  const partial = sources.filter((source) => source.status !== 'connected')
-  const unavailable = health && (health.collection.status !== 'connected' || health.query.status !== 'connected')
-  patchContent(target, `<p class="st-help">${bounds ? `Retention boundary: ${escape(date(bounds.retentionAfter))}. Retained source times: ${escape(bounds.from ? date(bounds.from) : 'Not recorded')} – ${escape(bounds.to ? date(bounds.to) : 'Not recorded')}.` : 'Retention bounds have not been read.'} Rows use ${escape(effectiveTimezone())}.${health ? ' Collection health read ' + escape(date(health.collection.checkedAt)) + '.' : ''}</p>
-    ${partial.length || unavailable ? `<details class="logging-coverage" open><summary>Partial or unavailable collection coverage</summary><p class="st-help">${health ? `Collection: ${escape(health.collection.status)} · Query service: ${escape(health.query.status)}${health.collection.lossObserved ? ' · Collection loss has been observed' : ''}.` : 'Source coverage is incomplete.'}</p><ul>${partial.map((source) => `<li>${escape(source.source)}: ${escape(source.status)}${source.error ? ' · ' + escape(source.error) : ''}${source.gaps.length ? ` · ${source.gaps.length} retained coverage gaps` : ''}</li>`).join('')}</ul></details>` : ''}`)
+  const state = health?.collection.currentStatus ?? (health?.collection.status === 'partial' ? 'initializing' : health?.collection.status)
+  const label = (value: string | undefined) => value === 'connected' ? 'Connected' : value === 'partial' ? 'Degraded' : value === 'initializing' ? 'Awaiting observation' : value === 'not-configured' ? 'Not configured' : value ? value[0].toUpperCase() + value.slice(1) : 'Not read'
+  const button = view.querySelector<HTMLButtonElement>('#logging-data-button')!
+  button.classList.toggle('has-issue', !!healthMessage || !!state && state !== 'connected' || health?.query.status === 'unavailable')
+  button.title = `Data and collection · ${healthMessage ? 'Health unavailable' : label(state)}`
+  if (!opening && !view.querySelector<HTMLElement>('#logging-data')!.matches(':popover-open')) return
+  patchContent(target, `<dl class="logging-data-facts">${field('Collection now', label(state))}${field('Query service', label(health?.query.status))}
+    ${field('Snapshot', lastSuccess ? date(new Date(lastSuccess).toISOString()) : null)}${field('Collection read', health ? date(health.collection.checkedAt) : null)}
+    ${field('Retention boundary', bounds ? date(bounds.retentionAfter) : null)}${field('Earliest retained', bounds?.from ? date(bounds.from) : null)}${field('Latest retained', bounds?.to ? date(bounds.to) : null)}${field('Timezone', effectiveTimezone())}${field('Historical loss recorded', health ? health.collection.lossObserved ? 'Yes' : 'No' : null)}</dl>
+    ${healthMessage ? `<p class="st-help st-help-error">${escape(healthMessage)}</p>` : ''}
+    <table class="logging-coverage-table" aria-label="Diagnostic sources"><thead><tr><th>Source</th><th>Current</th><th>Last observed</th><th>History</th></tr></thead><tbody>${sources.map((source) => `<tr><td><span>${escape(source.source)}</span><small>${escape(source.id)}</small></td><td title="${escape(source.error ?? '')}">${escape(label(currentCoverageStatus(source)))}${source.error && currentCoverageStatus(source) !== 'connected' ? `<small>${escape(source.error)}</small>` : ''}</td><td>${escape(source.observedAt ? date(source.observedAt) : '—')}</td><td>${source.gaps.length ? `<details><summary aria-label="${source.gaps.length} retained gaps for ${escape(source.id)}">${source.gaps.length} gaps</summary><ul>${source.gaps.map((gap) => `<li>${escape(date(gap.from))} – ${escape(gap.to ? date(gap.to) : 'Open')}<br>${escape(gap.reason)}</li>`).join('')}</ul></details>` : '—'}</td></tr>`).join('')}</tbody></table>`)
 }
 
 async function readHealth(mine: number): Promise<void> {
@@ -479,7 +550,7 @@ async function exportCurrent(): Promise<void> {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'poise-diagnostics.ndjson'; anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-    message = 'A fresh bounded snapshot was exported. Its metadata records any truncation and resume cursor.'; render()
+    message = ''; render()
   } catch (error) { if (current(mine) && !request.signal.aborted) { message = 'Export failed; no complete download was produced. ' + failure(error).message; render() } }
   finally { requests.delete(request); button.removeAttribute('aria-busy') }
 }
@@ -511,6 +582,11 @@ function onClick(event: Event): void {
   }
   const id = button.dataset.row
   switch (button.dataset.action) {
+    case 'clear-filter': {
+      const key = EXACT.find(([key]) => key === button.dataset.field)?.[0]
+      if (key) { preferences[key] = ''; filtersChanged(); view.querySelector<HTMLInputElement>('#logging-' + key)?.focus() }
+      break
+    }
     case 'expand': if (id) { if (expanded.has(id)) { expanded.delete(id); related.delete(id) } else expanded.add(id); render() } break
     case 'refresh': case 'new': refreshCurrent(); break
     case 'export': if (button.getAttribute('aria-busy') !== 'true') void exportCurrent(); break
@@ -548,6 +624,13 @@ function onInput(event: Event): void {
   filtersChanged(true)
 }
 function onChange(event: Event): void {
+  const column = event.target as HTMLInputElement
+  const key = OPTIONAL.find(([key]) => key === column.dataset.column)?.[0]
+  if (key) {
+    if (!column.checked && preferences[key]) { column.checked = true; return }
+    preferences.columns = column.checked ? [...preferences.columns.filter((name) => name !== key), key] : preferences.columns.filter((name) => name !== key)
+    persist(); render(); return
+  }
   const select = event.target as HTMLSelectElement
   if (select.id === 'logging-source') { preferences.source = select.value; filtersChanged() }
   if (select.id === 'logging-scope' && (select.value === 'workspace' || select.value === 'instance')) {
@@ -573,6 +656,6 @@ export function initLoggingView(): void {
 export function refreshLoggingView(): void { if (active) refreshCurrent() }
 export function stopLoggingRefresh(): void {
   if (!active) return
-  active = false; invalidate(); document.removeEventListener('visibilitychange', visibility)
+  closePopovers(); active = false; invalidate(); document.removeEventListener('visibilitychange', visibility)
   stopTick?.(); stopTick = null
 }
