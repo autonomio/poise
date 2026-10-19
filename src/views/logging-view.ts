@@ -179,7 +179,7 @@ function detail(event: LoggingEvent): string {
     settings ? `<button type="button" data-action="settings" data-settings="${settings}">Open Settings</button>` : ''].filter(Boolean).join(' ')
   const pre = (label: string, value: string | null) => `<section class="logging-evidence"><h3 class="tp-group-label">${label}</h3><pre class="agent-response-body">${escape(absent(value) ? 'Not recorded' : value)}</pre></section>`
   const r = related.get(event.id)
-  const relatedMarkup = r ? `<p class="st-help" role="status">${escape(r.loading ? 'Loading related diagnostics…' : r.error || `${r.total.toLocaleString()} matching retained events · related snapshot`)}</p>
+  const relatedMarkup = r ? `<p class="st-help st-help-${!r.loading && r.error ? 'warn' : 'info'}" role="status">${escape(r.loading ? 'Loading related diagnostics…' : r.error || `${r.total.toLocaleString()} matching retained events · related snapshot`)}</p>
     <ul class="logging-related-list">${r.events.map((entry) => `<li><button type="button" data-action="related-event" data-event="${entry.id}">${escape(date(entry.eventTime ?? entry.ingestedAt))} · ${escape(entry.message)}</button></li>`).join('')}</ul>
     <div class="range-picker" role="group" aria-label="Related pages"><button type="button" data-action="related-previous" data-row="${event.id}" data-focus="related-previous-${event.id}" ${r.page === 0 || r.loading ? 'disabled' : ''}>Previous</button><button type="button" data-action="related-next" data-row="${event.id}" data-focus="related-next-${event.id}" ${!r.cursor || r.loading ? 'disabled' : ''}>Next 20</button></div>` : ''
   return `${event.truncated ? '<p class="st-help st-help-warn">Evidence is truncated; omitted details are not retained.</p>' : ''}
@@ -363,7 +363,7 @@ function evidenceFailure(error: LoggingApiError): string {
 function renderLink(): void {
   const target = view.querySelector<HTMLElement>('#logging-link')!
   const extra = linked && !page?.events.some((event) => event.id === linked!.id)
-  patchContent(target, linkFailure ? `<section class="logging-linked" aria-label="Linked diagnostic state"><h2 class="tp-group-label" tabindex="-1" id="logging-linked-heading">${evidenceFailure(linkFailure)}</h2><p class="st-help">${escape(linkFailure.message)}</p>
+  patchContent(target, linkFailure ? `<section class="logging-linked" aria-label="Linked diagnostic state"><h2 class="tp-group-label" tabindex="-1" id="logging-linked-heading">${evidenceFailure(linkFailure)}</h2><p class="st-help st-help-${[404, 410].includes(linkFailure.status) ? 'warn' : 'error'}">${escape(linkFailure.message)}</p>
     <div class="range-picker"><button type="button" data-action="restore">Browse retained diagnostics</button>${access?.isAdmin && preferences.scope === 'workspace' && linkFailure.status === 404 ? '<button type="button" data-action="link-instance">Use instance scope</button>' : ''}</div></section>`
     : link ? `<section class="logging-linked" aria-label="Linked diagnostic evidence"><h2 class="tp-group-label" tabindex="-1" id="logging-linked-heading">${extra ? 'Linked diagnostic · outside the current page' : 'Linked diagnostic'}</h2><p class="st-help">${escape(linkMessage)}</p><div class="range-picker"><button type="button" data-action="restore">Restore saved filters</button></div>${extra && linked ? detail(linked) : ''}</section>` : '')
 }
@@ -387,7 +387,7 @@ function renderHealth(opening = false): void {
   patchContent(target, `<dl class="logging-data-facts">${field('Collection now', label(state))}${field('Query service', label(queryState))}
     ${field('Snapshot', lastSuccess ? date(new Date(lastSuccess).toISOString()) : null)}${field('Collection read', health ? date(health.collection.checkedAt) : null)}
     ${field('Retention boundary', bounds ? date(bounds.retentionAfter) : null)}${field('Earliest retained', bounds?.from ? date(bounds.from) : null)}${field('Latest retained', bounds?.to ? date(bounds.to) : null)}${field('Timezone', effectiveTimezone())}${field('Active loss', healthFresh && health?.collection.lossActive !== undefined ? health.collection.lossActive ? 'Yes' : 'No' : null)}${field('Historical loss recorded', health ? health.collection.lossObserved ? 'Yes' : 'No' : null)}</dl>
-    ${healthMessage ? `<p class="st-help st-help-error">${escape(healthMessage)}</p>` : ''}
+    ${healthMessage ? `<p class="st-help st-help-warn">${escape(healthMessage)}</p>` : ''}
     <table class="logging-coverage-table" aria-label="Diagnostic sources"><thead><tr><th>Source</th><th>Current</th><th>Last observed</th><th>History</th></tr></thead><tbody>${sources.map((source) => `<tr><td><span>${escape(source.source)}</span><small>${escape(source.id)}</small></td><td title="${escape(source.error ?? '')}">${escape(health && !healthFresh ? 'Stale' : source.optional && currentCoverageStatus(source) === 'not-configured' ? 'Not applicable' : label(currentCoverageStatus(source)))}${source.error && currentCoverageStatus(source) !== 'connected' ? `<small>${escape(source.error)}</small>` : ''}</td><td>${escape(source.observedAt ? date(source.observedAt) : '—')}</td><td>${coverageHistory(source)}</td></tr>`).join('')}</tbody></table>`)
 }
 

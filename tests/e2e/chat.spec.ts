@@ -456,6 +456,12 @@ test('offers an explicit fallback choice when the default provider is not signed
   await dialog.getByRole('button', { name: 'Create' }).click()
   await expect(page.getByRole('dialog', { name: 'New session' }).getByRole('alert')).toContainText('uncommitted changes')
   await expect(page.locator('.chat-session-item')).toHaveCount(0)
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
+    await expect(dialog.locator('.chat-dialog-fallback .st-help')).toHaveCSS('color', 'rgb(168, 121, 43)')
+    await expect(dialog.getByRole('alert')).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await expect(dialog.getByRole('button', { name: 'Create' })).toBeEnabled()
+  }
 })
 
 test('hands a Current card and an Editor document off to a prefilled New session dialog', async ({ page }) => {
@@ -2927,7 +2933,8 @@ test('CLI refresh: a completed Settings check updates the fresh console without 
 
 test('CLI refresh: an unavailable latest version stays visible independently of activity and reasoning', async ({ page }) => {
   const warning = 'Latest claude CLI could not be verified: download unavailable. Trying the installed CLI (2.1.274).'
-  const state = makeState([session({ cliVersion: '2.1.274', cliWarning: warning })])
+  const orphan = 'An orphaned process must be stopped by hand before this chat can continue.'
+  const state = makeState([session({ cliVersion: '2.1.274', cliWarning: warning, orphanNotice: orphan })])
   await installRoutes(page, state); const sock = await installSocket(page, state)
   await page.goto('/'); await sock.subscribed('s1')
   await expect(page.locator('.chat-cli-warning')).toHaveText(warning)
@@ -2942,6 +2949,7 @@ test('CLI refresh: an unavailable latest version stays visible independently of 
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
     await expect(page.locator('.chat-cli-warning')).toHaveCSS('color', 'rgb(168, 121, 43)')
+    await expect(page.getByText(orphan, { exact: true })).toHaveCSS('color', 'rgb(184, 80, 72)')
     await expect(page.locator('.chat-msg-error .chat-msg-body').filter({ hasText: 'Actual provider failure' })).toHaveCSS('color', 'rgb(184, 80, 72)')
   }
 })
