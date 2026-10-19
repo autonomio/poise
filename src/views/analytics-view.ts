@@ -148,7 +148,10 @@ function refreshQuota(): void {
 }
 
 function refreshAnalytics(): void {
-  if (document.visibilityState === 'visible' && active) void readAnalytics(true)
+  if (document.visibilityState === 'visible' && active) {
+    render()
+    void readAnalytics(true)
+  }
 }
 
 function readFailure(title: string, error: unknown): ReadFailure {
@@ -158,6 +161,11 @@ function readFailure(title: string, error: unknown): ReadFailure {
 
 function accountFailures(data: { errors: Array<{ org: string, error: string, stale?: boolean }> }): ReadFailure[] {
   return data.errors.map(({ org, error, stale }) => ({ key: `account:${org.toLowerCase()}`, title: `GitHub data for ${org} ${stale ? 'is not updating' : 'is unavailable'}`, body: error }))
+}
+
+function hasNewAccountFailure(report: AnalyticsReport, previous: AnalyticsReport): boolean {
+  const missing = new Set(previous.errors.filter((error) => !error.stale).map((error) => error.org.toLowerCase()))
+  return report.errors.some((error) => !error.stale && !missing.has(error.org.toLowerCase()))
 }
 
 function historyMarkup(label: string, all: HistorySeries[] | null): string {
@@ -220,8 +228,11 @@ function groupMarkup(group: AnalyticsGroup): string {
 }
 
 function render(): void {
+  const day = analyticsDay(dayOffset, dayAnchor)
+  viewEl.querySelector('.analytics-date')!.textContent = day.label
+  viewEl.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
   if (!shown) return
-  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, shown.progress, shown.snapshotTime).map(groupMarkup).join(''))
+  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, day.isToday ? shown.progress : undefined, day.isToday ? shown.snapshotTime : undefined).map(groupMarkup).join(''))
   for (const [label, index] of cursors) showCursor(label, index)
 }
 
@@ -371,9 +382,8 @@ async function readAnalytics(background = false): Promise<void> {
   }).format(capturedAt) : undefined
   if (!background) {
     shown = null
+    render()
     void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
-    viewEl.querySelector('.analytics-date')!.textContent = day.label
-    viewEl.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
     // The emptied sections keep their space while the next day loads, so
     // GitHub below does not jump up under the loader and back down after.
     const quotaTop = quota.offsetTop
@@ -397,15 +407,11 @@ async function readAnalytics(background = false): Promise<void> {
     ])
     if (generation !== readGeneration) return
     const failures = [...accountFailures(data), ...accountFailures(baseline)]
-    if (background && shown && [...data.errors, ...baseline.errors].some((error) => !error.stale)) {
+    if (background && shown && (hasNewAccountFailure(data, shown.report) || hasNewAccountFailure(baseline, shown.baseline))) {
       noticeFeed.reportReadErrors('analytics-day', failures)
       return
     }
     shown = { report: data, baseline, progress, snapshotTime }
-    if (background) {
-      viewEl.querySelector('.analytics-date')!.textContent = day.label
-      viewEl.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
-    }
     render()
     noticeFeed.reportReadErrors('analytics-day', failures)
   } catch (error) {

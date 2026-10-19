@@ -61,9 +61,11 @@ history is not reread. Quota keeps its separate refresh schedule.
 
 The current values, charts and chart cursor stay in place during refreshes.
 A successful read replaces totals and their pace timestamp together. A failed
-request or unreadable account preserves the previous snapshot's complete scope
-and reports the failure in Notifications. Readable stale caches still update
-the snapshot with the existing warning and pace suppression.
+request, or an account becoming unreadable in either report, preserves the
+previous snapshot and reports the failure in Notifications. A snapshot that
+already lacks an account can still refresh its other accounts while the same
+account remains unreadable. Readable stale caches update with the existing
+warning and pace suppression.
 These local reads make no GitHub requests and consume no GitHub API quota.
 They show the datastore's latest stored records; freshness still depends on
 the existing GitHub sync, whose schedule and requests are unchanged.
@@ -155,10 +157,11 @@ stays with the totals snapshot between successful local reads, including when
 history arrives or quota refreshes. Each paced value's keyboard-accessible
 tooltip gives the snapshot date, time and Settings timezone; the visible label
 stays “Typical by now.” Opening Analytics, choosing a day or organization,
-saving Settings and the visible refresh clock renew the snapshot. A visible
-midnight refresh keeps the selected date and updates its completed-day
-comparison without reloading history. Pacing reuses these local reads and makes
-no GitHub requests.
+saving Settings and the visible refresh clock renew the snapshot. At midnight
+or on returning to the tab, calendar labels, forward navigation and the
+completed-day comparison update even if the local read fails; the retained
+totals keep their selected date. History is not reloaded. Pacing reuses these
+local reads and makes no GitHub requests.
 
 Completed days retain the full-day comparison: activity increases are green,
 decreases red, and an unchanged value has a neutral arrow and 0%. A zero

@@ -43,13 +43,14 @@ interface Workspace {
   fail: boolean
   stale: boolean
   partial: 'day' | 'baseline' | null
+  additionalMissingOrg: string | null
   baselineHours: number
   baselineMerged: number
   pacing: { merged: number, median: number } | null
 }
 
 async function workspace(page: Page, timezone = 'UTC'): Promise<Workspace> {
-  const state: Workspace = { quotaReads: 0, historyReads: [], historyFails: false, reads: [], fail: false, stale: false, partial: null, baselineHours: 54, baselineMerged: 8, pacing: null }
+  const state: Workspace = { quotaReads: 0, historyReads: [], historyFails: false, reads: [], fail: false, stale: false, partial: null, additionalMissingOrg: null, baselineHours: 54, baselineMerged: 8, pacing: null }
   await page.clock.setFixedTime(new Date('2026-10-09T12:00:00Z'))
   await page.addInitScript(() => {
     if (sessionStorage.getItem('seeded')) return
@@ -77,6 +78,7 @@ async function workspace(page: Page, timezone = 'UTC'): Promise<Workspace> {
       result.window = { since: read.since, until: read.until }
       if (state.stale) result.errors = [{ org: 'acme', error: 'Synchronization failed', stale: true }]
       if (state.partial === (baseline ? 'baseline' : 'day')) result.errors.push({ org: 'beta', error: 'Account scope unavailable' })
+      if (baseline && state.additionalMissingOrg) result.errors.push({ org: state.additionalMissingOrg, error: 'Additional account scope unavailable' })
       if (baseline) result.daily = Array.from({ length: 7 }, () => {
         const pullRequests = report(state.pacing?.median ?? 1).pullRequests
         if (state.pacing) pullRequests.lines = { total: pullRequests.merged * 1000, median: 180, counted: pullRequests.merged }
@@ -732,6 +734,50 @@ test('keeps the last complete snapshot on a quiet failure, cancels the other hal
   expect(state.quotaReads).toBe(1)
 })
 
+for (const partial of ['day', 'baseline'] as const) {
+  test(`refreshes an initially partial ${partial} snapshot until another account becomes unavailable`, async ({ page }) => {
+    const state = await workspace(page)
+    state.pacing = { merged: 15, median: 27 }
+    state.partial = partial
+    await installRefreshClock(page)
+    await page.goto('/')
+    await pauseRefreshClock(page)
+    await openAnalytics(page)
+    const merged = countTrend(page)
+    await expect(merged.locator('.analytics-value')).toHaveText('15')
+    await expect(merged.locator('.analytics-arrow')).toHaveCount(0)
+    await expect(merged.locator('.analytics-delta')).toHaveCount(0)
+
+    await page.clock.setFixedTime(new Date('2026-10-09T14:00:00Z'))
+    state.pacing.merged = 16
+    await refreshAnalytics(page)
+    await expect(merged.locator('.analytics-value')).toHaveText('16')
+    await expect(merged).toContainText('Typical by now: 15.8 · 7-day median: 27.0 / day')
+    await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 14:00 UTC/)
+    await expect(merged.locator('.analytics-arrow')).toHaveCount(0)
+    await expect(merged.locator('.analytics-delta')).toHaveCount(0)
+    await page.locator('.nr-bell').click()
+    const notices = page.locator('.nr-rail .nr-card')
+    await expect(notices.filter({ hasText: 'Account scope unavailable' })).toHaveCount(1)
+    await expect(notices.filter({ hasText: 'Account scope unavailable' })).toContainText('GitHub data for beta is unavailable')
+    expect(state.reads).toHaveLength(4)
+    expect(state.historyReads).toHaveLength(1)
+
+    await page.clock.setFixedTime(new Date('2026-10-09T15:00:00Z'))
+    state.pacing.merged = 20
+    state.additionalMissingOrg = 'acme'
+    await refreshAnalytics(page)
+    await expect(notices.filter({ hasText: 'Additional account scope unavailable' })).toHaveCount(1)
+    await expect(merged.locator('.analytics-value')).toHaveText('16')
+    await expect(merged).toContainText('Typical by now: 15.8 · 7-day median: 27.0 / day')
+    await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 14:00 UTC/)
+    await expect(merged.locator('.analytics-arrow')).toHaveCount(0)
+    expect(state.reads).toHaveLength(6)
+    expect(state.historyReads).toHaveLength(1)
+    expect(state.quotaReads).toBe(1)
+  })
+}
+
 test('coalesces ticks during a foreground read and discards a superseded background day', async ({ page }) => {
   const state = await workspace(page)
   state.pacing = { merged: 15, median: 27 }
@@ -980,6 +1026,40 @@ test('retains the selected calendar date and completes its pace comparison acros
   expect(state.historyReads).toHaveLength(4)
 })
 
+
+for (const failure of ['HTTP', 'account'] as const) {
+  test(`completes the selected day's calendar presentation when the midnight ${failure} refresh fails`, async ({ page }) => {
+    const state = await workspace(page)
+    state.pacing = { merged: 15, median: 27 }
+    await page.clock.install({ time: new Date('2026-10-09T23:59:30Z') })
+    await page.goto('/')
+    await openAnalytics(page)
+    const panel = page.locator('#view-analytics')
+    const merged = countTrend(page)
+    await expect(panel.locator('.analytics-date')).toHaveText('Today')
+    await expect(panel.getByRole('button', { name: 'Next day' })).toBeDisabled()
+    await expect(merged).toContainText('Typical by now: 27.0 · 7-day median: 27.0 / day')
+    await expect(panel.locator('.analytics-history-line')).toHaveCount(13)
+    state.pacing.merged = 20
+    if (failure === 'HTTP') state.fail = true
+    else state.partial = 'baseline'
+
+    await page.clock.fastForward(60_000)
+    await expect(panel.locator('.analytics-date')).toHaveText('Yesterday')
+    await expect(panel.getByRole('button', { name: 'Next day' })).toBeEnabled()
+    await expect(merged.locator('.analytics-value')).toHaveText('15')
+    await expect(merged.locator('.analytics-delta')).toHaveText('44.4%')
+    await expect(merged).toContainText('7-day median: 27.0 / day')
+    await expect(merged).not.toContainText('Typical by now')
+    await expect(merged.locator('.analytics-value')).not.toHaveAttribute('data-help', /Pace as of/)
+    await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
+    await expect(panel.locator('.analytics-tile')).toHaveCount(13)
+    await page.locator('.nr-bell').click()
+    await expect(page.locator('.nr-rail .nr-card').filter({ hasText: failure === 'HTTP' ? 'acme: datastore offline' : 'Account scope unavailable' })).toHaveCount(1)
+    expect(state.reads).toHaveLength(4)
+    expect(state.historyReads).toHaveLength(1)
+  })
+}
 
 test('shows the standard loader with no old values on initial load, day/account changes and reopening', async ({ page }, info) => {
   await workspace(page)
