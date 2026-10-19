@@ -91,12 +91,12 @@ export function inbox(instance: string, recipient: string, after = 0): InternalM
 }
 export function pending(instance: string, afterRecipient = ''): InternalMessage[] {
   const page = db.prepare(`SELECT seq, recipient, sender, body, created_at, state, turn_id FROM chat_control_inbox
-    WHERE instance = ? AND state = 'pending' AND recipient > ?
+    WHERE instance = ? AND state = 'pending'
       AND seq IN (SELECT MIN(seq) FROM chat_control_inbox WHERE instance = ? AND state = 'pending' GROUP BY recipient)
       AND recipient IN (SELECT id FROM chat_sessions WHERE status = 'idle')
       AND recipient NOT IN (SELECT session FROM chat_control_paused WHERE instance = ?)
-    ORDER BY recipient LIMIT 100`).all(instance, afterRecipient, instance, instance) as InternalMessage[]
-  return page.length || !afterRecipient ? page : pending(instance)
+    ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient LIMIT 100`).all(instance, instance, instance, afterRecipient) as InternalMessage[]
+  return page
 }
 export function pauseDelivery(instance: string, session: string): void {
   db.prepare('INSERT OR IGNORE INTO chat_control_paused VALUES(?, ?)').run(instance, session)
