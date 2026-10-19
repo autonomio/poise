@@ -157,7 +157,7 @@ export function observeQuotaConditions(accounts: GithubQuotaAccount[], now = Dat
           || typeof value.lastAt !== 'number' || !Number.isFinite(value.lastAt) || typeof value.warned !== 'boolean') throw new Error('Invalid retained GitHub quota risk interval')
         previous = value as unknown as RiskWindow
       }
-      const eligible = bucket.limit > 0 && bucket.remaining > 0 && Date.parse(bucket.resetAt) > now && bucket.riskPercent >= QUOTA_WARNING_RISK_PERCENT
+      const eligible = bucket.limit > 0 && bucket.remaining > 0 && Date.parse(bucket.resetAt) > now && bucket.riskPercent !== null && bucket.riskPercent >= QUOTA_WARNING_RISK_PERCENT
       const state: RiskWindow = previous?.resetAt === bucket.resetAt && previous.lastAt <= at
         ? { ...previous } : { resetAt: bucket.resetAt, since: null, lastAt: at, warned: false }
       state.exhaustedSince = bucket.remaining === 0 && Date.parse(bucket.resetAt) > now ? state.exhaustedSince ?? at : null
