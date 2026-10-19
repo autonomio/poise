@@ -257,15 +257,15 @@ test('setup cooldowns are neutral while genuine activation and sync failures sta
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
     for (const login of ['waiting-new', 'waiting-ready']) {
       const row = page.locator(`.ob-org[data-org="${login}"]`)
-      await expect(row.locator('.ob-org-state')).toHaveText('Waiting for GitHub')
-      await expect(row.locator('.ob-org-state')).toHaveCSS('color', theme === 'light' ? 'rgb(92, 99, 109)' : 'rgb(197, 203, 209)')
-      await expect(row.locator('.st-help')).toHaveCSS('color', 'rgb(142, 149, 158)')
-      await expect(row.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+      await expect.soft(row.locator('.ob-org-state')).toHaveText('Waiting for GitHub')
+      await expect.soft(row.locator('.ob-org-state')).toHaveCSS('color', theme === 'light' ? 'rgb(92, 99, 109)' : 'rgb(197, 203, 209)')
+      await expect.soft(row.locator('.st-help')).toHaveCSS('color', 'rgb(142, 149, 158)')
+      await expect.soft(row.getByRole('button', { name: 'Retry' })).toHaveCount(0)
     }
     for (const login of ['activation-failed', 'sync-failed']) {
       const row = page.locator(`.ob-org[data-org="${login}"]`)
-      await expect(row.locator('.ob-org-state')).toHaveCSS('color', 'rgb(184, 80, 72)')
-      await expect(row.locator('.st-help-error')).toHaveCSS('color', 'rgb(184, 80, 72)')
+      await expect.soft(row.locator('.ob-org-state')).toHaveCSS('color', 'rgb(184, 80, 72)')
+      await expect.soft(row.locator('.st-help-error')).toHaveCSS('color', 'rgb(184, 80, 72)')
       await expect(row.getByRole('button', { name: 'Retry' })).toBeEnabled()
     }
   }
@@ -283,7 +283,7 @@ test('optional setup probes warn while an unavailable model catalog blocks progr
     const note = page.locator('.ob-dialog .st-help').filter({ hasText: text })
     for (const theme of ['light', 'dark']) {
       await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-      await expect(note).toHaveCSS('color', blocked ? 'rgb(184, 80, 72)' : 'rgb(168, 121, 43)')
+      await expect.soft(note).toHaveCSS('color', blocked ? 'rgb(184, 80, 72)' : 'rgb(168, 121, 43)')
       if (blocked) await expect(next(page)).toBeDisabled()
       else await expect(next(page)).toBeEnabled()
     }

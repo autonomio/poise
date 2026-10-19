@@ -156,7 +156,7 @@ test('account sign-in notices are amber while account read failures stay red', a
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
     for (const note of await row.locator('.st-gh-missing, .st-gh-problem').all()) {
-      await expect(note).toHaveCSS('color', 'rgb(168, 121, 43)')
+      await expect.soft(note).toHaveCSS('color', 'rgb(168, 121, 43)')
     }
     for (const state of await row.locator('.st-account-state-off').all()) {
       await expect.poll(() => state.evaluate(el => getComputedStyle(el, '::before').backgroundColor)).toBe('rgb(168, 121, 43)')
@@ -169,6 +169,6 @@ test('account sign-in notices are amber while account read failures stay red', a
   await expect(page.locator('.st-account-checks-status')).toContainText('Could not check gh')
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-    await expect(page.locator('.st-account-checks-status')).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await expect.soft(page.locator('.st-account-checks-status')).toHaveCSS('color', 'rgb(184, 80, 72)')
   }
 })

@@ -458,15 +458,15 @@ test('offers an explicit fallback choice when the default provider is not signed
   await expect(page.locator('.chat-session-item')).toHaveCount(0)
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-    await expect(dialog.locator('.chat-dialog-fallback .st-help')).toHaveCSS('color', 'rgb(168, 121, 43)')
-    await expect(dialog.getByRole('alert')).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await expect.soft(dialog.locator('.chat-dialog-fallback .st-help')).toHaveCSS('color', 'rgb(168, 121, 43)')
+    await expect.soft(dialog.getByRole('alert')).toHaveCSS('color', 'rgb(184, 80, 72)')
     await expect(dialog.getByRole('button', { name: 'Create' })).toBeEnabled()
   }
   await dialog.getByLabel('Model').selectOption('grok-4.6-xhigh')
   await expect(dialog.getByRole('status')).toContainText('not signed in')
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-    await expect(dialog.getByRole('status')).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await expect.soft(dialog.getByRole('status')).toHaveCSS('color', 'rgb(184, 80, 72)')
     await expect(dialog.getByRole('button', { name: 'Create' })).toBeDisabled()
   }
 })

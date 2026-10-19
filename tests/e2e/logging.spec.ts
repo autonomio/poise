@@ -547,7 +547,7 @@ test('auxiliary Logging failures warn while primary evidence remains usable', as
   await expect(related).toContainText('Fixture related read unavailable')
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-    await expect(related).toHaveCSS('color', 'rgb(168, 121, 43)')
+    await expect.soft(related).toHaveCSS('color', 'rgb(168, 121, 43)')
   }
   await page.route('**/api/logging/health?**', route => route.fulfill({ status: 503, json: { error: 'logging_unavailable', message: 'Fixture health unavailable' } }))
   const health = page.waitForResponse(response => new URL(response.url()).pathname === '/api/logging/health')
@@ -558,6 +558,6 @@ test('auxiliary Logging failures warn while primary evidence remains usable', as
   const note = page.locator('#logging-health .st-help').filter({ hasText: 'Fixture health unavailable' })
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
-    await expect(note).toHaveCSS('color', 'rgb(168, 121, 43)')
+    await expect.soft(note).toHaveCSS('color', 'rgb(168, 121, 43)')
   }
 })
