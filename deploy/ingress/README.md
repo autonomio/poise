@@ -106,7 +106,8 @@ warning/error records remain authoritative; no access event is promoted to an
 error. All retained diagnostics continue to share the existing finite FIFO
 budget; this integration adds no quota policy or guarantee against a flood.
 
-Window ends use the gateway handshake clock. The edge clock must agree within
+Window ends are one second before the earlier of the edge and gateway handshake
+clocks, so a slow edge cannot commit beyond events it has not emitted yet. The edge clock must agree within
 five seconds; greater skew reports an explicit unavailable observation, keeps
 the committed checkpoint and uses the normal 15-second cadence until repaired.
 Unstructured shared-proxy text is excluded without discarding attributable JSON

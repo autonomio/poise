@@ -71,6 +71,25 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(behind["expected"], hello["checkpoint"])
         self.assertEqual(behind["records"], [])
 
+    def test_a_slow_edge_clock_never_commits_past_events_that_have_not_been_emitted(self):
+        reads = 0
+        def source(argv, **_options):
+            nonlocal reads
+            if "inspect" in argv:
+                return CONTAINER.encode()
+            reads += 1
+            stamp = "2026-10-19T09:59:54.000000000Z" if reads == 1 else "2026-10-19T09:59:57.000000000Z"
+            return line(message="before scan" if reads == 1 else "emitted after scan", stamp=stamp) + b"\n"
+        hello = {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None):
+            first = reporter.collect(CONFIG, hello, NOW - dt.timedelta(seconds=4))
+            cursor = json.dumps({"container": CONTAINER, "until": first["until"]}, separators=(",", ":"))
+            second = reporter.collect(CONFIG, {**hello, "issuedAt": reporter.iso(NOW + dt.timedelta(seconds=15)), "checkpoint": cursor}, NOW + dt.timedelta(seconds=11))
+        self.assertEqual(first["state"], "complete")
+        self.assertLess(reporter.instant(first["until"]), NOW - dt.timedelta(seconds=4))
+        self.assertEqual(second["from"], first["until"])
+        self.assertEqual([record["log"]["msg"] for record in second["records"]], ["emitted after scan"])
+
     def test_real_subprocess_output_and_absolute_time_bounds(self):
         with self.assertRaises(reporter.ReadBound):
             reporter.bounded_command([sys.executable, "-c", "import sys;sys.stdout.write('x'*10000)"], limit=1024)

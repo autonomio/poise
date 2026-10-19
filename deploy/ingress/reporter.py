@@ -152,7 +152,7 @@ def collect(config, hello, now=None):
     checkpoint = hello.get("checkpoint")
     cursor = json.loads(checkpoint) if checkpoint is not None else None
     gateway_now = instant(hello["issuedAt"])
-    end = gateway_now - dt.timedelta(seconds=1)
+    end = min(gateway_now, now) - dt.timedelta(seconds=1)
     if abs((now - gateway_now).total_seconds()) > 5:
         boundary = cursor["until"] if cursor and cursor["container"] == container else iso(end)
         return {"version": 1, "challenge": hello.get("challenge"), "expected": checkpoint, "container": container,
