@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import Database from 'better-sqlite3'
 import { environmentSecrets, normalize, redact, severity, type DiagnosticInput, type LogEvent } from '../src/diagnostics/contract.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { runOperator } from '../src/diagnostics/cli.js'
@@ -16,6 +17,30 @@ const directories: string[] = []
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const dir of directories.splice(0)) rmSync(dir, { force: true, recursive: true }) })
 function directory() { const path = mkdtempSync(join(tmpdir(), 'poise-diagnostics-')); directories.push(path); return path }
 function store(policy = DEFAULT_LOG_POLICY) { const value = new DiagnosticStore(':memory:', policy, () => NOW); stores.push(value); return value }
+
+it('upgrades legacy count metadata without losing retained events or existing snapshot cursors', () => {
+  const path = join(directory(), 'logging.db')
+  const original = new DiagnosticStore(path, DEFAULT_LOG_POLICY, () => NOW)
+  original.append(Array.from({ length: 12 }, (_, index) => event('legacy-index-' + index)))
+  const first = original.query(alice, { limit: 5 })
+  original.close()
+  const legacy = new Database(path)
+  try { legacy.exec('DROP INDEX log_scope_time; CREATE INDEX log_scope_time ON log_events(workspace,sort_time DESC,id DESC)') }
+  finally { legacy.close() }
+  const upgraded = new DiagnosticStore(path, DEFAULT_LOG_POLICY, () => NOW)
+  try {
+    const next = upgraded.query(alice, { limit: 5, cursor: first.nextCursor! })
+    expect(next.total).toBe(12)
+    expect(next.events).toHaveLength(5)
+    expect(next.events.some((row) => first.events.some((prior) => row.id === prior.id))).toBe(false)
+    const reader = new Database(path, { readonly: true })
+    try {
+      const plan = reader.prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM log_events WHERE workspace=? AND visibility IN ('workspace','infrastructure') AND severity IN ('critical','error','warning') AND ingested_at>=? AND seq<=?")
+        .all('alice', new Date(NOW - DEFAULT_LOG_POLICY.retentionMs).toISOString(), 12) as Array<{ detail: string }>
+      expect(plan.some((step) => step.detail.includes('COVERING INDEX'))).toBe(true)
+    } finally { reader.close() }
+  } finally { upgraded.close() }
+})
 function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
   const value = normalize({ id, time: new Date(NOW).toISOString(), level: 'error', source: 'poise', operation: 'test.operation',
     workspace: 'alice', message: 'precise failure', ...update }, NOW)
