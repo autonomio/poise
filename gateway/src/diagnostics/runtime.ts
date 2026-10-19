@@ -206,6 +206,7 @@ export class DiagnosticRuntime {
   mergeHistory(id: string, history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; lossActive?: boolean; availableFrom: string | null }): void {
     const source = this.sources.get(this.coverageId(id))
     if (!source) return // Admission failure is already reported by observe/deliver.
+    const liveLossChanged = source.lossActive !== history.lossActive
     const gaps = new Map(source.gaps.map((gap) => [gap.from + ':' + gap.reason, gap]))
     for (const gap of history.gaps) {
       const safe = { ...gap, reason: this.safe(gap.reason, 128) }
@@ -219,7 +220,7 @@ export class DiagnosticRuntime {
     source.lossActive = history.lossActive
     if (history.availableFrom && (!source.availableFrom || history.availableFrom < source.availableFrom)) source.availableFrom = history.availableFrom
     if (source.currentStatus === 'connected' && (source.historyIncomplete || source.gaps.length)) source.status = 'partial'
-    this.saveJournal()
+    this.saveJournal(liveLossChanged)
   }
 
   health() {
