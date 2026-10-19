@@ -87,9 +87,12 @@ def projected(line, domain, start, end, occurrence=0):
         raise ReadBound("native Docker timestamp framing is unavailable")
     try:
         observed = instant(stamp.decode("ascii"))
+    except (ValueError, UnicodeError):
+        raise ReadBound("native Docker timestamp cannot be decoded")
+    try:
         row = json.loads(text)
     except (ValueError, UnicodeError):
-        raise ReadBound("native proxy record cannot be decoded")
+        return None  # Unstructured shared-proxy output cannot establish Poise attribution.
     if not isinstance(row, dict) or not start <= observed <= end:
         return None
     request = row.get("request")
@@ -148,8 +151,13 @@ def collect(config, hello, now=None):
         raise RuntimeError("source container identity is invalid")
     checkpoint = hello.get("checkpoint")
     cursor = json.loads(checkpoint) if checkpoint is not None else None
+    gateway_now = instant(hello["issuedAt"])
+    end = gateway_now - dt.timedelta(seconds=1)
+    if abs((now - gateway_now).total_seconds()) > 5:
+        boundary = cursor["until"] if cursor and cursor["container"] == container else iso(end)
+        return {"version": 1, "challenge": hello.get("challenge"), "expected": checkpoint, "container": container,
+                "from": boundary, "until": boundary, "state": "unavailable", "failure": "clock-skew", "records": []}
     retained = retained_boundary(container)
-    end = now - dt.timedelta(seconds=1)
     initial = max(end - dt.timedelta(days=30), min(instant(retained), end)) if retained else end - dt.timedelta(minutes=5)
     start = instant(cursor["until"]) if cursor and cursor["container"] == container else initial
     # Catch up a stopped reader in finite windows; do not pretend old replay is current.

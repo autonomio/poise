@@ -48,6 +48,29 @@ class IngressTests(unittest.TestCase):
         self.assertNotIn("private-header", json.dumps(result))
         self.assertNotIn("private-query", json.dumps(result))
 
+    def test_unstructured_lines_do_not_discard_attributable_records_in_the_same_second(self):
+        native = b"2026-10-19T09:59:58.123456789Z goroutine 1 [running]:\n" + line() + b"\n"
+        def source(argv, **_options):
+            return CONTAINER.encode() if "inspect" in argv else native
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None):
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}, NOW)
+        self.assertEqual(batch["state"], "complete")
+        self.assertEqual(len(batch["records"]), 1)
+
+    def test_gateway_clock_anchors_windows_and_excessive_skew_is_explicit_without_advancing(self):
+        def source(argv, **_options):
+            return CONTAINER.encode() if "inspect" in argv else b""
+        hello = {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None):
+            ahead = reporter.collect(CONFIG, hello, NOW + dt.timedelta(seconds=4))
+            behind = reporter.collect(CONFIG, hello, NOW - dt.timedelta(seconds=60))
+        self.assertEqual(ahead["until"], "2026-10-19T09:59:59.000Z")
+        self.assertEqual(ahead["state"], "complete")
+        self.assertEqual(behind["state"], "unavailable")
+        self.assertEqual(behind["failure"], "clock-skew")
+        self.assertEqual(behind["expected"], hello["checkpoint"])
+        self.assertEqual(behind["records"], [])
+
     def test_real_subprocess_output_and_absolute_time_bounds(self):
         with self.assertRaises(reporter.ReadBound):
             reporter.bounded_command([sys.executable, "-c", "import sys;sys.stdout.write('x'*10000)"], limit=1024)
@@ -67,7 +90,7 @@ class IngressTests(unittest.TestCase):
             return CONTAINER.encode() if "inspect" in argv else line() + b"\n"
 
         with patch.object(reporter, "bounded_command", side_effect=run), patch.object(reporter, "retained_boundary", return_value="2026-10-01T00:00:00.000Z"):
-            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "checkpoint": cursor}, NOW)
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": cursor}, NOW)
         self.assertEqual(batch["from"], "2026-10-19T09:59:30.000Z")
         self.assertEqual(batch["until"], "2026-10-19T09:59:59.000Z")
         self.assertEqual(batch["expected"], cursor)
@@ -82,7 +105,7 @@ class IngressTests(unittest.TestCase):
             raise reporter.ReadBound("source byte cap")
 
         with patch.object(reporter, "bounded_command", side_effect=bounded), patch.object(reporter, "retained_boundary", return_value=None):
-            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "checkpoint": None}, NOW)
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}, NOW)
         self.assertEqual(batch["state"], "bounded")
         self.assertEqual(batch["records"], [])
         self.assertLessEqual((reporter.instant(batch["until"]) - reporter.instant(batch["from"])).total_seconds(), 1)
@@ -94,7 +117,7 @@ class IngressTests(unittest.TestCase):
             raise RuntimeError("source unavailable")
 
         with patch.object(reporter, "bounded_command", side_effect=unavailable), patch.object(reporter, "retained_boundary", return_value=None):
-            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "checkpoint": None}, NOW)
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}, NOW)
         self.assertEqual(batch["state"], "unavailable")
         with patch.object(reporter, "bounded_command") as source:
             with self.assertRaises(RuntimeError):
@@ -106,7 +129,7 @@ class IngressTests(unittest.TestCase):
             return CONTAINER.encode() if "inspect" in argv else line() + b"\n" + line() + b"\n"
 
         with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value="2026-10-09T10:00:00.000Z"):
-            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "checkpoint": None}, NOW)
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": None}, NOW)
         self.assertEqual(batch["from"], "2026-10-09T10:00:00.000Z")
         self.assertEqual(batch["state"], "complete")
         self.assertEqual(len(batch["records"]), 2)

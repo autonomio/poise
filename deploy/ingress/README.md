@@ -105,3 +105,11 @@ The installed proxy has no server access logging enabled. Its native causal
 warning/error records remain authoritative; no access event is promoted to an
 error. All retained diagnostics continue to share the existing finite FIFO
 budget; this integration adds no quota policy or guarantee against a flood.
+
+Window ends use the gateway handshake clock. The edge clock must agree within
+five seconds; greater skew reports an explicit unavailable observation, keeps
+the committed checkpoint and uses the normal 15-second cadence until repaired.
+Unstructured shared-proxy text is excluded without discarding attributable JSON
+records in the same second. Invalid Docker timestamp framing remains a source
+continuity failure. Diagnostics storage or relay startup failure is independently
+reported and retried every five seconds; login and workspace routing continue.

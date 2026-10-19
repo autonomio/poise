@@ -37,7 +37,8 @@ export async function receiveIngress(db: DiagnosticStore, domain: string, stdin:
   const batch: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   if (!object(batch) || batch.version !== 1 || batch.challenge !== challenge || batch.expected !== expected || typeof batch.container !== 'string' || !/^[a-f0-9]{64}$/.test(batch.container)
     || !['complete', 'bounded', 'unavailable'].includes(String(batch.state)) || !Array.isArray(batch.records) || batch.records.length > 100
-    || (batch.state === 'unavailable' && batch.records.length)) throw new Error('Invalid ingress delivery envelope or checkpoint')
+    || (batch.state === 'unavailable' && batch.records.length)
+    || (batch.failure !== undefined && !['clock-skew', 'source-read'].includes(String(batch.failure)))) throw new Error('Invalid ingress delivery envelope or checkpoint')
   const at = now(), from = timestamp(batch.from), until = timestamp(batch.until)
   if (at < issuedAt || at - issuedAt > 30_000 || from > until || until > issuedAt + 5000 || until - from > 31 * 86_400_000) throw new Error('Ingress window is reversed, future or exceeds 31 days')
   const cursor: unknown = expected ? JSON.parse(expected) : null
@@ -77,8 +78,8 @@ export async function receiveIngress(db: DiagnosticStore, domain: string, stdin:
     observationExpiresAt: new Date(issuedAt + INGRESS_LEASE_MS).toISOString(),
     historyIncomplete: previous?.historyIncomplete || gaps.length > 32,
     ingestedAt: events.length ? new Date(at).toISOString() : previous?.ingestedAt ?? null,
-    availableFrom: previous?.availableFrom && Date.parse(previous.availableFrom) < from ? previous.availableFrom : batch.from as string, gaps: gaps.slice(-32),
-    error: batch.state === 'unavailable' ? 'External proxy source could not be read' : currentStatus === 'partial' ? 'External proxy replay is incomplete' : null }
+    availableFrom: batch.state === 'unavailable' ? previous?.availableFrom ?? null : previous?.availableFrom && Date.parse(previous.availableFrom) < from ? previous.availableFrom : batch.from as string, gaps: gaps.slice(-32),
+    error: batch.state === 'unavailable' ? batch.failure === 'clock-skew' ? 'External proxy and gateway clocks differ by more than five seconds' : 'External proxy source could not be read' : currentStatus === 'partial' ? 'External proxy replay is incomplete' : null }
   const next = batch.state === 'unavailable' ? expected : JSON.stringify({ container: batch.container, until: batch.until })
   db.commitCollection(events, KEY, expected, next, coverage)
   write(JSON.stringify({ accepted: true, checkpoint: next, events: events.length, currentStatus }))
