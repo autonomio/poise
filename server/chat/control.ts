@@ -338,10 +338,13 @@ export class ChatControl {
       if (pending) {
         // Running CI cannot recover the prior failure or overwrite evidence
         // belonging to a new owner while the network read was in flight.
-        store.saveObservation(instance, key, previous?.fingerprint ?? fingerprint, now)
+        // An empty fingerprint records the polling clock without inventing a
+        // settled baseline before this binding's first completed observation.
+        store.saveObservation(instance, key, previous?.fingerprint ?? '', now)
         return
       }
-      if (previous?.fingerprint !== fingerprint && (previous || initiallyActionable)) {
+      const settled = previous?.fingerprint ? previous : undefined
+      if (settled?.fingerprint !== fingerprint && (settled || initiallyActionable)) {
         store.message(instance, binding.session, 'Poise work monitor', boundedNotice(body, { kind: data.kind, target: binding.target,
           head: data.head, failingCount: Array.isArray(data.failing) ? data.failing.length : undefined,
           detail: 'Inspect the complete current work state through Poise APIs or Caller before acting.', inspect: { operation: 'api', path: '/api/logging' } }),
