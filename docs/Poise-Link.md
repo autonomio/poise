@@ -373,3 +373,8 @@ when they start, so start at login stays as it was.
 - Automatic updates; run the install command again to update.
 - On Windows, an alert opens its page when clicked while the notification is on
   screen, but not later from the notification center.
+
+Browser-only **View in Logging** references do not change Link's alert envelope,
+primary front-page URL, pairing or device authorization. Optional evidence is
+resolved only for the browser notice/Behaviors reads; the native alert stream
+remains `{ id, kind, title, body, url, created_at }`.

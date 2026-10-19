@@ -1,3 +1,4 @@
+import type { EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
 // Thin client for the Behaviors view.
 //
 // All polling, snapshotting, and triggering live SERVER-SIDE in
@@ -67,7 +68,7 @@ export interface BehaviorDiagnostics {
     actor: string | null
     error: string | null
   }
-  failures: Array<{
+  failures: Array<EvidenceAttachment & {
     org?: string
     behavior: BehaviorKey
     target?: string
@@ -78,15 +79,17 @@ export interface BehaviorDiagnostics {
     error?: string
     diagnostic?: DiagnosticClassification
     callId?: string
+    correlationId?: string
     recovered?: boolean
   }>
-  deadLetters: Array<{
+  deadLetters: Array<EvidenceAttachment & {
     id: string
     behavior: string
     target: string
     error: string
     createdAt: string
     attemptCount?: number
+    correlationId?: string | null
     callId?: string | null
     diagnostic?: DiagnosticClassification
   }>

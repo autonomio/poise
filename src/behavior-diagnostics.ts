@@ -1,8 +1,11 @@
+import { evidenceAttachment, type EvidenceAttachment } from '../gateway/src/diagnostics/evidence-contract'
 import type { BehaviorDiagnostics } from './behaviors'
 import { classifyBehaviorDiagnostic, diagnosticClassification, failureCause, type DiagnosticClassification } from './behavior-failure-cause'
 
 /** One line of a group's details, with what it is about. */
-export interface DiagnosticEntry {
+export interface DiagnosticEntry extends EvidenceAttachment {
+  callId?: string | null
+  correlationId?: string | null
   /** The behavior and target the line is about; both null for a condition of
    *  Poise as a whole (agent log, datastore, identity, runtime). */
   behavior: string | null
@@ -45,7 +48,9 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     const entry = { ...about, detail }
     const existing = groups.get(key)
     if (existing) {
-      if (!existing.details.includes(detail)) { existing.details.push(detail); existing.entries.push(entry) }
+      if (!existing.details.includes(detail)) existing.details.push(detail)
+      const identity = (row: DiagnosticEntry) => JSON.stringify([row.behavior, row.target, row.callId, row.correlationId, row.at, row.detail])
+      if (!existing.entries.some((row) => identity(row) === identity(entry))) existing.entries.push(entry)
     } else groups.set(key, { ...classification, scope, message, details: [detail], entries: [entry] })
   }
   for (const [scope, error] of [
@@ -72,7 +77,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`
       : diagnosticMessage(classification.code, cause)
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}${failure.nextRetryAt ? `; next check ${failure.nextRetryAt}` : ''}`
-    add(classification, scope, message, detail, { behavior: failure.behavior, target: failure.target ?? null, at: failure.lastFailureAt || null })
+    add(classification, scope, message, detail, { behavior: failure.behavior, target: failure.target ?? null, at: failure.lastFailureAt || null, callId: failure.callId, correlationId: failure.correlationId, ...evidenceAttachment(failure) })
   }
   for (const letter of diagnostics.deadLetters) {
     const ref = targetRef(letter.target)
@@ -85,7 +90,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     if (existing && (!letter.diagnostic || (existing.code === classification.code && existing.severity === classification.severity))) continue
     add(classification, ref, diagnosticMessage(classification.code, cause),
       `${letter.behavior} ${letter.target}: ${cause} (${letter.attemptCount ?? 1} attempts)`,
-      { behavior: letter.behavior, target: letter.target, at: letter.createdAt || null })
+      { behavior: letter.behavior, target: letter.target, at: letter.createdAt || null, callId: letter.callId, correlationId: letter.correlationId, ...evidenceAttachment(letter) })
   }
   if (diagnostics.runtimeError) {
     add(diagnosticClassification('runtime_unhealthy'), 'Behaviors', diagnostics.runtimeError, 'Poise runtime needs repair.')

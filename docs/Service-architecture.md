@@ -755,3 +755,10 @@ output capture preserves command status/deadlines and excludes arguments and
 stdout from diagnostic records. The gateway captures release-task failure
 metadata before removing its short-lived container; retained central evidence
 is independent of that container and its home-volume lifecycle.
+
+The browser notice and Behaviors APIs may include optional `evidence` and bounded
+`evidenceReferences` from the retained owner-scoped index. Association shares the
+Logging read worker and its admission/deadline limits; it creates no diagnostic
+occurrences and cannot delay raising an alert. Pending/unavailable associations
+preserve the primary condition and action. No new route, ingest endpoint, target
+variant or scope is introduced. See [Logging](Logging.md#notification-evidence).

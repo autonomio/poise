@@ -199,3 +199,13 @@ The page reads `GET /api/notices` every ten seconds while it is in front, and
 at once when it comes back to the front. The code is `server/alerts/notices.ts`
 on the server; in the page it is `src/views/notification-rail.ts`, with what it
 lists in `src/notification-items.ts`.
+
+## Retained evidence
+
+Expanded rail entries, including diagnostic-only conditions, show **View in
+Logging** when exact retained evidence is available. Distinct attempts keep their
+own references; additional retained history is labelled. Pending collection and
+unavailable diagnostics remain explicit. A missing record never borrows another
+review's failure. [Logging](Logging.md#notification-evidence) defines identity and
+expiry behavior. This secondary action never dismisses or silences; the primary
+Open action keeps its existing dismissal behavior. Arrival cards are unchanged.
