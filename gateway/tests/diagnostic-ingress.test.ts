@@ -197,3 +197,24 @@ it('does not let a concurrent reporter overwrite a window committed after its ha
     expect(db.query(access).total).toBe(1)
   } finally { db.close() }
 })
+
+
+it('rejects an old challenge on a new connection without renewing source observation', async () => {
+  const db = store()
+  try {
+    const [hello, ack] = await send(db, batch())
+    const before = db.readCoverage(access)[0]
+    await expect(send(db, { ...batch(ack.checkpoint as string), from: batch().until, until: new Date(NOW).toISOString(), records: [], challenge: hello.challenge })).rejects.toThrow(/envelope|checkpoint/)
+    expect(db.readCoverage(access)[0]).toEqual(before)
+    expect(db.checkpoint('external-ingress-window')).toBe(ack.checkpoint)
+  } finally { db.close() }
+})
+
+it('starts the observation lease at the fresh challenge instead of delayed receipt', async () => {
+  const db = store()
+  let calls = 0
+  try {
+    await send(db, batch(), () => NOW + calls++ * 10_000)
+    expect(db.readCoverage(access)[0]).toMatchObject({ observedAt: new Date(NOW).toISOString(), observationExpiresAt: new Date(NOW + INGRESS_LEASE_MS).toISOString() })
+  } finally { db.close() }
+})

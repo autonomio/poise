@@ -51,7 +51,7 @@ try {
   const { receiveIngress } = await import(pathToFileURL(join(root, 'gateway/dist/diagnostics/ingress.js')).href)
   db = new DiagnosticStore(join(directory, 'logging.db'))
   let hello
-  async function* input() { yield JSON.stringify({ version: 1, challenge: hello.challenge, expected: hello.checkpoint, container: inspect.Id, from: new Date(Date.now() - 60_000).toISOString(), until: new Date().toISOString(), state: 'complete', records }) }
+  async function* input() { yield JSON.stringify({ version: 1, challenge: hello.challenge, expected: hello.checkpoint, container: inspect.Id, from: new Date(Math.min(...records.map((record) => Date.parse(record.time))) - 1000).toISOString(), until: new Date().toISOString(), state: 'complete', records }) }
   await receiveIngress(db, 'poise.test', input(), (line) => { hello = JSON.parse(line) })
   const page = db.query({ workspace: null, operator: true })
   assert.equal(page.total, 1)

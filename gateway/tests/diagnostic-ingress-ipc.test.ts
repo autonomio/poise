@@ -50,8 +50,8 @@ it('runs the compiled operator command through one writer while gateway diagnost
   const concurrent = setInterval(() => { w.runtime.emit({ id: 'active-' + emitted++, source: 'gateway', operation: 'busy', level: 'error', message: 'concurrent retained cause' }); w.runtime.flush() }, 5)
   try {
     const lines = await cli(w.directory, 'ingress-stream', (hello) => JSON.stringify({ version: 1, challenge: hello.challenge, expected: hello.checkpoint,
-      container: 'a'.repeat(64), from: new Date(Date.now() - 1000).toISOString(), until: new Date().toISOString(), state: 'complete', records: [] }))
-    expect(lines[1]).toMatchObject({ accepted: true, currentStatus: 'connected' })
+      container: 'a'.repeat(64), from: new Date(Date.now() - 1000).toISOString(), until: new Date(Date.now() + 1000).toISOString(), state: 'complete', records: Array.from({ length: 100 }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), time: new Date().toISOString(), log: { request: { host: 'alice.poise.test' }, level: 'error', msg: 'native batch cause' } })) }))
+    expect(lines[1]).toMatchObject({ accepted: true, currentStatus: 'connected', events: 100 })
     expect(emitted).toBeGreaterThan(0)
     w.runtime.flush()
     expect(w.runtime.health()).toMatchObject({ error: null, dropped: 0, rejected: 0 })
