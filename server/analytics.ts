@@ -207,6 +207,7 @@ export function computeAnalytics(input: {
       closedUnmerged: input.prs.filter((pr) => pr.status === 'closed' && inWindow(pr.closed_at, window)).length,
       merged: merged.length,
       workReview: {
+        reviewed: reviewed.length === merged.length ? reviewed.filter((review) => review.rounds > 0 || review.missingCommits > 0).length : null,
         types: [...types].filter(([, count]) => count > 0).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count),
         rounds: {
           median: knownRounds.length === merged.length ? median(knownRounds.map((review) => review.rounds)) : null,
@@ -279,7 +280,7 @@ async function readOrganization(org: Organization, me: string, window: Analytics
         count(CASE WHEN r.state = 'CHANGES_REQUESTED' THEN 1 END) AS changeRequests,
         count(CASE WHEN r.state = 'DISMISSED' THEN 1 END) AS dismissed
       FROM reviews r JOIN items i ON i.item_id = r.item_id
-      WHERE r.item_id = ? AND r.submitted_at IS NOT NULL AND r.state <> 'PENDING'
+      WHERE r.item_id = ? AND r.submitted_at IS NOT NULL AND r.state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED')
         AND julianday(r.submitted_at) <= julianday(i.closed_at)
         AND (r.author_login IS NULL OR i.author_login IS NULL OR lower(r.author_login) <> lower(i.author_login))
     `)

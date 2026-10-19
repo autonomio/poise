@@ -78,6 +78,36 @@ describe('the window', () => {
 })
 
 describe('the periods of a history', () => {
+  it('uses per-PR rounds and affected-PR incidence with zero and unknown reviews', () => {
+    const prs = [
+      pr(1, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z', { review_summary: { rounds: 1, missingCommits: 0, changeRequests: 2, dismissed: 0 } }),
+      pr(2, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z', { review_summary: { rounds: 2, missingCommits: 0, changeRequests: 0, dismissed: 0 } }),
+      pr(3, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z'),
+    ]
+    const compute = () => computeAnalytics({ window: WEEK, prs, issues: [], behaviors: [] }).pullRequests.workReview
+    expect(compute()).toMatchObject({ reviewed: 2, rounds: { median: 1, counted: 3 }, changesRequested: { prs: 1, reviews: 2 } })
+    prs.push(pr(4, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z', { review_summary: { rounds: 0, missingCommits: 1, changeRequests: 1, dismissed: 0 } }))
+    expect(compute()).toMatchObject({ reviewed: 3, rounds: { median: null, counted: 3, missingReviews: 1 }, changesRequested: { prs: 2, reviews: 3 } })
+  })
+
+  it('breaks work-type ties by taxonomy order rather than input order', () => {
+    const result = computeAnalytics({ window: WEEK, issues: [], behaviors: [], prs: [
+      pr(1, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z', { title: 'FIX: correct it' }),
+      pr(2, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z', { title: 'feat(ui)!: add it' }),
+    ] })
+    expect(result.pullRequests.workReview.types).toEqual([{ type: 'feat', count: 1 }, { type: 'fix', count: 1 }])
+  })
+  it('pools seven-day PR observations instead of averaging daily medians or shares', () => {
+    const prs = Array.from({ length: 6 }, (_, i) => pr(i + 1, '2026-10-01T00:00:00Z', i < 5 ? '2026-10-04T12:00:00Z' : '2026-10-05T12:00:00Z', {
+      review_summary: { rounds: i < 5 ? 10 : 1, missingCommits: 0, changeRequests: i < 5 ? 2 : 0, dismissed: 0 },
+    }))
+    prs.push(pr(7, '2026-10-01T00:00:00Z', '2026-10-08T12:00:00Z', { review_summary: { rounds: 99, missingCommits: 0, changeRequests: 1, dismissed: 0 } }))
+    const result = computeHistory({ bounds: ['2026-10-01T00:00:00Z', '2026-10-08T00:00:00Z', '2026-10-09T00:00:00Z'], issues: [], prs })
+    expect(result.periods[0].pullRequests.merged).toBe(6)
+    expect(result.periods[0].pullRequests.workReview.rounds.median).toBe(10)
+    expect(result.periods[0].pullRequests.workReview.changesRequested.prs).toBe(5)
+    expect(result.periods[1].pullRequests.workReview.rounds.median).toBe(99)
+  })
   it('takes increasing zoned edges, exact to the millisecond', () => {
     expect(parseBounds('2026-10-01T00:00:00+03:00,2026-10-08T00:00:00.500Z')).toEqual(['2026-09-30T21:00:00.000Z', '2026-10-08T00:00:00.500Z'])
     expect(parseBounds(Array.from({ length: 80 }, (_, i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString()).join(','))).toHaveLength(80)
@@ -222,7 +252,7 @@ describe('the numbers', () => {
         opened: 0,
         closedUnmerged: 0,
         merged: 0,
-        workReview: { types: [], rounds: { median: null, counted: 0, missingReviews: 0, distribution: [] }, changesRequested: { prs: 0, reviews: 0, dismissed: 0, counted: 0 } },
+        workReview: { reviewed: 0, types: [], rounds: { median: null, counted: 0, missingReviews: 0, distribution: [] }, changesRequested: { prs: 0, reviews: 0, dismissed: 0, counted: 0 } },
         mergedByAgent: null,
         firstReview: { count: 0, medianMs: null },
         commentsPerPr: null,
@@ -359,7 +389,7 @@ describe('reading what Current shows', () => {
     review(first, 'reviewer', 'CHANGES_REQUESTED', '2026-10-06T00:00:00.501Z', 'after')
     const report = await readAnalytics(WEEK, 'alpha')
     expect(report.pullRequests.workReview).toEqual({
-      types: [{ type: 'feat', count: 1 }, { type: 'fix', count: 1 }],
+      reviewed: 1, types: [{ type: 'feat', count: 1 }, { type: 'fix', count: 1 }],
       rounds: { median: 1.5, counted: 2, missingReviews: 0, distribution: [{ rounds: 0, prs: 1 }, { rounds: 3, prs: 1 }] },
       changesRequested: { prs: 1, reviews: 2, dismissed: 1, counted: 2 },
     })
@@ -377,6 +407,23 @@ describe('reading what Current shows', () => {
     const work = (await readAnalytics(WEEK, 'alpha')).pullRequests.workReview
     expect(work.rounds).toEqual({ median: null, counted: 1, missingReviews: 2, distribution: [{ rounds: 0, prs: 1 }] })
     expect(work.changesRequested).toEqual({ prs: 1, reviews: 1, dismissed: 1, counted: 2 })
+  })
+
+  it('counts comment-only, bot and deleted-account reviews without author replies', async () => {
+    const ids = Array.from({ length: 4 }, (_, i) => seed(pr(i + 1, '2026-10-04T00:00:00Z', '2026-10-06T00:00:00Z'), 'pr', true))
+    review(ids[0], 'reviewer', 'COMMENTED', '2026-10-04T01:00:00Z', 'reply-revision')
+    review(ids[0], 'review-bot[bot]', 'COMMENTED', '2026-10-04T02:00:00Z', 'bot-revision')
+    review(ids[0], 'robot', 'APPROVED', '2026-10-04T03:00:00Z', 'agent-revision')
+    review(ids[1], null, 'APPROVED', '2026-10-04T01:00:00Z', 'deleted-reviewer')
+    const db = new Database(mocks.orgs[0].datastorePath)
+    db.prepare('UPDATE items SET author_login = NULL WHERE item_id = ?').run(ids[2])
+    db.close()
+    review(ids[2], 'octocat', 'APPROVED', '2026-10-04T01:00:00Z', 'deleted-author')
+    review(ids[3], 'OCTOCAT', 'COMMENTED', '2026-10-04T01:00:00Z', 'author-reply')
+    const work = (await readAnalytics(WEEK, 'alpha')).pullRequests.workReview
+    expect(work.reviewed).toBe(3)
+    expect(work.rounds).toEqual({ median: 1, counted: 4, missingReviews: 0, distribution: [{ rounds: 0, prs: 1 }, { rounds: 1, prs: 2 }, { rounds: 3, prs: 1 }] })
+    expect(work.changesRequested.prs).toBe(0)
   })
 
   it('deduplicates involvement and agent authorship and reads PR sizes and comments without CLI processes', async () => {

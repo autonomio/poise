@@ -39,11 +39,12 @@ describe('work and review analytics', () => {
     ['feat: add capability', 'feat'], ['fix(api)!: correct result', 'fix'], ['perf!: reduce work', 'perf'],
     ['refactor(core): simplify', 'refactor'], ['test: cover it', 'test'], ['ci: check', 'ci'], ['revert: undo', 'revert'],
     ['Fix: crash', 'fix'], ['Feat(api): add capability', 'feat'], ['PERF(core)!: speed up', 'perf'],
+    ['docs: describe', 'docs'], ['build: package', 'build'], ['chore: maintain', 'chore'], ['style: format', 'style'], ['Revert "feat: add capability"', 'unclassified'],
     ['feature: not a recognized prefix', 'unclassified'], ['feat: ', 'unclassified'], ['A feat: title', 'unclassified'], ['feat(scope: broken', 'unclassified'],
   ])('classifies %s as %s', (title, expected) => { expect(workType(title)).toBe(expected) })
 
   function work(merged: number, affected: number, rounds: number | null = 3): WorkReviewAnalytics {
-    return { types: [{ type: 'feat', count: merged }], rounds: { median: rounds, counted: merged, missingReviews: 0, distribution: [] }, changesRequested: { prs: affected, reviews: affected * 2, dismissed: 1, counted: merged } }
+    return { reviewed: merged, types: [{ type: 'feat', count: merged }], rounds: { median: rounds, counted: merged, missingReviews: 0, distribution: [] }, changesRequested: { prs: affected, reviews: affected * 2, dismissed: 1, counted: merged } }
   }
 
   it('shows the approved population, neutral work mix and relative review-friction comparisons', () => {
@@ -54,6 +55,13 @@ describe('work and review analytics', () => {
     expect(tile(groups, 'Change-request share')).toMatchObject({ value: '84.2%', comparison: '7-day share: 71.7% · 237 PRs', trend: { direction: 'bad', text: '↑ 17.4%' } })
     const lower = buildGroups(report({ merged: 57, workReview: work(57, 20, 1) }), report({ merged: 237, workReview: work(237, 170) }))
     for (const label of ['Review rounds', 'Change-request share']) expect(tile(lower, label).trend?.direction).toBe('good')
+  })
+
+  it('includes unclassified PRs in neutral work-type shares without a baseline', () => {
+    const mix = work(4, 2)
+    mix.types = [{ type: 'feat', count: 2 }, { type: 'unclassified', count: 2 }]
+    expect(tile(buildGroups(report({ workReview: mix }), report()), 'Work type')).toMatchObject({ value: '50.0%', valueLabel: 'feat', population: 4 })
+    expect(tile(buildGroups(report({ workReview: mix }), report()), 'Work type').comparison).toBeUndefined()
   })
 
   it('withholds unavailable figures and comparisons rather than inventing zeros', () => {
@@ -71,6 +79,33 @@ describe('work and review analytics', () => {
     const zero = report({ workReview: work(4, 0) })
     expect(tile(buildGroups(report({ workReview: work(4, 1) }), zero), 'Change-request share').trend).toBeUndefined()
     expect(tile(buildGroups(zero, zero), 'Change-request share').trend).toMatchObject({ direction: 'neutral', text: '→ 0%' })
+    expect(tile(buildGroups(report({ workReview: work(4, 1, 1) }), report({ workReview: work(4, 0, 0) })), 'Review rounds').trend).toBeUndefined()
+    expect(tile(buildGroups(report({ workReview: work(4, 0, 0) }), report({ workReview: work(4, 0, 0) })), 'Review rounds').trend).toMatchObject({ direction: 'neutral', text: '→ 0%' })
+  })
+
+  it('explains day and baseline coverage independently, including unavailable and empty cohorts', () => {
+    const day = report({ workReview: work(4, 2) })
+    const week = report({ workReview: work(4, 2, null) })
+    week.pullRequests.workReview!.rounds = { median: null, counted: 3, missingReviews: 2, distribution: [{ rounds: 1, prs: 3 }] }
+    const rounds = tile(buildGroups(day, week), 'Review rounds')
+    expect(rounds.note).toContain('Selected day: exact round counts for 4 of 4')
+    expect(rounds.note).toContain('7-day baseline: exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities')
+    expect(rounds.trend).toBeUndefined()
+    expect(tile(buildGroups(week, day), 'Review rounds').note).toContain('Selected day: exact round counts for 3 of 4')
+    expect(tile(buildGroups(day, report()), 'Review rounds').note).toContain('7-day baseline: review aggregates unavailable')
+    expect(tile(buildGroups(report({ merged: 0 }), day), 'Review rounds').note).toContain('Selected day: no merged PRs')
+    expect(tile(buildGroups(day, week), 'Change-request share').note).toContain('Stored summaries available for 4 of 4 PRs')
+  })
+
+  it('keeps observed-friction polarity while exposing when fewer PRs were reviewed', () => {
+    const unreviewed = work(4, 0, 0)
+    unreviewed.reviewed = 0
+    const groups = buildGroups(report({ workReview: unreviewed }), report({ workReview: work(4, 2, 1) }))
+    for (const label of ['Review rounds', 'Change-request share']) {
+      expect(tile(groups, label).trend).toMatchObject({ direction: 'good', text: '↓ 100%' })
+      expect(tile(groups, label).note).toContain('0 of 4 PRs had an eligible review')
+      expect(tile(groups, label).note).toContain('Fewer reviewed PRs can lower observed friction')
+    }
   })
 })
 

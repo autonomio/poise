@@ -1044,6 +1044,7 @@ tr:hover .review-btn { opacity: 1; }
 .analytics-history-tip { position: absolute; bottom: calc(100% + var(--sp-2)); z-index: 2; padding: var(--sp-2) var(--sp-3); border: var(--b-base); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--e-2); font-size: .6875rem; line-height: 1.5; white-space: nowrap; pointer-events: none; }
 .analytics-history-tip strong { display: block; font-size: .8125rem; color: var(--text); }
 .analytics-history-tip span { color: var(--text-secondary); }
+[data-group="work-review"] .analytics-history-tip span { display: block; max-width: min(280px, calc(100vw - 48px)); white-space: normal; }
 .analytics-history-tip small { display: block; max-width: 280px; margin-top: var(--sp-2); white-space: normal; color: var(--text-tertiary); font-size: .6875rem; }
 .analytics-history-empty { display: flex; align-items: center; height: 158px; margin: 0; font-size: .6875rem; color: var(--text-tertiary); }
 .analytics-histogram { margin-top: var(--sp-3); padding-top: var(--sp-2); border-top: var(--b-hair); }

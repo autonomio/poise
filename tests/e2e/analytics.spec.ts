@@ -13,6 +13,7 @@ function report(merged: number, hours = 27): AnalyticsReport {
       closedUnmerged: 1,
       merged,
       workReview: {
+        reviewed: merged,
         types: merged ? [{ type: 'feat', count: Math.ceil(merged / 2) }, { type: 'fix', count: Math.floor(merged / 2) }] : [],
         rounds: { median: merged ? 3 : null, counted: merged, missingReviews: 0, distribution: merged ? [{ rounds: 3, prs: merged }] : [] },
         changesRequested: { prs: merged ? merged === 4 ? 3 : Math.floor(merged / 2) : 0, reviews: merged, dismissed: 0, counted: merged },
@@ -287,7 +288,7 @@ test('keeps missing review identities in tooltips while showing known change-req
   await openAnalytics(page)
   const figure = value(page, 'Review rounds')
   await expect(figure).toHaveText('—')
-  await expect(figure).toHaveAttribute('data-help', /Exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities/)
+  await expect(figure).toHaveAttribute('data-help', /exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities/)
   await expect(value(page, 'Change-request share')).toHaveText('75.0%')
   await expect(page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-line')).toHaveCount(1)
   await figure.scrollIntoViewIfNeeded()
@@ -295,6 +296,117 @@ test('keeps missing review identities in tooltips while showing known change-req
   await figure.focus()
   await expect(page.getByRole('tooltip')).toContainText('3 of 4 merged PRs')
   await expect(page.getByRole('region', { name: 'Work & review' })).not.toContainText('lack commit identities')
+})
+
+test('explains missing baseline and historical round coverage independently of a complete day', async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 820 })
+  await workspace(page)
+  await page.route('**/api/analytics?**', async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    const baseline = Date.parse(query.get('until')!) - Date.parse(query.get('since')!) > 2 * 86_400_000
+    const data = report(4)
+    if (baseline) data.pullRequests.workReview!.rounds = { median: null, counted: 3, missingReviews: 2, distribution: [{ rounds: 3, prs: 3 }] }
+    await route.fulfill({ json: data })
+  })
+  await page.route('**/api/analytics/history?**', async (route) => {
+    const data = history(new URL(route.request().url()).searchParams.get('bounds')!.split(','))
+    data.periods.at(-1)!.pullRequests = report(4).pullRequests
+    data.periods.at(-1)!.pullRequests.workReview!.rounds = { median: null, counted: 3, missingReviews: 2, distribution: [{ rounds: 3, prs: 3 }] }
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  const figure = value(page, 'Review rounds')
+  await expect(figure).toHaveText('3.0')
+  await expect(figure).toHaveAttribute('data-help', /Selected day: exact round counts for 4 of 4.*7-day baseline: exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities/)
+  await expect(countTrend(page, 'Review rounds')).toContainText('7-day median: — · 4 PRs')
+  const plot = page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-plot')
+  await plot.focus()
+  await page.keyboard.press('End')
+  await expect(page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-tip')).toContainText('exact round counts for 3 of 4 merged PRs; 2 reviews lack commit identities')
+  const tip = (await page.locator('.analytics-history[data-series="Review rounds"] .analytics-history-tip').boundingBox())!
+  expect(tip.x).toBeGreaterThanOrEqual(8)
+  expect(tip.x + tip.width).toBeLessThanOrEqual(412)
+})
+
+test('keeps known daily round counts visible while year history is delayed or unavailable', async ({ page }) => {
+  await workspace(page)
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/analytics/history?**', async (route) => {
+    await held
+    await route.fulfill({ status: 502, json: { error: 'History unavailable' } })
+  })
+  await page.route('**/api/analytics?**', async (route) => {
+    const data = report(4)
+    data.pullRequests.workReview!.rounds = { median: null, counted: 3, missingReviews: 2, distribution: [{ rounds: 0, prs: 1 }, { rounds: 3, prs: 2 }] }
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  const rounds = page.getByRole('region', { name: 'Work & review' }).locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Review rounds$/ }) })
+  await expect(value(page, 'Review rounds')).toHaveText('—')
+  await expect(rounds.locator('.analytics-history-plot')).toHaveAttribute('aria-busy', 'true')
+  await expect(rounds.locator('.analytics-histogram rect')).toHaveCount(10)
+  await expect(rounds.locator('.analytics-histogram')).toHaveAttribute('data-help', /3 of 4 merged PRs/)
+  const before = await rounds.locator('.analytics-histogram').innerHTML()
+  release()
+  await expect(rounds.locator('.analytics-history-plot')).toHaveAttribute('aria-label', 'Year history unavailable')
+  await expect(rounds.locator('.analytics-histogram')).toHaveJSProperty('innerHTML', before)
+})
+
+test('updates work and review cards and charts by day and organization, discarding late history', async ({ page }) => {
+  await workspace(page)
+  const dataFor = (org: string | null, since: string) => {
+    const beta = org === 'beta'
+    const yesterday = since === '2026-10-08T00:00:00.000Z'
+    const data = report(4)
+    const rounds = beta ? yesterday ? 7 : 6 : yesterday ? 3 : 2
+    data.pullRequests.workReview!.types = [{ type: beta ? yesterday ? 'perf' : 'fix' : yesterday ? 'docs' : 'feat', count: 4 }]
+    data.pullRequests.workReview!.rounds = { median: rounds, counted: 4, missingReviews: 0, distribution: [{ rounds, prs: 4 }] }
+    data.pullRequests.workReview!.changesRequested.prs = beta ? yesterday ? 4 : 3 : yesterday ? 2 : 1
+    return data
+  }
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let lateHistory = false
+  let finished = false
+  await page.route('**/api/analytics?**', async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    await route.fulfill({ json: dataFor(query.get('org'), query.get('since')!) })
+  })
+  await page.route('**/api/analytics/history?**', async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    const bounds = query.get('bounds')!.split(',')
+    const delayed = query.get('org') === 'beta' && bounds.at(-1) === '2026-10-08T00:00:00.000Z'
+    if (delayed) { lateHistory = true; await held }
+    const data = history(bounds)
+    for (const period of data.periods) period.pullRequests = dataFor(query.get('org'), bounds.at(-1)!).pullRequests
+    try { await route.fulfill({ json: data }) } finally { if (delayed) finished = true }
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  const work = page.getByRole('region', { name: 'Work & review' })
+  const assertCards = async (type: string, rounds: number, share: string, chart = true) => {
+    await expect(work.locator('.analytics-work-label')).toHaveText(type)
+    await expect(value(page, 'Review rounds')).toHaveText(`${rounds}.0`)
+    await expect(value(page, 'Change-request share')).toHaveText(share)
+    await expect(work.locator('.analytics-work-type')).toHaveAttribute('data-help', new RegExp(`${type}: 4 of 4`))
+    if (chart) await expect(work.locator('.analytics-history[data-series="Review rounds"] .analytics-history-max')).toHaveText(`Max ${rounds}.0`)
+  }
+  await assertCards('feat', 2, '25.0%')
+  await page.getByRole('button', { name: 'Previous day' }).click()
+  await assertCards('docs', 3, '50.0%')
+  await page.locator('#analytics-filters').getByLabel('Organization filter').selectOption('beta')
+  await assertCards('perf', 7, '100.0%', false)
+  await expect.poll(() => lateHistory).toBe(true)
+  await page.getByRole('button', { name: 'Next day' }).click()
+  await assertCards('fix', 6, '75.0%')
+  release()
+  await expect.poll(() => finished).toBe(true)
+  await assertCards('fix', 6, '75.0%')
+  await page.locator('#analytics-filters').getByLabel('Organization filter').selectOption('')
+  await assertCards('feat', 2, '25.0%')
 })
 
 test('keeps Productivity in two rows beside a docked notification rail', async ({ page }) => {

@@ -1,7 +1,7 @@
 // What the Analytics view says about a report from /api/analytics
 // (server/analytics.ts). Kept free of the DOM so the wording is testable.
 
-import { changeRequestShare, type WorkReviewAnalytics } from './analytics-work-review'
+import { changeCoverage, changeRequestShare, roundCoverage, type WorkReviewAnalytics } from './analytics-work-review'
 
 export interface AnalyticsReport {
   window: { since: string | null, until: string | null }
@@ -215,15 +215,16 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
         },
         {
           ...perPr('Review rounds', work?.rounds.median ?? null, previousWork?.rounds.median ?? null, formatRate, { lowerIsBetter: true }),
+          ...(previousWork?.rounds.median === 0 && work?.rounds.median !== 0 ? { trend: undefined } : {}),
           distribution: work?.rounds,
           population: pr.merged,
-          note: work ? `Exact round counts for ${work.rounds.counted} of ${pr.merged} merged PRs; ${work.rounds.missingReviews} reviews lack commit identities. The median is withheld unless every PR is covered.` : 'Review-round data is unavailable.',
+          note: `${roundCoverage(pr, 'Selected day')} ${roundCoverage(baseline.pullRequests, '7-day baseline')} The median is withheld unless every PR is covered. Fewer reviewed PRs can lower observed friction; color is not a review-quality score.`,
         },
         {
           label: 'Change-request share', value: percent(share),
           trend: complete && !(previousShare === 0 && share !== 0) ? metricTrend(share, previousShare, undefined, 'share', false, true) : undefined,
           comparison: `7-day share: ${percent(previousShare)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}`,
-          note: work ? `${work.changesRequested.prs ?? UNKNOWN} of ${pr.merged} merged PRs with change requests; ${work.changesRequested.reviews ?? UNKNOWN} change-request reviews. Review-state coverage: ${work.changesRequested.counted} of ${pr.merged} PRs. ${work.changesRequested.dismissed ?? UNKNOWN} dismissed reviews have unknown previous states and are not inferred as change requests.` : 'Review-state data is unavailable.',
+          note: `${changeCoverage(pr, 'Selected day')} ${changeCoverage(baseline.pullRequests, '7-day baseline')} The local datastore does not retain previous states of dismissed reviews, so historic change requests may be undercounted. Fewer reviewed PRs can lower observed friction; color is not a review-quality score.`,
         },
       ],
     },

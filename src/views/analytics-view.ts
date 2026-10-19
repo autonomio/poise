@@ -63,7 +63,7 @@ function renderShell(): string {
     </main>`
 }
 
-function histogramMarkup(series: HistorySeries, tile: AnalyticsTile): string {
+function histogramMarkup(series: Pick<HistorySeries, 'label' | 'values' | 'format'>, tile: AnalyticsTile): string {
   const rounds = tile.label === 'Review rounds'
   const distribution = tile.distribution
   const values = rounds ? (distribution?.distribution ?? []).flatMap((entry) => Array<number>(entry.prs).fill(entry.rounds)) : series.values
@@ -175,6 +175,9 @@ function hasNewAccountFailure(report: AnalyticsReport, previous: AnalyticsReport
 
 function historyMarkup(tile: AnalyticsTile, all: HistorySeries[] | null): string {
   const { label } = tile
+  if (label === 'Review rounds' && (history.error || !all)) {
+    return `<dd class="analytics-history"><span class="analytics-history-max"></span><div class="analytics-history-plot" ${history.error ? 'aria-label="Year history unavailable"' : 'aria-busy="true"'}></div>${histogramMarkup({ label, values: [], format: formatRate }, tile)}</dd>`
+  }
   if (history.error) return '<dd class="analytics-history" aria-label="History unavailable"></dd>'
   if (!all) return '<dd class="analytics-history" aria-busy="true"><span class="analytics-history-max"></span><div class="analytics-history-plot"></div><div class="analytics-histogram"></div></dd>'
   const series = all.find((s) => s.label === label)
@@ -209,12 +212,12 @@ const measurementHelp: Record<string, string> = {
   'Time to first review': 'Median elapsed time from opening to the first submitted review by someone other than the author, for first reviews on the selected day.',
   'Comments': 'Median conversation and review comments per pull request merged on the selected day.',
   'Median lines': 'Median additions plus deletions per pull request merged on the selected day. Withheld when any size is unknown.',
-  'Behaviors': 'Median completed review and approval behaviors per pull request merged on the selected day.',
+  'Behaviors': 'Median completed review and approval behaviors per pull request merged on the selected day, from Poise’s own launch ledger.',
   'Median time': 'Median elapsed time from opening to merge across pull requests merged on the selected day.',
   'Merged by agent': 'Share of pull requests merged on the selected day whose merger was the configured agent account.',
   'Work type': 'Share of merged PRs by Conventional Commit title prefix. Titles without a recognized prefix are unclassified. The headline shows the largest category; categories have no good or bad polarity.',
-  'Review rounds': 'Median distinct commit revisions with a submitted review by someone other than the author, at or before merge. Multiple reviews of one commit count once; PRs without reviews count zero. Includes the initial reviewed revision; this does not prove rework or causation.',
-  'Change-request share': 'Share of merged PRs with at least one observed submitted CHANGES_REQUESTED review by someone other than the author, at or before merge. Each PR counts once. Lower is better. Comparison is a relative percentage change, like the other cards.',
+  'Review rounds': 'Median distinct commit revisions with a submitted APPROVED, CHANGES_REQUESTED, COMMENTED or DISMISSED review by someone other than the author, at or before merge. Bots and the configured agent count; deleted accounts count unless known to be the author. Multiple reviews of one commit count once; PRs without reviews count zero. Includes the initial reviewed revision and comment-only reviews; this does not prove rework or causation.',
+  'Change-request share': 'Share of merged PRs with at least one observed submitted CHANGES_REQUESTED review by someone other than the author, at or before merge, from the local GitHub datastore. Each PR counts once. Comparison is a relative percentage change, like the other cards.',
 }
 
 function workTypeMarkup(tile: AnalyticsTile): string {

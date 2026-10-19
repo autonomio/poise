@@ -230,38 +230,59 @@ of falling to zero, and a known value with unknown neighbours shows as a dot.
 The year is read once per day and account, separately from the day's numbers,
 and each chart keeps its place until it arrives. If it cannot be read, the
 charts keep an empty reserved space, the day's numbers stay, and the failure
-appears in Notifications.
+appears in Notifications. Review rounds retains its independent selected-day
+histogram in that reserved area.
 
 ## Work and review
 
 All three cards use the pull requests merged on the selected day and the existing
-account/involvement scope. Work type groups case-insensitive Conventional Commit title prefixes:
-feat, fix, perf, refactor, docs, test, build, ci, chore, style and revert. Other
-titles remain unclassified, included in the denominator. The headline is the
-largest category's share; neutral bars show every represented type. Counts and
-classification details live in tooltips. No title-based category implies quality.
+account/involvement scope. Work type groups case-insensitive Conventional Commit
+title prefixes: feat, fix, perf, refactor, docs, test, build, ci, chore, style
+and revert. Other titles remain unclassified, included in the denominator. The
+headline is the largest category's share; ties use the listed prefix order,
+with unclassified last. Auto-generated `Revert "…"` titles are unclassified;
+`revert: …` is recognized. Work type has no baseline or year history. Neutral
+bars show every represented type; counts and classification details live in
+tooltips. No title-based category implies quality.
 
-Review rounds is the median number of distinct commit revisions reviewed by
-someone other than the author, at or before merge. Multiple reviews of one
-commit count once; PRs without submitted reviews count zero. Pending, author
-and post-merge reviews are excluded. The initial reviewed revision counts;
-this measures observed reviewed revisions, not proven rework or causation.
-If any eligible review lacks a commit identity, the median is withheld and
-coverage appears in its tooltip. Its histogram shows the selected day's known
-per-PR round counts; its line shows weekly medians across the preceding year.
+Review rounds is the median number of distinct commit revisions with a
+submitted non-author review at or before merge, inclusive of the merge instant.
+APPROVED, CHANGES_REQUESTED, COMMENTED and DISMISSED states count. Bots and the
+configured agent count. A deleted reviewer or author account counts unless
+its login is known to be the author's. Comment-only reviews, including thread
+replies attached to a new revision, count intentionally: these are observed
+submitted reviews, not proof of a full review or rework. Multiple reviews of
+one commit count once; PRs without eligible reviews count zero. Pending,
+author and post-merge reviews are excluded. The initial reviewed revision counts.
+
+If any eligible review lacks a commit identity, the median is withheld.
+Coverage appears separately for the day and baseline in its tooltip, and for
+each historical period in its readout. Empty cohorts say no merges; older
+payloads without aggregates say unavailable. The histogram shows the selected
+day's known per-PR counts, including known counts when the median is withheld;
+the line shows weekly medians across the preceding year. The daily histogram
+remains available while the independent year read is delayed or fails.
 
 Change-request share counts each merged PR once if it has at least one observed
 submitted non-author CHANGES_REQUESTED review at or before merge. Its denominator
-includes every merged PR, including those without reviews. Dismissed reviews
-have unknown previous states and are not inferred as change requests. Its line
-and histogram use weekly shares; histogram bounds stay at 0–100%.
+includes every merged PR, including those without reviews. The local datastore
+does not collect dismissal events or their previous states, although GitHub
+exposes them. Dismissed change requests can therefore be undercounted; the
+tooltip reports the dismissed-review count. Its line and histogram use weekly
+shares; histogram bounds stay at 0–100%.
 
-Both friction cards show the preceding seven-day cohort's median or share and
-PR count beneath the delta, matching the other cards. Changes use relative
-percentages, not percentage points; a positive share against a zero baseline
-has no relative delta. Decreases are green, increases red and
-unchanged values neutral. Definitions, coverage and review-state caveats are
-in measurement tooltips. No merges produce unknown medians and shares.
+Both friction cards show the pooled preceding seven-day cohort's median or share
+and PR count beneath the delta. Changes use relative percentages, not percentage
+points; a positive value against a zero baseline has no relative delta for either
+card. Both compare Today's partial cohort directly, without elapsed-day pacing
+or averaging daily medians/shares. Decreases are green, increases red and
+unchanged values neutral. Definitions and coverage remain in tooltips.
+
+This preserves observed-friction polarity, including when fewer reviewed PRs
+drive a decrease: an unreviewed cohort can be green. Both tooltips therefore
+report how many merged PRs had an eligible review; colors are not a review-quality
+score. Stored-summary availability covers the local aggregate, not complete
+historical review-state knowledge. No merges produce unknown medians and shares.
 Existing local SQLite reads supply these metrics; collection, dependencies,
 GitHub requests and refresh schedules are unchanged.
 
@@ -343,9 +364,10 @@ report also names `agentAccount` (null when none is set) and gives, under
 `pullRequests`, `opened`, `closedUnmerged`, `mergedByAgent` (null without an
 agent account) and `firstReview` with its `count` and `medianMs`.
 
-`pullRequests.workReview` adds `types` (type/count), `rounds` (median, counted,
+`pullRequests.workReview` adds `reviewed` (PRs with an eligible review; null
+when summaries are unavailable), `types` (type/count), `rounds` (median, counted,
 missingReviews and rounds/PR-count distribution), and `changesRequested`
-(affected PRs, review count, dismissed count and state coverage). Unavailable
+(affected PRs, review count, dismissed count and available-summary count). Unavailable
 review aggregates remain null; older client payloads show unknown metrics.
 
 `GET /api/analytics/history?bounds=…&org=…` answers the past year. `bounds`
