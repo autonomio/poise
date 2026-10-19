@@ -60,7 +60,6 @@ export class DiagnosticStore {
           account TEXT, repository TEXT, call_id TEXT, correlation_id TEXT, search TEXT NOT NULL,
           bytes INTEGER NOT NULL, payload TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS log_scope_time ON log_events(workspace, sort_time DESC, id DESC);
         CREATE INDEX IF NOT EXISTS log_time ON log_events(sort_time DESC, id DESC);
         CREATE INDEX IF NOT EXISTS log_ingestion_seq ON log_events(ingested_at,seq);
         CREATE INDEX IF NOT EXISTS log_incident ON log_events(incident_id);
@@ -80,6 +79,12 @@ export class DiagnosticStore {
         CREATE TABLE IF NOT EXISTS log_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT OR IGNORE INTO log_meta VALUES ('version','1');
       `)
+      // Keep the order used by pages while covering their broad count predicates.
+      // Old stores had only the first three columns and read every payload page.
+      const scopeColumns = this.db.pragma('index_info(log_scope_time)') as Array<{ name: string }>
+      if (scopeColumns.map((column) => column.name).join(',') !== 'workspace,sort_time,id,visibility,ingested_at,severity') this.db.transaction(() => {
+        this.db.exec('DROP INDEX IF EXISTS log_scope_time; CREATE INDEX log_scope_time ON log_events(workspace, sort_time DESC, id DESC, visibility, ingested_at, severity)')
+      }).immediate()
       this.db.prepare("INSERT OR IGNORE INTO log_meta VALUES ('cursor_key',?)").run(randomBytes(32).toString('hex'))
       this.checkVersion()
     } catch (error) {
