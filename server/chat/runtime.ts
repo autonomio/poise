@@ -36,7 +36,7 @@ import { latestReviewTarget, prepareReview, type ReviewTarget } from './review'
 import type { AutoMergeAck, SafeModeAck } from './protocol'
 import type { ChildProcess } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { loadCatalog, catalogModel, type Catalog, type CatalogModel } from '../models'
 import { claudeAuth } from '../claude-auth'
 import { HttpError } from '../http'
@@ -170,6 +170,8 @@ interface LiveSession {
 }
 
 export interface RuntimeOptions {
+  /** Native tools discover Poise through this server-owned, per-session context. */
+  controlContext?: (sessionId: string) => Promise<string>
   /** `poise-dev:<db>` or `poise-prod:<db>`; sessions of another instance are never adopted. */
   instance: string
   instanceLabel: string
@@ -625,7 +627,18 @@ export class ChatRuntime extends EventEmitter {
     return this.track(() => this.createSession(request))
   }
 
-  private async createSession(request: NewSessionRequest): Promise<SessionRecord> {
+  /** Managed workers never share the manager's local checkout lease. */
+  async createChild(parentId: string, request: Pick<NewSessionRequest, 'model' | 'effort' | 'title'>): Promise<SessionRecord> {
+    this.assertAcceptingWork()
+    const parent = this.get(parentId)
+    if (!parent || parent.status === 'closed') throw new ChatError(404, 'unknown active manager', 'unknown_session')
+    return this.track(async () => {
+      const { agent } = await this.resolveModel(request.model, request.effort)
+      return this.createSession({ ...request, agent, deferStart: true, safeMode: parent.safeMode === true, autoMerge: parent.autoMerge }, true)
+    })
+  }
+
+  private async createSession(request: NewSessionRequest, isolated = false): Promise<SessionRecord> {
     if (this.stopped) throw new ChatError(503, 'the chat runtime is stopping', 'agent_error')
     if (request.deferStart !== undefined && typeof request.deferStart !== 'boolean') throw new ChatError(400, 'deferStart must be a boolean', 'invalid')
     if (request.safeMode !== undefined && typeof request.safeMode !== 'boolean') throw new ChatError(400, 'safeMode must be a boolean', 'invalid')
@@ -639,7 +652,7 @@ export class ChatRuntime extends EventEmitter {
     const branch = normalizeBranchRequest(request.branch ?? { new: `chat/${id}` }, this.branchPrefix())
     if (agent === 'claude' && !request.deferStart) await this.requireClaudeReady()
     const checkout = local
-      ? await ensureLocalWorkspace(this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, this.instance)
+      ? await ensureLocalWorkspace(isolated ? join(this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, 'workers', id) : this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, this.instance)
       : canonicalCheckout(await this.resolveCheckout(request.repo!))
     const now = new Date().toISOString()
     const title = (request.title || request.context?.title || 'New session').slice(0, CHAT_LIMITS.titleChars)
@@ -1771,7 +1784,10 @@ export class ChatRuntime extends EventEmitter {
       turn.abort.signal.throwIfAborted()
       turn.contextAction = undefined
       turn.agentInvoked = true
-      const response = adapter.prompt(turn.id, withAutoMergeInstructions({ ...adapterInput, text: expandSwitches(adapterInput.text, turn.switches), memories: readMemories().text }, record.autoMerge, turn.implementsChange), turn.abort.signal)
+      const controlContext = await this.options.controlContext?.(record.id)
+      turn.abort.signal.throwIfAborted()
+      const expanded = expandSwitches(adapterInput.text, turn.switches)
+      const response = adapter.prompt(turn.id, withAutoMergeInstructions({ ...adapterInput, text: controlContext ? `${controlContext}\n\n[Request]\n${expanded}` : expanded, memories: readMemories().text }, record.autoMerge, turn.implementsChange), turn.abort.signal)
       turn.releasePrompt()
       const result = await response
       agentSettled = true
