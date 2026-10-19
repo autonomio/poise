@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { build } from 'esbuild'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { LedgerReply } from '../server/behavior-ledger-contract'
+import type { LogEntry } from '../server/agent'
 import { parseBehaviorLedgerArguments } from '../server/behavior-ledger-cli'
 import { createAuthenticatedClaudeAuth } from './claude-auth-fixture'
 import { PUBLIC_HOST, PUBLIC_ORIGIN, gatewayKeys, serviceEnvironment, signAssertion } from './service-fixture'
@@ -229,4 +230,26 @@ it('preserves incomplete JSON with nonzero status, bounds replies and refuses re
     expect((await cli(['health', '--base-url', stubBase])).code).toBe(1)
     expect(redirected).toBe(false)
   } finally { await new Promise<void>((resolve) => stub.close(() => resolve())) }
+})
+
+it('requires the original correlation even after a Caller call ID is known', async () => {
+  const nativeId = randomUUID()
+  const callId = 'c'.repeat(32)
+  const head = 'b'.repeat(40)
+  const startedAt = new Date().toISOString()
+  ledger.captureBehaviorAdmission({ admissionKey: nativeId, nativeId, behavior: 'review-new-prs', source: 'poise:review-new-prs',
+    owner: 'octocat', actor: 'octobot', repository: 'example/project', number: 9, head, slot: 'primary', plannedSlots: ['primary'], startedAt })
+  ledger.captureBehaviorOutcome({ nativeId, state: 'unknown', activity: 'unknown', callId, stateSource: 'native' })
+  const listing = await ledger.readBehaviorLedger({ operation: 'list', limit: 100 })
+  const record = listing.body.records!.find((row) => row.kind === 'firing' && row.behavior === 'review-new-prs' && row.target.number === 9)!
+  const entry: LogEntry = { id: callId, pr_id: '9', repo: 'example/project', actor: 'octobot', model: 'fixture', behavior: 'pr_review',
+    session_id: null, prompt: '', started_at: startedAt, started_at_precise: startedAt, completed_at: new Date().toISOString(),
+    time_elapsed: '0', status: 'completed', outcome: 'clean', head_sha: head, expected_head: head, source: 'poise:review-new-prs',
+    correlation_id: nativeId, action: 'reviewed_clean', response: null, error: '' }
+  for (const correlation of ['foreign-correlation', null]) {
+    ledger.observeAgentSnapshot({ entries: [{ ...entry, correlation_id: correlation }], quarantined: [] })
+    expect((await call(`${PREFIX}/${record.id}`)).body.record).toMatchObject({ state: 'unknown', activity: 'unknown' })
+  }
+  ledger.observeAgentSnapshot({ entries: [entry], quarantined: [] })
+  expect((await call(`${PREFIX}/${record.id}`)).body.record).toMatchObject({ state: 'completed', activity: 'settled', outcome: 'clean' })
 })

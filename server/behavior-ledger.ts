@@ -263,20 +263,25 @@ export class BehaviorLedgerObserver {
       for (const row of snapshot.entries) {
         if (calls.has(row.id)) calls.set(row.id, calls.get(row.id)! + 1)
       }
+      const quarantinedCalls = new Set<string>()
+      const quarantinedCorrelations = new Set<string>()
+      let unattributed = false
+      for (const item of snapshot.quarantined) {
+        if (item.id && calls.has(item.id)) quarantinedCalls.add(item.id)
+        if (item.correlationId && pending.has(item.correlationId)) quarantinedCorrelations.add(item.correlationId)
+        if (!item.id && !item.correlationId) unattributed = true
+      }
       for (const [nativeId, { row, duplicate }] of related) {
-        const quarantined = duplicate || (calls.get(row.id) ?? 0) > 1 || snapshot.quarantined.some((item) => {
-          if (item.id === row.id || item.correlationId === nativeId) return true
-          return !((item.id && item.id !== row.id) || (item.correlationId && item.correlationId !== nativeId)
-            || (item.repo && row.repo && item.repo.toLowerCase() !== row.repo.toLowerCase())
-            || (item.prId && item.prId !== row.pr_id) || (item.behavior && item.behavior !== row.behavior))
-        })
+        const correlationMatches = row.correlation_id === nativeId
+        const quarantined = !correlationMatches || duplicate || (calls.get(row.id) ?? 0) > 1
+          || quarantinedCalls.has(row.id) || quarantinedCorrelations.has(nativeId) || unattributed
         const observation: LedgerCaller = {
           type: 'caller', nativeId, callId: row.id, repository: row.repo,
           number: row.pr_id ? Number(row.pr_id) : null, actor: row.actor, source: row.source,
           behavior: row.behavior, expectedHead: row.expected_head, head: row.head_sha,
-          status: row.status, action: row.action, outcome: row.outcome,
+          status: correlationMatches ? row.status : null, action: row.action, outcome: row.outcome,
           startedAt: row.started_at_precise ?? row.started_at, completedAt: row.completed_at ?? null,
-          uncertain: quarantined, mayRun: /^(running|in_progress)$/.test(row.status),
+          uncertain: quarantined, mayRun: correlationMatches && /^(running|in_progress)$/.test(row.status),
           interrupted: row.error_code === 'interrupted',
         }
         this.capture(observation)
