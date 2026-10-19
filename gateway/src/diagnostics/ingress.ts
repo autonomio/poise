@@ -103,9 +103,9 @@ export async function receiveManualIngress(db: DiagnosticStore, domain: string, 
   const event = normalize(input, db.now(), environmentSecrets())
   const previous = db.readCoverage(access).find((source) => source.id === 'external-ingress')
   const at = new Date(db.now()).toISOString()
-  const coverage: Coverage = previous ? { ...previous, ingestedAt: event ? at : previous.ingestedAt } : {
+  const coverage: Coverage = previous && previous.status !== 'not-configured' ? { ...previous, ingestedAt: event ? at : previous.ingestedAt } : {
     id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', currentStatus: 'initializing', observedAt: null,
-    ingestedAt: event ? at : null, availableFrom: at, error: 'Manual delivery cannot establish continuous collection', gaps: [],
+    ingestedAt: event ? at : previous?.ingestedAt ?? null, availableFrom: previous?.availableFrom ?? at, error: 'Manual delivery cannot establish continuous collection', gaps: previous?.gaps ?? [],
   }
   db.commitCollection(event ? [event] : [], KEY, db.checkpoint(KEY), null, coverage)
   write(JSON.stringify({ accepted: true, eventId: event?.id ?? null }))
