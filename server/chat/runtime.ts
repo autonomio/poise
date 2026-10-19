@@ -36,13 +36,13 @@ import { latestReviewTarget, prepareReview, type ReviewTarget } from './review'
 import type { AutoMergeAck, SafeModeAck } from './protocol'
 import type { ChildProcess } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { loadCatalog, catalogModel, type Catalog, type CatalogModel } from '../models'
 import { claudeAuth } from '../claude-auth'
 import { HttpError } from '../http'
 import { chatTurnFinished, chatWaiting, chatWaitingEnded, type ChatSessionAlertContext } from '../alerts/producers'
 import { localCheckoutPath } from '../gh'
-import { ensureLocalWorkspace, LOCAL_CHAT_ROOT } from './local-workspace'
+import { ensureLocalWorkspace, ensureWorkerWorkspace, LOCAL_CHAT_ROOT } from './local-workspace'
 import { catalogueAgents } from './catalog-agents'
 import { runFile } from '../process'
 import { CheckoutLease, canonicalCheckout, describeHolder, type AcquireResult, type CheckoutLeaseOptions } from './checkout-lock'
@@ -652,7 +652,9 @@ export class ChatRuntime extends EventEmitter {
     const branch = normalizeBranchRequest(request.branch ?? { new: `chat/${id}` }, this.branchPrefix())
     if (agent === 'claude' && !request.deferStart) await this.requireClaudeReady()
     const checkout = local
-      ? await ensureLocalWorkspace(isolated ? join(this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, 'workers', id) : this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, this.instance)
+      ? isolated
+        ? await ensureWorkerWorkspace(this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, id, this.instance)
+        : await ensureLocalWorkspace(this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT, this.instance)
       : canonicalCheckout(await this.resolveCheckout(request.repo!))
     const now = new Date().toISOString()
     const title = (request.title || request.context?.title || 'New session').slice(0, CHAT_LIMITS.titleChars)

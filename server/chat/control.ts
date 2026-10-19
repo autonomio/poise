@@ -171,7 +171,7 @@ export class ChatControl {
     if (req.method !== 'POST') return reply(res, 405, { error: 'use POST' })
     try {
       const id = text(req.headers['x-poise-chat'], 'x-poise-chat')
-      this.session(id)
+      if (this.session(id).status === 'closed') throw new HttpError(403, 'the source chat is closed')
       const provided = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''))
       const expected = Buffer.from(this.token(id))
       if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return reply(res, 403, { error: 'invalid chat control credential' })
@@ -255,7 +255,7 @@ export class ChatControl {
   }
 
   tick(): Promise<void> {
-    if (this.stopped || !this.ready || this.runtime.draining || releaseBackgroundPaused()) return Promise.resolve()
+    if (this.stopped || !this.ready || !this.origin || this.runtime.draining || releaseBackgroundPaused()) return Promise.resolve()
     if (this.running) return this.running
     const release = trackReleaseBackground()
     this.running = this.runTick().finally(() => { this.running = null; release() })
