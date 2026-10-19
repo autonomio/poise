@@ -119,8 +119,12 @@ and neutral arrow are white and say “On pace.” For example, 15 merges agains
 27/day median after 10 hours of a 24-hour day shows “Typical by now: 11.3” and
 “33.3% ahead of pace.” A zero typical value withholds the trend and percentage;
 missing daily data or partial line-size coverage also withholds the comparison.
-The browser recomputes pacing as time passes without additional analytics or
-GitHub reads; it uses the existing baseline response's seven daily totals.
+Pacing uses the time the displayed totals were read and the existing baseline
+response's seven daily totals. That comparison stays with the snapshot when
+history arrives, quota refreshes or the clock advances, so colors
+cannot drift against unchanged counts. Opening Analytics, choosing a day or
+organization, saving Settings and crossing midnight use the existing analytics
+reads to refresh the snapshot. Pacing adds no analytics or GitHub reads.
 
 Completed days retain the full-day comparison: activity increases are green,
 decreases red, and an unchanged value has a neutral arrow and 0%. A zero

@@ -508,44 +508,71 @@ test('compares cumulative cards with elapsed-day pace while retaining actual val
   expect(state.historyReads).toHaveLength(2)
 })
 
-test('updates all three pace bands as time passes without reading analytics again and stops when inactive', async ({ page }) => {
+test('keeps pace tied to its data snapshot through elapsed time, history and quota updates, then renews it on reopening', async ({ page }) => {
   const state = await workspace(page)
   state.pacing = { merged: 15, median: 27 }
   state.baselineMerged = 189
+  let releaseHistory!: () => void
+  const historyHeld = new Promise<void>((resolve) => { releaseHistory = resolve })
+  await page.route('**/api/analytics/history?**', async (route) => { await historyHeld; await route.fallback() })
   await page.clock.install({ time: new Date('2026-10-09T10:00:00Z') })
   await page.goto('/')
   await openAnalytics(page)
   const merged = countTrend(page)
-  await expect(merged.locator('.analytics-delta')).toHaveText('33.3% ahead of pace')
-  const graph = page.locator('.analytics-history[data-series="Pull requests merged"] .analytics-history-line')
-  await expect(graph).toHaveAttribute('d', /^M/)
-  const graphBefore = await graph.getAttribute('d')
+  const expectInitialSnapshot = async () => {
+    await expect(merged.locator('.analytics-value')).toHaveText('15')
+    await expect(merged).toHaveClass(/good/)
+    await expect(merged.locator('.analytics-arrow')).toHaveText('↑')
+    await expect(merged.locator('.analytics-delta')).toHaveText('33.3% ahead of pace')
+    await expect(merged).toContainText('Typical by now: 11.3 · 7-day median: 27.0 / day')
+  }
+  await expectInitialSnapshot()
 
   await page.clock.fastForward(3 * 3_600_000)
-  await expect(merged.locator('.analytics-value')).toHaveText('15')
-  await expect(merged).toHaveClass(/neutral/)
-  await expect(merged.locator('.analytics-arrow')).toHaveText('→')
-  await expect(merged.locator('.analytics-delta')).toHaveText('On pace')
-  await expect(merged).toContainText('Typical by now: 14.6 · 7-day median: 27.0 / day')
-  const colors = await merged.evaluate(element => ['.analytics-value', '.analytics-arrow', '.analytics-delta'].map(selector => getComputedStyle(element.querySelector(selector)!).color))
-  expect(new Set(colors).size).toBe(1)
-
-  await page.clock.fastForward(3 * 3_600_000)
-  await expect(merged).toHaveClass(/bad/)
-  await expect(merged.locator('.analytics-arrow')).toHaveText('↓')
-  await expect(merged.locator('.analytics-delta')).toHaveText('16.7% behind pace')
-  await expect(merged).toContainText('Typical by now: 18.0 · 7-day median: 27.0 / day')
-  await expect(mergeTrend(page).locator('.analytics-delta')).toHaveText('50%')
-  await expect(graph).toHaveAttribute('d', graphBefore!)
+  await expectInitialSnapshot()
+  expect(state.reads).toHaveLength(2)
+  expect(state.historyReads).toHaveLength(0)
+  releaseHistory()
+  await expect(page.locator('.analytics-history[data-series="Pull requests merged"] .analytics-history-line')).toHaveAttribute('d', /^M/)
+  await expectInitialSnapshot()
+  const quotaRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github-quota')
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await quotaRefresh
+  await expectInitialSnapshot()
   expect(state.reads).toHaveLength(2)
   expect(state.historyReads).toHaveLength(1)
 
   await leaveAnalytics(page)
   const hiddenSummary = await merged.textContent()
-  await page.clock.fastForward(3 * 3_600_000)
+  await page.clock.fastForward(3_600_000)
   await expect(merged).toHaveText(hiddenSummary!)
   expect(state.reads).toHaveLength(2)
   expect(state.historyReads).toHaveLength(1)
+
+  state.pacing.merged = 16
+  await openAnalytics(page)
+  await expect(merged.locator('.analytics-value')).toHaveText('16')
+  await expect(merged).toHaveClass(/neutral/)
+  await expect(merged.locator('.analytics-arrow')).toHaveText('→')
+  await expect(merged.locator('.analytics-delta')).toHaveText('On pace')
+  await expect(merged).toContainText('Typical by now: 15.8 · 7-day median: 27.0 / day')
+  const colors = await merged.evaluate(element => ['.analytics-value', '.analytics-arrow', '.analytics-delta'].map(selector => getComputedStyle(element.querySelector(selector)!).color))
+  expect(new Set(colors).size).toBe(1)
+  expect(state.reads).toHaveLength(4)
+  expect(state.historyReads).toHaveLength(2)
+
+  await leaveAnalytics(page)
+  await page.clock.fastForward(4 * 3_600_000)
+  state.pacing.merged = 17
+  await openAnalytics(page)
+  await expect(merged.locator('.analytics-value')).toHaveText('17')
+  await expect(merged).toHaveClass(/bad/)
+  await expect(merged.locator('.analytics-arrow')).toHaveText('↓')
+  await expect(merged.locator('.analytics-delta')).toHaveText('16% behind pace')
+  await expect(merged).toContainText('Typical by now: 20.3 · 7-day median: 27.0 / day')
+  await expect(mergeTrend(page).locator('.analytics-delta')).toHaveText('50%')
+  expect(state.reads).toHaveLength(6)
+  expect(state.historyReads).toHaveLength(3)
 })
 
 test('reads both periods for the selected account and shows slower merges in red', async ({ page }) => {

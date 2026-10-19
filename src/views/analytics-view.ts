@@ -26,10 +26,9 @@ let readGeneration = 0
 let quotaGeneration = 0
 let historyGeneration = 0
 let quotaTimer: ReturnType<typeof setInterval> | undefined
-let paceTimer: ReturnType<typeof setInterval> | undefined
 // The day on screen and the past year it is drawn with. The year arrives on
 // its own: until then each headline tile holds its chart's place.
-let shown: { report: AnalyticsReport, baseline: AnalyticsReport } | null = null
+let shown: { report: AnalyticsReport, baseline: AnalyticsReport, progress: number | undefined } | null = null
 let history: { data: AnalyticsHistory | null, error: string } = { data: null, error: '' }
 // The period a chart's cursor rests on, by tile, while hovered or focused.
 const cursors = new Map<string, number>()
@@ -143,10 +142,7 @@ async function readQuota(): Promise<void> {
 }
 
 function refreshQuota(): void {
-  if (document.visibilityState === 'visible' && active) {
-    render()
-    void readQuota()
-  }
+  if (document.visibilityState === 'visible' && active) void readQuota()
 }
 
 function readFailure(title: string, error: unknown): ReadFailure {
@@ -219,9 +215,7 @@ function groupMarkup(group: AnalyticsGroup): string {
 
 function render(): void {
   if (!shown) return
-  const day = analyticsDay(dayOffset, dayAnchor)
-  const progress = day.isToday ? analyticsDayProgress(day.since, day.until) : undefined
-  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, progress).map(groupMarkup).join(''))
+  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, shown.progress).map(groupMarkup).join(''))
   for (const [label, index] of cursors) showCursor(label, index)
 }
 
@@ -358,6 +352,8 @@ async function readAnalytics(): Promise<void> {
   const groups = viewEl.querySelector<HTMLElement>('.analytics-groups')!
   const quota = viewEl.querySelector<HTMLElement>('.github-quota-section')!
   const day = analyticsDay(dayOffset, dayAnchor)
+  // Totals and typical-by-now must describe the same read, even on later renders.
+  const progress = day.isToday ? analyticsDayProgress(day.since, day.until) : undefined
   shown = null
   void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
   viewEl.querySelector('.analytics-date')!.textContent = day.label
@@ -383,7 +379,7 @@ async function readAnalytics(): Promise<void> {
       read(day.baselineSince, day.since, analyticsDailyBounds(dayOffset, dayAnchor)),
     ])
     if (generation !== readGeneration) return
-    shown = { report: data, baseline }
+    shown = { report: data, baseline, progress }
     render()
     noticeFeed.reportReadErrors('analytics-day', [...accountFailures(data), ...accountFailures(baseline)])
   } catch (error) {
@@ -459,9 +455,6 @@ export function initAnalyticsView(): void {
     quota.classList.remove('st-help-error')
     clearInterval(quotaTimer)
     quotaTimer = setInterval(refreshQuota, GITHUB_QUOTA_REFRESH_MS)
-    paceTimer = setInterval(() => {
-      if (document.visibilityState === 'visible' && analyticsDay(dayOffset, dayAnchor).isToday) render()
-    }, 60_000)
   }
   scheduleMidnightRead()
   void readAnalytics()
@@ -477,6 +470,5 @@ export function stopAnalyticsRefresh(): void {
   cancelHover()
   hoveredSeries = null
   clearInterval(quotaTimer)
-  clearInterval(paceTimer)
   clearTimeout(midnightTimer)
 }
