@@ -272,6 +272,24 @@ test('answers a permission with the keyboard and a question with its options', a
   await expect(q).toHaveClass(/resolved/)
 })
 
+test('attributes a worker question answer to its manager and preserves it on reload', async ({ page }) => {
+  const state = makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'Work on staging', attachments: [], mentions: [] } })] })
+  await installRoutes(page, state)
+  const sock = await installSocket(page)
+  await page.goto('/')
+  await sock.subscribed('s1')
+  sock.seq = 1
+  sock.push('s1', { type: 'question.asked', id: 'q-manager', turnId: 't1', questions: [{ id: 'target', question: 'Which deployment target?', options: [], multiSelect: false, freeText: true }] })
+  const question = page.locator('.chat-question[data-request="q-manager"]')
+  await expect(question).toContainText('Which deployment target?')
+  sock.push('s1', { type: 'question.answered', id: 'q-manager', answers: { target: 'staging' }, by: 'chat', fromSession: 'manager-session' })
+  await expect(question).toContainText('Answered by manager')
+  await expect(question).toHaveClass(/resolved/)
+  expect(sock.framesOf('question.answer')).toHaveLength(0)
+  await page.reload()
+  await expect(page.locator('.chat-question[data-request="q-manager"]')).toContainText('Answered by manager')
+})
+
 test('shows tool cards with diffs, reverts one by its diffId, and folds consecutive reads', async ({ page }) => {
   const state = makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'go', attachments: [], mentions: [] } })] })
   await installRoutes(page, state)

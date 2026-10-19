@@ -2115,7 +2115,7 @@ export class ChatRuntime extends EventEmitter {
     this.afterRequestAnswered(session)
   }
 
-  answerQuestion(id: string, requestId: string, answers: QuestionAnswers): void {
+  answerQuestion(id: string, requestId: string, answers: QuestionAnswers, fromSession?: string): void {
     const session = this.requireLive(id)
     const pending = session.pending.get(requestId)
     if (!pending || pending.kind !== 'question') {
@@ -2125,7 +2125,7 @@ export class ChatRuntime extends EventEmitter {
       throw new ChatError(409, 'this question is no longer pending', 'no_turn')
     }
     const validated = validateAnswers(pending.questions ?? [], answers)
-    this.emit_(id, { type: 'question.answered', id: requestId, answers: validated, by: 'user' })
+    this.emit_(id, { type: 'question.answered', id: requestId, answers: validated, by: fromSession ? 'chat' : 'user', ...(fromSession ? { fromSession } : {}) })
     session.pending.delete(requestId)
     pending.resolve(validated)
     this.afterRequestAnswered(session)

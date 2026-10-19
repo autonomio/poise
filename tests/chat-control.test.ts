@@ -29,6 +29,7 @@ let Control: typeof ChatControl
 const prompts = new Map<string, PromptInput[]>()
 const finishes = new Map<string, (result: TurnResult) => void>()
 const hosts = new Map<string, AdapterHost>()
+const steers = new Map<string, string[]>()
 const ci = vi.fn<() => Promise<CiObservation>>()
 
 function adapter(host: AdapterHost): Adapter {
@@ -44,7 +45,7 @@ function adapter(host: AdapterHost): Adapter {
       return new Promise<TurnResult>(done => finishes.set(host.sessionId, done))
     },
     async cancel() { finish() }, async close() { alive = false; finish() },
-    async steer() {}, async setMode() {}, async setModel(modelId, effort) { return { modelId, effort } },
+    async steer(text) { steers.set(host.sessionId, [...(steers.get(host.sessionId) ?? []), text]) }, async setMode() {}, async setModel(modelId, effort) { return { modelId, effort } },
     async fork() { return randomUUID() }, onExit() {},
   }
 }
@@ -88,7 +89,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   clock = Date.now()
-  prompts.clear(); finishes.clear(); hosts.clear()
+  prompts.clear(); finishes.clear(); hosts.clear(); steers.clear()
   ci.mockReset().mockResolvedValue({ head: 'a'.repeat(40), failing: [] })
   runtime = new Runtime({ instance: `control:${randomUUID()}`, instanceLabel: 'test', callerTurns: null, catalog: async () => CATALOG,
     adapters: { grok: adapter, claude: adapter, codex: adapter, muse: adapter }, requireClaudeReady: async () => {}, probeAgent: async () => ({ ok: true }),
@@ -234,6 +235,57 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     ci.mockResolvedValue(failed)
     clock += 5 * 60_000; await control.tick()
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(3)
+  })
+
+  it('lets the recorded manager supply context and answer task questions with durable attribution', async () => {
+    const parent = await manager(), outsider = await manager()
+    const result = await command(parent.id, { operation: 'create', title: 'Worker', task: 'Use the known target' })
+    const child = (result.session as { id: string }).id
+    await control.tick(); await until(() => prompts.has(child))
+    const input = { operation: 'steer', sessionId: child, text: 'The target is staging', requestId: randomUUID() }
+    await command(parent.id, input); await command(parent.id, input)
+    expect(steers.get(child)).toHaveLength(1)
+    await expect(command(outsider.id, { ...input, requestId: randomUUID() })).rejects.toThrow('recorded manager')
+    const waiting = hosts.get(child)!.askQuestion({ questions: [{ id: 'target', question: 'Which target?', options: [], freeText: true, multiSelect: false }] })
+    await until(() => runtime.get(child)?.status === 'waiting')
+    const questionId = runtime.get(child)!.pendingRequests[0]
+    await expect(command(outsider.id, { operation: 'answer', sessionId: child, questionId, answers: { target: 'staging' } })).rejects.toThrow('recorded manager')
+    await command(parent.id, { operation: 'answer', sessionId: child, questionId, answers: { target: 'staging' } })
+    await expect(waiting).resolves.toEqual({ target: 'staging' })
+    expect(runtime.events(child, 0).events.find(e => e.event.type === 'question.answered')?.event).toMatchObject({ by: 'chat', fromSession: parent.id })
+    expect(runtime.get(child)?.status).toBe('running')
+  })
+
+  it('validates real Caller CI packets, filters running checks, and refuses mismatched targets', async () => {
+    const processModule = await import('../server/process')
+    const { readWorkCi } = await import('../server/chat/control')
+    database.setMeta('agentAccount', 'fixture-agent')
+    const run = vi.spyOn(processModule, 'runFile').mockResolvedValue({ stdout: JSON.stringify({ action: 'list_failing_ci', repository: 'acme/app', pull_number: 9, head_sha: 'b'.repeat(40), failing: [
+      { name: 'Queued', state: 'queued', conclusion: null }, { name: 'Running', state: 'in_progress', conclusion: null },
+      { name: 'Failure', state: 'completed', conclusion: 'failure', url: 'https://github.com/acme/app/actions/runs/1' },
+      { name: 'Legacy', state: 'error' },
+    ] }), stderr: '' })
+    const target = store.workTarget('https://github.com/acme/app/pull/9')
+    expect((await readWorkCi(target)).failing.map(c => c.name)).toEqual(['Failure', 'Legacy'])
+    expect(run.mock.calls[0][1]).toContain('--repository')
+    run.mockResolvedValue({ stdout: JSON.stringify({ repository: 'acme/other', pull_number: 9, head_sha: 'b'.repeat(40), failing: [] }), stderr: '' })
+    await expect(readWorkCi(target)).rejects.toThrow('invalid CI evidence')
+    run.mockRestore()
+  })
+
+  it('delivers current failure evidence to a new owner and rejects credentials after control restart', async () => {
+    const first = await manager(), second = await manager()
+    const target = 'https://github.com/acme/app/pull/45'
+    ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] })
+    await command(first.id, { operation: 'bind', target }); await control.tick()
+    await command(first.id, { operation: 'unbind', target })
+    await command(second.id, { operation: 'bind', target }); await control.tick()
+    expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
+    const old = await config(second.id)
+    await control.stop()
+    control = new Control(runtime, { ci, now: () => clock }); control.attach(server); control.start()
+    const response = await fetch(`${origin}/api/chat/control`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Poise-Chat': second.id, Authorization: `Bearer ${old.token}` }, body: '{"operation":"list"}' })
+    expect(response.status).toBe(403)
   })
 
   it('routes local behavior changes to the matching work owner and fails visibly when CI cannot be read', async () => {

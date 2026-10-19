@@ -23,6 +23,8 @@ between agents running as the same operating-system user.
 | `read` | `sessionId`, optional `afterSeq` | Session and paged transcript; continue from the last sequence while `truncated` |
 | `create` | `title`, `task`, optional `model`, `effort` | One independent worker with the manager's model by default |
 | `send` | `sessionId`, `text` | Durable internal message |
+| `steer` | Managed worker `sessionId`, `text` | Native context delivery during its active turn |
+| `answer` | Managed worker `sessionId`, `questionId`, `answers` | Supply known task data; transcript attributes the answer to the manager |
 | `inbox` | Optional `afterSeq` | Up to 100 durable messages in sequence order |
 | `supervise` | `sessionIds`, `intervalMinutes`, `instruction` | Persistent supervision ID |
 | `unsupervise` | `watchId` | Disable the caller's supervision |
@@ -51,6 +53,12 @@ can read its inbox directly. Admission records the new turn ID; it is not proof
 that the agent completed the task. Failed/stopped/interrupted work pauses
 automatic dispatch until explicit chat activity. Existing queued tasks take
 priority. Stop preserves pending messages and bindings.
+
+A manager can explicitly steer its own worker or answer its pending question
+with known task data. Native answer validation still applies. The transcript
+records the manager's chat ID and shows “Answered by manager”; it never labels
+that answer as the person's decision. Questions needing a new human decision
+and all permission requests remain with the person/native Safe mode.
 
 Supervision supports 1–20 other chats and intervals of 1–1440 minutes. It
 persists in SQLite and supplies current status, unanswered request IDs and
