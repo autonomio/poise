@@ -131,7 +131,7 @@ export function itemHtml(item: NotificationItem, opened: boolean, now: number): 
       + '<button type="button" class="nr-btn" data-action="dismiss">Dismiss</button>'
     : ''
   const refs = evidenceReferences(item)
-  const diagnosticActions = refs.map((ref, index) => `<button type="button" class="nr-btn" data-action="logging" data-evidence="${index}">${index === 0 ? 'View in Logging' : `View retained attempt ${index + 1} in Logging`}</button>`).join('')
+  const diagnosticActions = refs.map((_ref, index) => `<button type="button" class="nr-btn" data-action="logging" data-evidence="${index}">${index === 0 ? 'View in Logging' : `View retained attempt ${index + 1} in Logging`}</button>`).join('')
   const evidenceState = item.evidenceStatus === 'unavailable' ? 'Retained diagnostics are unavailable.'
     : item.evidenceStatus === 'pending' ? 'No matching retained evidence is available yet.' : ''
   const evidenceNote = `${evidenceState}${item.evidenceMore ? ' Additional retained history is available in Logging.' : ''}`
