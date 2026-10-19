@@ -106,7 +106,9 @@ export function firstReviewTrend(current: number | null, baseline: number | null
 
 function paceTrend(current: number | null, typical: number | null): AnalyticsTile['trend'] {
   if (current === null || typical === null || typical === 0) return undefined
-  if (current >= typical * 0.9 && current <= typical * 1.1) {
+  // Elapsed-day fractions can round an exact boundary just outside the band.
+  const ratio = current / typical
+  if (ratio >= 0.9 - Number.EPSILON && ratio <= 1.1 + Number.EPSILON) {
     return { direction: 'neutral', text: '→ On pace', description: 'Within 10% of typical by now', caption: 'On pace · within 10% of typical by now', onPace: true }
   }
   const ahead = current > typical

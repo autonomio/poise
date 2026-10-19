@@ -167,6 +167,13 @@ describe('elapsed-day pacing', () => {
     expect(mergedTile(current).trend).toMatchObject({ direction, text })
   })
 
+  it('keeps exact tolerance boundaries neutral despite fractional elapsed-day rounding', () => {
+    expect(mergedTile(30, 80, 10 / 24).trend).toMatchObject({ direction: 'neutral', text: '→ On pace' })
+    expect(mergedTile(29, 80, 10 / 24).trend?.direction).toBe('bad')
+    expect(mergedTile(110, 240, 10 / 24).trend).toMatchObject({ direction: 'neutral', text: '→ On pace' })
+    expect(mergedTile(111, 240, 10 / 24).trend?.direction).toBe('good')
+  })
+
   it('paces event counts and total lines while preserving duration and per-PR comparisons', () => {
     const day = report({ merged: 1, lines: { total: 175, median: 175, counted: 1 } })
     day.issues = { opened: 86, closed: 1 }
