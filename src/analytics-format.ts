@@ -27,7 +27,7 @@ export interface AnalyticsTile {
   value: string
   /** A line under the value that says what it is made of. */
   note?: string
-  trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string, caption: string }
+  trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string, caption: string, onPace?: boolean }
   comparison?: string
 }
 
@@ -104,7 +104,23 @@ export function firstReviewTrend(current: number | null, baseline: number | null
   return metricTrend(current, baseline, { format: formatShortDuration, basis: 'median' })
 }
 
-export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport): AnalyticsGroup[] {
+function paceTrend(current: number | null, typical: number | null): AnalyticsTile['trend'] {
+  if (current === null || typical === null || typical === 0) return undefined
+  if (current >= typical * 0.9 && current <= typical * 1.1) {
+    return { direction: 'neutral', text: '→ On pace', description: 'Within 10% of typical by now', caption: 'On pace · within 10% of typical by now', onPace: true }
+  }
+  const ahead = current > typical
+  const percent = Math.abs((current - typical) / typical * 100)
+  const change = percent < 0.1 ? '<0.1%' : `${percent.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
+  const description = `${change} ${ahead ? 'ahead of' : 'behind'} pace`
+  return {
+    direction: ahead ? 'good' : 'bad', text: `${ahead ? '↑' : '↓'} ${description}`,
+    description: `${description} versus the preceding 7-day daily median, adjusted for elapsed day`,
+    caption: `${ahead ? 'Ahead of' : 'Behind'} pace · typical by now`,
+  }
+}
+
+export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport, dayProgress?: number): AnalyticsGroup[] {
   const pr = report.pullRequests
   const { lines, behaviors } = pr
   const none = pr.merged === 0
@@ -115,12 +131,15 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
     if (values.some((n) => n === null)) return null
     return values.filter((n): n is number => n !== null).sort((a, b) => a - b)[3]
   }
-  const dailyCount = (label: string, current: number | null, previous: number | null): AnalyticsTile => ({
-    label,
-    value: current === null ? UNKNOWN : formatCount(current),
-    trend: complete ? metricTrend(current, previous) : undefined,
-    comparison: `7-day median: ${formatRate(previous)} / day`,
-  })
+  const dailyCount = (label: string, current: number | null, previous: number | null): AnalyticsTile => {
+    const typical = previous === null || dayProgress === undefined ? null : previous * dayProgress
+    return {
+      label,
+      value: current === null ? UNKNOWN : formatCount(current),
+      trend: !complete ? undefined : dayProgress === undefined ? metricTrend(current, previous) : paceTrend(current, typical),
+      comparison: `${dayProgress === undefined ? '' : `Typical by now: ${formatRate(typical)} · `}7-day median: ${formatRate(previous)} / day`,
+    }
+  }
 
   // Zero merged pull requests changed zero lines; merged ones nobody has
   // sized yet changed an unknown number.

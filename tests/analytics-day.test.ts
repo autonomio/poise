@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { analyticsDay } from '../src/analytics-day'
+import { analyticsDay, analyticsDayProgress } from '../src/analytics-day'
 import { setLocalSettings } from '../src/config'
 
 afterEach(() => { vi.useRealTimers() })
@@ -19,6 +19,39 @@ describe('analytics calendar days', () => {
     setLocalSettings({ org: '', me: '', timezone: 'Europe/Helsinki' })
     expect(analyticsDay(-1)).toEqual({ label: 'Yesterday', isToday: false, since: '2026-10-24T21:00:00.000Z', until: '2026-10-25T22:00:00.000Z', baselineSince: '2026-10-17T21:00:00.000Z' })
     expect(analyticsDay(0).baselineSince).toBe('2026-10-18T21:00:00.000Z')
+  })
+})
+
+describe('elapsed analytics day', () => {
+  it.each([
+    ['2026-10-19T00:00:00Z', 0],
+    ['2026-10-19T10:00:00Z', 10 / 24],
+    ['2026-10-20T00:00:00Z', 1],
+    ['2026-10-18T23:00:00Z', 0],
+    ['2026-10-20T01:00:00Z', 1],
+  ] as const)('clamps the selected day at %s to %s', (now, expected) => {
+    expect(analyticsDayProgress('2026-10-19T00:00:00Z', '2026-10-20T00:00:00Z', Date.parse(now))).toBe(expected)
+  })
+
+  it('uses the current instant and configured timezone bounds', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-02T04:30:00Z'))
+    setLocalSettings({ org: '', me: '', timezone: 'Asia/Kolkata' })
+    const day = analyticsDay(0)
+    expect(day.since).toBe('2026-01-01T18:30:00.000Z')
+    expect(analyticsDayProgress(day.since, day.until)).toBe(10 / 24)
+  })
+
+  it.each([
+    ['2026-03-29T09:30:00Z', 23],
+    ['2026-10-25T09:30:00Z', 25],
+  ] as const)('uses the actual %s calendar day rather than assuming 24 hours', (now, hours) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(now))
+    setLocalSettings({ org: '', me: '', timezone: 'Europe/Helsinki' })
+    const day = analyticsDay(0)
+    expect((Date.parse(day.until) - Date.parse(day.since)) / 3_600_000).toBe(hours)
+    expect(analyticsDayProgress(day.since, day.until)).toBe(0.5)
   })
 })
 

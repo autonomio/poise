@@ -5,7 +5,7 @@ import { patchContent } from '../dom-patch'
 // pull request, each with a weekly line and distribution, then
 // live GitHub API quota. Independent of Current's filters.
 import { analyticsGroups, type AnalyticsGroup, type AnalyticsReport } from '../analytics-format'
-import { analyticsDay, analyticsDailyBounds, analyticsHistoryBounds } from '../analytics-day'
+import { analyticsDay, analyticsDayProgress, analyticsDailyBounds, analyticsHistoryBounds } from '../analytics-day'
 import { HISTORY_BASELINE, historyChart, histogram, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
 import { mountOrganizationFilter, organizationUrl } from '../organizations'
 import { effectiveTimezone } from '../config'
@@ -26,6 +26,7 @@ let readGeneration = 0
 let quotaGeneration = 0
 let historyGeneration = 0
 let quotaTimer: ReturnType<typeof setInterval> | undefined
+let paceTimer: ReturnType<typeof setInterval> | undefined
 // The day on screen and the past year it is drawn with. The year arrives on
 // its own: until then each headline tile holds its chart's place.
 let shown: { report: AnalyticsReport, baseline: AnalyticsReport } | null = null
@@ -142,7 +143,10 @@ async function readQuota(): Promise<void> {
 }
 
 function refreshQuota(): void {
-  if (document.visibilityState === 'visible' && active) void readQuota()
+  if (document.visibilityState === 'visible' && active) {
+    render()
+    void readQuota()
+  }
 }
 
 function readFailure(title: string, error: unknown): ReadFailure {
@@ -203,7 +207,7 @@ function groupMarkup(group: AnalyticsGroup): string {
         ${group.tiles.map((tile) => `
           <div class="analytics-tile">
             <dt class="analytics-label">${escapeHtml(tile.label)}</dt>
-            <dd class="analytics-summary ${tile.trend?.direction ?? 'neutral'}">
+            <dd class="analytics-summary ${tile.trend?.direction ?? 'neutral'}${tile.trend?.onPace ? ' on-pace' : ''}">
               <div class="analytics-value-row"><span class="analytics-value" data-help="${escapeHtml([measurementHelp[tile.label], tile.note].filter(Boolean).join(' '))}" tabindex="0">${escapeHtml(tile.value)}</span>${tile.trend ? `<span class="analytics-arrow" role="img" aria-label="${escapeHtml(tile.trend.description)}" data-help="${escapeHtml(tile.trend.caption)}" tabindex="0">${escapeHtml(tile.trend.text.slice(0, 1))}</span>` : ''}</div>
               <div class="analytics-trend">${tile.trend ? `<span class="analytics-delta" data-help="${escapeHtml(tile.trend.description)}" tabindex="0">${escapeHtml(tile.trend.text.slice(2))}</span>` : ''}<span class="analytics-note">${tile.comparison ? escapeHtml(tile.comparison) : ''}</span></div>
             </dd>
@@ -215,7 +219,9 @@ function groupMarkup(group: AnalyticsGroup): string {
 
 function render(): void {
   if (!shown) return
-  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline).map(groupMarkup).join(''))
+  const day = analyticsDay(dayOffset, dayAnchor)
+  const progress = day.isToday ? analyticsDayProgress(day.since, day.until) : undefined
+  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, progress).map(groupMarkup).join(''))
   for (const [label, index] of cursors) showCursor(label, index)
 }
 
@@ -453,6 +459,9 @@ export function initAnalyticsView(): void {
     quota.classList.remove('st-help-error')
     clearInterval(quotaTimer)
     quotaTimer = setInterval(refreshQuota, GITHUB_QUOTA_REFRESH_MS)
+    paceTimer = setInterval(() => {
+      if (document.visibilityState === 'visible' && analyticsDay(dayOffset, dayAnchor).isToday) render()
+    }, 60_000)
   }
   scheduleMidnightRead()
   void readAnalytics()
@@ -468,5 +477,6 @@ export function stopAnalyticsRefresh(): void {
   cancelHover()
   hoveredSeries = null
   clearInterval(quotaTimer)
+  clearInterval(paceTimer)
   clearTimeout(midnightTimer)
 }

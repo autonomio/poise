@@ -105,21 +105,37 @@ comment on issues, not pull requests, and are not counted either.
 ## Seven-day trends
 
 Pull requests opened, Pull requests merged, Closed without merging, Lines
-changed, Issues opened and Issues closed compare the day's totals with the
-median of the preceding seven complete calendar days' totals, including zero
-days. The existing baseline response includes those seven daily totals; no
-extra request or upstream read is needed. Calendar boundaries follow Settings'
-timezone, including daylight-saving changes. Missing daily data or partial
-line-size coverage withholds the comparison.
+changed, Issues opened and Issues closed use the median of the preceding seven
+complete calendar days' totals, including zero days. For Today, the comparison
+is that median multiplied by the elapsed fraction of the calendar day in
+Settings' timezone. The fraction uses the day's actual midnight boundaries,
+including 23- and 25-hour daylight-saving days.
+
+Today's cards retain the actual total and full-day seven-day median and show
+“Typical by now.” Above 110% of that typical value, the total and upward arrow
+are green and the percentage says “ahead of pace.” Below 90%, they are red with
+a downward arrow and “behind pace.” From 90% through 110%, inclusive, the total
+and neutral arrow are white and say “On pace.” For example, 15 merges against a
+27/day median after 10 hours of a 24-hour day shows “Typical by now: 11.3” and
+“33.3% ahead of pace.” A zero typical value withholds the trend and percentage;
+missing daily data or partial line-size coverage also withholds the comparison.
+The browser recomputes pacing as time passes without additional analytics or
+GitHub reads; it uses the existing baseline response's seven daily totals.
+
+Completed days retain the full-day comparison: activity increases are green,
+decreases red, and an unchanged value has a neutral arrow and 0%. A zero
+baseline uses an absolute change rather than division by zero. The weekly
+history lines and histograms remain unchanged.
 
 Time to merge and Time to first review compare the selected day's median
 with the median of the preceding seven days' observations and name the sample
 count. The selected day is excluded. Today is partial. A green downward arrow
-means faster; a red upward arrow means slower. Activity increases are green,
-decreases red. The colored arrow sits beside the value, with the matching
-percentage delta and baseline underneath. An unchanged value shows a neutral
-arrow and 0%; a zero baseline uses an absolute change rather than division
-by zero. Without observations, no directional claim is made.
+means faster; a red upward arrow means slower. The colored arrow sits beside
+the value, with the matching percentage delta and baseline underneath. An
+unchanged value shows a neutral arrow and 0%; a zero baseline uses an absolute
+change rather than division by zero. Without observations, no directional
+claim is made. Durations and per-PR metrics keep these existing comparisons
+without elapsed-day adjustment or the pacing tolerance.
 
 Per-PR comments and behaviors show selected-day medians and compare with
 the median across the preceding seven days' merged pull requests. Lines and

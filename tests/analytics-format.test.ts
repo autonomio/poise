@@ -141,6 +141,77 @@ it('compares headline event counts against seven-day daily medians, including ze
   expect(tile(buildGroups(day, week), 'Lines changed').comparison).toBe('7-day median: — / day')
 })
 
+describe('elapsed-day pacing', () => {
+  function mergedTile(current: number, median = 100, progress = 0.5) {
+    const week = report()
+    week.daily!.forEach((day) => { day.pullRequests.merged = median })
+    return tile(buildGroups(report({ merged: current }), week, progress), 'Pull requests merged')
+  }
+
+  it('keeps actual totals and the full-day median while comparing with typical work by now', () => {
+    const merged = mergedTile(15, 27, 10 / 24)
+    expect(merged.value).toBe('15')
+    expect(merged.comparison).toBe('Typical by now: 11.3 · 7-day median: 27.0 / day')
+    expect(merged.trend).toMatchObject({ direction: 'good', text: '↑ 33.3% ahead of pace' })
+    expect(merged.trend?.caption).toMatch(/pace/i)
+    expect(merged.trend?.description).toMatch(/pace/i)
+  })
+
+  it.each([
+    [44, 'bad', '↓ 12% behind pace'],
+    [45, 'neutral', '→ On pace'],
+    [50, 'neutral', '→ On pace'],
+    [55, 'neutral', '→ On pace'],
+    [56, 'good', '↑ 12% ahead of pace'],
+  ] as const)('uses inclusive 90–110%% neutral boundaries for %s of a typical 50', (current, direction, text) => {
+    expect(mergedTile(current).trend).toMatchObject({ direction, text })
+  })
+
+  it('paces event counts and total lines while preserving duration and per-PR comparisons', () => {
+    const day = report({ merged: 1, lines: { total: 175, median: 175, counted: 1 } })
+    day.issues = { opened: 86, closed: 1 }
+    const week = report()
+    const groups = buildGroups(day, week, 0.5)
+    for (const label of ['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Issues opened', 'Issues closed']) {
+      expect(tile(groups, label).comparison).toMatch(/^Typical by now: /)
+    }
+    expect(tile(groups, 'Pull requests merged').trend).toMatchObject({ direction: 'neutral', text: '→ On pace' })
+    expect(tile(groups, 'Lines changed')).toMatchObject({ value: '175', comparison: 'Typical by now: 175.0 · 7-day median: 350.0 / day', trend: { direction: 'neutral', text: '→ On pace' } })
+    const fullDay = buildGroups(day, week)
+    for (const label of ['Time to first review', 'Time to merge', 'Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent']) {
+      expect(tile(groups, label)).toEqual(tile(fullDay, label))
+    }
+  })
+
+  it.each([
+    [0, 27, 0],
+    [15, 27, 0],
+    [0, 0, 0.5],
+    [15, 0, 0.5],
+  ])('does not invent a percentage for %s merges with median %s and progress %s', (current, median, progress) => {
+    const merged = mergedTile(current, median, progress)
+    expect(merged.value).toBe(String(current))
+    expect(merged.comparison).toBe(`Typical by now: 0.0 · 7-day median: ${median.toFixed(1)} / day`)
+    expect(merged.trend).toBeUndefined()
+  })
+
+  it('retains unknown and incomplete-data suppression for live comparisons', () => {
+    const day = report({ merged: 2, lines: { total: 100, median: 100, counted: 1 } })
+    const week = report()
+    expect(tile(buildGroups(day, week, 0.5), 'Lines changed').trend).toBeUndefined()
+    week.daily![0].pullRequests.lines.counted = 1
+    expect(tile(buildGroups(day, week, 0.5), 'Lines changed').comparison).toBe('Typical by now: — · 7-day median: — / day')
+    day.errors = [{ org: 'missing', error: 'unreadable' }]
+    expect(tile(buildGroups(day, week, 0.5), 'Pull requests merged').trend).toBeUndefined()
+    day.errors = []
+    week.errors = [{ org: 'missing', error: 'unreadable' }]
+    expect(tile(buildGroups(day, week, 0.5), 'Pull requests merged').trend).toBeUndefined()
+    week.errors = []
+    delete week.daily
+    expect(tile(buildGroups(day, week, 0.5), 'Pull requests merged').trend).toBeUndefined()
+  })
+})
+
 
 describe('pull request flow', () => {
   it('times first reviews down to the second', () => {
