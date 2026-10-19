@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { analyticsGroups as buildGroups, firstReviewTrend, formatDuration, formatRate, formatShortDuration, mergeTimeTrend, type AnalyticsReport } from '../src/analytics-format'
+import { workType, type WorkReviewAnalytics } from '../src/analytics-work-review'
 
 // What the Analytics view says (src/analytics-format.ts).
 
@@ -33,6 +34,42 @@ function tile(groups: ReturnType<typeof analyticsGroups>, label: string) {
   return groups.flatMap((group) => group.tiles).find((t) => t.label === label)!
 }
 
+describe('work and review analytics', () => {
+  it.each([
+    ['feat: add capability', 'feat'], ['fix(api)!: correct result', 'fix'], ['perf!: reduce work', 'perf'],
+    ['refactor(core): simplify', 'refactor'], ['test: cover it', 'test'], ['ci: check', 'ci'], ['revert: undo', 'revert'],
+    ['feature: not a recognized prefix', 'unclassified'], ['feat: ', 'unclassified'], ['A feat: title', 'unclassified'], ['feat(scope: broken', 'unclassified'],
+  ])('classifies %s as %s', (title, expected) => { expect(workType(title)).toBe(expected) })
+
+  function work(merged: number, affected: number, rounds: number | null = 3): WorkReviewAnalytics {
+    return { types: [{ type: 'feat', count: merged }], rounds: { median: rounds, counted: merged, missingReviews: 0, distribution: [] }, changesRequested: { prs: affected, reviews: affected * 2, dismissed: 1, counted: merged } }
+  }
+
+  it('shows the approved population, neutral work mix and relative review-friction comparisons', () => {
+    const groups = buildGroups(report({ merged: 57, workReview: work(57, 48) }), report({ merged: 237, workReview: work(237, 170) }), 0.5)
+    expect(tile(groups, 'Work type')).toMatchObject({ value: '100.0%', valueLabel: 'feat', population: 57 })
+    expect(tile(groups, 'Work type').trend).toBeUndefined()
+    expect(tile(groups, 'Review rounds')).toMatchObject({ value: '3.0', comparison: '7-day median: 3.0 · 237 PRs', trend: { direction: 'neutral', text: '→ 0%' } })
+    expect(tile(groups, 'Change-request share')).toMatchObject({ value: '84.2%', comparison: '7-day share: 71.7% · 237 PRs', trend: { direction: 'bad', text: '↑ 17.4%' } })
+    const lower = buildGroups(report({ merged: 57, workReview: work(57, 20, 1) }), report({ merged: 237, workReview: work(237, 170) }))
+    for (const label of ['Review rounds', 'Change-request share']) expect(tile(lower, label).trend?.direction).toBe('good')
+  })
+
+  it('withholds unavailable figures and comparisons rather than inventing zeros', () => {
+    const absent = buildGroups(report(), report())
+    for (const label of ['Work type', 'Review rounds', 'Change-request share']) expect(tile(absent, label).value).toBe('—')
+    const day = report({ workReview: work(4, 2, null) })
+    day.pullRequests.workReview!.rounds.counted = 3
+    day.pullRequests.workReview!.rounds.missingReviews = 2
+    const week = report({ workReview: work(4, 2) })
+    expect(tile(buildGroups(day, week), 'Review rounds')).toMatchObject({ value: '—', note: expect.stringContaining('3 of 4') })
+    day.errors = [{ org: 'missing', error: 'unreadable' }]
+    expect(tile(buildGroups(day, week), 'Change-request share').trend).toBeUndefined()
+    const empty = report({ merged: 0, workReview: work(0, 0, null) })
+    expect(tile(buildGroups(empty, week), 'Change-request share').value).toBe('—')
+  })
+})
+
 describe('Analytics wording', () => {
   it('shows durations in at most two units', () => {
     expect(formatDuration(null)).toBe('—')
@@ -54,10 +91,11 @@ describe('Analytics wording', () => {
   it('orders productivity by pull request flow, review and merge times, then issues', () => {
     const groups = analyticsGroups(report())
     expect(groups.map((group) => [group.id, group.label])).toEqual([
-      ['productivity', 'Productivity'], ['per-merged-pr', 'Per merged pull request'],
+      ['productivity', 'Productivity'], ['work-review', 'Work & review'], ['per-merged-pr', 'Per merged pull request'],
     ])
     expect(groups.map((group) => group.tiles.map((t) => [t.label, t.value]))).toEqual([
       [['Pull requests opened', '6'], ['Pull requests merged', '4'], ['Closed without merging', '1'], ['Lines changed', '12,345'], ['Time to first review', '1m 35s'], ['Time to merge', '5h'], ['Issues opened', '1,204'], ['Issues closed', '1']],
+      [['Work type', '—'], ['Review rounds', '—'], ['Change-request share', '—']],
       [['Comments', '2.3'], ['Median lines', '181'], ['Behaviors', '1.5'], ['Median time', '5h'], ['Merged by agent', '75%']],
     ])
     expect(tile(groups, 'Merged by agent').note).toBe('3 of 4 by robot')
@@ -96,7 +134,7 @@ describe('Analytics wording', () => {
     expect(tile(groups, 'Merged by agent').value).toBe('—')
     expect(tile(groups, 'Merged by agent').trend).toBeUndefined()
     expect(groups[0].note).toBe('')
-    expect(groups[1].note).toBe('No pull requests were merged in this range.')
+    expect(groups[2].note).toBe('No pull requests were merged in this range.')
   })
 })
 
@@ -389,7 +427,7 @@ describe('pull request flow', () => {
 it('compares every per-PR metric with the same seven-day population', () => {
   const day = report({ commentsPerPr: 6, medianTimeToMergeMs: 3_600_000 })
   const groups = buildGroups(day, report({ commentsPerPr: 3, medianTimeToMergeMs: 7_200_000 }))
-  expect(groups[1].tiles.every((item) => item.trend && item.comparison?.includes('4 PRs'))).toBe(true)
+  expect(groups[2].tiles.every((item) => item.trend && item.comparison?.includes('4 PRs'))).toBe(true)
   expect(tile(groups, 'Comments').trend?.text).toBe('↑ 100%')
   expect(tile(groups, 'Median time')).toMatchObject({ trend: { direction: 'good', text: '↓ 50%' }, comparison: '7-day median: 2h · 4 PRs' })
 })

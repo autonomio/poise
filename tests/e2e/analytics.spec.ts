@@ -12,6 +12,11 @@ function report(merged: number, hours = 27): AnalyticsReport {
       opened: 5,
       closedUnmerged: 1,
       merged,
+      workReview: {
+        types: merged ? [{ type: 'feat', count: merged / 2 }, { type: 'fix', count: merged / 2 }] : [],
+        rounds: { median: merged ? 3 : null, counted: merged, missingReviews: 0, distribution: merged ? [{ rounds: 3, prs: merged }] : [] },
+        changesRequested: { prs: merged ? merged === 4 ? 3 : merged / 2 : 0, reviews: merged, dismissed: 0, counted: merged },
+      },
       mergedByAgent: merged ? merged - 1 : 0,
       firstReview: { count: 3, medianMs: hours > 30 ? 150_000 : 75_000 },
       commentsPerPr: merged ? 3.25 : null,
@@ -183,7 +188,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   await expect(page.locator('#menu-popover [data-action="analytics"]')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#menu-toggle')).toBeFocused()
   await expect(page.locator('#menu-toggle')).toHaveAttribute('aria-expanded', 'false')
-  await expect(view.locator('main h2')).toHaveText(['Productivity', 'Per merged pull request', 'GitHub API · Live'])
+  await expect(view.locator('main h2')).toHaveText(['Productivity', 'Work & review', 'Per merged pull request', 'GitHub API · Live'])
   const topline = view.getByRole('region', { name: 'Productivity' })
   const flow = topline
   const perPr = view.getByRole('region', { name: 'Per merged pull request' })
@@ -208,11 +213,35 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   expect(new Set(placed.map(tile => tile.left)).size).toBe(4)
   expect(placed.sort((a, b) => a.top - b.top || a.left - b.left).map(tile => tile.label)).toEqual(cardOrder)
   expect(new Set(await lefts(perPr, '.analytics-tile')).size).toBe(5)
+  const work = view.getByRole('region', { name: 'Work & review' })
+  await expect(work.locator('.analytics-label')).toHaveText(['Work type', 'Review rounds', 'Change-request share'])
+  const row = await work.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => {
+    const { x, y, width, height } = tile.getBoundingClientRect()
+    return { x, y, width, height }
+  }))
+  expect(new Set(row.map((box) => box.y)).size).toBe(1)
+  expect(row[0].width).toBeCloseTo(row[1].width * 2 + 12, 0)
+  expect(row[1].width).toBeCloseTo(row[2].width, 0)
+  expect(row[0].y).toBeGreaterThan((await topline.boundingBox())!.y)
+  expect(row[0].y + row[0].height).toBeLessThan((await perPr.boundingBox())!.y)
+  await expect(value(page, 'Work type')).toHaveText('50.0%')
+  await expect(work.locator('.analytics-work-type')).toHaveCount(2)
+  await expect(value(page, 'Review rounds')).toHaveText('3.0')
+  await expect(countTrend(page, 'Review rounds')).toContainText('0%')
+  await expect(countTrend(page, 'Review rounds')).toContainText('7-day median: 3.0 · 8 PRs')
+  await expect(countTrend(page, 'Review rounds')).toHaveClass(/neutral/)
+  await expect(value(page, 'Review rounds')).toHaveAttribute('data-help', /Multiple reviews of one commit count once/)
+  await expect(countTrend(page, 'Change-request share')).toHaveClass(/bad/)
+  await expect(value(page, 'Change-request share')).toHaveText('75.0%')
+  await expect(countTrend(page, 'Change-request share')).toContainText('50%')
+  await expect(countTrend(page, 'Change-request share')).toContainText('7-day share: 50.0% · 8 PRs')
+  await expect(work.locator('.analytics-histogram').first()).toHaveAttribute('data-help', /4 of 4 merged PRs on the selected day/)
+  await expect(work.locator('button, select')).toHaveCount(0)
   const accounts = await quota.locator('.github-quota-account').evaluateAll((items) => items.map((item) => item.getBoundingClientRect().top))
   expect(new Set(accounts).size).toBe(1)
   await expect(quota.locator('.github-quota-avatar')).toHaveCount(2)
   await expect(quota.locator('.github-quota-bucket h4')).toHaveText(['REST API', 'GraphQL'])
-  await expect(view.locator('.analytics-histogram svg rect')).toHaveCount(130)
+  await expect(view.locator('.analytics-histogram svg rect')).toHaveCount(150)
   await expect(perPr.locator('.analytics-note')).toHaveCount(5)
   await page.screenshot({ path: info.outputPath('analytics-view.png'), fullPage: true })
 

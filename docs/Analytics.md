@@ -13,12 +13,14 @@ The page reads top to bottom:
    requests opened, merged, closed without merging, and lines changed.
    The second shows time to first review, time to merge, issues opened,
    and issues closed.
-2. **Per merged pull request**: five compact cards for comments, median lines,
+2. **Work & review**: the third row. Work type spans half the row; Review rounds
+   and Change-request share each span a quarter at 880px and wider.
+3. **Per merged pull request**: five compact cards for comments, median lines,
    behaviors, median time and the share merged by the agent account.
-3. **GitHub API · Live**: avatar-led user and automation account panels side
+4. **GitHub API · Live**: avatar-led user and automation account panels side
    by side, each holding REST and GraphQL budgets.
 
-Every metric card groups its colored value and adjacent trend arrow above a
+Except for the neutral Work type breakdown, every metric card groups its colored value and adjacent trend arrow above a
 matching delta and seven-day baseline. A gap separates this summary from the weekly history line
 and a ten-bin histogram. Productivity uses larger cards and taller plots than
 per-PR metrics. Borders, colors, spacing and tooltip motion follow the shared
@@ -229,6 +231,38 @@ and each chart keeps its place until it arrives. If it cannot be read, the
 charts keep an empty reserved space, the day's numbers stay, and the failure
 appears in Notifications.
 
+## Work and review
+
+All three cards use the pull requests merged on the selected day and the existing
+account/involvement scope. Work type groups Conventional Commit title prefixes:
+feat, fix, perf, refactor, docs, test, build, ci, chore, style and revert. Other
+titles remain unclassified, included in the denominator. The headline is the
+largest category's share; neutral bars show every represented type. Counts and
+classification details live in tooltips. No title-based category implies quality.
+
+Review rounds is the median number of distinct commit revisions reviewed by
+someone other than the author, at or before merge. Multiple reviews of one
+commit count once; PRs without submitted reviews count zero. Pending, author
+and post-merge reviews are excluded. The initial reviewed revision counts;
+this measures observed reviewed revisions, not proven rework or causation.
+If any eligible review lacks a commit identity, the median is withheld and
+coverage appears in its tooltip. Its histogram shows the selected day's known
+per-PR round counts; its line shows weekly medians across the preceding year.
+
+Change-request share counts each merged PR once if it has at least one observed
+submitted non-author CHANGES_REQUESTED review at or before merge. Its denominator
+includes every merged PR, including those without reviews. Dismissed reviews
+have unknown previous states and are not inferred as change requests. Its line
+and histogram use weekly shares; histogram bounds stay at 0–100%.
+
+Both friction cards show the preceding seven-day cohort's median or share and
+PR count beneath the delta, matching the other cards. Changes use relative
+percentages, not percentage points. Decreases are green, increases red and
+unchanged values neutral. Definitions, coverage and review-state caveats are
+in measurement tooltips. No merges produce unknown medians and shares.
+Existing local SQLite reads supply these metrics; collection, dependencies,
+GitHub requests and refresh schedules are unchanged.
+
 ## Missing data and failures
 
 A missing metric shows —; its measurement tooltip explains its meaning and
@@ -306,6 +340,11 @@ alongside their means. Errors from readable but stale caches carry `stale: true`
 report also names `agentAccount` (null when none is set) and gives, under
 `pullRequests`, `opened`, `closedUnmerged`, `mergedByAgent` (null without an
 agent account) and `firstReview` with its `count` and `medianMs`.
+
+`pullRequests.workReview` adds `types` (type/count), `rounds` (median, counted,
+missingReviews and rounds/PR-count distribution), and `changesRequested`
+(affected PRs, review count, dismissed count and state coverage). Unavailable
+review aggregates remain null; older client payloads show unknown metrics.
 
 `GET /api/analytics/history?bounds=…&org=…` answers the past year. `bounds`
 lists the period edges, comma-separated times with a timezone, increasing,

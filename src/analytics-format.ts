@@ -1,6 +1,8 @@
 // What the Analytics view says about a report from /api/analytics
 // (server/analytics.ts). Kept free of the DOM so the wording is testable.
 
+import { changeRequestShare, type WorkReviewAnalytics } from './analytics-work-review'
+
 export interface AnalyticsReport {
   window: { since: string | null, until: string | null }
   agentAccount: string | null
@@ -9,6 +11,7 @@ export interface AnalyticsReport {
     opened: number
     closedUnmerged: number
     merged: number
+    workReview?: WorkReviewAnalytics
     mergedByAgent: number | null
     firstReview: { count: number, medianMs: number | null }
     commentsPerPr: number | null
@@ -29,11 +32,15 @@ export interface AnalyticsTile {
   note?: string
   trend?: { direction: 'good' | 'bad' | 'neutral', text: string, description: string, caption: string, onPace?: boolean }
   comparison?: string
+  workTypes?: WorkReviewAnalytics['types']
+  population?: number
+  distribution?: WorkReviewAnalytics['rounds']
+  valueLabel?: string
 }
 
 export interface AnalyticsGroup {
   /** Names the section on the page; the productivity topline comes first. */
-  id: 'productivity' | 'per-merged-pr'
+  id: 'productivity' | 'work-review' | 'per-merged-pr'
   label: string
   /** What the section counts, shown over its heading. */
   help: string
@@ -160,6 +167,12 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
     trend: complete ? metricTrend(current, previous, options.duration ? { format: formatDuration, basis: 'median' } : undefined, options.median === false ? 'average' : 'median', false, options.lowerIsBetter ?? options.duration ?? false) : undefined,
     comparison: `7-day ${options.median === false ? 'average' : 'median'}: ${format(previous)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}`,
   })
+  const work = pr.workReview
+  const previousWork = baseline.pullRequests.workReview
+  const dominant = work?.types[0]
+  const share = changeRequestShare(pr)
+  const previousShare = changeRequestShare(baseline.pullRequests)
+  const percent = (n: number | null) => n === null ? UNKNOWN : `${formatRate(n)}%`
 
   return [
     {
@@ -188,6 +201,31 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
         dailyCount('Issues closed', report.issues.closed, dailyMedian((day) => day.issues.closed)),
       ],
       note: [linesNote, pr.firstReview.count ? '' : 'No pull request had its first review in this range.'].filter(Boolean).join(' '),
+    },
+    {
+      id: 'work-review',
+      label: 'Work & review',
+      help: 'Work types and observed review friction across pull requests merged on the selected day.',
+      tiles: [
+        {
+          label: 'Work type', value: dominant && pr.merged ? percent(dominant.count / pr.merged * 100) : UNKNOWN,
+          valueLabel: dominant?.type,
+          workTypes: work?.types ?? [], population: pr.merged,
+          note: work ? `${plural(pr.merged, 'merged PR', 'merged PRs')}. ${plural(work.types.find((entry) => entry.type === 'unclassified')?.count ?? 0, 'unclassified title', 'unclassified titles')}.` : 'Work-type data is unavailable.',
+        },
+        {
+          ...perPr('Review rounds', work?.rounds.median ?? null, previousWork?.rounds.median ?? null, formatRate, { lowerIsBetter: true }),
+          distribution: work?.rounds,
+          population: pr.merged,
+          note: work ? `Exact round counts for ${work.rounds.counted} of ${pr.merged} merged PRs; ${work.rounds.missingReviews} reviews lack commit identities. The median is withheld unless every PR is covered.` : 'Review-round data is unavailable.',
+        },
+        {
+          label: 'Change-request share', value: percent(share),
+          trend: complete ? metricTrend(share, previousShare, undefined, 'share', false, true) : undefined,
+          comparison: `7-day share: ${percent(previousShare)} · ${plural(baseline.pullRequests.merged, 'PR', 'PRs')}`,
+          note: work ? `${work.changesRequested.prs ?? UNKNOWN} of ${pr.merged} merged PRs with change requests; ${work.changesRequested.reviews ?? UNKNOWN} change-request reviews. Review-state coverage: ${work.changesRequested.counted} of ${pr.merged} PRs. ${work.changesRequested.dismissed ?? UNKNOWN} dismissed reviews have unknown previous states and are not inferred as change requests.` : 'Review-state data is unavailable.',
+        },
+      ],
     },
     {
       id: 'per-merged-pr',
