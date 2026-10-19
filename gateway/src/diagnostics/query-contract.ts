@@ -24,11 +24,20 @@ export interface Coverage {
   workspace: string | null
   status: 'connected' | 'unavailable' | 'partial' | 'not-configured'
   currentStatus?: 'connected' | 'unavailable' | 'partial' | 'not-configured' | 'initializing'
+  observationExpiresAt?: string
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null
   error: string | null
   gaps: Array<{ from: string; to: string | null; reason: string }>
+}
+
+/** External source health expires without requiring its failed reporter to run. */
+export function observedCoverage(source: Coverage, now: number): Coverage {
+  if (!source.observationExpiresAt || Date.parse(source.observationExpiresAt) > now) return source
+  const open = source.gaps.find((gap) => gap.to === null)
+  return { ...source, status: 'partial', currentStatus: 'unavailable', error: 'External proxy observation lease expired',
+    gaps: [...source.gaps.filter((gap) => gap.to !== null), open ?? { from: source.observationExpiresAt, to: null, reason: 'External proxy observation stopped' }].slice(-32) }
 }
 
 /** A legacy partial record cannot establish whether its source has recovered. */

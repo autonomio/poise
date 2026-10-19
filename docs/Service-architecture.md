@@ -737,6 +737,17 @@ are read-only gateway mounts, used only for kernel and Docker-daemon warnings.
 The operator CLI and redaction/retention/coverage contracts are in
 [Logging](Logging.md).
 
+An optional external Caddy reader uses a dedicated operator SSH key restricted
+to `docker exec -i poise-gateway node dist/diagnostics/cli.js ingress-stream`.
+No HTTP ingestion route, JWT scope or workspace host capability is added.
+The version-1 stdin protocol carries one bounded projected source window after
+a domain/checkpoint handshake; central events, coverage and its compare-and-set
+checkpoint commit together before acknowledgement. Coverage includes an optional
+90-second `observationExpiresAt` lease, enforced at read time even when the
+reporter is dead. Retained history and initial/rotation/read-bound uncertainty
+remain independent of current connectivity. See the
+[external reader installation contract](../deploy/ingress/README.md).
+
 `GET /api/service/diagnostics?cursor=OPAQUE` is a maintenance-only delivery
 route: loopback or the existing gateway `admin` assertion, never browser/link
 scope. It returns `{ version:1, events, cursor, hasMore, coverage }`, at most

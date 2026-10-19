@@ -8,6 +8,7 @@ import { environmentSecrets, normalize, redact } from './contract.js'
 import { nativeDiagnostic } from './sources.js'
 import { MAX_COVERAGE_JOURNAL_BYTES } from './runtime.js'
 import { validateLoggingFilter } from './query-parser.js'
+import { receiveIngress } from './ingress.js'
 
 interface JournalHealth { version: number; stopped: boolean; sinkError: string | null; coverageError?: string | null; reportError?: string | null; writtenAt: string; sources: Coverage[]; dropped?: number; rejected?: number }
 
@@ -40,9 +41,12 @@ export async function runOperator(args: string[], write: (line: string) => void 
     } finally { reader?.close() }
     return
   }
-  const db = new DiagnosticStore(path, policy, Date.now, command !== 'ingress')
+  const db = new DiagnosticStore(path, policy, Date.now, command !== 'ingress' && command !== 'ingress-stream')
   try {
-    if (command === 'event') {
+    if (command === 'ingress-stream') {
+      if (options.length) throw new Error('ingress-stream accepts only its bounded stdin protocol')
+      await receiveIngress(db, process.env.POISE_DOMAIN ?? '', stdin, write)
+    } else if (command === 'event') {
       if (options.length !== 1) throw new Error('event requires one event ID')
       write(JSON.stringify(db.lookup(access, options[0])))
     } else if (command === 'query' || command === 'export') {
@@ -71,13 +75,14 @@ export async function runOperator(args: string[], write: (line: string) => void 
       if (event) db.append([event])
       const at = new Date().toISOString()
       const previous = db.readCoverage(access).find((source) => source.id === 'external-ingress')
-      db.coverage({ id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', observedAt: at, ingestedAt: event ? at : previous?.ingestedAt ?? null,
+      db.coverage(previous?.observationExpiresAt ? { ...previous, ingestedAt: event ? at : previous.ingestedAt } : {
+        id: 'external-ingress', source: 'ingress', workspace: null, status: 'partial', observedAt: at, ingestedAt: event ? at : previous?.ingestedAt ?? null,
         availableFrom: previous?.availableFrom ?? at, error: 'Record delivery observed; continuous external proxy coverage is unverified', gaps: previous?.gaps ?? [] })
       write(JSON.stringify({ accepted: true, eventId: event?.id ?? null }))
-    } else throw new Error('Use health, query, event, export or ingress')
+    } else throw new Error('Use health, query, event, export, ingress or ingress-stream')
   } finally { db.close() }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runOperator(process.argv.slice(2)).catch((error: unknown) => { process.stderr.write(redact(error instanceof Error ? error.message : 'Operator diagnostic command failed', environmentSecrets()) + '\n'); process.exitCode = 1 })
+  runOperator(process.argv.slice(2)).catch((error: unknown) => { process.stdin.destroy(); process.stderr.write(redact(error instanceof Error ? error.message : 'Operator diagnostic command failed', environmentSecrets()) + '\n'); process.exitCode = 1 })
 }
