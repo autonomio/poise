@@ -294,11 +294,16 @@ test('discovers native workers live and after reconnect without losing the manag
     sock.ws!.send(JSON.stringify({ kind: 'session.created', session: worker }))
   }
   await expect(page.locator('.chat-session-item')).toHaveCount(4)
+  const busyWorker = state.sessions.find(s => s.id === 'worker-0')!
+  busyWorker.status = 'running'
+  sock.ws!.send(JSON.stringify({ kind: 'session.updated', session: busyWorker }))
+  await expect(page.locator('.chat-session-item[data-id="worker-0"] .chat-session-running')).toBeVisible()
   const staleResponse = page.waitForResponse(response => response.url().endsWith('/api/chat/sessions'))
   releaseList!()
   await (await staleResponse).finished()
   await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
   await expect(page.locator('.chat-session-item')).toHaveCount(4)
+  await expect(page.locator('.chat-session-item[data-id="worker-0"] .chat-session-running')).toBeVisible()
   const reconnected = sock.ws
   sock.ws!.close()
   const missed = session({ id: 'missed-worker', title: 'Created while disconnected' })

@@ -79,8 +79,11 @@ export class ChatSocketServer {
     for (const connection of this.connections) this.send(connection, { kind: 'switches.updated', catalogue })
   }
   private readonly onEvent = (envelope: ChatEnvelope) => {
-    if (envelope.event.type === 'session.created') {
-      for (const connection of this.connections) this.send(connection, { kind: 'session.created', session: { ...envelope.event.session, lastSeq: envelope.seq } })
+    if (['session.created', 'session.updated', 'session.resumed', 'status.changed', 'model.updated', 'mode.updated'].includes(envelope.event.type)) {
+      const session = this.runtime.get(envelope.sessionId)
+      if (session) for (const connection of this.connections) this.send(connection, {
+        kind: envelope.event.type === 'session.created' ? 'session.created' : 'session.updated', session: { ...session, lastSeq: envelope.seq },
+      })
     }
     this.broadcast(envelope)
   }

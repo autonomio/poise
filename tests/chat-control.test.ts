@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { WebSocket } from 'ws'
 import { CATALOG } from './model-catalog-fixture'
 import type { Adapter, AdapterHost, TurnResult } from '../server/chat/adapters/types'
-import type { Capabilities, PromptInput, ServerFrame } from '../server/chat/protocol'
+import type { Capabilities, PromptInput, ServerFrame, SessionRecord } from '../server/chat/protocol'
 import type { ChatRuntime } from '../server/chat/runtime'
 import type { ChatControl, CiObservation } from '../server/chat/control'
 
@@ -414,15 +414,20 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const socket = new WebSocket(origin.replace('http:', 'ws:') + '/ws/chat')
     try {
       await new Promise<void>((done, fail) => { socket.once('open', done); socket.once('error', fail) })
-      const notice = new Promise<Extract<ServerFrame, { kind: 'session.created' }>>((done, fail) => {
+      const updates: SessionRecord[] = []
+      const notice = new Promise<SessionRecord>((done, fail) => {
         const timer = setTimeout(() => fail(new Error('missing native session discovery')), 8000)
         socket.on('message', raw => {
           const frame = JSON.parse(raw.toString()) as ServerFrame
-          if (frame.kind === 'session.created') { clearTimeout(timer); done(frame) }
+          if (frame.kind === 'session.created') { clearTimeout(timer); done(frame.session) }
+          if (frame.kind === 'session.updated') updates.push(frame.session)
         })
       })
       const result = await command(parent.id, { operation: 'create', title: 'Visible worker', task: 'Run the delegated task' })
-      expect((await notice).session).toMatchObject({ id: (result.session as { id: string }).id, title: 'Visible worker', lastSeq: 1 })
+      const child = (result.session as { id: string }).id
+      expect(await notice).toMatchObject({ id: child, title: 'Visible worker', lastSeq: 1 })
+      await control.tick()
+      await until(() => updates.some(s => s.id === child && s.status === 'running'))
     } finally { socket.terminate(); await transport.close() }
   })
 })

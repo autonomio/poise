@@ -290,7 +290,8 @@ export class ChatClient {
         if (catalogue) for (const fn of this.listeners.switches) fn(catalogue)
         return
       }
-      case 'session.created': {
+      case 'session.created':
+      case 'session.updated': {
         if (!this.handshakeReady || !frame.session || typeof frame.session.id !== 'string' || frame.session.instance !== this.serverInstance) return
         for (const fn of this.listeners.session) fn(frame.session)
         return
