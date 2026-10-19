@@ -103,7 +103,7 @@ export class ChatControl {
   private running: Promise<void> | null = null
   private stopped = false
   private ready = false
-  private deliveryAfter = 0
+  private deliveryAfter = ''
   private readonly onEvent = (envelope: ChatEnvelope) => {
     const event = envelope.event
     if (event.type === 'turn.finished' && event.stopReason !== 'end_turn') store.pauseDelivery(this.runtime.instance, envelope.sessionId)
@@ -309,9 +309,9 @@ export class ChatControl {
     if (this.stopped || this.runtime.draining) return
     const attempted = new Set<string>()
     for (const item of store.pending(instance, this.deliveryAfter)) {
-      // Advance even across deferred queues; a blocked recipient cannot
-      // monopolize every bounded page. The next pass wraps at the end.
-      this.deliveryAfter = item.seq
+      // Recipient identity keeps the rotation stable as new messages arrive;
+      // each recipient contributes only its oldest pending message.
+      this.deliveryAfter = item.recipient
       if (attempted.has(item.recipient)) continue
       attempted.add(item.recipient)
       if (!this.runtime.ownsSession(item.recipient)) continue

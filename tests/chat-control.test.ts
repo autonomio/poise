@@ -422,6 +422,23 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, recipient.id)[1].state).toBe('admitted')
   })
 
+  it('returns to an unblocked recipient while a later recipient keeps receiving new messages', async () => {
+    const pair = [await manager(), await manager()].sort((a, b) => a.id < b.id ? -1 : 1)
+    const [blocked, fast] = pair
+    const taskId = randomUUID()
+    await runtime.enqueue(blocked.id, taskId, { text: 'Deferred task', attachments: [], mentions: [] })
+    store.message(runtime.instance, blocked.id, 'fixture', 'Older blocked context')
+    store.message(runtime.instance, fast.id, 'fixture', 'Fast context 0')
+    await control.tick()
+    await until(() => prompts.has(fast.id))
+    runtime.removeQueue(blocked.id, taskId)
+    finishes.get(fast.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(fast.id)?.status === 'idle')
+    store.message(runtime.instance, fast.id, 'fixture', 'Fast context 1')
+    await control.tick()
+    expect(store.inbox(runtime.instance, blocked.id)[0].state).toBe('admitted')
+  })
+
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
     const parent = await manager()
     const connection = await config(parent.id)
