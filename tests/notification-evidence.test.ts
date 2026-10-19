@@ -1,3 +1,4 @@
+import type { BehaviorLaunchClaim } from '../server/db'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -141,6 +142,43 @@ describe('read-time producer binding', () => {
     expect((await bindings.noticeEvidence(notices.noticesState())).notices[0].evidence?.eventId).not.toBe(evidence.eventId)
     expect(logging.loggingRuntime()!.query((db) => db.lookup(access, evidence.eventId)).status).toBe('found')
   })
+  it('binds a material cause change to its new attempt while count/attempt churn keeps dismissal', async () => {
+    const producer = await import('../server/alerts/producers'), notices = await import('../server/alerts/notices'), bindings = await import('../server/notification-evidence')
+    const claim = (callId: string): BehaviorLaunchClaim => ({ key: 'review-new-prs', target: 'acme/repo#9', seenAt: new Date().toISOString(), claimId: correlationId, leaseUntil: null,
+      launchBehavior: 'pr_review', launchRepo: 'acme/repo', launchPr: 9, launchRequestedAt: new Date().toISOString(), launchExpectedHead: 'e'.repeat(40),
+      launchActor: 'review-bot', launchSource: 'poise:review-new-prs', launchCorrelationId: correlationId, launchCallId: callId,
+      launchError: null, launchQuarantine: null, launchQuarantineMayRun: false, launchCovers: [] })
+    const first = caller('a'.repeat(32))
+    logging.loggingRuntime()!.ingest(first); logging.loggingRuntime()!.ingest(first)
+    database.recordBehaviorDeadLetter(claim(first.callId!), cause)
+    producer.behaviorHeld('review-new-prs', 'acme/repo#9', false, cause)
+    logging.loggingRuntime()!.flush()
+    const old = (await bindings.noticeEvidence(notices.noticesState())).notices[0]
+    expect(old.evidence?.eventId).toBe(first.id)
+    notices.dismissNotice(old.id)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const second = caller('b'.repeat(32))
+    logging.loggingRuntime()!.ingest(second)
+    database.recordBehaviorDeadLetter(claim(second.callId!), cause)
+    producer.behaviorHeld('review-new-prs', 'acme/repo#9', true, cause)
+    expect(notices.noticesState().notices).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const changedCause = 'error: a different material preparation failure'
+    const third = caller('c'.repeat(32), changedCause)
+    logging.loggingRuntime()!.ingest(third)
+    database.recordBehaviorDeadLetter(claim(third.callId!), changedCause)
+    producer.behaviorHeld('review-new-prs', 'acme/repo#9', true, changedCause)
+    logging.loggingRuntime()!.flush()
+    const current = (await bindings.noticeEvidence(notices.noticesState())).notices[0]
+    expect(current.id).not.toBe(old.id)
+    expect(current.evidence?.eventId).toBe(third.id)
+    expect(logging.loggingRuntime()!.query((db) => db.query(access, { source: 'caller' })).total).toBe(3)
+    database.retireBehaviorDeadLettersForTarget('review-new-prs', 'acme/repo#9')
+    notices.retireClearedBehaviorAlerts()
+    expect(notices.noticesState().notices).toEqual([])
+    expect(logging.loggingRuntime()!.query((db) => db.query(access, { source: 'caller' })).total).toBe(3)
+  })
+
   it.each([false, true])('binds a quota condition captured while off before its later notice (exhausted=%s)', async (exhausted) => {
     const quota = await import('../server/github-quota'), notices = await import('../server/alerts/notices'), bindings = await import('../server/notification-evidence')
     const now = Date.now(), resetAt = new Date(now + 3_600_000).toISOString()
