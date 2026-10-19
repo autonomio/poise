@@ -56,14 +56,17 @@ describe('elapsed analytics day', () => {
 })
 
 it.each([
-  ['Africa/Cairo', '2026-04-24T12:00:00Z', '2026-04-23T22:00:00.000Z', '24 Apr 2026'],
-  ['Asia/Beirut', '2026-03-29T12:00:00Z', '2026-03-28T22:00:00.000Z', '29 Mar 2026'],
-  ['America/Havana', '2026-11-01T12:00:00Z', '2026-11-01T04:00:00.000Z', '1 Nov 2026'],
-])('uses the first valid instant when %s skips or repeats midnight', (timezone, now, expected, label) => {
+  ['Africa/Cairo', '2026-04-24T12:00:00Z', '2026-04-23T22:00:00.000Z', '24 Apr 2026', 23],
+  ['Asia/Beirut', '2026-03-29T12:00:00Z', '2026-03-28T22:00:00.000Z', '29 Mar 2026', 23],
+  ['America/Havana', '2026-11-01T12:00:00Z', '2026-11-01T04:00:00.000Z', '1 Nov 2026', 25],
+] as const)('uses the first valid instant when %s skips or repeats midnight', (timezone, now, expected, label, hours) => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date(now))
   setLocalSettings({ org: '', me: '', timezone })
-  expect(analyticsDay(0).since).toBe(expected)
+  const day = analyticsDay(0)
+  expect(day.since).toBe(expected)
+  expect((Date.parse(day.until) - Date.parse(day.since)) / 3_600_000).toBe(hours)
+  expect(analyticsDayProgress(day.since, day.until, Date.parse(day.since) + 10 * 3_600_000)).toBe(10 / hours)
   expect(analyticsDay(-1).until).toBe(expected)
   vi.setSystemTime(new Date(Date.parse(now) + 2 * 86_400_000))
   expect(analyticsDay(-2).label).toBe(label)

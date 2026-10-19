@@ -113,7 +113,8 @@ function paceTrend(current: number | null, typical: number | null): AnalyticsTil
   }
   const ahead = current > typical
   const percent = Math.abs((current - typical) / typical * 100)
-  const change = percent < 0.1 ? '<0.1%' : `${percent.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
+  const rounded = percent.toLocaleString('en-US', { maximumFractionDigits: 1 })
+  const change = rounded === '10' ? '>10%' : `${rounded}%`
   const description = `${change} ${ahead ? 'ahead of' : 'behind'} pace`
   return {
     direction: ahead ? 'good' : 'bad', text: `${ahead ? '↑' : '↓'} ${description}`,
@@ -122,11 +123,13 @@ function paceTrend(current: number | null, typical: number | null): AnalyticsTil
   }
 }
 
-export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport, dayProgress?: number): AnalyticsGroup[] {
+export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsReport, dayProgress?: number, snapshotTime?: string): AnalyticsGroup[] {
   const pr = report.pullRequests
   const { lines, behaviors } = pr
   const none = pr.merged === 0
   const complete = ![...report.errors, ...baseline.errors].some((error) => !error.stale)
+  const countsComplete = dayProgress === undefined ? complete : report.errors.length === 0 && baseline.errors.length === 0
+  const paceNote = dayProgress !== undefined && snapshotTime ? `Pace as of ${snapshotTime}, when totals were read.` : undefined
   const dailyMedian = (value: (day: NonNullable<AnalyticsReport['daily']>[number]) => number | null): number | null => {
     if (baseline.daily?.length !== 7) return null
     const values = baseline.daily.map(value)
@@ -138,7 +141,8 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
     return {
       label,
       value: current === null ? UNKNOWN : formatCount(current),
-      trend: !complete ? undefined : dayProgress === undefined ? metricTrend(current, previous) : paceTrend(current, typical),
+      note: paceNote,
+      trend: !countsComplete ? undefined : dayProgress === undefined ? metricTrend(current, previous) : paceTrend(current, typical),
       comparison: `${dayProgress === undefined ? '' : `Typical by now: ${formatRate(typical)} · `}7-day median: ${formatRate(previous)} / day`,
     }
   }
@@ -167,7 +171,7 @@ export function analyticsGroups(report: AnalyticsReport, baseline: AnalyticsRepo
         dailyCount('Pull requests merged', pr.merged, dailyMedian((day) => day.pullRequests.merged)),
         dailyCount('Closed without merging', pr.closedUnmerged, dailyMedian((day) => day.pullRequests.closedUnmerged)),
         { ...dailyCount('Lines changed', none ? 0 : lines.total, dailyMedian(({ pullRequests: day }) => day.merged === 0 ? 0 : day.lines.counted < day.merged ? null : day.lines.total)), value: linesTotal,
-          ...(lines.counted < pr.merged ? { trend: undefined } : {}), note: linesNote,
+          ...(lines.counted < pr.merged ? { trend: undefined } : {}), note: [paceNote, linesNote].filter(Boolean).join(' ') || undefined,
         },
         {
           label: 'Time to first review', value: formatShortDuration(pr.firstReview.medianMs),

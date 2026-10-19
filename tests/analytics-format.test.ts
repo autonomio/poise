@@ -174,6 +174,15 @@ describe('elapsed-day pacing', () => {
     expect(mergedTile(111, 240, 10 / 24).trend?.direction).toBe('good')
   })
 
+  it.each([
+    [111, 2018, 'good', '↑ >10% ahead of pace'],
+    [89, 1978, 'bad', '↓ >10% behind pace'],
+  ] as const)('makes a raw outside-band change explicit when its percentage rounds to 10%%', (current, median, direction, text) => {
+    const merged = mergedTile(current, median, 0.05)
+    expect(merged.trend).toMatchObject({ direction, text })
+    expect(merged.trend?.description).toContain('>10%')
+  })
+
   it('paces event counts and total lines while preserving duration and per-PR comparisons', () => {
     const day = report({ merged: 1, lines: { total: 175, median: 175, counted: 1 } })
     day.issues = { opened: 86, closed: 1 }
@@ -216,6 +225,46 @@ describe('elapsed-day pacing', () => {
     week.errors = []
     delete week.daily
     expect(tile(buildGroups(day, week, 0.5), 'Pull requests merged').trend).toBeUndefined()
+  })
+
+  it.each(['current', 'baseline'] as const)('withholds live cumulative trends for a stale %s report while retaining other comparisons', (stale) => {
+    const day = report()
+    const week = report()
+    const fresh = buildGroups(day, week, 0.5)
+    const historical = buildGroups(day, week)
+    const staleReport = stale === 'current' ? day : week
+    staleReport.errors = [{ org: 'offline', error: 'sync failed', stale: true }]
+    const groups = buildGroups(day, week, 0.5)
+    for (const label of ['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Issues opened', 'Issues closed']) {
+      expect(tile(groups, label).trend).toBeUndefined()
+      expect(tile(groups, label).value).toBe(tile(fresh, label).value)
+      expect(tile(groups, label).comparison).toBe(tile(fresh, label).comparison)
+    }
+    expect(tile(groups, 'Pull requests merged').comparison).toBe('Typical by now: 1.0 · 7-day median: 2.0 / day')
+    for (const label of ['Time to first review', 'Time to merge', 'Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent']) {
+      expect(tile(groups, label)).toEqual(tile(fresh, label))
+    }
+    expect(buildGroups(day, week)).toEqual(historical)
+  })
+
+  it('identifies the totals snapshot in cumulative-card notes only for a paced day', () => {
+    const snapshotTime = '9 Oct 2026, 10:00 UTC'
+    const note = `Pace as of ${snapshotTime}, when totals were read.`
+    const day = report()
+    const week = report()
+    const groups = buildGroups(day, week, 0.5, snapshotTime)
+    for (const label of ['Pull requests opened', 'Pull requests merged', 'Closed without merging', 'Lines changed', 'Issues opened', 'Issues closed']) {
+      expect(tile(groups, label).note).toBe(note)
+      expect(tile(buildGroups(day, week, undefined, snapshotTime), label).note).toBeUndefined()
+    }
+    for (const label of ['Time to first review', 'Time to merge', 'Comments', 'Median lines', 'Behaviors', 'Median time', 'Merged by agent']) {
+      expect(tile(groups, label)).toEqual(tile(buildGroups(day, week, 0.5), label))
+    }
+    day.pullRequests.lines.counted = 3
+    const partial = tile(buildGroups(day, week, 0.5, snapshotTime), 'Lines changed')
+    expect(partial.note).toContain(note)
+    expect(partial.note).toContain('From 3 of 4 pull requests')
+    expect(partial.trend).toBeUndefined()
   })
 })
 
