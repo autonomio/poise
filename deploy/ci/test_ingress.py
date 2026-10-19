@@ -129,6 +129,28 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(batch["records"], [])
         self.assertLessEqual((reporter.instant(batch["until"]) - reporter.instant(batch["from"])).total_seconds(), 1)
 
+    def test_projection_framing_overflow_reduces_window_before_invoking_helper(self):
+        def native(stamp, message):
+            return (stamp + " " + json.dumps({"level": "error", "msg": message, "request": {"host": "poise.test"}}) + "\n").encode()
+        stamp = "2026-10-19T09:59:32.000000000Z"
+        message = "x" * ((reporter.MAX_BYTES - 100) // 100 - len(native(stamp, "")))
+        raw = b"".join(native(stamp if index < 50 else "2026-10-19T09:59:57.000000000Z", message) for index in range(100))
+        self.assertLess(len(raw), reporter.MAX_BYTES)
+        reads = 0
+        def source(argv, **_options):
+            nonlocal reads
+            if "inspect" in argv:
+                return CONTAINER.encode()
+            reads += 1
+            return raw
+        cursor = json.dumps({"container": CONTAINER, "until": "2026-10-19T09:59:30.000Z"}, separators=(",", ":"))
+        with patch.object(reporter, "bounded_command", side_effect=source), patch.object(reporter, "retained_boundary", return_value=None):
+            batch = reporter.collect(CONFIG, {"version": 1, "domain": "poise.test", "issuedAt": reporter.iso(NOW), "checkpoint": cursor}, NOW)
+        self.assertGreater(reads, 1)
+        self.assertEqual(batch["state"], "complete")
+        self.assertEqual(len(batch["records"]), 50)
+        self.assertLess(reporter.instant(batch["until"]), NOW - dt.timedelta(seconds=1))
+
     def test_source_failure_is_explicit_and_domain_mismatch_stops_before_read(self):
         def unavailable(argv, **_options):
             if "inspect" in argv:

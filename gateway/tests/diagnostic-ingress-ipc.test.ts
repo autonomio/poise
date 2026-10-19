@@ -117,6 +117,31 @@ it('handles a write error on a refused second client while the first transaction
   } finally { fault.mockRestore(); first.destroy(); second.destroy() }
 })
 
+it('closes refused half-open clients without waiting for their input EOF', async () => {
+  const w = await writer(), first = createConnection(w.socket)
+  first.on('error', () => first.destroy())
+  await once(first, 'connect'); first.write('ingress-stream\n')
+  await once(first, 'data')
+  const end = Socket.prototype.end
+  const refused: Socket[] = []
+  const observed = vi.spyOn(Socket.prototype, 'end').mockImplementation(function(this: Socket, ...args: unknown[]) {
+    if (args[0] === '{"error":"Ingress writer is busy"}\n') refused.push(this)
+    return Reflect.apply(end, this, args)
+  })
+  const clients = Array.from({ length: 8 }, () => {
+    const client = createConnection({ path: w.socket, allowHalfOpen: true })
+    client.on('error', () => client.destroy()); client.resume()
+    return client
+  })
+  try {
+    await vi.waitFor(() => {
+      expect(refused).toHaveLength(clients.length)
+      expect(refused.every((socket) => socket.destroyed)).toBe(true)
+    })
+    expect(first.destroyed).toBe(false)
+  } finally { observed.mockRestore(); first.destroy(); for (const client of clients) client.destroy() }
+})
+
 it('preserves an edge message until canonical normalization can mark its truncation', async () => {
   const w = await writer()
   const records = JSON.parse(execFileSync(process.execPath, [resolve('../test-results/ingress/projection.cjs'), 'poise.test'], {

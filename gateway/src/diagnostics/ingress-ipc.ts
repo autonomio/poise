@@ -52,9 +52,10 @@ export async function startIngressSocket(runtime: DiagnosticRuntime, path: strin
   let active: Socket | null = null
   const server = createServer({ allowHalfOpen: true }, (socket) => {
     socket.on('error', () => socket.destroy())
-    if (active) { socket.end('{"error":"Ingress writer is busy"}\n'); return }
-    active = socket
     const deadline = setTimeout(() => socket.destroy(new Error('Ingress connection exceeded 30 seconds')), 30_000)
+    socket.once('close', () => clearTimeout(deadline))
+    if (active) { socket.end('{"error":"Ingress writer is busy"}\n', () => socket.destroy()); return }
+    active = socket
     void (async () => {
       // The default readable iterator destroys the duplex socket at input EOF,
       // before the committed transaction can send its acknowledgement.
@@ -76,8 +77,8 @@ export async function startIngressSocket(runtime: DiagnosticRuntime, path: strin
       if (command === 'ingress-stream') await receiveIngress(runtime.query((db) => db), domain, input(), write)
       else if (command === 'ingress') await receiveManualIngress(runtime.query((db) => db), domain, input(), write)
       else throw new Error('Unknown ingress command')
-      socket.end()
-    })().catch(() => { if (!socket.destroyed) socket.end('{"error":"Ingress delivery rejected"}\n') }).finally(() => { clearTimeout(deadline); active = null })
+      socket.end(() => socket.destroy())
+    })().catch(() => { if (!socket.destroyed) socket.end('{"error":"Ingress delivery rejected"}\n', () => socket.destroy()) }).finally(() => { active = null })
   })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(path, () => {
     try { chmodSync(path, 0o600); runtime.ownCoverage('external-ingress', configured); resolve() }

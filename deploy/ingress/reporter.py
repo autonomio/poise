@@ -189,12 +189,15 @@ def collect(config, hello, now=None):
                     records.append(record)
             if len(records) > 100:
                 raise ReadBound("delivery exceeds 100 diagnostic records")
+            payload = json.dumps(records).encode()
+            if len(payload) > MAX_BYTES:
+                raise ReadBound("source projection exceeds 1 MiB")
             helper = Path(__file__).with_name("projection.cjs")
             if not helper.is_file():
                 helper = Path(__file__).resolve().parents[2] / "test-results/ingress/projection.cjs"
             with subprocess.Popen(["node", str(helper), domain], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
                 try:
-                    batch["records"] = json.loads(capture(process, json.dumps(records).encode(), min(2, max(0.01, deadline - time.monotonic())), MAX_BYTES))
+                    batch["records"] = json.loads(capture(process, payload, min(2, max(0.01, deadline - time.monotonic())), MAX_BYTES))
                 finally:
                     if process.poll() is None:
                         process.kill()
