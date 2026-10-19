@@ -13,9 +13,9 @@ function report(merged: number, hours = 27): AnalyticsReport {
       closedUnmerged: 1,
       merged,
       workReview: {
-        types: merged ? [{ type: 'feat', count: merged / 2 }, { type: 'fix', count: merged / 2 }] : [],
+        types: merged ? [{ type: 'feat', count: Math.ceil(merged / 2) }, { type: 'fix', count: Math.floor(merged / 2) }] : [],
         rounds: { median: merged ? 3 : null, counted: merged, missingReviews: 0, distribution: merged ? [{ rounds: 3, prs: merged }] : [] },
-        changesRequested: { prs: merged ? merged === 4 ? 3 : merged / 2 : 0, reviews: merged, dismissed: 0, counted: merged },
+        changesRequested: { prs: merged ? merged === 4 ? 3 : Math.floor(merged / 2) : 0, reviews: merged, dismissed: 0, counted: merged },
       },
       mergedByAgent: merged ? merged - 1 : 0,
       firstReview: { count: 3, medianMs: hours > 30 ? 150_000 : 75_000 },
@@ -398,8 +398,8 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
   const clipped = await view.locator('.analytics-day > *').evaluateAll((items) => items.map((item) => item.scrollWidth - item.clientWidth))
   expect(Math.max(...clipped)).toBeLessThanOrEqual(1)
   expect(new Set(await lefts(view.getByRole('region', { name: 'Productivity' }), '.analytics-tile')).size).toBe(2)
-  await expect(view.locator('.analytics-history-line')).toHaveCount(13)
-  const overflows = await view.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => {
+  await expect(view.locator('.analytics-history-line')).toHaveCount(15)
+  const overflows = await view.locator('.analytics-tile:not(.analytics-work-tile)').evaluateAll((tiles) => tiles.map((tile) => {
     const histogram = tile.querySelector('.analytics-histogram')!
     return histogram.getBoundingClientRect().bottom - tile.getBoundingClientRect().bottom
   }))
@@ -619,7 +619,7 @@ test('refreshes one quiet local pair on ticks and visibility return while keepin
   await refreshAnalytics(page)
   await expect.poll(() => refreshRequests).toBe(2)
   await expectInitialSnapshot()
-  await expect(panel.locator('.analytics-tile')).toHaveCount(13)
+  await expect(panel.locator('.analytics-tile')).toHaveCount(16)
   await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
   await expect(panel.locator('.analytics-groups')).not.toHaveAttribute('aria-busy', 'true')
   await refreshAnalytics(page)
@@ -716,7 +716,7 @@ test('keeps the last complete snapshot on a quiet failure, cancels the other hal
   await expect(merged).toContainText('Typical by now: 11.3 · 7-day median: 27.0 / day')
   await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 10:00 UTC/)
   await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
-  await expect(panel.locator('.analytics-tile')).toHaveCount(13)
+  await expect(panel.locator('.analytics-tile')).toHaveCount(16)
   await page.locator('.nr-bell').click()
   const failure = page.locator('.nr-rail .nr-card').filter({ hasText: 'acme: datastore offline' })
   await expect(failure).toHaveCount(1)
@@ -1159,7 +1159,7 @@ for (const failure of ['HTTP', 'account'] as const) {
     await expect(panel.locator('.analytics-date')).toHaveText('Today')
     await expect(panel.getByRole('button', { name: 'Next day' })).toBeDisabled()
     await expect(merged).toContainText('Typical by now: 27.0 · 7-day median: 27.0 / day')
-    await expect(panel.locator('.analytics-history-line')).toHaveCount(13)
+    await expect(panel.locator('.analytics-history-line')).toHaveCount(15)
     state.pacing.merged = 20
     if (failure === 'HTTP') state.fail = true
     else state.partial = 'baseline'
@@ -1173,7 +1173,7 @@ for (const failure of ['HTTP', 'account'] as const) {
     await expect(merged).not.toContainText('Typical by now')
     await expect(merged.locator('.analytics-value')).not.toHaveAttribute('data-help', /Pace as of/)
     await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
-    await expect(panel.locator('.analytics-tile')).toHaveCount(13)
+    await expect(panel.locator('.analytics-tile')).toHaveCount(16)
     await page.locator('.nr-bell').click()
     await expect(page.locator('.nr-rail .nr-card').filter({ hasText: failure === 'HTTP' ? 'acme: datastore offline' : 'Account scope unavailable' })).toHaveCount(1)
     expect(state.reads).toHaveLength(4)
@@ -1287,7 +1287,7 @@ test('attaches delayed help to measurements, with plain headings and no quota ex
   const view = page.locator('#view-analytics')
   await expect(view.locator('h2[data-help], dt[data-help]')).toHaveCount(0)
   await expect(view).not.toContainText('Estimated risk of running out before reset, assuming recent usage continues.')
-  await expect(view.locator('.analytics-value[data-help]')).toHaveCount(13)
+  await expect(view.locator('.analytics-value[data-help]')).toHaveCount(16)
   const figure = value(page, 'Behaviors')
   await figure.scrollIntoViewIfNeeded()
   await page.mouse.move(0, 0)
