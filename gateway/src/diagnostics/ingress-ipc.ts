@@ -56,7 +56,9 @@ export async function startIngressSocket(runtime: DiagnosticRuntime, path: strin
     const deadline = setTimeout(() => socket.destroy(new Error('Ingress connection exceeded 30 seconds')), 30_000)
     socket.on('error', () => socket.destroy())
     void (async () => {
-      const iterator = socket[Symbol.asyncIterator]()
+      // The default readable iterator destroys the duplex socket at input EOF,
+      // before the committed transaction can send its acknowledgement.
+      const iterator = socket.iterator({ destroyOnReturn: false })
       let bytes = Buffer.alloc(0), split = -1
       while (split < 0) {
         const initial = await iterator.next()
