@@ -24,6 +24,10 @@ export interface Coverage {
   workspace: string | null
   status: 'connected' | 'unavailable' | 'partial' | 'not-configured'
   currentStatus?: 'connected' | 'unavailable' | 'partial' | 'not-configured' | 'initializing'
+  optional?: boolean
+  historyIncomplete?: boolean
+  dropped?: number
+  rejected?: number
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null

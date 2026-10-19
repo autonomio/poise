@@ -36,3 +36,16 @@ it('keeps rejected records degraded until a successful recovery boundary without
     expect(runtime.query((db) => db.query({ workspace: 'alice', operator: false })).events.some((event) => event.message === input.message)).toBe(true)
   } finally { runtime.stop() }
 })
+
+it('excludes explicitly unsupported local sources while a newly observed required source still degrades health', () => {
+  const runtime = new DiagnosticRuntime({ path: ':memory:', report: () => undefined })
+  try {
+    runtime.unconfigured('kernel', 'kernel', 'alice', 'Kernel collection is not configured in local mode')
+    runtime.observe('application', 'poise', 'alice'); runtime.flush()
+    expect(runtime.health().currentStatus).toBe('connected')
+    expect(runtime.health().sources.find((source) => source.id === 'kernel')?.optional).toBe(true)
+    runtime.observe('kernel', 'kernel', 'alice', 'Actual configured journal read failed')
+    expect(runtime.health().currentStatus).toBe('partial')
+    expect(runtime.health().sources.find((source) => source.id === 'kernel')?.optional).toBe(false)
+  } finally { runtime.stop() }
+})

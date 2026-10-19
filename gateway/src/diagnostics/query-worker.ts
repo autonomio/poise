@@ -32,7 +32,9 @@ function health(request: LoggingRead): LoggingReply {
     const sources = journal.sources.filter((source) => source.workspace === null || source.workspace === request.access.workspace)
       .map((source) => projectCoverage(source, request.access))
     const lossObserved = journal.dropped > 0 || journal.rejected > 0 || !!journal.coverageError || !!journal.reportError
-    const observations = sources.map(currentCoverageStatus)
+      || sources.some((source) => (source.dropped ?? 0) > 0 || (source.rejected ?? 0) > 0)
+    const required = sources.filter((source) => !source.optional)
+    const observations = required.map(currentCoverageStatus)
     const freshness = journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped'
       : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale' : null
     const legacyLoss = (journal.dropped > 0 || journal.rejected > 0) && journal.lossActive === undefined
@@ -41,7 +43,7 @@ function health(request: LoggingRead): LoggingReply {
         || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
         : legacyLoss || !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'),
       status: journal.sinkError ? 'unavailable' : journal.stopped ? 'stopped' : request.now - Date.parse(journal.writtenAt) > 60_000 ? 'stale'
-        : lossObserved || sources.some((source) => source.status !== 'connected') ? 'partial' : 'connected' }
+        : lossObserved || required.some((source) => source.status !== 'connected') ? 'partial' : 'connected' }
   } catch {
     // An unread journal is an explicit independent failure, never a healthy empty source list.
     collection.status = 'unavailable'; collection.currentStatus = 'unavailable'
@@ -55,10 +57,11 @@ function health(request: LoggingRead): LoggingReply {
     for (const source of collection.sources) sources.set(source.id, source)
     if (sources.size > 256) throw new Error('Combined collection coverage exceeds its source bound')
     collection.sources = [...sources.values()]
-    if (collection.status === 'connected' && collection.sources.some((source) => source.status !== 'connected')) collection.status = 'partial'
+    const required = collection.sources.filter((source) => !source.optional)
+    if (collection.status === 'connected' && required.some((source) => source.status !== 'connected')) collection.status = 'partial'
     if (collection.currentStatus === 'connected' || collection.currentStatus === 'initializing') {
       const unestablished = collection.currentStatus === 'initializing'
-      const observations = collection.sources.map(currentCoverageStatus)
+      const observations = required.map(currentCoverageStatus)
       collection.currentStatus = observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
         : unestablished || !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'
     }

@@ -753,6 +753,18 @@ from cumulative loss. Its first transition is immediately journaled; a successfu
 drain/persistence boundary without new loss establishes recovery. Independent
 health readers retain cumulative loss and do not infer recovery from legacy
 counters that lack this observation.
+Maintenance coverage adds bounded owner-scoped historical summaries: optional
+`historyIncomplete`, dropped/rejected lower bounds and up to two latest gaps for
+each of at most 16 sources. The production producer and collector share this
+projection's regression proof; invalid coverage cannot advance a delivery cursor.
+Source details omitted by the projection remain explicitly incomplete after
+current observation recovers. No status enum changes. An explicit `optional`
+flag describes intentionally unsupported local collectors; missing required
+production sources are not exempted from health.
+Workspace native diagnostic/fatal/fallback reports use stderr. Ordinary stdout
+is outside that log-read window; Caddy retains its native streams and release
+tasks retain their separate failure collector. Workspace stream health is
+aggregated once per collection pass across all relevant containers.
 
 The workspace distribution includes the bounded bootstrap diagnostic command and
 its canonical redaction module for standalone maintenance scripts. Installer

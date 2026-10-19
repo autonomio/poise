@@ -91,7 +91,7 @@ export class DiagnosticRuntime {
           // An existing open outage already covers the unobserved restart interval.
           if (!journal.stopped && !gaps.some((gap) => gap.to === null)) gaps.push({ from: journal.writtenAt, to: this.iso(), reason: 'Collector observation unavailable during restart; completeness is unknown' })
           this.sources.set(source.id, { ...source, status: source.status === 'not-configured' ? 'not-configured' : source.error ? 'unavailable' : 'partial',
-            currentStatus: source.status === 'not-configured' ? 'not-configured' : 'initializing', gaps })
+            currentStatus: source.status === 'not-configured' ? 'not-configured' : 'initializing', historyIncomplete: source.historyIncomplete || source.gaps.length >= 32, gaps })
         }
       } catch (error) { this.journalError = this.message(error); this.notify('logging.coverage.unavailable', this.journalError) }
     }
@@ -173,7 +173,7 @@ export class DiagnosticRuntime {
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
     id = this.coverageId(id)
     if (!this.sources.has(id) && this.sources.size >= MAX_COVERAGE_SOURCES) { this.reject(new Error('Collection source bound reached')); return }
-    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', currentStatus: 'not-configured', observedAt: null, ingestedAt: null,
+    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: 'not-configured', currentStatus: 'not-configured', optional: true, observedAt: null, ingestedAt: null,
       availableFrom: null, error: this.safe(reason), gaps: [] })
     this.saveJournal()
   }
@@ -187,26 +187,45 @@ export class DiagnosticRuntime {
     let gaps = [...(previous?.gaps ?? [])]
     if (reason && !gaps.some((gap) => gap.to === null)) gaps.push({ from: at, to: null, reason: this.safe(reason, 128) })
     if (!reason) gaps = gaps.map((gap) => gap.to === null ? { ...gap, to: at } : gap)
-    this.sources.set(id, { id, source: this.sourceName(source), workspace, status: reason ? 'unavailable' : gaps.length ? 'partial' : 'connected',
+    this.sources.set(id, { ...previous, id, source: this.sourceName(source), workspace, optional: false, status: reason ? 'unavailable' : gaps.length || previous?.historyIncomplete ? 'partial' : 'connected',
       currentStatus: reason ? 'unavailable' : 'connected',
       observedAt: reason ? previous?.observedAt ?? null : at, ingestedAt: previous?.ingestedAt ?? null,
-      availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32) })
+      availableFrom: previous?.availableFrom ?? (reason ? null : at), error: reason, gaps: gaps.slice(-32), historyIncomplete: previous?.historyIncomplete || gaps.length > 32 })
     if (reason && previous?.error !== reason) this.emit({ source: 'collection', component: source, level: 'warning', operation: 'source.unavailable',
       id: `coverage:${this.runId}:${++this.sourceSequence}`, workspace, message: reason, context: { source, coverageId: id } })
     this.saveJournal()
   }
 
-  partial(id: string, source: string, workspace: string | null, reason: string): void {
+  partial(id: string, source: string, workspace: string | null, reason: string, currentStatus: 'partial' | 'initializing' = 'partial'): void {
     this.observe(id, source, workspace)
     const value = this.sources.get(this.coverageId(id))
-    if (value) { value.status = 'partial'; value.currentStatus = 'partial'; value.error = this.safe(reason) }
+    if (value) { value.status = 'partial'; value.currentStatus = currentStatus; value.error = this.safe(reason) }
+    this.saveJournal()
+  }
+
+  mergeHistory(id: string, history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; availableFrom: string | null }): void {
+    const source = this.sources.get(this.coverageId(id))
+    if (!source) return // Admission failure is already reported by observe/deliver.
+    const gaps = new Map(source.gaps.map((gap) => [gap.from + ':' + gap.reason, gap]))
+    for (const gap of history.gaps) {
+      const safe = { ...gap, reason: this.safe(gap.reason, 128) }
+      gaps.set(safe.from + ':' + safe.reason, safe)
+    }
+    const ordered = [...gaps.values()].sort((a, b) => a.from.localeCompare(b.from))
+    source.historyIncomplete = source.historyIncomplete || history.incomplete || ordered.length > 32
+    source.gaps = ordered.slice(-32)
+    source.dropped = Math.max(source.dropped ?? 0, history.dropped)
+    source.rejected = Math.max(source.rejected ?? 0, history.rejected)
+    if (history.availableFrom && (!source.availableFrom || history.availableFrom < source.availableFrom)) source.availableFrom = history.availableFrom
+    if (source.currentStatus === 'connected' && (source.historyIncomplete || source.gaps.length)) source.status = 'partial'
     this.saveJournal()
   }
 
   health() {
+    const required = [...this.sources.values()].filter((source) => !source.optional)
     const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
-      || [...this.sources.values()].some((source) => source.status !== 'connected')
-    const observations = [...this.sources.values()].map(currentCoverageStatus)
+      || required.some((source) => source.status !== 'connected')
+    const observations = required.map(currentCoverageStatus)
     const currentStatus = this.sinkError ? 'unavailable' : this.lossActive || this.journalError || this.coverageError || this.reportError
       || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
       : this.lastSuccess === null || observations.includes('initializing') ? 'initializing' : 'connected'

@@ -164,7 +164,7 @@ export class DiagnosticStore {
 
   coverage(value: Coverage): void {
     if (!value.id || value.id.length > 256 || (value.workspace !== null && value.workspace.length > 512)) throw new Error('Logging coverage identity exceeds its bound')
-    const payload = JSON.stringify({ ...value, gaps: value.gaps.slice(-32).map((gap) => ({ ...gap, reason: gap.reason.slice(0, 128) })) })
+    const payload = JSON.stringify({ ...value, ...(value.gaps.length > 32 ? { historyIncomplete: true } : {}), gaps: value.gaps.slice(-32).map((gap) => ({ ...gap, reason: gap.reason.slice(0, 128) })) })
     if (Buffer.byteLength(payload) > MAX_COVERAGE_RECORD_BYTES) throw new Error('Logging coverage exceeds its bound')
     this.db.transaction(() => {
       const count = (this.db.prepare('SELECT COUNT(*) AS count FROM log_coverage').get() as { count: number }).count
