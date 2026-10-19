@@ -3194,7 +3194,7 @@ tr:hover .stop-btn { opacity: 1; }
 #logging-filters { gap: var(--sp-3); }
 .logging-screen-reader { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #logging-scope-label[hidden], #logging-new[hidden], .logging-custom[hidden] { display: none; }
-.logging-table-wrap { overflow-x: auto; }
+.logging-table-wrap { overflow: auto; max-height: calc(100dvh - 180px); overscroll-behavior: contain; }
 #logging-table { min-width: 1050px; }
 #logging-table th, #logging-table td { text-align: left; }
 #logging-table .logging-column-time { width: 180px; }

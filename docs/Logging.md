@@ -167,7 +167,8 @@ Gateway warnings/errors are redacted before Docker stdout and retained directly.
 Every 15 seconds the independent collector reads bounded Docker logs/lifecycle
 windows for managed workspaces, Poise Compose services and release-install
 tasks. Only validated structured workspace envelopes enter private history;
-unstructured output is excluded and its coverage limitation is explicit.
+ordinary unstructured output is intentionally outside the diagnostic contract
+and does not create a coverage gap.
 Docker OOM, nonzero exit and unhealthy events use native lifecycle meanings.
 Workspace backfill reads three durable events per authenticated maintenance
 page and commits its checkpoint only with central persistence. Replacement or
@@ -178,8 +179,8 @@ The gateway reads native host kernel and `docker.service` Warning-or-higher
 journal records using `journalctl`, with a durable native cursor. Compose mounts
 only the journal directories and machine ID read-only; workspaces receive no
 journal, Docker socket or central-store mount. Missing journals, insufficient
-permissions, unavailable Docker, incompatible old workspaces and excluded
-unstructured logs remain explicit source coverage gaps. The first observation
+permissions, unavailable Docker and incompatible old workspaces remain explicit
+source coverage failures. The first observation
 is not a claim of complete history before installation. Polling bounds can
 limit historical replay; Docker's own retained native event history is finite.
 
@@ -320,6 +321,32 @@ The workspace/time index also covers visibility, ingestion retention and severit
 Broad retained counts therefore read index metadata without fetching every event
 payload; writable stores upgrade the earlier three-column index in place. Query
 filters, source-time ordering, snapshot cursors and retained counts are unchanged.
+
+Workspace log reads select stderr independently of ordinary stdout. Structured
+envelopes, entrypoint fatal checks and the supervisor's reporting fallback use
+stderr; routine output cannot consume that diagnostic window. Release tasks use
+their dedicated evidence collector. A pass publishes one workspace-stream
+observation after all container reads: a success for another container cannot
+close an actual failed read. Caddy keeps its native streams. No Docker `tail`
+limit is used as a completeness proof before the time-window filter.
+
+The maintenance producer carries at most 16 source summaries and two latest gaps
+per source, preserving the three-event / 256 KiB delivery limit. The central
+collector validates this metadata before advancing the event cursor, retains
+owner-scoped history and marks missing/truncated details as `historyIncomplete`.
+Observed upstream loss counters are retained as lower bounds across replacement;
+the inspector uses `≥` rather than presenting them as an exhaustive lifetime sum.
+The dedicated store still caps each source's detailed history at 32 gaps and
+retains an incompleteness marker when older details are compacted. Existing
+ambiguous false gaps/Warning rows are not reinterpreted or deleted; already
+evicted evidence cannot be recovered from counters.
+
+Only deliberately unsupported local collectors use `optional: true`; required
+production sources, including unconfigured external ingress, remain degraded.
+A cached health snapshot is marked stale after a failed health read or 60 seconds
+without a fresh read. Successful independent health cannot clear a failed list
+read: a successful actual query must establish query connectivity again. Rows
+and their earlier snapshot time remain available throughout a transport outage.
 
 Current queue overflow/rejection is separately reported as `lossActive` in runtime
 and independent browser health. The first transition is journaled immediately.
