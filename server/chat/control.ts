@@ -46,6 +46,7 @@ const APIS = {
   '/api/models': 'Available models and efforts: GET.',
   '/api/analytics': 'Workspace analytics: GET.',
   '/api/notices': 'Workspace notices: GET.',
+  '/api/logging': 'Structured workspace diagnostics: GET; GET /api/logging/health for collection health.',
 }
 
 export interface CiObservation { head: string, pending?: boolean, failing: Array<{ name: string, state: string, conclusion?: string | null, url?: string | null }> }
@@ -87,6 +88,11 @@ function sequence(value: unknown): number {
 }
 function reply(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body))
+}
+
+function boundedNotice(body: string, summary: Record<string, unknown>): string {
+  const bytes = Buffer.byteLength(body)
+  return bytes <= 32 * 1024 ? body : JSON.stringify({ ...summary, truncated: true, originalBytes: bytes })
 }
 
 export class ChatControl {
@@ -277,7 +283,10 @@ export class ChatControl {
         const session = this.runtime.ownsSession(id) ? this.runtime.get(id) : null
         return session ? { id, title: session.title, status: session.status, lastSeq: session.lastSeq, pendingRequests: session.pendingRequests, bindings: store.bindings(instance).filter(b => b.session === id) } : { id, status: 'deleted' }
       })
-      store.fireWatch(instance, watch, JSON.stringify({ kind: 'supervision', watchId: watch.id, instruction: watch.instruction, sessions: snapshots }), now)
+      const snapshot = JSON.stringify({ kind: 'supervision', watchId: watch.id, instruction: watch.instruction, sessions: snapshots })
+      store.fireWatch(instance, watch, boundedNotice(snapshot, { kind: 'supervision', watchId: watch.id,
+        sessions: snapshots.map(s => ({ id: s.id, status: s.status })),
+        detail: 'Read the complete supervision instruction and work bindings with the list operation before acting.' }), now)
     }
     // Read only claimed targets, once per five minutes, with no browser-driven polling.
     for (const binding of store.bindings(instance)) {
@@ -292,11 +301,7 @@ export class ChatControl {
       try {
         const ci = await (this.options.ci ?? readWorkCi)(target)
         const data = { kind: 'ci', target: target.url, head: ci.head, failing: ci.failing }
-        if (ci.pending && !ci.failing.length && previous) {
-          // A rerun still running is not recovery from the last observed
-          // failure. Retain that state while advancing the shared read clock.
-          store.saveObservation(instance, `ci:${target.url}`, previous.fingerprint, now)
-        } else this.observe(binding, `ci:${target.url}`, data, now, ci.failing.length > 0)
+        this.observe(binding, `ci:${target.url}`, data, now, ci.failing.length > 0, ci.pending === true && !ci.failing.length)
       } catch (error) {
         this.observe(binding, `ci:${target.url}`, { kind: 'ci_unavailable', target: target.url, error: error instanceof Error ? error.message : String(error) }, now, true)
       }
@@ -323,14 +328,24 @@ export class ChatControl {
     }
   }
 
-  private observe(binding: store.Binding, key: string, data: unknown, now: number, initiallyActionable: boolean): void {
+  private observe(binding: store.Binding, key: string, data: Record<string, unknown>, now: number, initiallyActionable: boolean, pending = false): void {
     const instance = this.runtime.instance
     const body = JSON.stringify(data)
     const fingerprint = createHash('sha256').update(body).digest('hex')
     db.transaction(() => {
+      if (!store.bindingIsCurrent(instance, binding)) return
       const previous = store.observation(instance, key)
+      if (pending) {
+        // Running CI cannot recover the prior failure or overwrite evidence
+        // belonging to a new owner while the network read was in flight.
+        store.saveObservation(instance, key, previous?.fingerprint ?? fingerprint, now)
+        return
+      }
       if (previous?.fingerprint !== fingerprint && (previous || initiallyActionable)) {
-        store.message(instance, binding.session, 'Poise work monitor', body, `${key}:${binding.session}:${previous?.checked_at ?? now}:${fingerprint}`)
+        store.message(instance, binding.session, 'Poise work monitor', boundedNotice(body, { kind: data.kind, target: binding.target,
+          head: data.head, failingCount: Array.isArray(data.failing) ? data.failing.length : undefined,
+          detail: 'Inspect the complete current work state through Poise APIs or Caller before acting.', inspect: { operation: 'api', path: '/api/logging' } }),
+        `${key}:${binding.session}:${binding.created_at}:${previous?.checked_at ?? now}:${fingerprint}`)
         diagnostic({ level: key.startsWith('ci:') && initiallyActionable ? 'warning' : 'info', operation: 'chat.work.changed', target: binding.target,
           repository: store.workTarget(binding.target).repo, message: 'Bound chat work changed', context: { sessionId: binding.session, observation: data } })
       }

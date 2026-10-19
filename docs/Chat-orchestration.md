@@ -57,6 +57,8 @@ can read its inbox directly. Admission records the new turn ID; it is not proof
 that the agent completed the task. Failed/stopped/interrupted work pauses
 automatic dispatch until explicit chat activity. Existing queued tasks take
 priority. Stop preserves pending messages and bindings.
+Dispatch preserves each recipient's message order while rotating across
+recipients, including those blocked behind a deferred queue.
 
 A manager can explicitly steer its own worker or answer its pending question
 with known task data. Native answer validation still applies. The transcript
@@ -69,6 +71,10 @@ persists in SQLite and supplies current status, unanswered request IDs and
 work bindings at each requested interval, even when work is unchanged. After
 downtime it emits one due check and schedules forward from the current time;
 it does not burst through missed intervals. Disable supervision when finished.
+Oversized snapshots produce an explicitly truncated notice with current chat
+statuses and a reference to the saved supervision instruction and bindings.
+They cannot stop delivery to other chats. Work notices are bounded likewise;
+the owner must inspect complete evidence before acting on a truncated notice.
 
 ## Issue and PR ownership
 

@@ -374,6 +374,54 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, parent.id)[0].state).toBe('admitted')
   })
 
+  it('bounds oversized supervision without blocking delivery to unrelated chats', async () => {
+    const supervisor = await manager(), worker = await manager(), recipient = await manager()
+    for (let number = 1; number <= 300; number++) store.bindWork(runtime.instance, worker.id, `https://github.com/large/app/issues/${number}`)
+    await command(supervisor.id, { operation: 'supervise', sessionIds: [worker.id], intervalMinutes: 10, instruction: 'Inspect the complete assigned work' })
+    store.message(runtime.instance, recipient.id, 'fixture', 'Unrelated authorized task')
+    clock += 11 * 60_000
+    await control.tick()
+    const notice = store.inbox(runtime.instance, supervisor.id)[0]
+    expect(Buffer.byteLength(notice.body)).toBeLessThanOrEqual(32 * 1024)
+    expect(JSON.parse(notice.body)).toMatchObject({ kind: 'supervision', truncated: true })
+    expect(store.watches(runtime.instance)[0].next_at).toBe(clock + 10 * 60_000)
+    expect(store.inbox(runtime.instance, recipient.id)[0].state).toBe('admitted')
+  }, 30_000)
+
+  it('does not notify a stale owner or restore its observations after a CI read crosses a handoff', async () => {
+    const first = await manager(), second = await manager()
+    const target = 'https://github.com/acme/app/pull/46'
+    await command(first.id, { operation: 'bind', target })
+    let complete!: (value: CiObservation) => void
+    ci.mockImplementationOnce(() => new Promise<CiObservation>(done => { complete = done }))
+    const reading = control.tick()
+    await until(() => ci.mock.calls.length === 1)
+    await command(first.id, { operation: 'unbind', target })
+    await command(second.id, { operation: 'bind', target })
+    const failure = { head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] }
+    complete(failure)
+    await reading
+    expect(store.inbox(runtime.instance, first.id)).toHaveLength(0)
+    expect(store.observation(runtime.instance, `ci:${target}`)).toBeUndefined()
+    ci.mockResolvedValue(failure)
+    await control.tick()
+    expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
+  })
+
+  it('preserves each recipient message order across dispatch-page boundaries', async () => {
+    const recipient = await manager()
+    for (let i = 0; i < 101; i++) store.message(runtime.instance, recipient.id, 'fixture', `Ordered ${i}`)
+    await control.tick()
+    await until(() => prompts.has(recipient.id))
+    expect(prompts.get(recipient.id)![0].text.endsWith('\nOrdered 0')).toBe(true)
+    finishes.get(recipient.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(recipient.id)?.status === 'idle')
+    await control.tick()
+    await until(() => prompts.get(recipient.id)?.length === 2)
+    expect(prompts.get(recipient.id)![1].text.endsWith('\nOrdered 1')).toBe(true)
+    expect(store.inbox(runtime.instance, recipient.id)[1].state).toBe('admitted')
+  })
+
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
     const parent = await manager()
     const connection = await config(parent.id)
@@ -387,6 +435,7 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
       expect(result.ok).toBe(false)
     }
     await expect(command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/9/files' })).rejects.toThrow('exact GitHub')
+    await expect(command(parent.id, { operation: 'bind', target: `https://github.com/${'a'.repeat(2000)}/app/issues/1` })).rejects.toThrow('1024')
     await expect(command(parent.id, { operation: 'supervise', sessionIds: [parent.id], intervalMinutes: 0, instruction: 'loop' })).rejects.toThrow()
   })
 

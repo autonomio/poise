@@ -35,6 +35,7 @@ db.exec(`
 
 export interface WorkTarget { url: string, repo: string, kind: 'issues' | 'pull', number: number }
 export function workTarget(value: string): WorkTarget {
+  if (Buffer.byteLength(value) > 1024) throw new HttpError(400, 'a GitHub work target may contain at most 1024 UTF-8 bytes')
   const match = /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\/(issues|pull)\/([1-9][0-9]*)\/?$/.exec(value)
   if (!match || !Number.isSafeInteger(Number(match[3]))) throw new HttpError(400, 'target must be an exact GitHub issue or pull request URL')
   const repo = match[1].toLowerCase()
@@ -46,6 +47,10 @@ export function workTarget(value: string): WorkTarget {
 export interface Binding { target: string, session: string, created_at: number }
 export function bindings(instance: string): Binding[] {
   return db.prepare('SELECT target, session, created_at FROM chat_work_bindings WHERE instance = ? ORDER BY target').all(instance) as Binding[]
+}
+export function bindingIsCurrent(instance: string, binding: Binding): boolean {
+  return !!db.prepare('SELECT 1 FROM chat_work_bindings WHERE instance = ? AND target = ? AND session = ? AND created_at = ?')
+    .get(instance, binding.target, binding.session, binding.created_at)
 }
 export const bindWork = db.transaction((instance: string, session: string, target: string): Binding => {
   const canonical = workTarget(target).url
@@ -87,9 +92,10 @@ export function inbox(instance: string, recipient: string, after = 0): InternalM
 export function pending(instance: string, afterSeq = 0): InternalMessage[] {
   const page = db.prepare(`SELECT seq, recipient, sender, body, created_at, state, turn_id FROM chat_control_inbox
     WHERE instance = ? AND state = 'pending' AND seq > ?
+      AND seq IN (SELECT MIN(seq) FROM chat_control_inbox WHERE instance = ? AND state = 'pending' GROUP BY recipient)
       AND recipient IN (SELECT id FROM chat_sessions WHERE status = 'idle')
       AND recipient NOT IN (SELECT session FROM chat_control_paused WHERE instance = ?)
-    ORDER BY seq LIMIT 100`).all(instance, afterSeq, instance) as InternalMessage[]
+    ORDER BY seq LIMIT 100`).all(instance, afterSeq, instance, instance) as InternalMessage[]
   return page.length || !afterSeq ? page : pending(instance)
 }
 export function pauseDelivery(instance: string, session: string): void {
