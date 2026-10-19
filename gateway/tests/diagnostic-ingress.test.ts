@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { receiveIngress, INGRESS_LEASE_MS } from '../src/diagnostics/ingress.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
-import { runOperator } from '../src/diagnostics/cli.js'
+import { receiveManualIngress } from '../src/diagnostics/ingress.js'
 import { executeLoggingRead } from '../src/diagnostics/query-worker.js'
 
 const NOW = Date.parse('2026-10-19T10:00:00.000Z')
@@ -24,7 +24,7 @@ function batch(expected: string | null = null) {
 }
 async function send(db: DiagnosticStore, input: unknown, now = () => NOW) {
   const lines: string[] = []
-  async function* stdin() { yield JSON.stringify(input) }
+  async function* stdin() { yield JSON.stringify({ ...(input as Record<string, unknown>), challenge: (input as Record<string, unknown>).challenge ?? JSON.parse(lines[0]).challenge }) }
   await receiveIngress(db, 'poise.test', stdin(), (line) => lines.push(line), now)
   return lines.map((line) => JSON.parse(line) as Record<string, unknown>)
 }
@@ -175,7 +175,7 @@ it('manual one-record delivery cannot renew an expired continuous lease', async 
     vi.setSystemTime(NOW + INGRESS_LEASE_MS + 1)
     vi.stubEnv('POISE_DOMAIN', 'poise.test'); vi.stubEnv('POISE_GATEWAY_DATA', resolve(db.path, '..'))
     async function* input() { yield JSON.stringify(batch().records[0].log) }
-    await runOperator(['ingress'], () => undefined, input())
+    await receiveManualIngress(db, 'poise.test', input(), () => undefined)
     const reader = new DiagnosticStore(db.path, db.policy, Date.now, true)
     try { expect(reader.readCoverage(access)[0]).toMatchObject({ currentStatus: 'unavailable', observationExpiresAt: new Date(NOW + INGRESS_LEASE_MS).toISOString() }) }
     finally { reader.close() }
@@ -188,9 +188,10 @@ it('does not let a concurrent reporter overwrite a window committed after its ha
   const text = new Promise<string>((resolve) => { release = resolve })
   async function* delayed() { yield await text }
   try {
-    const pending = expect(receiveIngress(db, 'poise.test', delayed(), () => undefined, () => NOW)).rejects.toThrow(/checkpoint changed/)
+    let challenge = ''
+    const pending = expect(receiveIngress(db, 'poise.test', delayed(), (line) => { challenge = JSON.parse(line).challenge }, () => NOW)).rejects.toThrow(/checkpoint changed/)
     const [, ack] = await send(db, batch())
-    release(JSON.stringify(batch()))
+    release(JSON.stringify({ ...batch(), challenge }))
     await pending
     expect(db.checkpoint('external-ingress-window')).toBe(ack.checkpoint)
     expect(db.query(access).total).toBe(1)

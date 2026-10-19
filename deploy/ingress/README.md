@@ -75,3 +75,33 @@ advance. `status: partial` may retain earlier gaps; inspect those separately.
 Verify an actual retained Poise proxy diagnostic using operator `query`/`event`.
 Use journal output for collector failures; never dump raw shared proxy logs.
 Stopping/removing the unit and its one public-key line revokes this integration.
+
+The gateway process owns `logging.ingress.sock` (0600) and the only writable
+connection. Both operator ingress commands relay to it; the gateway must be
+running. A stream receives a new challenge and gateway-issued observation time
+before scanning. Acknowledgement follows the atomic event/coverage/checkpoint
+commit. The 90-second lease starts at the challenge issue time, rather than
+receipt of an old packet. An expired source opens a gap at its last confirmed
+observation. Gateway restart is initializing until another source scan.
+
+Build the edge projection with Node 22 after installing the gateway lockfile:
+
+```sh
+npm ci --prefix gateway
+node deploy/ingress/build.mjs /tmp/poise-ingress/projection.cjs
+```
+
+The bundle targets the installed edge Node 12 syntax/runtime and contains the
+same canonical host classifier and redactor used by the gateway. Copy that
+bundle beside `reporter.py` as `/opt/poise-ingress/projection.cjs`; the edge needs
+Python 3.10+, Node, Docker and OpenSSH. Redaction and strict host projection run
+locally before SSH transmission. Raw request headers, bodies, addresses and URIs
+never form an outgoing record. Full native timestamps remain in occurrence
+identity even though display times use milliseconds. Reads never use `--tail`.
+
+Attributable TLS records require a structured Poise name. Unattributable
+hostless shared-proxy records are excluded; access loggers are also excluded.
+The installed proxy has no server access logging enabled. Its native causal
+warning/error records remain authoritative; no access event is promoted to an
+error. All retained diagnostics continue to share the existing finite FIFO
+budget; this integration adds no quota policy or guarantee against a flood.

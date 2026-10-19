@@ -28,7 +28,10 @@ def iso(value):
 
 
 def instant(value):
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z", value):
+        raise ValueError("native Docker timestamp is invalid")
+    parsed = re.sub(r"(\.\d{6})\d+Z$", r"\1Z", value)
+    return dt.datetime.fromisoformat(parsed.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def capture(process, payload, timeout, limit):
@@ -81,25 +84,27 @@ def bounded_command(argv, timeout=8, limit=MAX_BYTES):
 def projected(line, domain, start, end, occurrence=0):
     stamp, separator, text = line.partition(b" ")
     if not separator:
-        return None
+        raise ReadBound("native Docker timestamp framing is unavailable")
     try:
         observed = instant(stamp.decode("ascii"))
         row = json.loads(text)
     except (ValueError, UnicodeError):
-        return None  # Unstructured process output is outside the native contract.
+        raise ReadBound("native proxy record cannot be decoded")
     if not isinstance(row, dict) or not start <= observed <= end:
         return None
     request = row.get("request")
-    if not isinstance(request, dict) or not isinstance(request.get("host"), str):
+    request = request if isinstance(request, dict) else {}
+    header = request.get("host") or row.get("server_name") or row.get("identifier")
+    if not isinstance(header, str):
         return None
-    host = request["host"].lower().split(":", 1)[0]
+    host = header.lower().split(":", 1)[0].rstrip(".")
     if host != domain and not host.endswith("." + domain):
         return None
     if str(row.get("level", "unknown")).lower() in ("debug", "info", "notice", "trace"):
         return None
     # Never transmit headers, URI/query, body or unrelated application fields.
-    log = {key: row[key] for key in ("level", "ts", "msg", "message", "logger", "request_id", "duration", "errno") if key in row}
-    log["request"] = {"host": host, "method": request.get("method")}
+    log = {key: row[key] for key in ("level", "ts", "msg", "message", "logger", "request_id", "duration", "errno", "error", "status", "err_id", "err_trace", "upstream", "server_name", "identifier") if key in row}
+    log["request"] = {"host": header, "method": request.get("method")}
     record = {"id": hashlib.sha256(line + b":" + str(occurrence).encode()).hexdigest(), "time": iso(observed), "log": log}
     if len(json.dumps(record).encode()) > 64 * 1024:
         raise ReadBound("Poise source record exceeds 64 KiB")
@@ -149,7 +154,7 @@ def collect(config, hello, now=None):
     start = instant(cursor["until"]) if cursor and cursor["container"] == container else initial
     # Catch up a stopped reader in finite windows; do not pretend old replay is current.
     end = min(end, start + dt.timedelta(days=30))
-    batch = {"version": 1, "expected": checkpoint, "container": container, "from": iso(start), "until": iso(end), "state": "complete", "records": []}
+    batch = {"version": 1, "challenge": hello.get("challenge"), "expected": checkpoint, "container": container, "from": iso(start), "until": iso(end), "state": "complete", "records": []}
     batch["retainedFrom"] = retained
     deadline = time.monotonic() + 12
     while True:
@@ -159,22 +164,33 @@ def collect(config, hello, now=None):
             batch["records"] = []
             break
         try:
-            raw = bounded_command(["/usr/bin/docker", "logs", "--timestamps", "--since", iso(start), "--until", iso(end), "--tail", str(MAX_LINES + 1), container], timeout=min(3, remaining))
+            raw = bounded_command(["/usr/bin/docker", "logs", "--timestamps", "--since", iso(start), "--until", iso(end), container], timeout=min(3, remaining))
             lines = raw.splitlines()
             if len(lines) > MAX_LINES:
                 raise ReadBound("source window exceeds 1000 records")
             records = []
             repeats = {}
             for line in lines:
+                if len(line) > 64 * 1024:
+                    raise ReadBound("native proxy line exceeds 64 KiB")
                 identity = hashlib.sha256(line).digest()
                 occurrence = repeats.get(identity, 0)
                 repeats[identity] = occurrence + 1
                 record = projected(line, domain, start, end, occurrence)
                 if record is not None:
                     records.append(record)
-            batch["records"] = records
             if len(records) > 100:
                 raise ReadBound("delivery exceeds 100 diagnostic records")
+            helper = Path(__file__).with_name("projection.cjs")
+            if not helper.is_file():
+                helper = Path(__file__).resolve().parents[2] / "test-results/ingress/projection.cjs"
+            with subprocess.Popen(["node", str(helper), domain], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+                try:
+                    batch["records"] = json.loads(capture(process, json.dumps(records).encode(), min(2, max(0.01, deadline - time.monotonic())), MAX_BYTES))
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
             if len(json.dumps(batch).encode()) > MAX_BYTES:
                 raise ReadBound("source delivery exceeds 1 MiB")
             break

@@ -25,7 +25,7 @@ def line(host="alice.poise.test", level="error", message="upstream refused", sta
 class IngressTests(unittest.TestCase):
     def test_native_projection_excludes_other_hosts_routine_output_and_request_payload(self):
         start, end = NOW - dt.timedelta(minutes=5), NOW
-        for value in (line("business.test"), line("poise.test.attacker.test"), line(level="info"), b"unstructured process stdout"):
+        for value in (line("business.test"), line("poise.test.attacker.test"), line(level="info"), ):
             self.assertIsNone(reporter.projected(value, "poise.test", start, end))
         record = reporter.projected(line(), "poise.test", start, end)
         self.assertEqual(record["time"], "2026-10-19T09:59:58.123Z")
@@ -58,7 +58,7 @@ class IngressTests(unittest.TestCase):
         self.assertEqual(batch["until"], "2026-10-19T09:59:59.000Z")
         self.assertEqual(batch["expected"], cursor)
         self.assertEqual(len(batch["records"]), 1)
-        self.assertIn("1001", calls[-1])
+        self.assertNotIn("--tail", calls[-1])
         self.assertNotIn("--follow", calls[-1])
 
     def test_reduces_source_window_and_records_irrecoverable_read_loss(self):
