@@ -10,9 +10,9 @@ export async function selectNodeRuntime({
   readVersion,
 }) {
   const candidates = explicitNode ? [explicitNode] : [
-    currentNode,
     '/opt/homebrew/opt/node@22/bin/node',
     '/usr/local/opt/node@22/bin/node',
+    currentNode,
   ]
   for (const candidate of new Set(candidates)) {
     if (await isExecutable(candidate) && supportedNodeVersion(await readVersion(candidate))) return candidate

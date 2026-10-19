@@ -15,17 +15,23 @@ describe('the installed Node runtime', () => {
   function selection(versions, options = {}) {
     const isExecutable = vi.fn(async (path) => path in versions)
     const readVersion = vi.fn(async (path) => versions[path])
-    return { isExecutable, result: selectNodeRuntime({ explicitNode: null, currentNode: '/custom/node', isExecutable, readVersion, ...options }) }
+    return { isExecutable, readVersion, result: selectNodeRuntime({ explicitNode: null, currentNode: '/custom/node', isExecutable, readVersion, ...options }) }
   }
 
   it('keeps the invoking Node 22 ahead of other Homebrew installations', async () => {
-    const { result, isExecutable } = selection({
+    const { result, readVersion } = selection({
       '/custom/node': 'v22.23.1',
       '/opt/homebrew/opt/node@20/bin/node': 'v20.19.0',
       '/opt/homebrew/opt/node@24/bin/node': 'v24.0.0',
     })
     await expect(result).resolves.toBe('/custom/node')
-    expect(isExecutable).toHaveBeenCalledTimes(1)
+    expect(readVersion).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains the stable Homebrew Node 22 path instead of a versioned Cellar executable', async () => {
+    const currentNode = '/opt/homebrew/Cellar/node@22/22.23.1/bin/node'
+    const { result } = selection({ [currentNode]: 'v22.23.1', '/opt/homebrew/opt/node@22/bin/node': 'v22.23.1' }, { currentNode })
+    await expect(result).resolves.toBe('/opt/homebrew/opt/node@22/bin/node')
   })
 
   it('finds Homebrew Node 22 when the invoking runtime is unsupported', async () => {
