@@ -127,10 +127,15 @@ function countTrend(page: Page, label = 'Pull requests merged') {
   return page.locator('#view-analytics .analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: new RegExp(`^${label}$`) }) }).locator('.analytics-summary')
 }
 
-async function pauseRefreshClock(page: Page) {
+async function installRefreshClock(page: Page) {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.clock.install({ time: new Date('2026-10-09T10:00:00Z') })
-  await page.clock.pauseAt(new Date('2026-10-09T10:00:01Z'))
+}
+
+async function pauseRefreshClock(page: Page) {
+  await expect(page.getByRole('button', { name: 'Menu', exact: true })).toBeVisible()
+  const now = await page.evaluate(() => Date.now())
+  await page.clock.pauseAt(new Date(now + 1000))
   await page.clock.setFixedTime(new Date('2026-10-09T10:00:00Z'))
 }
 
@@ -542,8 +547,9 @@ test('refreshes one quiet local pair on ticks and visibility return while keepin
   let releaseHistory!: () => void
   const historyHeld = new Promise<void>((resolve) => { releaseHistory = resolve })
   await page.route('**/api/analytics/history?**', async (route) => { await historyHeld; await route.fallback() })
-  await pauseRefreshClock(page)
+  await installRefreshClock(page)
   await page.goto('/')
+  await pauseRefreshClock(page)
   await openAnalytics(page)
   const merged = countTrend(page)
   const panel = page.locator('#view-analytics')
@@ -641,8 +647,9 @@ test('keeps the last complete snapshot on a quiet failure, cancels the other hal
   const state = await workspace(page)
   state.pacing = { merged: 15, median: 27 }
   state.baselineMerged = 189
-  await pauseRefreshClock(page)
+  await installRefreshClock(page)
   await page.goto('/')
+  await pauseRefreshClock(page)
   await openAnalytics(page)
   const panel = page.locator('#view-analytics')
   const merged = countTrend(page)
@@ -728,7 +735,7 @@ test('keeps the last complete snapshot on a quiet failure, cancels the other hal
 test('coalesces ticks during a foreground read and discards a superseded background day', async ({ page }) => {
   const state = await workspace(page)
   state.pacing = { merged: 15, median: 27 }
-  await pauseRefreshClock(page)
+  await installRefreshClock(page)
   let initialRelease!: () => void
   const initialHeld = new Promise<void>((resolve) => { initialRelease = resolve })
   let requests = 0
@@ -750,6 +757,7 @@ test('coalesces ticks during a foreground read and discards a superseded backgro
     await route.fallback()
   })
   await page.goto('/')
+  await pauseRefreshClock(page)
   await openAnalytics(page)
   await expect.poll(() => requests).toBe(2)
   await refreshAnalytics(page)
@@ -796,8 +804,9 @@ for (const rate of ['1m', '5m'] as const) {
   test(`uses the shared ${rate} cadence for quiet local refreshes`, async ({ page }) => {
     const state = await workspace(page)
     state.pacing = { merged: 15, median: 27 }
-    await pauseRefreshClock(page)
+    await installRefreshClock(page)
     await page.goto('/')
+    await pauseRefreshClock(page)
     await page.evaluate(refreshRate => {
       localStorage.setItem('poise-refresh-rate', refreshRate)
       window.dispatchEvent(new Event('poise:refresh-rate-changed'))
@@ -907,11 +916,16 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await workspace(page)
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
+  let started!: () => void
+  const oldReadStarted = new Promise<void>(resolve => { started = resolve })
+  let finished!: () => void
+  const oldReadFinished = new Promise<void>(resolve => { finished = resolve })
   await page.route('**/api/analytics?**', async route => {
     const url = new URL(route.request().url())
     if (url.searchParams.get('since') === '2026-10-08T00:00:00.000Z' && url.searchParams.get('until') === '2026-10-09T00:00:00.000Z') {
+      started()
       await held
-      await route.fulfill({ json: report(99) })
+      try { await route.fulfill({ json: report(99) }) } finally { finished() }
     } else await route.fallback()
   })
   await page.goto('/')
@@ -919,12 +933,19 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
   const panel = page.locator('#view-analytics')
   await panel.getByRole('button', { name: 'Previous day' }).click()
+  await oldReadStarted
+  const canceled = page.waitForEvent('requestfailed', {
+    predicate: request => {
+      const query = new URL(request.url()).searchParams
+      return query.get('since') === '2026-10-08T00:00:00.000Z' && query.get('until') === '2026-10-09T00:00:00.000Z'
+    },
+  })
   await panel.getByRole('button', { name: 'Previous day' }).click()
+  await canceled
   await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
-  const response = page.waitForResponse(res => new URL(res.url()).searchParams.get('since') === '2026-10-08T00:00:00.000Z')
   release()
-  await response
+  await oldReadFinished
   await expect(panel.locator('.analytics-groups')).not.toHaveAttribute('aria-busy', 'true')
   await expect(value(page, 'Pull requests merged')).toHaveText('4')
   await expect(mergeTrend(page)).toContainText('50%')
