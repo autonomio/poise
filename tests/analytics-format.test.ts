@@ -38,6 +38,7 @@ describe('work and review analytics', () => {
   it.each([
     ['feat: add capability', 'feat'], ['fix(api)!: correct result', 'fix'], ['perf!: reduce work', 'perf'],
     ['refactor(core): simplify', 'refactor'], ['test: cover it', 'test'], ['ci: check', 'ci'], ['revert: undo', 'revert'],
+    ['Fix: crash', 'fix'], ['Feat(api): add capability', 'feat'], ['PERF(core)!: speed up', 'perf'],
     ['feature: not a recognized prefix', 'unclassified'], ['feat: ', 'unclassified'], ['A feat: title', 'unclassified'], ['feat(scope: broken', 'unclassified'],
   ])('classifies %s as %s', (title, expected) => { expect(workType(title)).toBe(expected) })
 

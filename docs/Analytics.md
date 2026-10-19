@@ -235,7 +235,7 @@ appears in Notifications.
 ## Work and review
 
 All three cards use the pull requests merged on the selected day and the existing
-account/involvement scope. Work type groups Conventional Commit title prefixes:
+account/involvement scope. Work type groups case-insensitive Conventional Commit title prefixes:
 feat, fix, perf, refactor, docs, test, build, ci, chore, style and revert. Other
 titles remain unclassified, included in the denominator. The headline is the
 largest category's share; neutral bars show every represented type. Counts and

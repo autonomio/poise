@@ -3,7 +3,7 @@ export const WORK_TYPES = ['feat', 'fix', 'perf', 'refactor', 'docs', 'test', 'b
 export type WorkType = typeof WORK_TYPES[number]
 
 export function workType(title: string): WorkType {
-  const prefix = /^([a-z]+)(?:\([^()\r\n]+\))?!?:\s+\S/.exec(title)?.[1]
+  const prefix = /^([a-z]+)(?:\([^()\r\n]+\))?!?:\s+\S/i.exec(title)?.[1].toLowerCase()
   return WORK_TYPES.find((type) => type !== 'unclassified' && type === prefix) ?? 'unclassified'
 }
 
