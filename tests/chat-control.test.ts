@@ -154,7 +154,7 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await control.tick()
     await until(() => prompts.get(parent.id)?.length === 2)
     expect(prompts.get(parent.id)![1].text).toContain('worker_event')
-  })
+  }, 30_000) // Four Git workspaces and several independently bounded readiness phases.
 
   it.each(['grok', 'claude', 'codex', 'muse'] as const)('injects discovery and live bindings through the shared %s prompt path', async agent => {
     const parent = await manager(agent)

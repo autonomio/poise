@@ -66,6 +66,8 @@ export async function readWorkCi(target: store.WorkTarget): Promise<CiObservatio
     const url: unknown = item.url
     if (conclusion !== undefined && conclusion !== null && typeof conclusion !== 'string') throw new Error('Caller returned a malformed CI conclusion')
     if (url !== undefined && url !== null && typeof url !== 'string') throw new Error('Caller returned a malformed CI URL')
+    if (!['completed', 'queued', 'in_progress', 'pending', 'requested', 'waiting', 'failure', 'error', 'success'].includes(item.state)
+      || (item.state === 'completed' && typeof conclusion === 'string' && !['success', 'neutral', 'skipped', 'failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'].includes(conclusion))) throw new Error('Caller returned unknown CI state')
     if (['queued', 'in_progress', 'pending', 'requested', 'waiting'].includes(item.state) || (item.state === 'completed' && conclusion == null)) pending = true
     // The primitive also lists queued and running checks; those never wake an owner.
     if ((item.state === 'completed' && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'].includes(String(conclusion)))
