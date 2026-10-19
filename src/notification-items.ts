@@ -144,8 +144,8 @@ export function notificationItems(notices: readonly Notice[], diagnostics: Behav
     const attachments = [...(item.notice ? [item.notice] : []), ...item.details]
     const refs = [...new Map(attachments.flatMap(evidenceReferences).map((ref) => [ref.eventId, ref])).values()]
     if (refs.length) Object.assign(item, { evidence: refs[0], evidenceReferences: refs.slice(0, 20), evidenceStatus: 'retained' })
-    else if (attachments.some((entry) => entry.evidenceStatus === 'unavailable')) item.evidenceStatus = 'unavailable'
-    else if (attachments.some((entry) => entry.evidenceStatus === 'pending')) item.evidenceStatus = 'pending'
+    if (attachments.some((entry) => entry.evidenceStatus === 'unavailable')) item.evidenceStatus = 'unavailable'
+    else if (!refs.length && attachments.some((entry) => entry.evidenceStatus === 'pending')) item.evidenceStatus = 'pending'
     if (refs.length > 20 || attachments.some((entry) => entry.evidenceMore)) item.evidenceMore = true
   }
   return items

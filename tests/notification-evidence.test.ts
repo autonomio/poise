@@ -200,6 +200,29 @@ describe('read-time producer binding', () => {
     if (stored.status === 'found') expect(stored.event.operation).toBe(exhausted ? 'github_quota.exhausted' : 'github_quota.warning')
   })
 
+  it('starts new exhaustion evidence after confirmed capacity with an unknown risk forecast', async () => {
+    const quota = await import('../server/github-quota'), notices = await import('../server/alerts/notices'), bindings = await import('../server/notification-evidence')
+    const now = Date.now(), resetAt = new Date(now + 3_600_000).toISOString()
+    database.setMeta('me', 'octocat')
+    const bucket = { resource: 'core', label: 'REST API', used: 5000, remaining: 0, limit: 5000, riskPercent: 100, perMinute: 100, resetAt }
+    const sample = (at: number, remaining: number, riskPercent: number | null) => quota.syncQuotaAlerts([{ login: 'octocat', roles: ['user'], checkedAt: new Date(at).toISOString(), error: null,
+      buckets: [{ ...bucket, remaining, riskPercent }] }], at)
+    logging.diagnostic({ id: 'first-exhaustion', time: new Date(now).toISOString(), level: 'error', operation: 'github_quota.exhausted', account: 'octocat', target: 'core', condition: resetAt, message: 'Exhausted' })
+    sample(now, 0, 100); logging.loggingRuntime()!.flush()
+    const first = (await bindings.noticeEvidence(notices.noticesState(now))).notices[0]
+    expect(first.evidence?.eventId).toMatch(/^evt_/)
+    sample(now + 15_000, 100, null)
+    expect(notices.noticesState(now + 15_000).notices).toEqual([])
+    sample(now + 30_000, 0, 100)
+    const beforeCollection = (await bindings.noticeEvidence(notices.noticesState(now + 30_000))).notices[0]
+    expect(beforeCollection.evidence).toBeUndefined()
+    logging.diagnostic({ id: 'second-exhaustion', time: new Date(now + 30_000).toISOString(), level: 'error', operation: 'github_quota.exhausted', account: 'octocat', target: 'core', condition: resetAt, message: 'Exhausted again' })
+    logging.loggingRuntime()!.flush()
+    const second = (await bindings.noticeEvidence(notices.noticesState(now + 30_000))).notices[0]
+    expect(second.evidence?.eventId).toMatch(/^evt_/)
+    expect(second.evidence?.eventId).not.toBe(first.evidence!.eventId)
+  })
+
   it('joins a pre-launch exception by its exact context; later failures cannot borrow its record', async () => {
     const context = await import('../server/logging-context'), bindings = await import('../server/notification-evidence')
     const identity = { correlationId, behavior: 'review-new-prs', target: 'acme/repo#9', repository: 'acme/repo', account: 'review-bot' }

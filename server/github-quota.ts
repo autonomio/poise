@@ -146,7 +146,6 @@ export function observeQuotaConditions(accounts: GithubQuotaAccount[], now = Dat
     const at = Date.parse(account.checkedAt)
     if (!Number.isFinite(at) || at > now) throw new Error('Invalid GitHub quota observation time')
     for (const bucket of account.buckets) {
-      if (bucket.riskPercent === null) continue
       const key = riskKey(account.login, bucket.resource)
       const raw = getMeta(key)
       let previous: RiskWindow | null = null
@@ -162,6 +161,8 @@ export function observeQuotaConditions(accounts: GithubQuotaAccount[], now = Dat
       const state: RiskWindow = previous?.resetAt === bucket.resetAt && previous.lastAt <= at
         ? { ...previous } : { resetAt: bucket.resetAt, since: null, lastAt: at, warned: false }
       state.exhaustedSince = bucket.remaining === 0 && Date.parse(bucket.resetAt) > now ? state.exhaustedSince ?? at : null
+      // Positive capacity is authoritative even before a forecast can be computed.
+      if (bucket.riskPercent === null) { setMeta(key, JSON.stringify(state)); continue }
       if (!eligible) { state.since = null; state.warned = false }
       else if (state.since === null) state.since = at
       state.lastAt = Math.max(state.lastAt, at)
