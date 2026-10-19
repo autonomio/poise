@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 import { mocks, pr, HEAD_SHA, externalCalls, loadModules, arrangeCli, datastoreHealthOutput, deferred, fixture } from './behaviors-runtime-fixture'
