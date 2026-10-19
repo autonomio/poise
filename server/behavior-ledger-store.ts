@@ -55,6 +55,13 @@ export class BehaviorLedgerStore {
       if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
       this.db = new Database(path, { timeout: 0 })
       this.db.pragma('busy_timeout = 0')
+      const existingMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ledger_meta'").get()
+      if (existingMeta) {
+        const existingVersion = this.db.prepare("SELECT value FROM ledger_meta WHERE key='version'").get() as { value: string } | undefined
+        if (existingVersion?.value !== '1') throw new Error('Unsupported ledger schema')
+      } else if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
+        throw new Error('Unrecognized ledger schema')
+      }
       this.db.pragma('journal_mode = DELETE')
       this.db.pragma('temp_store = MEMORY')
       this.db.pragma('cache_size = -2048')
@@ -75,7 +82,12 @@ export class BehaviorLedgerStore {
       this.db.prepare("INSERT OR IGNORE INTO ledger_meta VALUES('generation',?)").run(randomBytes(16).toString('hex'))
       this.db.prepare("INSERT OR IGNORE INTO ledger_meta VALUES('cursor_key',?)").run(randomBytes(32).toString('hex'))
       this.db.prepare("INSERT OR IGNORE INTO ledger_meta VALUES('change_floor','0')").run()
+      const priorGeneration = this.data.generation
       this.data.generation = this.meta('generation')
+      if (priorGeneration !== null && priorGeneration !== this.data.generation) {
+        this.data.coverageStart = this.time()
+        this.gap('unavailable')
+      }
       this.cursorKey = this.meta('cursor_key')
       this.initialized = true
       this.db.transaction(() => {

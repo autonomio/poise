@@ -244,6 +244,35 @@ describe('behavior firing ledger store', () => {
     expect(unclean.health()).toMatchObject({ status: 'incomplete', gaps: [expect.objectContaining({ reason: 'unclean_restart' })] })
   })
 
+  it('exposes replacement of a previously covered store and starts a new coverage boundary', () => {
+    const db = store()
+    direct(db, 'before-replacement')
+    const generation = db.health().generation
+    const coverageStart = db.health().coverageStart
+    db.close()
+    rmSync(db.path)
+    clock += 1000
+    const replacement = store({}, db.path)
+    expect(replacement.health().generation).not.toBe(generation)
+    expect(replacement.health().coverageStart).not.toBe(coverageStart)
+    expect(replacement.health()).toMatchObject({ status: 'incomplete', gaps: [expect.objectContaining({ reason: 'unavailable' })] })
+  })
+
+  it('rejects unsupported schema versions before adding or changing tables', () => {
+    const db = store()
+    db.close()
+    const unsupported = new Database(db.path)
+    unsupported.exec("DROP TABLE ledger_instances; DROP TABLE ledger_changes; UPDATE ledger_meta SET value='999' WHERE key='version'")
+    unsupported.close()
+    const rejected = store({}, db.path)
+    expect(rejected.health().status).toBe('unavailable')
+    const retained = new Database(db.path, { readonly: true })
+    try {
+      expect(retained.prepare("SELECT value FROM ledger_meta WHERE key='version'").get()).toEqual({ value: '999' })
+      expect(retained.prepare("SELECT 1 FROM sqlite_master WHERE name='ledger_instances'").get()).toBeUndefined()
+    } finally { retained.close() }
+  })
+
   it('keeps unavailable health readable when initialization cannot allocate its bounded store', () => {
     const db = store({ maxPagesBytes: 4096 })
     expect(db.read({ operation: 'health' })).toMatchObject({ status: 200, body: { health: { status: 'unavailable' } } })

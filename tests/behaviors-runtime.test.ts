@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
+import type { LedgerAdmission, LedgerResult } from '../server/behavior-ledger-contract'
 
 // Reading Caller's local model catalog is not external work: no GitHub call,
 // no launch. The pause assertions below ignore it.
@@ -466,7 +467,7 @@ async function launchApprovalBeforeCrash() {
 }
 
 beforeEach(async () => {
-  mocks.captureAdmission.mockClear(); mocks.captureOutcome.mockClear(); mocks.observeSnapshot.mockClear()
+  mocks.captureAdmission.mockReset(); mocks.captureOutcome.mockReset(); mocks.observeSnapshot.mockReset()
   tempRoot = await mkdtemp(join(tmpdir(), 'poise-behavior-test-'))
   mocks.runFile.mockReset()
   mocks.spawnDetached.mockReset()
@@ -1421,6 +1422,56 @@ describe('behavior launch claims', () => {
     expect(mocks.captureOutcome.mock.calls.map(([result]) => result)).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({
       state: 'completed', outcome: 'waiting', activity: 'settled',
     })))
+  })
+
+  it.each(['absent', 'healthy', 'failed'] as const)('preserves resolution execution with %s real ledger capture', async (mode) => {
+    arrangeCli(false, false, { unresolvedConversationCount: 1, resolveUnresolvedCount: 1 })
+    const { database: db, behaviors: runtime } = await loadModules()
+    const { BehaviorLedgerObserver } = await vi.importActual<typeof import('../server/behavior-ledger')>('../server/behavior-ledger')
+    const observer = mode === 'absent' ? null : new BehaviorLedgerObserver({ path: mode === 'failed'
+      ? join(tempRoot, 'cache.db', 'behavior-ledger.db') : join(tempRoot, 'behavior-ledger.db') })
+    try {
+      if (observer) {
+        await observer.start()
+        mocks.captureAdmission.mockImplementation((input: Omit<LedgerAdmission, 'type'>) => observer.capture({ ...input, type: 'admit' }))
+        mocks.captureOutcome.mockImplementation((input: Omit<LedgerResult, 'type'>) => observer.capture({ ...input, type: 'result' }))
+      }
+      db.setMeta('me', 'poise-user')
+      db.setMeta('behavior_resolve_unblocking_enabled', '1')
+      await runtime.runEnabledBehaviorsOnce()
+
+      expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === '--resolve-nonblocking-conversations-if-ready')
+        .map(([command, args]) => [command, args])).toEqual([['github-interface', [
+        '--resolve-nonblocking-conversations-if-ready', '#17', '--username', 'review-bot',
+        '--expected-head', HEAD_SHA, '--token-user', 'review-bot',
+      ]]])
+      expect(mocks.spawnDetached).not.toHaveBeenCalled()
+      expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === '--logs')).toEqual([])
+      expect(db.db.prepare('SELECT * FROM behavior_runs').all()).toEqual([])
+      expect(db.db.prepare('SELECT key, target FROM behavior_seen').all()).toEqual([])
+      expect(db.db.prepare("SELECT key FROM meta WHERE key LIKE 'behavior_%_failure%' AND value <> ''").all()).toEqual([])
+      const { readBehaviorMetrics } = await import('../server/behavior-metrics')
+      expect(readBehaviorMetrics([], { since: null, until: null }, null).behaviors['resolve-unblocking'])
+        .toEqual({ totalRuns: 0, durationMinutes: 0, successRate: null })
+
+      if (observer) {
+        const reply = await observer.read({ operation: 'list' })
+        if (mode === 'healthy') {
+          expect(reply.status).toBe(200)
+          expect(reply.body.records).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'firing', behavior: 'resolve-unblocking', state: 'completed', outcome: 'waiting' }),
+            expect.objectContaining({ kind: 'attempt', head: HEAD_SHA, state: 'completed', activity: 'settled' }),
+          ]))
+        } else {
+          expect(reply.status).toBe(503)
+          expect(reply.body.health.status).toBe('unavailable')
+          expect(reply.body.health.dropped).toBeGreaterThan(0)
+          expect(reply.body.records).toBeUndefined()
+        }
+      }
+    } finally {
+      await observer?.stop()
+    }
   })
 
   it.each([
