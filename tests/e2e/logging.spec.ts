@@ -35,15 +35,29 @@ async function exactFilter(page: Page, key: string, value: string): Promise<void
 async function ready(page: Page, path?: string, timezone = 'UTC'): Promise<void> {
   await workspace(page, 'current', undefined, { preserveOnReload: true, realLogging: true, timezone })
   await page.evaluate((value) => localStorage.setItem('poise-logging-filters', JSON.stringify(value)), prefs)
-  const started = await page.evaluate(() => performance.now())
   if (path) await page.goto(path)
   else {
+    await page.evaluate(() => {
+      const start = (event: Event) => {
+        if (!(event.target instanceof Element) || !event.target.closest('#menu-popover [data-action="logging"]')) return
+        document.removeEventListener('click', start, true)
+        const started = performance.now()
+        const observer = new MutationObserver(() => {
+          const status = document.querySelector('#logging-status')
+          const loader = document.querySelector<HTMLElement>('#logging-loader')
+          if (!status?.textContent?.includes('matching retained events') || !loader?.hidden) return
+          observer.disconnect()
+          requestAnimationFrame(() => Object.assign(window, { loggingNavigationMs: performance.now() - started }))
+        })
+        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true })
+      }
+      document.addEventListener('click', start, true)
+    })
     await page.getByRole('button', { name: 'Menu', exact: true }).click()
     await page.locator('#menu-popover [data-action="logging"]').click()
   }
   await expect(status(page)).toContainText('matching retained events')
   await expect(page.locator('#logging-loader')).toBeHidden()
-  if (!path) await page.evaluate((started) => Object.assign(window, { loggingNavigationMs: performance.now() - started }), started)
   await expect(page.locator('#menu-surface')).toBeHidden()
   await expect(page.locator('#logging-scope-label')).toBeHidden()
   await expect(page.locator('#logging-new')).toBeHidden()
