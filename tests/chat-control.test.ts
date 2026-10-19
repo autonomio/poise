@@ -436,7 +436,10 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await until(() => runtime.get(fast.id)?.status === 'idle')
     store.message(runtime.instance, fast.id, 'fixture', 'Fast context 1')
     await control.tick()
-    expect(store.inbox(runtime.instance, blocked.id)[0].state).toBe('admitted')
+    expect(store.inbox(runtime.instance, blocked.id)[0].state, JSON.stringify({
+      blockedStatus: runtime.get(blocked.id)?.status, blockedQueue: runtime.get(blocked.id)?.queue,
+      fastStatus: runtime.get(fast.id)?.status, eligible: store.pending(runtime.instance).map(item => ({ recipient: item.recipient, seq: item.seq })),
+    })).toBe('admitted')
   })
 
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
