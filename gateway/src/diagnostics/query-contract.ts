@@ -43,8 +43,9 @@ export function observedCoverage(source: Coverage, now: number): Coverage {
   const expires = Date.parse(source.observationExpiresAt), observed = Date.parse(source.observedAt ?? '')
   if (Number.isFinite(expires) && Number.isFinite(observed) && observed <= now + 5000 && expires > observed && expires - observed <= 90_000 && expires > now) return source
   const open = source.gaps.find((gap) => gap.to === null)
+  const gaps = [...source.gaps.filter((gap) => gap.to !== null), open ?? { from: source.observedAt ?? new Date(now).toISOString(), to: null, reason: 'External proxy observation stopped' }]
   return { ...source, status: 'partial', currentStatus: 'unavailable', error: 'External proxy observation lease expired',
-    gaps: [...source.gaps.filter((gap) => gap.to !== null), open ?? { from: source.observedAt ?? new Date(now).toISOString(), to: null, reason: 'External proxy observation stopped' }].slice(-32) }
+    historyIncomplete: source.historyIncomplete || gaps.length > 32, gaps: gaps.slice(-32) }
 }
 
 /** A legacy partial record cannot establish whether its source has recovered. */

@@ -20,10 +20,10 @@ process.stdin.on('end', () => {
       || classifyHost(header, domain).kind === 'unknown' || /^http\.log\.access(?:\.|$)/.test(String(log.logger))) return []
     const safe: Record<string, unknown> = {}
     for (const key of ['level', 'msg', 'message', 'logger', 'request_id', 'error', 'err_id', 'err_trace', 'upstream', 'errno', 'server_name', 'identifier']) {
-      if (typeof log[key] === 'string') safe[key] = redact(log[key]).replace(/\?[^\s'"\]]+/g, '?[query omitted]').slice(0, key === 'error' ? 16_384 : 2048)
+      if (typeof log[key] === 'string') safe[key] = redact(log[key]).replace(/\?[^\s'"\]]+/g, '?[query omitted]')
     }
     for (const key of ['ts', 'status', 'duration']) if (typeof log[key] === 'number' && Number.isFinite(log[key])) safe[key] = log[key]
-    safe.request = { host: hostName(header), method: typeof log.request?.method === 'string' ? redact(log.request.method).slice(0, 32) : null }
+    safe.request = { host: hostName(header), method: typeof log.request?.method === 'string' ? redact(log.request.method) : null }
     return [{ id: record.id, time: record.time, log: safe }]
   })
   process.stdout.write(JSON.stringify(result))

@@ -51,10 +51,10 @@ export async function startIngressSocket(runtime: DiagnosticRuntime, path: strin
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   let active: Socket | null = null
   const server = createServer({ allowHalfOpen: true }, (socket) => {
+    socket.on('error', () => socket.destroy())
     if (active) { socket.end('{"error":"Ingress writer is busy"}\n'); return }
     active = socket
     const deadline = setTimeout(() => socket.destroy(new Error('Ingress connection exceeded 30 seconds')), 30_000)
-    socket.on('error', () => socket.destroy())
     void (async () => {
       // The default readable iterator destroys the duplex socket at input EOF,
       // before the committed transaction can send its acknowledgement.
@@ -84,4 +84,24 @@ export async function startIngressSocket(runtime: DiagnosticRuntime, path: strin
     catch (error) { server.close(); reject(error) }
   }) })
   return { close: () => new Promise<void>((resolve, reject) => { active?.destroy(); server.close((error) => error ? reject(error) : resolve()) }) }
+}
+
+/** Diagnostics storage can fail without withholding login and workspace routing. */
+export function maintainIngressSocket(runtime: DiagnosticRuntime, path: string, domain: string, configured: boolean, report: (error: unknown) => void): { close(): Promise<void> } {
+  let listener: Awaited<ReturnType<typeof startIngressSocket>> | null = null
+  let pending: Promise<void> | null = null, stopped = false, failed = false
+  const attempt = () => {
+    if (stopped || listener || pending) return
+    pending = startIngressSocket(runtime, path, domain, configured).then(async (ready) => {
+      if (stopped) { await ready.close(); return }
+      listener = ready
+      if (failed) runtime.observe('ingress-relay', 'collection', null)
+    }).catch((error: unknown) => {
+      failed = true
+      runtime.observe('ingress-relay', 'collection', null, 'Private ingress relay is unavailable; operator diagnostics contain the cause')
+      report(error)
+    }).finally(() => { pending = null })
+  }
+  const timer = setInterval(attempt, 5000); timer.unref(); attempt()
+  return { async close() { stopped = true; clearInterval(timer); await pending; await listener?.close() } }
 }

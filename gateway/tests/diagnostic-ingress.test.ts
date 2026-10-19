@@ -218,3 +218,19 @@ it('starts the observation lease at the fresh challenge instead of delayed recei
     expect(db.readCoverage(access)[0]).toMatchObject({ observedAt: new Date(NOW).toISOString(), observationExpiresAt: new Date(NOW + INGRESS_LEASE_MS).toISOString() })
   } finally { db.close() }
 })
+
+
+it('marks bounded expiry history incomplete before recovery persists it', async () => {
+  let now = NOW
+  const db = store(() => now)
+  try {
+    const [, ack] = await send(db, batch(), () => now)
+    const source = db.readCoverage(access)[0]
+    db.coverage({ ...source, gaps: Array.from({ length: 32 }, (_, index) => ({ from: new Date(NOW - 100_000 + index * 1000).toISOString(), to: new Date(NOW - 99_500 + index * 1000).toISOString(), reason: 'retained outage ' + index })) })
+    now += INGRESS_LEASE_MS + 1
+    expect(db.readCoverage(access)[0]).toMatchObject({ historyIncomplete: true, gaps: expect.any(Array) })
+    expect(db.readCoverage(access)[0].gaps).toHaveLength(32)
+    await send(db, { ...batch(ack.checkpoint as string), from: batch().until, until: new Date(now).toISOString(), records: [] }, () => now)
+    expect(db.readCoverage(access)[0]).toMatchObject({ currentStatus: 'connected', historyIncomplete: true })
+  } finally { db.close() }
+})

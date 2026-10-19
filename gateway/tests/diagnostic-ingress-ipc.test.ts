@@ -1,9 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createConnection, Socket } from 'node:net'
+import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeAll, expect, it } from 'vitest'
-import { startIngressSocket } from '../src/diagnostics/ingress-ipc.js'
+import { afterEach, beforeAll, expect, it, vi } from 'vitest'
+import { maintainIngressSocket, startIngressSocket } from '../src/diagnostics/ingress-ipc.js'
 import { DiagnosticRuntime } from '../src/diagnostics/runtime.js'
 import { DiagnosticStore } from '../src/diagnostics/store.js'
 import { executeLoggingRead } from '../src/diagnostics/query-worker.js'
@@ -74,4 +76,54 @@ it('preserves the legacy manual identity and refuses strict-host violations at t
   for (const host of ['admin.poise.test', 'nested.alice.poise.test', 'alice.poise.test:99999', 'poise.test.attacker.test']) {
     await expect(cli(w.directory, 'ingress', JSON.stringify({ request: { host }, level: 'error', msg: 'excluded' }))).rejects.toThrow()
   }
+})
+
+
+it('keeps diagnostics startup independent and reconnects after corrupt storage is repaired', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'poise-relay-retry-')), path = join(directory, 'logging.db')
+  writeFileSync(path, 'broken SQLite storage')
+  const runtime = new DiagnosticRuntime({ path, report: () => undefined }), errors: unknown[] = []
+  const service = maintainIngressSocket(runtime, join(directory, 'logging.ingress.sock'), 'poise.test', false, (error) => errors.push(error))
+  cleanups.push(async () => { await service.close(); runtime.stop(); rmSync(directory, { recursive: true, force: true }) })
+  await vi.waitFor(() => expect(errors.length).toBeGreaterThan(0))
+  expect(runtime.health().sources.find((source) => source.id === 'ingress-relay')?.currentStatus).toBe('unavailable')
+  rmSync(path)
+  await vi.waitFor(() => expect(runtime.health().sources.find((source) => source.id === 'ingress-relay')?.currentStatus).toBe('connected'), { timeout: 7000 })
+  expect((await cli(directory, 'ingress', JSON.stringify({ request: { host: 'poise.test' }, level: 'error', msg: 'repaired source' })))[0].accepted).toBe(true)
+})
+
+it('handles a write error on a refused second client while the first transaction remains usable', async () => {
+  const w = await writer(), first = createConnection(w.socket)
+  first.on('error', () => first.destroy())
+  await once(first, 'connect'); first.write('ingress-stream\n')
+  const hello = JSON.parse(String((await once(first, 'data'))[0])) as Record<string, unknown>
+  const end = Socket.prototype.end
+  let injected = false
+  const fault = vi.spyOn(Socket.prototype, 'end').mockImplementation(function(this: Socket, ...args: unknown[]) {
+    const result: Socket = Reflect.apply(end, this, args)
+    if (args[0] === '{"error":"Ingress writer is busy"}\n') {
+      injected = true
+      queueMicrotask(() => this.emit('error', Object.assign(new Error('Disconnected refused client'), { code: 'EPIPE' })))
+    }
+    return result
+  })
+  const second = createConnection(w.socket); second.on('error', () => second.destroy())
+  try {
+    await vi.waitFor(() => expect(injected).toBe(true))
+    fault.mockRestore()
+    const ack = once(first, 'data')
+    first.end(JSON.stringify({ version: 1, challenge: hello.challenge, expected: hello.checkpoint, container: 'b'.repeat(64), from: new Date(Date.now() - 1000).toISOString(), until: new Date().toISOString(), state: 'complete', records: [] }))
+    expect(JSON.parse(String((await ack)[0])).accepted).toBe(true)
+  } finally { fault.mockRestore(); first.destroy(); second.destroy() }
+})
+
+it('preserves an edge message until canonical normalization can mark its truncation', async () => {
+  const w = await writer()
+  const records = JSON.parse(execFileSync(process.execPath, [resolve('../test-results/ingress/projection.cjs'), 'poise.test'], {
+    input: JSON.stringify([{ id: 'c'.repeat(64), time: new Date().toISOString(), log: { request: { host: 'poise.test' }, level: 'error', msg: 'x'.repeat(3000) } }]), encoding: 'utf8', timeout: 3000,
+  })) as unknown[]
+  await cli(w.directory, 'ingress-stream', (hello) => JSON.stringify({ version: 1, challenge: hello.challenge, expected: hello.checkpoint, container: 'c'.repeat(64), from: new Date(Date.now() - 5000).toISOString(), until: new Date().toISOString(), state: 'complete', records }))
+  const db = new DiagnosticStore(w.path, undefined, Date.now, true)
+  try { expect(db.query({ workspace: null, operator: true }).events[0]).toMatchObject({ truncated: true }) }
+  finally { db.close() }
 })

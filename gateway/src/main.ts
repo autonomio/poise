@@ -3,7 +3,7 @@ import { environmentSecrets, redact } from './diagnostics/contract.js'
 import { DiagnosticRuntime } from './diagnostics/runtime.js'
 import { EnvironmentCollectors, gatewayDiagnostic, observeReleaseTask } from './diagnostics/collectors.js'
 import { HostJournal } from './diagnostics/host.js'
-import { startIngressSocket } from './diagnostics/ingress-ipc.js'
+import { maintainIngressSocket } from './diagnostics/ingress-ipc.js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { ConfigError, loadConfig, type Config } from './config.js'
@@ -40,7 +40,8 @@ if (config.insecureHttp) {
 
 mkdirSync(config.dataDir, { recursive: true, mode: 0o700 })
 diagnostics = new DiagnosticRuntime({ path: join(config.dataDir, 'logging.db'), ...diagnosticConfig(process.env) })
-const ingress = await startIngressSocket(diagnostics, join(config.dataDir, 'logging.ingress.sock'), config.domain, !!config.proxyListen)
+const ingress = maintainIngressSocket(diagnostics, join(config.dataDir, 'logging.ingress.sock'), config.domain, !!config.proxyListen,
+  (error) => log.error('logging.ingress.unavailable', { error: errorMessage(error) }))
 diagnostics.start()
 diagnostics.observe('gateway', 'gateway', null)
 process.once('uncaughtException', (error) => {
