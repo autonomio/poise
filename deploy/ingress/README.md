@@ -2,7 +2,7 @@
 
 This optional reader runs on the operator-owned Docker host serving the external
 Poise proxy. It sends only Poise-host native Warning/Error/Critical records to
-the existing gateway operator command. It adds no listener or workspace access.
+the existing gateway operator command. It adds no network listener or workspace access.
 The normal one-record `ingress` command remains available for manual diagnosis.
 
 The reader requires Python 3.10+, Docker CLI and OpenSSH. It polls every 15 seconds,

@@ -740,12 +740,19 @@ The operator CLI and redaction/retention/coverage contracts are in
 An optional external Caddy reader uses a dedicated operator SSH key restricted
 to `docker exec -i poise-gateway node dist/diagnostics/cli.js ingress-stream`.
 No HTTP ingestion route, JWT scope or workspace host capability is added.
-The version-1 stdin protocol carries one bounded projected source window after
-a domain/checkpoint handshake; central events, coverage and its compare-and-set
-checkpoint commit together before acknowledgement. Coverage includes an optional
-90-second `observationExpiresAt` lease, enforced at read time even when the
+The command relays to the gateway's mode-0600 private Unix socket; only the
+gateway writes the diagnostic store. Externally owned coverage lives in that
+store, and runtime journal flushes cannot overwrite it. The version-1 stdin
+protocol carries one bounded projected source window after a domain/checkpoint
+handshake with a new random challenge and gateway-issued observation time.
+Central events, coverage and its compare-and-set checkpoint commit together
+before acknowledgement. Coverage includes an optional 90-second
+`observationExpiresAt` lease starting at challenge issue, enforced at read time even when the
 reporter is dead. Retained history and initial/rotation/read-bound uncertainty
-remain independent of current connectivity. See the
+remain independent of current connectivity. A stopped observation opens a gap
+at its last confirmed time; restart remains initializing until a fresh scan.
+Canonical host selection and redaction run on the edge before transmission,
+then attribution and normalization run again at the gateway. See the
 [external reader installation contract](../deploy/ingress/README.md).
 
 `GET /api/service/diagnostics?cursor=OPAQUE` is a maintenance-only delivery
