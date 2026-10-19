@@ -462,6 +462,13 @@ test('offers an explicit fallback choice when the default provider is not signed
     await expect(dialog.getByRole('alert')).toHaveCSS('color', 'rgb(184, 80, 72)')
     await expect(dialog.getByRole('button', { name: 'Create' })).toBeEnabled()
   }
+  await dialog.getByLabel('Model').selectOption('grok-4.6-xhigh')
+  await expect(dialog.getByRole('status')).toContainText('not signed in')
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
+    await expect(dialog.getByRole('status')).toHaveCSS('color', 'rgb(184, 80, 72)')
+    await expect(dialog.getByRole('button', { name: 'Create' })).toBeDisabled()
+  }
 })
 
 test('hands a Current card and an Editor document off to a prefilled New session dialog', async ({ page }) => {
