@@ -62,7 +62,7 @@ test('outcomes, issue history and persistent filters remain selectable', async (
   await expect(page.locator('#tbody .agent-status.bad')).toHaveText('Failure')
 })
 
-test('partial history and a failed refresh remain visible, and recovered failures disappear', async ({ page }) => {
+test('snapshot limits stay out of Archive while failed refreshes and recovery remain visible', async ({ page }) => {
   await workspace(page, 'swarm')
   let failed = false
   let recovered = false
@@ -75,61 +75,36 @@ test('partial history and a failed refresh remain visible, and recovered failure
     } })
   })
   await page.getByRole('button', { name: 'Archive', exact: true }).click()
-  const notice = page.locator('#main-history-notice')
-  await expect(notice.locator('summary')).toHaveText('History notices (1)')
+  await expect(page.locator('#tbody')).toContainText('Deploy')
+  await expect(page.locator('#view-main')).not.toContainText('showing the latest')
   await expect(page.locator('#main-load-error')).toBeHidden()
-  await notice.locator('summary').click()
-  await expect(notice).toContainText('latest 100 of 130')
   failed = true
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
   await expect(page.locator('#main-load-error')).toContainText('Not updating')
-  await expect(notice.locator('li')).toBeVisible()
   await expect(page.locator('#tbody')).toContainText('Deploy')
   failed = false
   recovered = true
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
   await expect(page.locator('#tbody tr')).toHaveCount(0)
-  await expect(notice).toBeHidden()
   await expect(page.locator('#main-load-error')).toBeHidden()
 })
 
-for (const width of [390, 1280]) test(`repository history notices stay compact and follow source selection at ${width}px`, async ({ page }) => {
+for (const width of [390, 1280]) test(`fourteen repository snapshot limits produce no Archive notices at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 })
   await workspace(page, 'swarm')
   const warnings = Array.from({ length: 14 }, (_, i) => `acme/repository-${i}: showing the latest 100 of ${130 + i} failed runs. Open GitHub for older runs.`)
   await page.route('**/api/gh', route => {
     const action = route.request().postDataJSON().operation === 'actions'
     return route.fulfill({ json: { records: action ? [failedRun] : [], count: action ? 1 : 0,
-      warnings: action ? [...warnings, warnings[0]] : [], errors: action ? [{ org: 'beta', error: 'Repository unavailable' }] : [] } })
+      warnings: action ? warnings : [], errors: action ? [{ org: 'beta', error: 'Repository unavailable' }] : [] } })
   })
   await page.getByRole('button', { name: 'Archive', exact: true }).click()
-  const notice = page.locator('#main-history-notice')
-  const summary = notice.locator('summary')
-  await expect(summary).toHaveText('History notices (14)')
-  await expect(notice).not.toHaveAttribute('open')
-  await expect(notice.locator('li').first()).toBeHidden()
+  await expect(page.locator('#tbody')).toContainText('Deploy')
   await expect(page.locator('#main-load-error')).toContainText('Repository unavailable')
-  await expect(page.locator('#main-load-error')).not.toContainText('latest 100')
-  await page.screenshot({ path: `test-results/archive-notices-collapsed-${width}.png` })
-  await summary.focus()
-  await page.keyboard.press('Enter')
-  await expect(notice.locator('li')).toHaveText([...warnings].sort())
-  await expect(notice.locator('li').first()).toBeVisible()
-  await expect(summary).toBeFocused()
-  const refresh = page.waitForResponse(response => response.url().endsWith('/api/gh') && response.request().postDataJSON().operation === 'actions')
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:refresh-tick')))
-  await (await refresh).finished()
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)))
-  await expect(notice).toHaveAttribute('open', '')
-  await expect(summary).toBeFocused()
-  expect(await notice.evaluate(element => element.getBoundingClientRect().right <= innerWidth)).toBe(true)
+  await expect(page.locator('#view-main')).not.toContainText('showing the latest')
+  await expect(page.locator('#view-main')).not.toContainText('Open GitHub for older runs')
+  await expect(page.locator('#main-history-notice')).toHaveCount(0)
   await page.screenshot({ path: `test-results/archive-notices-${width}.png` })
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
-  await expect(notice).toBeHidden()
-  await expect(page.locator('#main-load-error')).toBeHidden()
-  await page.getByRole('button', { name: 'Actions', exact: true }).click()
-  await expect(summary).toHaveText('History notices (14)')
-  await expect(notice).not.toHaveAttribute('open')
 })
 
 
