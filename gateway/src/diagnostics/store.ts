@@ -308,10 +308,12 @@ export class DiagnosticStore {
     const predicate = access.operator ? "WHERE (visibility IN ('operator','infrastructure') OR (workspace=? AND visibility='workspace')) AND ingested_at>=?"
       : "WHERE workspace=? AND visibility IN ('workspace','infrastructure') AND ingested_at>=?"
     const parameters = [access.workspace, new Date(this.now() - this.policy.retentionMs).toISOString()]
-    // Separate indexed extrema avoid visiting every retained payload for each page.
-    const first = this.db.prepare(`SELECT sort_time FROM log_events ${predicate} ORDER BY sort_time ASC LIMIT 1`).get(...parameters) as { sort_time: string } | undefined
-    const last = this.db.prepare(`SELECT sort_time FROM log_events ${predicate} ORDER BY sort_time DESC LIMIT 1`).get(...parameters) as { sort_time: string } | undefined
-    return { from: first?.sort_time ?? null, to: last?.sort_time ?? null, retentionAfter: new Date(this.now() - this.policy.retentionMs).toISOString() }
+    return this.db.transaction(() => {
+      // Separate indexed extrema avoid visiting every retained payload for each page.
+      const first = this.db.prepare(`SELECT sort_time FROM log_events ${predicate} ORDER BY sort_time ASC LIMIT 1`).get(...parameters) as { sort_time: string } | undefined
+      const last = this.db.prepare(`SELECT sort_time FROM log_events ${predicate} ORDER BY sort_time DESC LIMIT 1`).get(...parameters) as { sort_time: string } | undefined
+      return { from: first?.sort_time ?? null, to: last?.sort_time ?? null, retentionAfter: new Date(this.now() - this.policy.retentionMs).toISOString() }
+    })()
   }
 
   lookup(access: LogAccess, id: string): { status: 'found'; event: LogEvent } | { status: 'expired' | 'unavailable' } {
