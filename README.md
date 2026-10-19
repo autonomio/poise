@@ -351,6 +351,10 @@ npm ci
 npm run install:production
 ```
 
+Installers use Node 22 (minimum 22.13). `POISE_NODE`, when set, must name that
+runtime; otherwise installation prefers the invoking Node 22, then Homebrew's
+Node 22. Self-update bootstrap rejects services configured with another Node line.
+
 A new installation can start without an initialized datastore; add the first
 GitHub account in Settings. Existing databases and their sync services are retained.
 An explicitly configured `POISE_DATASTORE_DB` must point to an existing file.

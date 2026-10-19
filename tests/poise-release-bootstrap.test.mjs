@@ -727,6 +727,11 @@ describe('preflight refusals', () => {
     expect(w.state.tokenSeen.every((where) => where === 'github')).toBe(true)
   })
 
+  it.each(['v20.19.0', 'v22.12.0', 'v24.0.0'])('refuses a production service running excluded Node %s', async (nodeVersion) => {
+    const w = await world({ state: { nodeVersion } })
+    await expect(w.installer.enable({ tokenFile: w.tokenFile })).rejects.toThrow('Node 22 (minimum 22.13) is required')
+  })
+
   it('refuses an unsupported Node runtime, a service without the checkout\'s Caller, or a non-macOS host', async () => {
     const oldNode = await world({ state: { nodeVersion: 'v18.20.0' } })
     await expect(oldNode.installer.enable({ tokenFile: oldNode.tokenFile })).rejects.toThrow(/v18.20.0/)
