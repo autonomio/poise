@@ -162,5 +162,11 @@ it('projects current collection state independently of historical gaps and loss 
     expect(JSON.parse(executeLoggingRead(request).body).collection.currentStatus).toBe('initializing')
     source.currentStatus = 'connected'; request.now += 60_001
     expect(read().collection.currentStatus).toBe('stale')
+    request.now = now
+    db.coverage({ id: 'external-ingress', source: 'ingress', workspace: null, status: 'not-configured', currentStatus: 'not-configured',
+      observedAt: null, ingestedAt: null, availableFrom: null, error: 'Operator delivery has not been configured', gaps: [] })
+    expect(read()).toMatchObject({ collection: { status: 'partial', currentStatus: 'partial', sources: expect.arrayContaining([
+      expect.objectContaining({ source: 'ingress', currentStatus: 'not-configured' }),
+    ]) } })
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }) }
 })

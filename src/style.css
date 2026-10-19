@@ -3196,13 +3196,20 @@ tr:hover .stop-btn { opacity: 1; }
 .logging-table-wrap { overflow-x: auto; }
 #logging-table { min-width: 1050px; }
 #logging-table th, #logging-table td { text-align: left; }
-#logging-table .logging-column-time { min-width: 180px; }
+#logging-table .logging-column-time { width: 180px; }
+#logging-table .logging-column-severity { width: 90px; }
+#logging-table .logging-column-source { width: 90px; }
+#logging-table .logging-column-component { width: 135px; }
+#logging-table .logging-column-repository { width: 140px; }
+#logging-table .logging-column-target { width: 145px; }
+#logging-table .logging-column-occurrences { width: 64px; }
+#logging-table th:last-child { width: 32px; }
 #logging-table .logging-column-occurrences, #logging-table .logging-number { text-align: right; font-variant-numeric: tabular-nums; }
 #logging-table .logging-cell { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
 #logging-table .logging-cell-message { min-width: 28ch; max-width: 50ch; }
 #logging-table :is(.logging-cell-callId, .logging-cell-correlationId, .logging-cell-incidentId) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .75rem; max-width: 18ch; }
 #logging-table .started-cell .agent-status-note { display: block; }
-.logging-column-button { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-2); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.logging-column-button { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-2); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer; }
 .logging-column-button svg { flex: none; opacity: .35; }
 .logging-column-button:hover svg, .logging-column-button.active svg { opacity: 1; }
 .logging-column-button.active { color: var(--a1); }
@@ -3237,6 +3244,7 @@ tr:hover .stop-btn { opacity: 1; }
   #logging-filters { gap: var(--sp-2); }
   #logging-filters .search-input { width: 125px; min-width: 60px; }
   #logging-filters .range-picker button { padding-inline: var(--sp-2); }
+  #view-logging tr.agent-expand-row > td > * { position: sticky; left: var(--sp-4); width: calc(100vw - 72px); max-width: calc(100vw - 72px); }
 }
 .logging-pagination { display: flex; align-items: center; gap: var(--sp-3); margin-block: var(--sp-4); }
 .logging-new { margin-block: var(--sp-3); }

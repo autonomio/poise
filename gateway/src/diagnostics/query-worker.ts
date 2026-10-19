@@ -48,6 +48,18 @@ function health(request: LoggingRead): LoggingReply {
   let db: DiagnosticStore | null = null
   try {
     db = new DiagnosticStore(request.path, request.policy, () => request.now, true)
+    // Operator integrations write their coverage directly; a fresh runtime journal
+    // must not hide an unconfigured or disconnected external source.
+    const sources = new Map(db.readCoverage(request.access).map((source) => [source.id, source]))
+    for (const source of collection.sources) sources.set(source.id, source)
+    if (sources.size > 256) throw new Error('Combined collection coverage exceeds its source bound')
+    collection.sources = [...sources.values()]
+    if (collection.status === 'connected' && collection.sources.some((source) => source.status !== 'connected')) collection.status = 'partial'
+    if (collection.currentStatus === 'connected' || collection.currentStatus === 'initializing') {
+      const observations = collection.sources.map(currentCoverageStatus)
+      collection.currentStatus = observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
+        : !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'
+    }
     return json(200, { version: 1, status: collection.status === 'unavailable' ? 'partial' : collection.status,
       collection, query: { status: 'connected' }, bounds: db.bounds(request.access), policy: request.policy })
   } catch {

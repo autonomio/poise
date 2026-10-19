@@ -326,7 +326,8 @@ for (const theme of ['light', 'dark']) test(`uses native table styles and bounde
   await expect(rows(page)).toHaveCount(50)
   await page.screenshot({ path: info.outputPath(`${theme}-logging-table.png`), fullPage: true })
   await openFilter(page, 'source')
-  await page.screenshot({ path: info.outputPath(`${theme}-logging-filter.png`), fullPage: true })
+  await page.screenshot({ path: info.outputPath(`${theme}-logging-filter.png`), fullPage: false })
+  await expect(page.locator('#logging-filter-source')).toBeVisible()
   await page.keyboard.press('Escape')
   await rows(page).first().getByRole('button', { name: 'Toggle diagnostic evidence' }).click()
   await page.screenshot({ path: info.outputPath(`${theme}-logging-desktop.png`), fullPage: true })
@@ -336,7 +337,7 @@ for (const theme of ['light', 'dark']) test(`uses native table styles and bounde
   const popup = await page.locator('#logging-filter-component').boundingBox()
   expect(popup!.x).toBeGreaterThanOrEqual(0)
   expect(popup!.x + popup!.width).toBeLessThanOrEqual(420)
-  await page.screenshot({ path: info.outputPath(`${theme}-logging-narrow-filter.png`), fullPage: true })
+  await page.screenshot({ path: info.outputPath(`${theme}-logging-narrow-filter.png`), fullPage: false })
   await page.keyboard.press('Escape')
   const sizes = await page.evaluate(() => ({ width: innerWidth, body: document.documentElement.scrollWidth, rows: document.querySelectorAll('#logging-table tr').length }))
   expect(sizes.body).toBeLessThanOrEqual(sizes.width + 1)
@@ -379,7 +380,7 @@ test('keeps filters in visible headers, preserves keyboard focus and restores vi
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('poise-logging-filters')!).account)).toBe('')
 })
 
-test('shows recovered history only on inspection and identifies actual current collection failure', async ({ page }) => {
+test('shows recovered history only on inspection and identifies actual current collection failure', async ({ page }, info) => {
   await ready(page)
   const at = new Date().toISOString()
   const sources = [{ id: 'application', source: 'poise', workspace: 'local', status: 'partial', currentStatus: 'connected', observedAt: at, ingestedAt: at, availableFrom: at, error: null as string | null,
@@ -395,6 +396,7 @@ test('shows recovered history only on inspection and identifies actual current c
   await expect(page.locator('#logging-data')).toContainText('Collection now')
   await expect(page.locator('#logging-data')).toContainText('Connected')
   await expect(page.locator('#logging-data')).toContainText('1 gaps')
+  await page.screenshot({ path: info.outputPath('logging-data-inspection.png'), fullPage: false })
   await page.locator('#logging-data summary').click()
   await expect(page.locator('#logging-data')).toContainText('Recovered restart interval')
   await page.keyboard.press('Escape')
