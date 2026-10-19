@@ -321,6 +321,12 @@ Broad retained counts therefore read index metadata without fetching every event
 payload; writable stores upgrade the earlier three-column index in place. Query
 filters, source-time ordering, snapshot cursors and retained counts are unchanged.
 
+Current queue overflow/rejection is separately reported as `lossActive` in runtime
+and independent browser health. The first transition is journaled immediately.
+A successful drain/persistence boundary with no new loss clears active state;
+cumulative counters and historical status remain. Legacy loss counters without
+this observation field cannot establish recovery and remain initializing.
+
 A recreated workspace store rejects obsolete delivery cursors explicitly. The authenticated collector records a collection gap, resets only that source checkpoint and resumes bounded retained-history backfill; authentication and other failures do not reset checkpoints. Bootstrap deadlines retain process-group SIGKILL escalation even when the direct child exits first, and await escalation before returning the timeout result.
 
 Caller completion checkpoints include the source database's persistent stream identity. A replaced database causes bounded replay from zero and a retained collection gap, even when its new sequences are below the old checkpoint. Legacy numeric checkpoints replay safely rather than guessing their source identity.

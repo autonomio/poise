@@ -16,6 +16,7 @@ interface Journal {
   dropped: number
   droppedSince: string | null
   rejected?: number
+  lossActive?: boolean
   sinkError: string | null
   coverageError?: string | null
   reportError?: string | null
@@ -47,6 +48,8 @@ export class DiagnosticRuntime {
   private journalError: string | null = null
   private reportError: string | null = null
   private rejected = 0
+  private lossActive = false
+  private lossSequence = 0
   private lastRejected: string | null = null
   private lastSuccess: string | null = null
   private journalAt = 0
@@ -75,6 +78,7 @@ export class DiagnosticRuntime {
         if (journal.version !== 1 || !Array.isArray(journal.sources) || journal.sources.length > MAX_COVERAGE_SOURCES
           || !Number.isFinite(Date.parse(journal.writtenAt)) || !Number.isSafeInteger(journal.dropped) || journal.dropped < 0) throw new Error('Invalid collection coverage journal')
         this.rejected = Number.isSafeInteger(journal.rejected) && journal.rejected! >= 0 ? journal.rejected! : 0
+        this.lossActive = journal.lossActive === true
         this.dropped = journal.dropped
         this.droppedSince = journal.droppedSince ?? null
         this.reportError = journal.reportError ?? null
@@ -140,7 +144,7 @@ export class DiagnosticRuntime {
     }
     const bytes = Buffer.byteLength(JSON.stringify(event))
     if (this.queue.length >= (this.options.maxQueueEvents ?? 1000) || this.queuedBytes + bytes > (this.options.maxQueueBytes ?? 2 * 1024 * 1024)) {
-      this.dropped++; this.droppedSince ??= this.iso(); this.saveJournal(); return null
+      this.dropped++; this.droppedSince ??= this.iso(); this.recordLoss(); return null
     }
     this.queue.push({ event, bytes }); this.queuedBytes += bytes
     this.schedule()
@@ -156,6 +160,14 @@ export class DiagnosticRuntime {
   private reject(error: unknown): void {
     this.rejected++; this.lastRejected = this.message(error)
     this.notify('logging.record.rejected', this.lastRejected)
+    this.recordLoss()
+  }
+
+  private recordLoss(): void {
+    this.lossSequence++
+    const changed = !this.lossActive
+    this.lossActive = true
+    this.saveJournal(changed)
   }
 
   unconfigured(id: string, source: string, workspace: string | null, reason: string): void {
@@ -195,12 +207,12 @@ export class DiagnosticRuntime {
     const partial = this.dropped > 0 || this.rejected > 0 || this.journalError || this.coverageError || this.reportError
       || [...this.sources.values()].some((source) => source.status !== 'connected')
     const observations = [...this.sources.values()].map(currentCoverageStatus)
-    const currentStatus = this.sinkError ? 'unavailable' : this.journalError || this.coverageError || this.reportError
+    const currentStatus = this.sinkError ? 'unavailable' : this.lossActive || this.journalError || this.coverageError || this.reportError
       || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
       : this.lastSuccess === null || observations.includes('initializing') ? 'initializing' : 'connected'
     return { status: this.sinkError ? 'unavailable' : partial ? 'partial' : this.lastSuccess === null ? 'initializing' : 'connected', currentStatus,
       error: this.sinkError, unavailableSince: this.sinkSince, coverageError: this.coverageError, journalError: this.journalError,
-      reportError: this.reportError, rejected: this.rejected, lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
+      reportError: this.reportError, rejected: this.rejected, lossActive: this.lossActive, lastRejected: this.lastRejected, checkedAt: this.iso(), lastSuccessfulWriteAt: this.lastSuccess,
       queued: this.queue.length, queuedBytes: this.queuedBytes, dropped: this.dropped, droppedSince: this.droppedSince,
       sources: [...this.sources.values()], policy: this.policy }
   }
@@ -248,6 +260,7 @@ export class DiagnosticRuntime {
 
   flush(): boolean {
     if (this.stopped || this.now() < this.retryAt) return false
+    const lossSequence = this.lossSequence
     const batch = this.queue.slice(0, 100)
     let store: DiagnosticStore
     try {
@@ -278,7 +291,9 @@ export class DiagnosticRuntime {
         context: { previousError: recovered, unavailableSince, recoveredAt: this.iso(), dropped: this.dropped } }, this.now(), this.secrets)
       if (event) this.enqueue(event)
     }
-    this.saveJournal()
+    const recoveredLoss = this.lossActive && lossSequence === this.lossSequence && !this.queue.length && !this.coverageError && !this.reportError
+    if (recoveredLoss) this.lossActive = false
+    this.saveJournal(recoveredLoss)
     if (this.queue.length) this.schedule()
     return batch.length > 0
   }
@@ -322,7 +337,7 @@ export class DiagnosticRuntime {
     if (!path || (!force && this.now() - this.journalAt < 1000)) return
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, rejected: this.rejected, droppedSince: this.droppedSince,
+      const journal: Journal = { version: 1, writtenAt: this.iso(), stopped: this.stopped, dropped: this.dropped, rejected: this.rejected, lossActive: this.lossActive, droppedSince: this.droppedSince,
         sinkError: this.sinkError, coverageError: this.coverageError, reportError: this.reportError, sinkSince: this.sinkSince, sources: [...this.sources.values()] }
       const payload = JSON.stringify(journal)
       if (Buffer.byteLength(payload) > MAX_COVERAGE_JOURNAL_BYTES) throw new Error('Coverage journal exceeds 8 MiB')
@@ -341,7 +356,7 @@ export class DiagnosticRuntime {
     this.timer = null; this.draining = true
     const deadline = Date.now() + 2000
     while (this.queue.length && Date.now() < deadline) if (!this.flush()) break
-    if (this.queue.length) { this.dropped += this.queue.length; this.droppedSince ??= this.iso() }
+    if (this.queue.length) { this.dropped += this.queue.length; this.droppedSince ??= this.iso(); this.recordLoss() }
     this.queue = []; this.queuedBytes = 0; this.stopped = true; this.draining = false
     this.saveJournal(true)
     try { this.store?.close() } catch (error) { this.sinkFailure(error) }

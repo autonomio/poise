@@ -16,7 +16,7 @@ export interface LoggingAccess { endpoint: string; isAdmin: boolean; owner: stri
 export interface LoggingHealth {
   version: 1
   status: string
-  collection: { status: string; currentStatus?: string; checkedAt: string; sources: Coverage[]; lossObserved: boolean }
+  collection: { status: string; currentStatus?: string; checkedAt: string; sources: Coverage[]; lossObserved: boolean; lossActive?: boolean }
   query: { status: string }
   bounds?: LoggingPage['bounds']
   policy: LogPolicy
@@ -144,6 +144,7 @@ export async function loggingHealth(access: LoggingAccess, scope: LoggingQuery['
   if (!object(body) || body.version !== 1 || !['connected', 'partial', 'unavailable', 'stopped', 'stale'].includes(String(body.status))
     || !object(body.collection) || !object(body.query) || !time(body.collection.checkedAt) || typeof body.collection.lossObserved !== 'boolean'
     || (body.collection.currentStatus !== undefined && !['connected', 'partial', 'unavailable', 'initializing', 'stopped', 'stale'].includes(String(body.collection.currentStatus)))
+    || (body.collection.lossActive !== undefined && typeof body.collection.lossActive !== 'boolean')
     || !['connected', 'partial', 'unavailable', 'stopped', 'stale'].includes(String(body.collection.status)) || !['connected', 'unavailable'].includes(String(body.query.status))
     || !Array.isArray(body.collection.sources) || body.collection.sources.length > 256 || !body.collection.sources.every(coverage)
     || (body.bounds !== undefined && !bounds(body.bounds)) || !policy(body.policy)) return protocol()
