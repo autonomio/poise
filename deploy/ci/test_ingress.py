@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import subprocess
 import time
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,19 @@ class IngressTests(unittest.TestCase):
         self.assertNotIn("private-", json.dumps(record))
         self.assertEqual(record["id"], reporter.projected(line(), "poise.test", start, end)["id"])
         self.assertNotEqual(record["id"], reporter.projected(line(message="second occurrence"), "poise.test", start, end)["id"])
+
+    def test_native_nanos_and_canonical_pretransport_projection(self):
+        self.assertEqual(reporter.instant("2026-10-19T09:59:58.123456789Z").microsecond, 123456)
+        start, end = NOW - dt.timedelta(minutes=5), NOW
+        values = [reporter.projected(line(message="upstream failed\\nAuthorization: Bearer private-secret"), "poise.test", start, end),
+                  reporter.projected(line("admin.poise.test"), "poise.test", start, end),
+                  reporter.projected(line("nested.alice.poise.test"), "poise.test", start, end)]
+        helper = PATH.parents[2] / "test-results/ingress/projection.cjs"
+        result = json.loads(subprocess.check_output(["node", str(helper), "poise.test"], input=json.dumps(values).encode(), timeout=3))
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("private-secret", json.dumps(result))
+        self.assertNotIn("private-header", json.dumps(result))
+        self.assertNotIn("private-query", json.dumps(result))
 
     def test_real_subprocess_output_and_absolute_time_bounds(self):
         with self.assertRaises(reporter.ReadBound):
