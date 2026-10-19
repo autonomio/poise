@@ -29,6 +29,7 @@ export interface Coverage {
   historyIncomplete?: boolean
   dropped?: number
   rejected?: number
+  lossActive?: boolean
   observedAt: string | null
   ingestedAt: string | null
   availableFrom: string | null

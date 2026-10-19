@@ -113,7 +113,7 @@ it('validates current observation independently of historical completeness', asy
   await expect(loggingHealth(access, 'workspace', signal())).rejects.toMatchObject({ code: 'logging_incompatible' })
 })
 
-it.each([{ optional: 'yes' }, { historyIncomplete: 'yes' }, { dropped: -1 }, { rejected: 1.5 }])('rejects malformed additive coverage fields %j', async (change) => {
+it.each([{ optional: 'yes' }, { historyIncomplete: 'yes' }, { lossActive: 'yes' }, { dropped: -1 }, { rejected: 1.5 }])('rejects malformed additive coverage fields %j', async (change) => {
   const source = { id: 'application', source: 'poise', workspace: 'local', status: 'partial', currentStatus: 'connected',
     observedAt: null, ingestedAt: null, availableFrom: null, error: null, gaps: [], ...change }
   respond({ ...health, collection: { ...health.collection, sources: [source] } })

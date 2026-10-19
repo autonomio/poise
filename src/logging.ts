@@ -59,7 +59,7 @@ function coverage(value: unknown): boolean {
   return object(value) && typeof value.id === 'string' && typeof value.source === 'string' && (value.workspace === null || typeof value.workspace === 'string')
     && ['connected', 'unavailable', 'partial', 'not-configured'].includes(String(value.status)) && (value.error === null || typeof value.error === 'string')
     && (value.currentStatus === undefined || ['connected', 'unavailable', 'partial', 'not-configured', 'initializing'].includes(String(value.currentStatus)))
-    && ['optional', 'historyIncomplete'].every((key) => value[key] === undefined || typeof value[key] === 'boolean')
+    && ['optional', 'historyIncomplete', 'lossActive'].every((key) => value[key] === undefined || typeof value[key] === 'boolean')
     && ['dropped', 'rejected'].every((key) => value[key] === undefined || Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
     && ['observedAt', 'ingestedAt', 'availableFrom'].every((key) => value[key] === null || time(value[key]))
     && Array.isArray(value.gaps) && value.gaps.length <= 32 && value.gaps.every((gap) => object(gap) && time(gap.from) && (gap.to === null || time(gap.to)) && typeof gap.reason === 'string')

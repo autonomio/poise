@@ -15,11 +15,12 @@ function workspaceCoverage(value: unknown) {
   if (!object(value) || !['connected', 'partial', 'unavailable', 'initializing'].includes(String(value.status))
     || (value.currentStatus !== undefined && !['connected', 'partial', 'unavailable', 'initializing'].includes(String(value.currentStatus)))
     || (value.error !== undefined && value.error !== null && (typeof value.error !== 'string' || value.error.length > 2048))
-    || (value.historyIncomplete !== undefined && typeof value.historyIncomplete !== 'boolean')) throw new Error('Workspace diagnostic coverage is incompatible')
+    || (value.historyIncomplete !== undefined && typeof value.historyIncomplete !== 'boolean')
+    || (value.lossActive !== undefined && typeof value.lossActive !== 'boolean')) throw new Error('Workspace diagnostic coverage is incompatible')
   for (const key of ['dropped', 'rejected']) if (value[key] !== undefined && (!Number.isSafeInteger(value[key]) || Number(value[key]) < 0)) throw new Error('Workspace diagnostic loss counter is incompatible')
-  const history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; availableFrom: string | null } = {
+  const history: { incomplete: boolean; gaps: Coverage['gaps']; dropped: number; rejected: number; lossActive?: boolean; availableFrom: string | null } = {
     incomplete: value.historyIncomplete === undefined ? value.status === 'partial' : value.historyIncomplete === true,
-    gaps: [], dropped: Number(value.dropped ?? 0), rejected: Number(value.rejected ?? 0), availableFrom: null,
+    gaps: [], dropped: Number(value.dropped ?? 0), rejected: Number(value.rejected ?? 0), lossActive: value.lossActive as boolean | undefined, availableFrom: null,
   }
   if (history.dropped || history.rejected) history.incomplete = true
   if (value.sources !== undefined) {
@@ -41,7 +42,8 @@ function workspaceCoverage(value: unknown) {
       }
     }
   }
-  return { currentStatus: value.currentStatus === undefined ? value.status === 'partial' ? 'initializing' : String(value.status) : String(value.currentStatus),
+  return { currentStatus: value.lossActive === true ? 'partial' : value.lossActive === undefined && (history.dropped || history.rejected) ? 'initializing'
+    : value.currentStatus === undefined ? value.status === 'partial' ? 'initializing' : String(value.status) : String(value.currentStatus),
     unavailable: !!value.error, history }
 }
 const handle = (value: string | undefined) => value && /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(value) ? value : null

@@ -58,11 +58,13 @@ function health(request: LoggingRead): LoggingReply {
     if (sources.size > 256) throw new Error('Combined collection coverage exceeds its source bound')
     collection.sources = [...sources.values()]
     const required = collection.sources.filter((source) => !source.optional)
+    collection.lossActive = collection.lossActive || required.some((source) => source.lossActive === true)
+      ? true : collection.lossActive === undefined || required.some((source) => source.lossActive === undefined && ((source.dropped ?? 0) > 0 || (source.rejected ?? 0) > 0)) ? undefined : false
     if (collection.status === 'connected' && required.some((source) => source.status !== 'connected')) collection.status = 'partial'
     if (collection.currentStatus === 'connected' || collection.currentStatus === 'initializing') {
       const unestablished = collection.currentStatus === 'initializing'
       const observations = required.map(currentCoverageStatus)
-      collection.currentStatus = observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
+      collection.currentStatus = collection.lossActive || observations.some((status) => status !== 'connected' && status !== 'initializing') ? 'partial'
         : unestablished || !observations.length || observations.includes('initializing') ? 'initializing' : 'connected'
     }
     return json(200, { version: 1, status: collection.status === 'unavailable' ? 'partial' : collection.status,

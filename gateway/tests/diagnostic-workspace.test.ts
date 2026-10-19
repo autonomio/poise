@@ -235,3 +235,40 @@ it('preserves recovered upstream history through the production maintenance proj
     rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks()
   }
 })
+
+it('carries live upstream loss through authenticated delivery, recovery and legacy observations', async () => {
+  const h = await startHarness(); await h.openWorkspace('alice')
+  const directory = mkdtempSync(join(tmpdir(), 'poise-upstream-loss-')), path = join(directory, 'central.db')
+  const source = new DiagnosticStore(join(directory, 'source.db'))
+  const coverage: { status: string; currentStatus: string; dropped: number; rejected: number; lossActive?: boolean } = {
+    status: 'partial', currentStatus: 'partial', dropped: 3, rejected: 0, lossActive: true,
+  }
+  const server = http.createServer((req, res) => {
+    const cursor = new URL(req.url!, 'http://workspace').searchParams.get('cursor')
+    res.end(JSON.stringify({ ...source.delivery({ workspace: 'alice', operator: false }, cursor), coverage }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const docker = new DockerClient('/unused-fixture-socket')
+  vi.spyOn(docker, 'diagnosticContainers').mockResolvedValue([]); vi.spyOn(docker, 'diagnosticRead').mockResolvedValue(Buffer.alloc(0))
+  const context = new Context({ ...h.context.deps, docker, upstream: () => ({ host: '127.0.0.1', port: (server.address() as AddressInfo).port }) })
+  const runtime = new DiagnosticRuntime({ path, report: () => undefined }), collector = new EnvironmentCollectors(runtime, docker, context)
+  const observed = () => runtime.health().sources.find((row) => row.id === 'workspace:alice')
+  const read = async () => {
+    const { executeLoggingRead } = await import('../src/diagnostics/query-worker.js')
+    return JSON.parse(executeLoggingRead({ path, policy: runtime.health().policy, now: Date.now(), access: { workspace: 'alice', operator: false }, operation: 'health', filter: {} }).body)
+  }
+  try {
+    collector.start(); await vi.waitFor(() => expect(observed()).toMatchObject({ lossActive: true, dropped: 3 })); await collector.stop(); runtime.flush()
+    expect(runtime.health()).toMatchObject({ lossActive: true, dropped: 0, rejected: 0 })
+    expect((await read()).collection.lossActive).toBe(true)
+    coverage.lossActive = false; coverage.currentStatus = 'connected'
+    collector.start(); await vi.waitFor(() => expect(observed()).toMatchObject({ lossActive: false, currentStatus: 'connected', dropped: 3 })); await collector.stop(); runtime.flush()
+    expect((await read()).collection).toMatchObject({ lossActive: false, lossObserved: true })
+    delete coverage.lossActive
+    collector.start(); await vi.waitFor(() => expect(observed()?.currentStatus).toBe('initializing')); await collector.stop(); runtime.flush()
+    expect((await read()).collection.lossActive).toBeUndefined()
+  } finally {
+    await collector.stop(); runtime.stop(); source.close(); context.agent.destroy()
+    await new Promise<void>((resolve) => server.close(() => resolve())); await h.close(); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks()
+  }
+})
