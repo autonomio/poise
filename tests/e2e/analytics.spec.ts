@@ -40,13 +40,14 @@ interface Workspace {
   historyFails: boolean
   reads: Array<{ since: string | null, until: string | null, org: string | null }>
   fail: boolean
+  stale: boolean
   baselineHours: number
   baselineMerged: number
   pacing: { merged: number, median: number } | null
 }
 
 async function workspace(page: Page, timezone = 'UTC'): Promise<Workspace> {
-  const state: Workspace = { historyReads: [], historyFails: false, reads: [], fail: false, baselineHours: 54, baselineMerged: 8, pacing: null }
+  const state: Workspace = { historyReads: [], historyFails: false, reads: [], fail: false, stale: false, baselineHours: 54, baselineMerged: 8, pacing: null }
   await page.clock.setFixedTime(new Date('2026-10-09T12:00:00Z'))
   await page.addInitScript(() => {
     if (sessionStorage.getItem('seeded')) return
@@ -72,6 +73,7 @@ async function workspace(page: Page, timezone = 'UTC'): Promise<Workspace> {
       const baseline = Date.parse(read.until!) - Date.parse(read.since!) > 2 * 86_400_000
       const result = baseline ? report(state.baselineMerged, state.baselineHours) : report(state.pacing?.merged ?? (read.since === '2026-10-08T00:00:00.000Z' ? 0 : 4))
       result.window = { since: read.since, until: read.until }
+      if (state.stale) result.errors = [{ org: 'acme', error: 'Synchronization failed', stale: true }]
       if (baseline) result.daily = Array.from({ length: 7 }, () => {
         const pullRequests = report(state.pacing?.median ?? 1).pullRequests
         if (state.pacing) pullRequests.lines = { total: pullRequests.merged * 1000, median: 180, counted: pullRequests.merged }
@@ -525,6 +527,7 @@ test('keeps pace tied to its data snapshot through elapsed time, history and quo
     await expect(merged.locator('.analytics-arrow')).toHaveText('↑')
     await expect(merged.locator('.analytics-delta')).toHaveText('33.3% ahead of pace')
     await expect(merged).toContainText('Typical by now: 11.3 · 7-day median: 27.0 / day')
+    await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 10:00 UTC, when totals were read\./)
   }
   await expectInitialSnapshot()
 
@@ -556,6 +559,7 @@ test('keeps pace tied to its data snapshot through elapsed time, history and quo
   await expect(merged.locator('.analytics-arrow')).toHaveText('→')
   await expect(merged.locator('.analytics-delta')).toHaveText('On pace')
   await expect(merged).toContainText('Typical by now: 15.8 · 7-day median: 27.0 / day')
+  await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 14:00 UTC, when totals were read\./)
   const colors = await merged.evaluate(element => ['.analytics-value', '.analytics-arrow', '.analytics-delta'].map(selector => getComputedStyle(element.querySelector(selector)!).color))
   expect(new Set(colors).size).toBe(1)
   expect(state.reads).toHaveLength(4)
@@ -571,9 +575,38 @@ test('keeps pace tied to its data snapshot through elapsed time, history and quo
   await expect(merged.locator('.analytics-arrow')).toHaveText('↓')
   await expect(merged.locator('.analytics-delta')).toHaveText('16% behind pace')
   await expect(merged).toContainText('Typical by now: 20.3 · 7-day median: 27.0 / day')
+  await expect(merged.locator('.analytics-value')).toHaveAttribute('data-help', /Pace as of 9 Oct 2026, 18:00 UTC, when totals were read\./)
   await expect(mergeTrend(page).locator('.analytics-delta')).toHaveText('50%')
   expect(state.reads).toHaveLength(6)
   expect(state.historyReads).toHaveLength(3)
+})
+
+test('keeps stale totals and their pacing context without judging Today, while retaining completed-day comparisons', async ({ page }) => {
+  const state = await workspace(page)
+  state.pacing = { merged: 15, median: 27 }
+  state.stale = true
+  await page.clock.setFixedTime(new Date('2026-10-09T18:00:00Z'))
+  await page.goto('/')
+  await openAnalytics(page)
+  const merged = countTrend(page)
+  await expect(merged.locator('.analytics-value')).toHaveText('15')
+  await expect(merged).toHaveClass(/neutral/)
+  await expect(merged.locator('.analytics-arrow')).toHaveCount(0)
+  await expect(merged.locator('.analytics-delta')).toHaveCount(0)
+  await expect(merged).toContainText('Typical by now: 20.3 · 7-day median: 27.0 / day')
+  expect(state.reads).toHaveLength(2)
+  expect(state.historyReads).toHaveLength(1)
+
+  await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
+  await expect(page.locator('.analytics-date')).toHaveText('Yesterday')
+  await expect(merged.locator('.analytics-value')).toHaveText('15')
+  await expect(merged).toHaveClass(/bad/)
+  await expect(merged.locator('.analytics-arrow')).toHaveText('↓')
+  await expect(merged.locator('.analytics-delta')).toHaveText('44.4%')
+  await expect(merged).toContainText('7-day median: 27.0 / day')
+  await expect(merged).not.toContainText('Typical by now')
+  expect(state.reads).toHaveLength(4)
+  expect(state.historyReads).toHaveLength(2)
 })
 
 test('reads both periods for the selected account and shows slower merges in red', async ({ page }) => {
@@ -662,11 +695,24 @@ test('a slow old date cannot overwrite the latest date or its trend', async ({ p
   await expect(mergeTrend(page)).toContainText('50%')
 })
 
-test('retains the selected calendar date when navigating across midnight', async ({ page }) => {
+test('retains the selected calendar date and completes its pace comparison across midnight', async ({ page }) => {
   const state = await workspace(page)
+  state.pacing = { merged: 15, median: 27 }
+  await page.clock.install({ time: new Date('2026-10-09T23:59:30Z') })
   await page.goto('/')
   await openAnalytics(page)
   const panel = page.locator('#view-analytics')
+  const merged = countTrend(page)
+  await expect(panel.locator('.analytics-date')).toHaveText('Today')
+  await expect(merged).toContainText('Typical by now: 27.0 · 7-day median: 27.0 / day')
+  await page.clock.fastForward(60_000)
+  await expect(panel.locator('.analytics-date')).toHaveText('Yesterday')
+  await expect(merged.locator('.analytics-value')).toHaveText('15')
+  await expect(merged.locator('.analytics-delta')).toHaveText('44.4%')
+  await expect(merged).toContainText('7-day median: 27.0 / day')
+  await expect(merged).not.toContainText('Typical by now')
+  expect(state.reads).toHaveLength(4)
+  expect(state.historyReads).toHaveLength(2)
   await panel.getByRole('button', { name: 'Previous day' }).click()
   await panel.getByRole('button', { name: 'Previous day' }).click()
   await expect(panel.locator('.analytics-date')).toHaveText('7 Oct 2026')
@@ -674,6 +720,8 @@ test('retains the selected calendar date when navigating across midnight', async
   await panel.getByRole('button', { name: 'Previous day' }).click()
   await expect(panel.locator('.analytics-date')).toHaveText('6 Oct 2026')
   await expect.poll(() => state.reads.at(-2)?.since).toBe('2026-10-06T00:00:00.000Z')
+  expect(state.reads).toHaveLength(10)
+  expect(state.historyReads).toHaveLength(5)
 })
 
 
