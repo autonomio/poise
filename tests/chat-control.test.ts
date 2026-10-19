@@ -316,11 +316,12 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
   it('rejects missing/forged credentials, browser origins, foreign sessions and malformed targets', async () => {
     const parent = await manager()
     const connection = await config(parent.id)
-    for (const headers of [
+    const variants: Array<Record<string, string>> = [
       {}, { 'X-Poise-Chat': parent.id, Authorization: 'Bearer forged' },
       { 'X-Poise-Chat': parent.id, Authorization: `Bearer ${connection.token}`, Origin: origin },
       { 'X-Poise-Chat': 'foreign', Authorization: `Bearer ${connection.token}` },
-    ]) {
+    ]
+    for (const headers of variants) {
       const result = await fetch(`${origin}/api/chat/control`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{"operation":"list"}' })
       expect(result.ok).toBe(false)
     }
