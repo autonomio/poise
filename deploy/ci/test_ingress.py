@@ -133,7 +133,8 @@ class IngressTests(unittest.TestCase):
         def native(stamp, message):
             return (stamp + " " + json.dumps({"level": "error", "msg": message, "request": {"host": "poise.test"}}) + "\n").encode()
         stamp = "2026-10-19T09:59:32.000000000Z"
-        message = "x" * ((reporter.MAX_BYTES - 100) // 100 - len(native(stamp, "")))
+        length = (reporter.MAX_BYTES - 100) // 100 - len(native(stamp, ""))
+        message = ("upstream refused. " * (length // 18 + 1))[:length]
         raw = b"".join(native(stamp if index < 50 else "2026-10-19T09:59:57.000000000Z", message) for index in range(100))
         self.assertLess(len(raw), reporter.MAX_BYTES)
         reads = 0
