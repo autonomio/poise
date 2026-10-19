@@ -25,7 +25,7 @@ it('upgrades legacy count metadata without losing retained events or existing sn
   const first = original.query(alice, { limit: 5 })
   original.close()
   const legacy = new Database(path)
-  try { legacy.exec('DROP INDEX log_scope_time; CREATE INDEX log_scope_time ON log_events(workspace,sort_time DESC,id DESC)') }
+  try { legacy.exec('DROP INDEX log_scope_count; DROP INDEX log_scope_search; DROP INDEX log_scope_time; CREATE INDEX log_scope_time ON log_events(workspace,sort_time DESC,id DESC)') }
   finally { legacy.close() }
   const upgraded = new DiagnosticStore(path, DEFAULT_LOG_POLICY, () => NOW)
   try {
@@ -40,6 +40,30 @@ it('upgrades legacy count metadata without losing retained events or existing sn
       expect(plan.some((step) => step.detail.includes('COVERING INDEX'))).toBe(true)
     } finally { reader.close() }
   } finally { upgraded.close() }
+})
+
+it('keeps selected payloads and counts in one read snapshot during concurrent eviction', () => {
+  const path = join(directory(), 'snapshot.db'), policy = { ...DEFAULT_LOG_POLICY, maxEvents: 2 }
+  const writer = new DiagnosticStore(path, policy, () => NOW)
+  const selected = event('snapshot-selected', { time: new Date(NOW + 1000).toISOString() })
+  writer.append([selected, event('snapshot-other')])
+  const reader = new DiagnosticStore(path, policy, () => NOW, true)
+  const prepare = Database.prototype.prepare
+  let evicted = false
+  const interleave = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function(this: Database.Database, sql: string) {
+    if (!evicted && sql === 'SELECT payload FROM log_events WHERE id=?') {
+      evicted = true
+      writer.append([event('snapshot-replacement', { time: new Date(NOW + 2000).toISOString() })])
+    }
+    return prepare.call(this, sql)
+  })
+  try {
+    const page = reader.query(alice, { limit: 1 })
+    expect(evicted).toBe(true)
+    expect(page.total).toBe(2)
+    expect(page.events.map((row) => row.id)).toEqual([selected.id])
+    expect(writer.lookup(alice, selected.id).status).toBe('expired')
+  } finally { interleave.mockRestore(); reader.close(); writer.close() }
 })
 function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
   const value = normalize({ id, time: new Date(NOW).toISOString(), level: 'error', source: 'poise', operation: 'test.operation',

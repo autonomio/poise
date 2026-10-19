@@ -321,6 +321,11 @@ The workspace/time index also covers visibility, ingestion retention and severit
 Broad retained counts therefore read index metadata without fetching every event
 payload; writable stores upgrade the earlier three-column index in place. Query
 filters, source-time ordering, snapshot cursors and retained counts are unchanged.
+Compact scope counts and the covering filter/search metadata index avoid cold
+payload-page scans. Page selection reads only identities/order keys; it loads
+payloads for the selected page inside the same SQLite read transaction. Legacy
+read-only stores remain readable before a writer installs the indexes. The
+100,000-event parity and 500 ms gates retain their original limits.
 
 Workspace log reads select stderr independently of ordinary stdout. Structured
 envelopes, entrypoint fatal checks and the supervisor's reporting fallback use
