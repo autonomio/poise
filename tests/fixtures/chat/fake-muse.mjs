@@ -36,7 +36,7 @@ function scripted() {
     updatedAt: '2026-09-18T13:17:02.687057Z', workspaceRoot: '/tmp/fixture', providerId: 'meta', modelId, turnCount: 0, forkedFrom: null,
     approvalMode: { mode: approvalMode, source: 'startup', lastCommandId: null }, ...extra,
   })
-  const models = ['muse-spark-1.3', 'muse-spark-1.3-contributor'].map((id) => ({
+  const models = ['muse-spark-1.3', 'muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'].map((id) => ({
     modelId: id, displayLabel: id, providerId: 'meta', profileId: 'tbh', releaseDate: '2026-09-02', description: null,
     contextLimit: 1007997, outputLimit: 128000, cost: null, isActive: false, isDefault: id.endsWith('contributor'),
   }))

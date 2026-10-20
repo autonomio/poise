@@ -369,9 +369,9 @@ describe('Muse adapter', () => {
   it('switches model and effort on the session and refuses modes', async () => {
     const { host, adapter } = setup()
     await adapter.start(MODEL)
-    await expect(adapter.setModel('muse-spark-1.3', 'high')).resolves.toEqual({ modelId: 'muse-spark-1.3', effort: 'high', efforts: EFFORTS })
-    expect(host.ofType('model.updated').at(-1)).toMatchObject({ modelId: 'muse-spark-1.3', effort: 'high' })
-    await expect(adapter.setModel('muse-none', 'high')).rejects.toThrow(/Muse does not offer model "muse-none"/)
+    await expect(adapter.setModel('muse-spark-1.2-contributor', 'high')).resolves.toEqual({ modelId: 'muse-spark-1.2-contributor', effort: 'high', efforts: EFFORTS })
+    expect(host.ofType('model.updated').at(-1)).toMatchObject({ modelId: 'muse-spark-1.2-contributor', effort: 'high' })
+    await expect(adapter.setModel('muse-none-contributor', 'high')).rejects.toThrow(/Muse does not offer model "muse-none-contributor"/)
     await expect(adapter.setMode('plan')).rejects.toMatchObject({ code: 'unsupported' })
   })
 

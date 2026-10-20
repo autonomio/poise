@@ -34,7 +34,7 @@ export interface Catalog {
 }
 
 export function assertMuseContributor(selector: unknown): asserts selector is string {
-  if (typeof selector !== 'string' || !/^muse-[a-z0-9.-]+-contributor$/.test(selector)) {
+  if (typeof selector !== 'string' || selector !== selector.trim() || !/^muse-[a-z0-9.-]+-contributor$/.test(selector)) {
     throw new Error('Muse requires an explicit contributor model selector; ordinary Muse models are prohibited')
   }
 }
