@@ -195,11 +195,17 @@ watchForUpdates()
 watchForSignOut()
 
 ;(async () => {
-  const googleReturned = await finishGoogleConnection()
-  await loadSettings()
+  const initialView = menu.currentView()
+  const query = new URLSearchParams(location.search)
+  const logging = query.get('view') === 'logging'
+  const googleReturning = query.has('google_state') || (query.has('state') && (query.has('code') || query.has('error')))
+  // Personal views open independently; a Google return must restore its draft first.
+  const openedEarly = !logging && !googleReturning && (initialView === 'editor' || initialView === 'snippets')
+  if (openedEarly) showView(initialView)
+  const [googleReturned] = await Promise.all([finishGoogleConnection(), loadSettings()])
   if (googleReturned === 'publish') menu.switchTo('editor')
-  else if (new URLSearchParams(location.search).get('view') === 'logging') menu.switchTo('logging')
-  else showView(menu.currentView())
+  else if (logging) menu.switchTo('logging')
+  else if (!openedEarly || menu.currentView() !== initialView) showView(menu.currentView())
   prepareAnalyticsView()
   // Single shared refresh clock — every view listens for poise:refresh-tick
   // and refreshes on it. Wall-clock-aligned so switching views never causes
