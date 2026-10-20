@@ -197,7 +197,8 @@ watchForSignOut()
 ;(async () => {
   const googleReturned = await finishGoogleConnection()
   await loadSettings()
-  if (new URLSearchParams(location.search).get('view') === 'logging') menu.switchTo('logging')
+  if (googleReturned === 'publish') menu.switchTo('editor')
+  else if (new URLSearchParams(location.search).get('view') === 'logging') menu.switchTo('logging')
   else showView(menu.currentView())
   prepareAnalyticsView()
   // Single shared refresh clock — every view listens for poise:refresh-tick
@@ -217,7 +218,8 @@ watchForSignOut()
   const place = takeServicePlace()
   // A workspace that still has to be set up opens first-run setup instead, at
   // pairing when Poise Link sent the person here.
-  if (googleReturned) { openSettingsAt('accounts'); return }
+  if (googleReturned === 'accounts') { openSettingsAt('accounts'); return }
+  if (googleReturned === 'publish') return
   if (await startOnboarding(place)) return
   if (place) {
     void openServicePlace(place)

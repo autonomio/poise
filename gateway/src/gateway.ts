@@ -2,6 +2,7 @@ import http, { STATUS_CODES, type IncomingMessage, type ServerResponse } from 'n
 import type { Duplex } from 'node:stream'
 import * as admin from './admin.js'
 import * as auth from './auth.js'
+import * as google from './google.js'
 import { Context, type GatewayDeps } from './context.js'
 import { classifyHost } from './hosts.js'
 import { header, HttpError, sendHtml, sendJson } from './http.js'
@@ -17,6 +18,9 @@ const APEX_ROUTES: Record<string, Record<string, Handler>> = {
   '/': { GET: auth.home, HEAD: auth.home },
   '/auth/login': { GET: auth.login },
   '/auth/callback': { GET: auth.callback },
+  '/auth/google/start': { GET: google.start },
+  '/auth/google/callback': { GET: google.callback },
+  '/_gateway/google': { POST: google.api },
   '/auth/logout': { GET: auth.logoutPage, POST: auth.logout },
   // Approving a code and the device list are in Settings; Poise Link still opens /link.
   '/link': { GET: link.toSettings },
@@ -155,6 +159,7 @@ export function createGateway(deps: GatewayDeps): Gateway {
       const stopped = new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
       server.closeAllConnections()
       await Promise.all([stopped, ctx.closeLoggingReads()])
+      ctx.closeGoogleConnections()
     },
   }
 }

@@ -1,19 +1,34 @@
-import { escapeGoogleHtml as escape, GOOGLE_CHANGED, googleCall, googleDocument, googlePath, googleReview, type GoogleSettings } from '../google'
+import { beginGoogleConnection, escapeGoogleHtml as escape, GOOGLE_CHANGED, googleCall, googleDocument, googlePath, googleReview, type GoogleSettings, type GooglePublishReturn } from '../google'
 import type { GoogleChangeReview, GoogleDocumentView } from '../../server/google/types'
 import type { PublishPanelHost } from './editor-publish'
 
-export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost): void {
+export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost, returned?: GooglePublishReturn): void {
   const element = document.createElement('section'); element.className = 'google-publish'
   panel.append(element)
   let busy = false
-  element.innerHTML = '<h3>Google Docs</h3><p class="google-publish-status" role="status">Reading Google accounts…</p><select aria-label="Google publishing account"></select><button type="button" class="composer-add" disabled>Publish to Google</button><button type="button" class="ep-link google-settings">Connect accounts</button>'
+  element.innerHTML = '<h3 class="ep-dest-name">Google Docs</h3><p class="ep-note google-publish-status" role="status" tabindex="-1">Reading Google accounts…</p><select class="ep-input" aria-label="Google publishing account"></select><button type="button" class="composer-add" disabled>Publish to Google</button><button type="button" class="ep-link google-connect">Add Google account</button>'
   const status = element.querySelector<HTMLElement>('[role="status"]')!, select = element.querySelector('select')!, publish = element.querySelector<HTMLButtonElement>('.composer-add')!
   const slug = host.slug()
-  element.querySelector('.google-settings')!.addEventListener('click', () => window.dispatchEvent(new CustomEvent('poise:open-settings', { detail: { section: 'accounts' } })))
+  const connect = element.querySelector<HTMLButtonElement>('.google-connect')!
+  connect.addEventListener('click', () => {
+    if (busy || !slug || host.slug() !== slug) return
+    busy = true; panel.inert = true
+    void (async () => {
+      let leaving = false
+      try {
+        await beginGoogleConnection({ slug, beforeNavigate: async () => { if (!await host.flush()) throw new Error('The draft could not be saved. Keep it open and resolve the save before connecting Google.') }, assertCurrent: () => { if (host.slug() !== slug) throw new Error('The open document changed. Connect Google from that document again.') } })
+        leaving = true
+      } catch (error) { status.textContent = (error as Error).message }
+      finally { if (!leaving) { busy = false; panel.inert = false; status.focus({ preventScroll: true }) } }
+    })()
+  })
   void googleCall<GoogleSettings>('/api/google/accounts').then(settings => {
     select.innerHTML = settings.accounts.filter(a => a.connected).map(a => `<option value="${escape(a.id)}">${escape(a.email)}</option>`).join('')
-    status.textContent = select.options.length ? 'Publishes a private Markdown file editable in Google Docs.' : 'Connect a Google account in Settings → Accounts.'
+    if (returned?.accountId && [...select.options].some(o => o.value === returned.accountId)) select.value = returned.accountId
+    status.textContent = returned?.message ?? (select.options.length ? 'Publish a private Markdown document.' : settings.configured ? 'Connect Google to publish this document.' : 'Google connections are unavailable. Ask the Poise operator to enable Google.')
+    connect.disabled = !settings.configured || settings.accounts.filter(a => a.connected).length >= 10
     publish.disabled = !select.options.length
+    if (returned) { if (returned.accountId && select.value === returned.accountId) select.focus({ preventScroll: true }); else status.focus({ preventScroll: true }) }
   }).catch(error => { status.textContent = (error as Error).message })
   publish.addEventListener('click', () => {
     if (busy || !slug || host.slug() !== slug) return

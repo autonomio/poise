@@ -17,7 +17,7 @@ async function setup(page: Page, options: { initialSyncFailure?: boolean, remote
       if (options.emptyFirstLoad && method === 'POST') return route.fulfill({ status: 503, json: { error: 'Fixture draft creation unavailable.' } })
       return route.fulfill({ json: { docs: options.emptyFirstLoad && docListReads++ === 0 ? [] : [{ slug: 'google-draft', title: 'Draft', updated_at: '2026-10-20T08:00:00Z', size: content.length }] } })
     }
-    if (path === '/api/editor/doc/google-draft') return route.fulfill({ json: { slug: 'google-draft', content, version: VERSION } })
+    if (path === '/api/editor/doc/google-draft') { if (method === 'PUT') content = (route.request().postDataJSON() as { content: string }).content; return route.fulfill({ json: { slug: 'google-draft', content, version: VERSION } }) }
     if (path.endsWith('/chat-session')) return route.fulfill({ json: { session_id: 'editor-google-draft-1792487000000' } })
     if (path.endsWith('/annotations')) return route.fulfill({ json: { annotations: [], version: VERSION } })
     if (path.endsWith('/reviews') || path.endsWith('/reviews/sync')) return route.fulfill({ json: { reviews: [], checkedAt: null, active: false, stale: false, problems: [] } })
@@ -97,11 +97,11 @@ test('lists multiple Google connections and disconnects only the chosen account'
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
   const google = page.locator('.st-google-accounts')
-  await expect(google).toContainText('one@example.test · Connected')
-  await expect(google).toContainText('two@example.test · Connected')
+  await expect(google.locator('[data-google-account="one"]')).toContainText('Connected')
+  await expect(google.locator('[data-google-account="two"]')).toContainText('Connected')
   await google.getByRole('button', { name: 'Disconnect', exact: true }).first().click()
-  await expect(google).toContainText('one@example.test · Disconnected')
-  await expect(google).toContainText('two@example.test · Connected')
+  await expect(google.locator('[data-google-account="one"]')).toContainText('Disconnected')
+  await expect(google.locator('[data-google-account="two"]')).toContainText('Connected')
   expect(disconnected).toEqual({ accountId: 'one' })
 })
 test('retains the Poise draft when Google changes after review', async ({ page }) => {
@@ -156,7 +156,7 @@ test('OAuth return opens Accounts and displays the result without depending on w
   await page.evaluate(secret => sessionStorage.setItem('poise-google-login-secret', secret), browserSecret)
   await page.route('**/api/google/accounts', route => route.fulfill({ json: accounts }))
   let exchanged: unknown
-  await page.route('**/api/google/callback', route => { exchanged = route.request().postDataJSON(); return route.fulfill({ json: accounts }) })
+  await page.route('**/api/google/callback', route => { exchanged = route.request().postDataJSON(); return route.fulfill({ json: { ...accounts, connection: { outcome: 'connected', accountId: 'one' } } }) })
   await page.goto('/?code=proof-code&state=proof-state')
   await expect(page.locator('#settings-panel')).toBeVisible()
   await expect(page.locator('.st-google-accounts')).toBeVisible()

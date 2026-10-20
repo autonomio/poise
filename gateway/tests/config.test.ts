@@ -27,6 +27,7 @@ describe('configuration', () => {
       insecureHttp: false,
       githubClientId: 'id',
       githubClientSecret: 'secret',
+      google: null,
       githubUrl: 'https://github.com',
       githubApiUrl: 'https://api.github.com',
       allowedUsers: [],
