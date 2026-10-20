@@ -443,6 +443,7 @@ function toggleImport(open: boolean): void {
 
 async function runImport(): Promise<void> {
   if (importing || saving) return
+  viewFeedback('snippets-import-result', 'Snippet import completed', '')
   const text = importEl<HTMLTextAreaElement>('.snip-import-text')
   const run = importEl<HTMLButtonElement>('.snip-import-run')
   if (!text.value.trim()) {

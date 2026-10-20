@@ -452,7 +452,9 @@ test('opts repositories and trusted authors into Review New Issues from Behavior
   await expect(dialog.locator('.bt-repo')).toHaveCount(3)
   await dialog.getByLabel('Trusted authors').fill('mikkokotila name!')
   await page.keyboard.press('Escape')
-  await expect(await feedback(page)).toContainText('Not a GitHub username: name!')
+  const triggerFailure = await feedback(page, 'Behavior settings need attention')
+  await expect(triggerFailure).toContainText('Not a GitHub username: name!')
+  await expect(triggerFailure).toHaveCount(1)
   await page.locator('#notification-bell').click()
   await expect(dialog).toBeVisible()
   // Escape saves as well, like every other way of closing.
@@ -461,6 +463,8 @@ test('opts repositories and trusted authors into Review New Issues from Behavior
   await page.keyboard.press('Escape')
   await expect.poll(() => writes.length).toBe(2)
   expect(writes[1]).toEqual({ repos: [], authors: ['mikkokotila'] })
+  await expect(await feedback(page, 'Behavior settings need attention')).toHaveCount(0)
+  await page.locator('#notification-bell').click()
   await expect(dialog).toBeHidden()
   await expect(pill).toHaveText('No repos')
 

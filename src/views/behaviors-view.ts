@@ -653,7 +653,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
         setTriggersStatus(`Not a GitHub username: ${invalid.join(', ')}`, 'error')
         return Promise.resolve(false)
       }
-      viewFeedback('behaviors-view-action', 'Behavior action needs attention', `The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`)
+      setTriggersStatus(`The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`, 'error')
       delete changes.authors
     }
   }
@@ -666,9 +666,9 @@ function closeTriggersPanel(force = false): Promise<boolean> {
       setTriggersStatus(`Not saved — the current ${meta.hasSkips ? 'setting' : 'repositories'} could not be read from the server.`, 'error')
       return Promise.resolve(false)
     }
-    viewFeedback('behaviors-view-action', 'Behavior action needs attention', meta.hasSkips
+    setTriggersStatus(meta.hasSkips
       ? `The ${meta.label} setting was not saved: the current one could not be read from the server.`
-      : 'The Review New Issues repositories were not saved: the current ones could not be read from the server.')
+      : 'The Review New Issues repositories were not saved: the current ones could not be read from the server.', 'error')
     finishClosingTriggersPanel()
     return Promise.resolve(true)
   }
@@ -679,7 +679,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
     return true
   }, (err: unknown) => {
     if (force) {
-      viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`)
+      setTriggersStatus(`Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`, 'error')
       finishClosingTriggersPanel()
       return true
     }

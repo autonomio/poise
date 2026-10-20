@@ -87,6 +87,12 @@ test('imports the plain pairs of a pasted Espanso file and lists what it skipped
   expect(desktop.yaml).not.toContain(pwn)
   expect(desktop.yaml).not.toContain('whoami')
 
+  await panel.getByRole('textbox', { name: 'Espanso match file' }).fill('backend: Clipboard\n')
+  await panel.getByRole('button', { name: 'Import', exact: true }).click()
+  const failedImport = await feedback(page)
+  await expect(failedImport.locator('.nr-card').filter({ hasText: 'Snippet import completed' })).toHaveCount(0)
+  await expect(failedImport).toContainText('Snippet import needs attention')
+  await page.locator('#notification-bell').click()
   await panel.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(panel).toBeHidden()
 })
