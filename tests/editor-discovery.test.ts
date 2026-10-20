@@ -75,7 +75,7 @@ describe('editor discovery I/O', () => {
   it('preserves title derivation across UTF-8 boundaries, blank prefixes and long first lines', async () => {
     const cases = [
       ['utf8', `${' '.repeat(4094)}€title\nbody`, '€title'],
-      ['blank', `${' \n'.repeat(5000)}# **Title** and `code`\nbody`, 'Title and code'],
+      ['blank', `${' \n'.repeat(5000)}# **Title** and \`code\`\nbody`, 'Title and code'],
       ['long', `# ${'a'.repeat(9000)}\nbody`, 'a'.repeat(200)],
       ['empty', '', 'Untitled'],
       ['whitespace', ' \n\t\n ', 'Untitled'],

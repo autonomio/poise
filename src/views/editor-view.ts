@@ -2145,7 +2145,7 @@ let docsError = false
 function renderDocMenu() {
   if (!menuEl) return
   if (!docs.length) {
-    menuEl.replaceChildren()
+    menuEl.innerHTML = `<div class="editor-doc-empty" role="status">${docsError ? 'Could not load documents. Reopen to retry.' : !docsLoaded ? 'Loading documents…' : 'No notes yet.'}</div>`
     return
   }
   const buckets: { name: string, items: DocSummary[] }[] = []
