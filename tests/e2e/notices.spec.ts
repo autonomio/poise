@@ -98,6 +98,7 @@ async function workspace(page: Page, notices: Notice[], options: { enabled?: boo
       'review-new-prs': behavior({ setting: 'p2', reviewers: 1 }), 'approve-prs': behavior(), 'resolve-unblocking': behavior({ scratchpad: null }),
       diagnostics: state.diagnostics,
     } })
+    if (pathname === '/api/current') return route.fulfill({ json: { cards: [] } })
     if (pathname === '/api/workspace') return route.fulfill({ json: { mode: 'local' } })
     if (pathname === '/api/claude-auth') return route.fulfill({ json: { status: 'authenticated', loginInProgress: false } })
     if (pathname === '/api/agent-logs') return route.fulfill({ json: { logs: [failedRun()] } })
