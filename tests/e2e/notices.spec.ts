@@ -361,7 +361,9 @@ test('focuses an older grouped failure while already in Swarm, clears filters, a
 
 test('reports a missing notification run instead of opening another run on the same target', async ({ page }) => {
   const absent = 'f'.repeat(32)
-  await workspace(page, [{ ...HELD, target: { swarm: absent } }])
+  const state = await workspace(page, [{ ...HELD, target: { swarm: absent } }])
+  const logs = [failedRun()]
+  await page.route('**/api/agent-logs**', route => route.fulfill({ json: { logs } }))
   await page.goto('/')
   await openRail(page)
   await expand(page, HELD.id)
@@ -369,6 +371,16 @@ test('reports a missing notification run instead of opening another run on the s
   await expect(page.locator('#view-swarm')).toBeVisible()
   await expect(await feedback(page)).toContainText(`No run found for call ${absent}.`)
   await expect(page.locator('.agent-row-focus')).toHaveCount(0)
+  await page.locator('#notification-bell').click()
+  logs.push(failedRun(absent))
+  const recovered = { ...HELD, id: 'aaaaaaaaaaaa-4', target: { swarm: absent } }
+  state.notices = [recovered]
+  await reread(page)
+  await openRail(page)
+  await expand(page, recovered.id)
+  await card(page, recovered.id).getByRole('button', { name: 'Open the run in Swarm' }).click()
+  await expect(page.locator(`.agent-row[data-id="${absent}"]`)).toHaveClass(/agent-row-focus/)
+  await expect(await feedback(page)).not.toContainText('Swarm run unavailable')
 })
 
 test('keeps the last opened notice in control when two navigations share a pending account request', async ({ page }) => {

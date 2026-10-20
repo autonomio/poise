@@ -1050,6 +1050,7 @@ export async function focusRow(repo: string, pr_id: string): Promise<void> {
 const highlightTimers = new WeakMap<HTMLTableRowElement, number>()
 
 function highlightRow(row: HTMLTableRowElement): void {
+  viewFeedback('swarm-navigation', 'Swarm run unavailable', '')
   scrollToActor(row, 'center')
   const previous = highlightTimers.get(row)
   if (previous !== undefined) window.clearTimeout(previous)
