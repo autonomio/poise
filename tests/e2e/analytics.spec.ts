@@ -1245,9 +1245,12 @@ test('refreshes one quiet local pair on ticks and visibility return while keepin
   await leaveAnalytics(page)
   const hiddenSummary = await merged.textContent()
   await refreshAnalytics(page)
+  // A visible alternate view prepares one new pair without repainting the
+  // hidden Analytics view or refreshing quota/history. Visibility coalesces.
+  await expect.poll(() => state.reads.length).toBe(8)
   await changeVisibility(page, 'visible')
   await expect(merged).toHaveText(hiddenSummary!)
-  expect(state.reads).toHaveLength(6)
+  expect(state.reads).toHaveLength(8)
   expect(state.historyReads).toHaveLength(1)
   expect(state.quotaReads).toBe(3)
 })
@@ -1811,7 +1814,7 @@ test('renders day cards before admitting year history and skips history after le
     release()
     await expect(value(page, 'Pull requests merged')).toHaveText('4')
     await expect.poll(() => historyReads).toBe(1)
-    expect(historySawCards).toBe(true)
+    await expect.poll(() => historySawCards).toBe(true)
     held = new Promise<void>(resolve => { release = resolve })
     await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
     await expect.poll(() => dayReads).toBe(4)

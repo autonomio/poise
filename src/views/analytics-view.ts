@@ -417,6 +417,9 @@ async function readAnalytics(background = false): Promise<void> {
   analyticsRead?.abort()
   const controller = new AbortController()
   analyticsRead = controller
+  // Admission time also deduplicates the shared tick and midnight timer
+  // when a read fails; the visible pace keeps the snapshot's actual time.
+  lastReadAt = Date.now()
   const groups = viewEl.querySelector<HTMLElement>('.analytics-groups')!
   if (!background) {
     shown = null
@@ -485,8 +488,9 @@ function showSnapshot(snapshot: AnalyticsSnapshot): void {
 }
 
 /** Prepare only lightweight day data while another view is visible. */
-export function prepareAnalyticsView(): void {
+export function prepareAnalyticsView(force = false): void {
   if (active || document.visibilityState !== 'visible' || !settingsReady()) return
+  if (!force && preparedAnalytics(0, new Date())) return
   void readAnalyticsSnapshot(0, new Date()).then(snapshot => {
     noticeFeed.reportReadErrors('analytics-preload', [...accountFailures(snapshot.report), ...accountFailures(snapshot.baseline)])
   }, error => {
@@ -495,10 +499,10 @@ export function prepareAnalyticsView(): void {
   })
 }
 
-window.addEventListener('poise:refresh-tick', prepareAnalyticsView)
-window.addEventListener('poise:synced', prepareAnalyticsView)
-window.addEventListener('poise:organization-filter-changed', prepareAnalyticsView)
-document.addEventListener('visibilitychange', prepareAnalyticsView)
+window.addEventListener('poise:refresh-tick', () => prepareAnalyticsView(true))
+window.addEventListener('poise:synced', () => prepareAnalyticsView())
+window.addEventListener('poise:organization-filter-changed', () => prepareAnalyticsView())
+document.addEventListener('visibilitychange', () => prepareAnalyticsView())
 
 function scheduleMidnightRead(): void {
   clearTimeout(midnightTimer)
@@ -572,7 +576,8 @@ export function initAnalyticsView(): void {
     if (!keepHistory) { history = { data: null, error: '' }; cursors.clear() }
     showSnapshot(snapshot)
     viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
-    if (!keepHistory) void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
+    if (!keepHistory || history.data?.errors.length) void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
+    if (snapshot.report.errors.length || snapshot.baseline.errors.length) void readAnalytics(true)
   }
   else void readAnalytics()
   void readQuota()
