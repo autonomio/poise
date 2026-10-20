@@ -91,6 +91,7 @@ function scripted() {
           approvalMode = params.mode
           return { commandId: params.commandId, status: 'accepted', applyOutcome: 'completed', effectiveMode: { mode: approvalMode, source: 'approvalReconfigure', lastCommandId: params.commandId } }
         case 'session/setModel':
+          if (process.argv.includes('--reject-model-change')) return { commandId: params.commandId, status: 'rejected' }
           modelId = params.model.modelId
           view('session/modelChanged', { modelId, providerId: 'meta', source: 'user' })
           return { commandId: params.commandId, status: 'accepted' }

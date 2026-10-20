@@ -1031,6 +1031,15 @@ export function createMuseAdapter(host: AdapterHost, options: { steerSettleMs?: 
     throw new AdapterError(AGENT, `${LABEL} does not offer model "${wanted}" (available: ${catalog.models.map((model) => model.modelId).join(', ') || 'none'})`, 'start_failed')
   }
 
+  async function applyModel(id: string, wanted: string): Promise<void> {
+    assertMuseContributor(wanted)
+    const commandId = uuidv7()
+    const receipt = await call('session/setModel', { commandId, sessionId: id, model: { modelId: wanted } }, { timeoutMs: 30_000 })
+    if (receipt.status !== 'accepted' || receipt.commandId !== commandId) {
+      throw new AdapterError(AGENT, 'Muse did not confirm the contributor model selection', 'start_failed')
+    }
+  }
+
   function chooseEffort(wanted: string): ReasoningEffort {
     if ((EFFORTS as readonly string[]).includes(wanted)) return wanted as ReasoningEffort
     throw new AdapterError(AGENT, `${LABEL} does not support reasoning effort "${wanted}"`, 'unsupported')
@@ -1138,7 +1147,7 @@ export function createMuseAdapter(host: AdapterHost, options: { steerSettleMs?: 
           id = response.session.sessionId
           sessionId = id
           if (response.session.modelId !== modelId) {
-            await call('session/setModel', { commandId: uuidv7(), sessionId: id, model: { modelId } }, { timeoutMs: 30_000 })
+            await applyModel(id, modelId)
           }
         } else if (options.forkFrom) {
           const response = await call('session/fork', { commandId: uuidv7(), sessionId: options.forkFrom, excludeItems: true }, { timeoutMs: 60_000 })
@@ -1148,7 +1157,7 @@ export function createMuseAdapter(host: AdapterHost, options: { steerSettleMs?: 
           // is idempotent, so a fork is attached explicitly.
           await call('view/subscribe', { sessionId: id }, { timeoutMs: 30_000 })
           if (response.session.modelId !== modelId) {
-            await call('session/setModel', { commandId: uuidv7(), sessionId: id, model: { modelId } }, { timeoutMs: 30_000 })
+            await applyModel(id, modelId)
           }
         } else {
           const response = await call('session/start', {
@@ -1263,7 +1272,7 @@ export function createMuseAdapter(host: AdapterHost, options: { steerSettleMs?: 
       const chosen = chooseEffort(nextEffort)
       const validated = await validateModel(nextModelId)
       if (validated !== modelId) {
-        await call('session/setModel', { commandId: uuidv7(), sessionId: id, model: { modelId: validated } }, { timeoutMs: 30_000 })
+        await applyModel(id, validated)
         modelId = validated
       }
       if (chosen !== effort) {

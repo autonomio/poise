@@ -71,6 +71,11 @@ describe('Muse adapter', () => {
     expect(turn.stopReason).toBe('end_turn')
   })
 
+  it('refuses to resume an ordinary session when contributor selection is rejected', async () => {
+    const { adapter } = setup(['--reject-model-change'])
+    await expect(adapter.start({ ...MODEL, resume: 'ordinary-session' })).rejects.toThrow(/did not confirm the contributor/)
+  })
+
   it('rejects an ordinary model returned by session startup', async () => {
     const { adapter } = setup(['--ordinary-start-model'])
     await expect(adapter.start(MODEL)).rejects.toThrow(/contributor/)

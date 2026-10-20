@@ -4,7 +4,7 @@ from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from agent_interface.model_catalog import (
     CATALOG,
@@ -304,6 +304,16 @@ class TestCatalogRefresh(TestCase):
 
 
 class TestMuseContributorDiscovery(TestCase):
+    def test_discovery_host_explicitly_enables_contributor_mode(self) -> None:
+        proc = MagicMock()
+        listed = [{"modelId": "muse-spark-1.3-contributor"}]
+        proc.stdout = [json.dumps({"id": 1, "result": {}}), json.dumps({"id": 2, "result": {"models": listed}})]
+        with patch.object(catalog_refresh.subprocess, "Popen", return_value=proc) as spawn:
+            self.assertEqual(catalog_refresh.muse_models(), listed)
+        args = spawn.call_args.args[0]
+        self.assertEqual(args[args.index("--contributor-mode") + 1], "on")
+        proc.terminate.assert_called_once()
+
     def test_ordinary_default_is_never_probed(self) -> None:
         listed = [{"modelId": "muse-spark-1.3", "isDefault": True},
                   {"modelId": "muse-spark-1.3-contributor", "isDefault": False}]
