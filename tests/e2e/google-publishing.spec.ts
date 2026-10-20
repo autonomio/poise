@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 const VERSION = 'a'.repeat(64), REMOTE = 'b'.repeat(64), TEXT = '# Draft\n\nThe local paragraph.\n'
 const accounts = { configured: true, clientId: 'poise.apps.googleusercontent.com', origin: 'http://127.0.0.1:5566', accounts: [{ id: 'one', email: 'one@example.test', connected: true }, { id: 'two', email: 'two@example.test', connected: true }] }
-const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, start: 9, end: 29 }] }
+const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, replies: [{ author: 'Second reviewer', body: 'Please also check the example.' }], start: 9, end: 29 }] }
 async function setup(page: Page) {
   await workspace(page)
   let content = TEXT
@@ -39,6 +39,7 @@ test('shows native comments, reviews incoming changes and imports only after exp
   const google = page.locator('.google-documents')
   await google.locator('summary').click()
   await expect(google).toContainText('Please clarify.')
+  await expect(google).toContainText('Please also check the example.')
   expect(actions.some(action => action.path.endsWith('/google/import'))).toBe(false)
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
   await expect(google.locator('.google-local')).toContainText('The local paragraph.')
@@ -91,4 +92,37 @@ test('retains the Poise draft when Google changes after review', async ({ page }
   await expect(google.getByRole('alert')).toContainText('Google changed after the review opened.')
   await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
+})
+
+test('an older Google refresh cannot overwrite a newer publication read', async ({ page }) => {
+  await setup(page)
+  const google = page.locator('.google-documents')
+  await google.locator('summary').click()
+  let reads = 0, release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const first = new Promise<void>(resolve => { started = resolve })
+  await page.route('**/api/editor/doc/google-draft/google/sync', async route => {
+    reads++
+    if (reads === 1) { started(); await held; return route.fulfill({ json: { version: VERSION, publications: [publication] } }) }
+    return route.fulfill({ json: { version: VERSION, publications: [{ ...publication, remoteChanged: false, localChanged: false }] } })
+  })
+  await google.getByRole('button', { name: 'Refresh Google', exact: true }).click()
+  await first
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:google-published')))
+  await expect(google).toContainText('Published version matches.')
+  const response = page.waitForResponse(response => response.url().endsWith('/google/sync'))
+  release(); await response
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+  await expect(google).toContainText('Published version matches.')
+  await expect(google.locator('summary')).not.toContainText('Updates available')
+})
+test('a failed Google read is visibly unknown rather than synchronized', async ({ page }) => {
+  await setup(page)
+  const google = page.locator('.google-documents')
+  await google.locator('summary').click()
+  await page.route('**/api/editor/doc/google-draft/google/sync', route => route.fulfill({ json: { version: VERSION, publications: [{ ...publication, remoteChanged: null, localChanged: false, problem: 'Google unavailable.' }] } }))
+  await google.getByRole('button', { name: 'Refresh Google', exact: true }).click()
+  await expect(google).toContainText('Google status unavailable.')
+  await expect(google.getByRole('alert')).toHaveText('Google unavailable.')
+  await expect(google).not.toContainText('Published version matches.')
 })

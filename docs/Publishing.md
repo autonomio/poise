@@ -244,8 +244,8 @@ Google redirects to Poise's normal page; it then exchanges the code through a
 same-origin API request and removes OAuth parameters from the address bar.
 
 The Editor's Google Docs section displays native Markdown comments with their
-author, quoted passage and resolution state. Open Google for replies and comment
-resolution. Native comments are embedded in the Markdown, separately from Drive
+author, quoted passage, replies and resolution state. Open Google to reply or
+resolve a comment. A failed read is shown as unavailable, never as synchronized. Native comments are embedded in the Markdown, separately from Drive
 file comments. Poise preserves their opaque metadata and moves their inline
 markers only when the passage is exact and unambiguous. Editing or deleting a
 commented passage, ambiguous locations, and unrecognized metadata stop

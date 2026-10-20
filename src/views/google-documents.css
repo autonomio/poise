@@ -16,3 +16,5 @@
 .google-config label { display: grid; gap: 5px; margin: 10px 0; }
 .google-config code { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .google-compare { grid-template-columns: 1fr; } }
+
+.google-comment-reply { border-top: 1px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }

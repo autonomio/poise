@@ -61,6 +61,12 @@ describe('Google document publication and reviewed import', () => {
     expect((await publish()).status).toBe(200)
     expect(raw).toContain('gdoc_comments:'); expect(raw).toContain('gdoc_comment_begin: c1')
   })
+  it('reports unread remote state as unknown rather than claiming it matches', async () => {
+    await publish(); mocks.read.mockRejectedValueOnce(new Error('Google unavailable'))
+    const result = await call('sync', {})
+    expect(result.status).toBe(200)
+    expect(result.body.publications[0]).toMatchObject({ remoteChanged: null, problem: 'Google unavailable' })
+  })
   it('requires the reviewed local and remote versions and keeps a recoverable pre-import file', async () => {
     await publish(); raw = body + '\nGoogle edit.'
     const review = await call('review', { accountId: 'one' })

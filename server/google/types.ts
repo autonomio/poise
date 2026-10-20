@@ -11,7 +11,7 @@ export interface GooglePublication {
 export interface GooglePublicationView extends GooglePublication {
   email: string
   connected: boolean
-  remoteChanged: boolean
+  remoteChanged: boolean | null
   localChanged: boolean
   comments: GoogleComment[]
   problem?: string

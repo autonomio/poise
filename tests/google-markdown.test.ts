@@ -10,7 +10,7 @@ describe('Google Markdown native comments', () => {
   it('extracts native comment text and exact offsets without exposing the opaque token', () => {
     const doc = readGoogleMarkdown(raw)
     expect(doc.text).toBe('# Draft\n\nThe silver owl circles the old tower.\n')
-    expect(doc.comments).toEqual([{ id: 'c1', author: 'Reviewer', body: 'Please clarify "this".', quote: 'The silver owl circles the', resolved: false, start: 9, end: 35 }])
+    expect(doc.comments).toEqual([{ id: 'c1', author: 'Reviewer', body: 'Please clarify "this".', quote: 'The silver owl circles the', resolved: false, replies: [], start: 9, end: 35 }])
     expect(JSON.stringify(doc.comments)).not.toContain('token')
     expect(updateGoogleMarkdown(raw, doc.text)).toBe(raw)
   })
@@ -46,4 +46,12 @@ describe('Google Markdown native comments', () => {
     const updated = updateGoogleMarkdown(value, readGoogleMarkdown(value).text.replace('# 🦉 Draft', '# 🦉 Longer draft'))
     expect(readGoogleMarkdown(updated).comments[0].start).toBe(19)
   })
+})
+
+it('reads the live native reply and resolution-event shape without exposing provider metadata', () => {
+  const thread = raw.replace('      quote:', '    replies:\n    - author: Second reviewer\n      body: A reply &amp; clarification.\n    - author: Reviewer\n      action: RESOLVE\n    head_unused:\n      quote:').replace('status: ACTIVE', 'status: RESOLVED')
+  const doc = readGoogleMarkdown(thread)
+  expect(doc.comments[0]).toMatchObject({ resolved: true, replies: [{ author: 'Second reviewer', body: 'A reply & clarification.' }] })
+  expect(updateGoogleMarkdown(thread, doc.text.replace('# Draft', '# Updated draft'))).toContain('action: RESOLVE')
+  expect(() => readGoogleMarkdown(raw.replace('status: ACTIVE', 'status: UNKNOWN_NEW_FORMAT'))).toThrow('unsupported')
 })

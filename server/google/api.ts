@@ -23,7 +23,7 @@ async function documentView(slug: string, sync: boolean): Promise<GoogleDocument
   const publications: GooglePublicationView[] = []
   for (const record of records) {
     const a = accounts.find(a => a.id === record.accountId)
-    const view: GooglePublicationView = { ...record, email: a?.email ?? 'Disconnected Google account', connected: a?.connected ?? false, remoteChanged: false, localChanged: doc.version !== record.sourceSha, comments: [] }
+    const view: GooglePublicationView = { ...record, email: a?.email ?? 'Disconnected Google account', connected: a?.connected ?? false, remoteChanged: null, localChanged: doc.version !== record.sourceSha, comments: [] }
     if (sync && a?.connected) {
       try {
         const file = await readGoogleFile(record.accountId, record.fileId), parsed = readGoogleMarkdown(file.raw)

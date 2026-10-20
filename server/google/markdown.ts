@@ -7,6 +7,7 @@ export interface GoogleComment {
   body: string
   quote: string
   resolved: boolean
+  replies: Array<{ author: string, body: string }>
   start: number | null
   end: number | null
 }
@@ -58,10 +59,20 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
   const comments: GoogleComment[] = []
   for (const [id, value] of Object.entries(data.gdoc_comments)) {
     if (!mapping(value) || !mapping(value.head) || typeof value.head.body !== 'string') throw invalid()
+    if (!['ACTIVE', 'RESOLVED'].includes(String(value.status))) throw invalid()
+    const replies: GoogleComment['replies'] = []
+    if (value.replies !== undefined) {
+      if (!Array.isArray(value.replies)) throw invalid()
+      for (const reply of value.replies) {
+        if (!mapping(reply)) throw invalid()
+        if (typeof reply.body === 'string') replies.push({ author: typeof reply.author === 'string' ? reply.author : '', body: decode(reply.body) })
+        else if (typeof reply.action !== 'string') throw invalid()
+      }
+    }
     const range = ranges.get(id)
     comments.push({ id, author: typeof value.head.author === 'string' ? value.head.author : '', body: decode(value.head.body),
       quote: range ? text.slice(range.start, range.end) : typeof value.head.quote === 'string' ? decode(value.head.quote) : '',
-      resolved: value.status !== 'ACTIVE', start: range?.start ?? null, end: range?.end ?? null })
+      resolved: value.status === 'RESOLVED', replies, start: range?.start ?? null, end: range?.end ?? null })
   }
   return { text, comments, markers, suffix }
 }
