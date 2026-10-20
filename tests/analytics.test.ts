@@ -322,8 +322,8 @@ describe('reading what Current shows', () => {
     db.prepare(`INSERT INTO repos VALUES (1, 'repo', 'alpha', 'app', 'alpha/app', 0, 0, 1, '{}', '2026-10-09T00:00:00Z')`).run()
     db.close()
   }
-  function seed(row: DatastoreRecord, kind: 'pr' | 'issue', involved = false) {
-    const db = new Database(mocks.orgs[0].datastorePath)
+  function seed(row: DatastoreRecord, kind: 'pr' | 'issue', involved = false, connection?: Database.Database) {
+    const db = connection ?? new Database(mocks.orgs[0].datastorePath)
     try {
       db.prepare(`INSERT INTO items (node_id, repo_id, repo_full_name, number, item_type, state, title, author_login, created_at, updated_at, closed_at, raw_json, expanded_json, synced_at)
         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`).run(
@@ -341,7 +341,7 @@ describe('reading what Current shows', () => {
         for (let i = 0; i < count; i++) insert.run(`${id}-${i}`, id, row.created_at, row.updated_at)
       }
       return id
-    } finally { db.close() }
+    } finally { if (!connection) db.close() }
   }
   function review(itemId: number, author: string | null, state: string, submitted: string | null, commit: string | null = 'revision-1') {
     const db = new Database(mocks.orgs[0].datastorePath)
@@ -567,9 +567,9 @@ describe('reading what Current shows', () => {
       additions: i, deletions: 2, comments_count: 3, review_comments_count: 2, merged_by: 'robot',
       review_summary: { rounds: 0, missingCommits: 0, changeRequests: 0, dismissed: 0 },
     }))
-    rows.forEach(row => seed(row, 'pr', true))
     const db = new Database(mocks.orgs[0].datastorePath)
     try {
+      db.transaction(() => rows.forEach(row => seed(row, 'pr', true, db)))()
       db.prepare("UPDATE items SET expanded_json = json_set(expanded_json, '$.discussion', ?)").run('x'.repeat(1024 * 1024))
       const eager = db.prepare<[number], Pick<DatastoreRecord, 'comments_count' | 'review_comments_count' | 'additions' | 'deletions' | 'merged_by'>>(`
         SELECT comments_count, review_comments_count, additions, deletions,
