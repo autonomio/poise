@@ -1,4 +1,4 @@
-import { viewDiagnostic, viewFeedback } from '../view-feedback'
+import { isNotificationInteraction, viewDiagnostic, viewFeedback } from '../view-feedback'
 import { patchContent } from '../dom-patch'
 import { layout, watchPanel } from '../motion'
 // Behaviors — a table view listing automations with on/off toggles.
@@ -710,10 +710,12 @@ function finishClosingTriggersPanel() {
 }
 
 function onTriggersKeydown(e: KeyboardEvent) {
+  if (e.defaultPrevented || isNotificationInteraction(e.target)) return
   if (e.key === 'Escape') { e.preventDefault(); void closeTriggersPanel() }
 }
 
 function onTriggersOutside(e: MouseEvent) {
+  if (isNotificationInteraction(e.target)) return
   const target = e.target as HTMLElement
   if (triggersPanelEl?.contains(target) || target.closest('.behavior-triggers-btn')) return
   void closeTriggersPanel()
@@ -904,10 +906,12 @@ function finishClosingMemoryPanel() {
 }
 
 function onMemoryKeydown(e: KeyboardEvent) {
+  if (e.defaultPrevented || isNotificationInteraction(e.target)) return
   if (e.key === 'Escape') { e.preventDefault(); closeMemoryPanel() }
 }
 
 function onMemoryOutside(e: MouseEvent) {
+  if (isNotificationInteraction(e.target)) return
   if (!memoryPanelEl) return
   const t = e.target as HTMLElement
   if (memoryPanelEl.contains(t)) return

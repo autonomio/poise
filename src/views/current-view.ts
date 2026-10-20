@@ -875,7 +875,7 @@ function openManualComposer(lane: 'idea' | 'concept' | 'plan') {
   const repoSel = composer.querySelector<HTMLSelectElement>('.manual-repo')!
   const addB = composer.querySelector<HTMLButtonElement>('.composer-add')!
   const cancelB = composer.querySelector<HTMLButtonElement>('.composer-cancel')!
-  const reportError = (message: string) => viewFeedback('current-action', 'Current action needs attention', message, 'action_needed')
+  const reportError = (message: string) => viewFeedback(`current-create:${lane}`, 'Current action needs attention', message, 'action_needed')
 
   const close = () => { retire(composer); addBtn.hidden = false }
   let adding = false
@@ -974,7 +974,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   const repoSel = composer.querySelector<HTMLSelectElement>('.issue-repo')!
   const addB = composer.querySelector<HTMLButtonElement>('.composer-add')!
   const cancelB = composer.querySelector<HTMLButtonElement>('.composer-cancel')!
-  const reportError = (message: string) => viewFeedback('current-action', 'Current action needs attention', message, 'action_needed')
+  const reportError = (message: string) => viewFeedback('current-create:issue', 'Current action needs attention', message, 'action_needed')
 
   // The list was a one-shot snapshot taken when the composer opened. If
   // /api/repos had not answered yet it silently degraded to the repos inside
@@ -1125,7 +1125,7 @@ function startEdit(cardEl: HTMLElement, draft?: EditDraft) {
   `
   const ta = wrapper.querySelector<HTMLTextAreaElement>('textarea')!
   const repoSel = wrapper.querySelector<HTMLSelectElement>('.manual-repo')!
-  const reportError = (message: string) => viewFeedback('current-action', 'Current action needs attention', message, 'action_needed')
+  const reportError = (message: string) => viewFeedback(`current-edit:${id}`, 'Current action needs attention', message, 'action_needed')
   // A restored draft is text the person typed that was never stored; it wins
   // over the saved value.
   ta.value = draft ? draft.text : originalText

@@ -5,7 +5,8 @@ import { evidenceAttachment, evidenceReferences, keepKnownEvidence, type Evidenc
 // shows the same ones: what one tab puts away, the others drop on their next read.
 
 export const NOTICE_KINDS = ['chat_waiting', 'sign_in_needed', 'behavior_held', 'datastore_sync_failing', 'pr_ready', 'chat_turn_finished', 'github_quota_warning', 'github_quota_exhausted', 'storage_low'] as const
-export type NoticeKind = typeof NOTICE_KINDS[number] | 'read_failed' | 'action_failed' | 'action_needed' | 'action_finished'
+export const LOCAL_NOTICE_KINDS = ['read_failed', 'action_failed', 'action_needed', 'action_finished'] as const
+export type NoticeKind = typeof NOTICE_KINDS[number] | typeof LOCAL_NOTICE_KINDS[number]
 
 export interface ReadFailure { key: string, title: string, body: string, target?: NoticeTarget }
 
@@ -129,7 +130,7 @@ export function sendLatest<T>(send: (value: T) => Promise<void>, failed: (error:
 }
 
 export interface LocalNotice extends ReadFailure {
-  kind?: 'read_failed' | 'action_failed' | 'action_needed' | 'action_finished'
+  kind?: typeof LOCAL_NOTICE_KINDS[number]
 }
 
 type Listener = (state: NoticesState) => void

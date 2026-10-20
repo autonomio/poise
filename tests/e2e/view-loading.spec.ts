@@ -236,7 +236,7 @@ test('promoting a linked card preserves its intended repository before and after
     const picker = page.getByLabel('Repository for the new issue')
     await expect(picker).toHaveValue('acme/intended')
     repos.release()
-    await expect(page.locator('#view-current')).toContainText('Partial repository discovery')
+    await expect(await feedback(page)).toContainText('Partial repository discovery')
     await expect(picker).toHaveValue('acme/intended')
     await expect(page.getByRole('button', { name: 'Edit card: Promote this linked card', exact: true })).toBeVisible()
   } finally { repos.release() }

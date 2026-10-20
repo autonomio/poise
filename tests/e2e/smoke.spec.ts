@@ -690,6 +690,7 @@ test('shows conflicting identity diagnostics when no validated Swarm row remains
   unreadable = false
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
   await expect(page.locator('.agent-row')).toHaveCount(1)
+  await expect(diagnostics).toHaveCount(0)
   await expect(page.locator('#swarm-quarantine')).toHaveCount(0)
   await expect(page.locator('#swarm-stale')).toHaveCount(0)
 })

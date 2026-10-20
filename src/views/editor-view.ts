@@ -1,4 +1,4 @@
-import { viewDiagnostic, viewFeedback } from '../view-feedback'
+import { isNotificationInteraction, viewDiagnostic, viewFeedback } from '../view-feedback'
 import { scrollToActor } from '../motion'
 import { retire, reveal, watchPanel } from '../motion'
 import { patchContent } from '../dom-patch'
@@ -2103,7 +2103,7 @@ function setMeta(text: string) {
   const source = text.startsWith('Annotation') ? 'editor-annotations' : 'editor-save'
   const routine = /^(Editing|Saving)/.test(text)
   if (routine) viewDiagnostic(source, text)
-  else viewFeedback(source, 'Editor needs attention', text, /Conflict|changed elsewhere/.test(text) ? 'action_needed' : 'action_failed')
+  else viewFeedback(source, 'Editor needs attention', text, /conflict|changed elsewhere/i.test(text) ? 'action_needed' : 'action_failed')
 }
 
 function setMetaForCurrent() {
@@ -3504,6 +3504,7 @@ function openIssueComposerFromSelection(): void {
   // before the editor sees the click (it would otherwise refocus
   // the doc and collapse anything still selected).
   const outside = (e: MouseEvent) => {
+    if (isNotificationInteraction(e.target)) return
     if (!issueComposerEl) { document.removeEventListener('mousedown', outside, true); return }
     const t = e.target as Node
     if (issueComposerEl.contains(t)) return
@@ -3604,6 +3605,7 @@ function openSnippetComposerFromSelection(): void {
   triggerInput.addEventListener('keydown', onKey)
   bodyTa.addEventListener('keydown', onKey)
   const outside = (e: MouseEvent) => {
+    if (isNotificationInteraction(e.target)) return
     if (!snippetComposerEl) { document.removeEventListener('mousedown', outside, true); return }
     const t = e.target as Node
     if (snippetComposerEl.contains(t)) return
