@@ -1,9 +1,6 @@
 import { reveal } from '../motion'
 import { analyticsLayout } from '../analytics-layout'
-// Analytics — a view of its own, opened from the burger menu rather than the
-// top nav: productivity, work and review, then the numbers per merged
-// pull request, each with a weekly line and distribution, then
-// live GitHub API quota. Independent of Current's filters.
+// Day, history and live quota retain independent read ownership on one card board.
 import { analyticsGroups, formatCount, formatRate, type AnalyticsGroup, type AnalyticsReport, type AnalyticsTile } from '../analytics-format'
 import { analyticsDay, analyticsDayProgress, analyticsDailyBounds, analyticsHistoryBounds } from '../analytics-day'
 import { HISTORY_BASELINE, historyChart, histogram, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
