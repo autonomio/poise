@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
@@ -17,7 +17,7 @@ let root: string, poise: string, bin: string, reportPath: string, caller: string
 const families = Object.fromEntries(['claude', 'codex', 'grok', 'antigravity', 'muse'].map(name => [name, { status: 'ok' }]))
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'poise model release '))
+  root = await realpath(await mkdtemp(join(tmpdir(), 'poise model release ')))
   poise = join(root, 'release', 'poise')
   bin = join(root, 'release', 'venv', 'bin')
   reportPath = join(root, 'report.json')
