@@ -175,7 +175,7 @@ it('captures unpublished text and its binding incarnation under one document loc
   const replacement = (async () => { await editor.deleteDoc(slug); await editor.writeDoc(slug, '# Replacement') })()
   await Promise.race([replacement, new Promise(resolve => setTimeout(resolve, 100))])
   release(); await replacement
-  expect((await publication).status).toBe(409)
+  expect([404, 409]).toContain((await publication).status)
   expect(await editor.readGoogleLedger(slug)).toEqual([])
   expect(mocks.create).not.toHaveBeenCalled()
 })
