@@ -280,3 +280,25 @@ test('preserves legacy confirmations and setup controls with production Accounts
     expect(stored.logins).not.toHaveProperty('grok')
   } finally { await stop(fixture.child) }
 })
+
+
+test('can withdraw a retained setup confirmation while the version probe fails', async ({ page }, info) => {
+  test.setTimeout(90_000)
+  const fixture = await start(page, info, { service: true, seed: { grok: '2026-10-09T06:00:00Z' } })
+  try {
+    await setScript(fixture.home, 'grok', { '--version': { stderr: 'broken installation', code: 1 } })
+    await page.request.post(`${fixture.origin}/api/onboarding`, { data: { restart: true } })
+    await page.request.post(`${fixture.origin}/api/onboarding`, { data: { step: 'ai' } })
+    await page.goto(fixture.origin)
+    const row = page.locator('.ob-ai-row[data-account="grok"]')
+    await expect(row.locator('.ob-ai-state')).toHaveText('Not signed in yet')
+    await expect(row.locator('.ob-ai-mark')).toHaveText('Not signed in')
+    await row.locator('.ob-ai-mark').click()
+    await expect(row.locator('.ob-ai-mark')).toHaveText("I've signed in")
+    const setup = await (await page.request.get(`${fixture.origin}/api/onboarding`)).json()
+    expect(setup.logins).not.toHaveProperty('grok')
+    const accounts = await (await page.request.get(`${fixture.origin}/api/accounts?id=grok`)).json()
+    expect(accounts.accounts[0]).toMatchObject({ signedIn: null, detail: expect.stringContaining('broken installation') })
+    expect(accounts.accounts[0]).not.toHaveProperty('signInRecordedAt')
+  } finally { await stop(fixture.child) }
+})

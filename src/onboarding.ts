@@ -50,6 +50,7 @@ interface StepView {
 
 interface StepContext {
   owner: string
+  logins(): Logins
   /** Re-evaluates the footer after the step's state changed. */
   update(): void
   status(text: string, tone?: 'info' | 'ok' | 'error'): void
@@ -604,7 +605,8 @@ function aiStep(ctx: StepContext): StepView {
       const { text, tone } = accountState(account)
       const label = tone === 'on' ? 'Reconnect' : 'Connect'
       // A CLI that cannot report its sign-in counts as signed in when the person says so.
-      const marked = hasRecordedSignIn(account)
+      // Withdrawal applies to retained history even when a probe is currently failing.
+      const marked = !!ctx.logins()[account.id]
       const mark = account.installed && UNREPORTED_SIGN_IN.includes(account.id) && account.signedIn === null
         ? `<button type="button" class="st-clear ob-ai-mark" data-mark="${account.id}" data-signed-in="${!marked}" aria-label="${escapeHtml(NAMES[account.id])}: ${marked ? 'not signed in' : 'I have signed in'}">${marked ? 'Not signed in' : 'I\'ve signed in'}</button>`
         : ''
@@ -637,7 +639,7 @@ function aiStep(ctx: StepContext): StepView {
     if (mark) {
       mark.disabled = true
       void postJson('/api/onboarding', { account: mark.dataset.mark, signedIn: mark.dataset.signedIn === 'true' })
-        .then(() => refresh(false))
+        .then(() => refresh(true))
         .catch((error: unknown) => {
           mark.disabled = false
           ctx.status(`That was not saved: ${(error as Error).message}`, 'error')
@@ -966,6 +968,7 @@ class Onboarding {
   private context(): StepContext {
     return {
       owner: this.info.owner,
+      logins: () => this.info.logins,
       update: () => this.footer(),
       status: (text, tone = 'info') => this.status(text, tone),
       terminal: (preset, slot, onEnd) => this.openTerminal(preset, slot, onEnd),
