@@ -88,7 +88,7 @@ test('all view shortcuts can be hidden while Settings and keyboard access remain
   await workspace(page, 'current', undefined, { preserveOnReload: true })
   await navigation(page)
   for (const surface of ['menu', 'top bar'] as const) for (const name of views) {
-    if (await remove(page, name, surface).count()) await shortcut(page, name, surface)
+    if (await shortcut(page, name, surface).count()) await remove(page, name, surface)
   }
   await expect(page.locator('#view-current')).toBeVisible()
   await expect(page.locator('#top-nav .nav-item')).toHaveCount(0)
