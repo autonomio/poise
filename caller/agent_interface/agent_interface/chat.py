@@ -201,6 +201,7 @@ def run(
             base = [
                 os.getenv("CODEX_CLI", "codex"),
                 "exec",
+                "--contributor-mode", "on",
                 "--model",
                 spec.selector,
                 "-c",
@@ -254,6 +255,7 @@ def run(
             args = [
                 os.getenv("MUSE_CLI", "muse"),
                 "exec",
+                "--contributor-mode", "on",
                 "--model",
                 spec.selector,
                 "--reasoning-effort",

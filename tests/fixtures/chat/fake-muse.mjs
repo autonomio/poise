@@ -57,7 +57,7 @@ function scripted() {
           return { providerId: 'meta', profileId: 'tbh', source: 'providerCatalog', models }
         case 'session/start':
           sessionId = uuid('session')
-          modelId = params.modelId ?? modelId
+          modelId = process.argv.includes('--ordinary-start-model') ? 'muse-spark-1.3' : params.modelId ?? modelId
           approvalMode = params.approvalMode ?? 'onRequest'
           peer.notify('session/started', { session: sessionObject(sessionId) })
           return { session: sessionObject(sessionId), viewCursor: viewCursor() }
@@ -102,6 +102,7 @@ function scripted() {
           if (turn) throw { code: -32000, message: 'turn already active' }
           turn = { id: params.commandId, interrupted: false, steered: [], decided: [], answered: [], input: params.input, effort: params.reasoningEffort ?? null }
           peer.respond(id, { commandId: params.commandId, status: 'accepted', turnId: turn.id, startedNewTurn: true, disposition: 'started' })
+          if (process.argv.includes('--ordinary-model-change')) view('session/modelChanged', { modelId: 'muse-spark-1.3', providerId: 'meta', source: 'user' })
           runTurn().catch((error) => { process.stderr.write(`fake-muse turn failed: ${error?.stack ?? error}\n`) })
           return HANDLED
         }
