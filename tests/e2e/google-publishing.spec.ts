@@ -18,7 +18,7 @@ async function setup(page: Page) {
     if (path.endsWith('/publishing')) return route.fulfill({ json: { title: 'Draft', slug: 'draft', today: '2026-10-20', publications: [] } })
     if (path.endsWith('/google') || path.endsWith('/google/sync') || path.endsWith('/google/publish')) return route.fulfill({ json: { version: VERSION, publications: [publication] } })
     if (path.endsWith('/google/review')) return route.fulfill({ json: { localText: content, remoteText: '# Draft\n\nThe Google paragraph.\n', localVersion: VERSION, remoteSha: REMOTE, comments: publication.comments } })
-    if (path.endsWith('/google/import')) { content = '# Draft\n\nThe Google paragraph.\n'; return route.fulfill({ json: { ok: true } }) }
+    if (path.endsWith('/google/import')) { content = '# Draft\n\nThe Google paragraph.\n'; return route.fulfill({ json: { ok: true, content, version: VERSION } }) }
     return route.fulfill({ json: {} })
   })
   await page.getByRole('button', { name: 'Editor', exact: true }).click()

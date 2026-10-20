@@ -64,7 +64,7 @@ async function publish(slug: string, input: Record<string, unknown>) {
     const parsed = readGoogleMarkdown(remote.raw)
     // Pending retries may adopt only the exact reserved publication, never unknown remote edits.
     if (record.pending && !record.remoteSha) {
-      if (parsed.text !== doc.content) throw new HttpError(409, 'The reserved Google publication differs from this draft. Review the Google file.')
+      if (sha(parsed.text) !== record.sourceSha) throw new HttpError(409, 'The reserved Google publication differs from this draft. Review the Google file.')
       record.remoteSha = sha(parsed.text)
     }
     if (sha(parsed.text) !== record.remoteSha) throw new HttpError(409, 'Google has unseen edits. Review Google changes before publishing.')
@@ -91,7 +91,8 @@ async function importChanges(slug: string, input: Record<string, unknown>) {
     await importGoogleDocument(slug, parsed.text, version)
     record.sourceSha = sha(parsed.text); record.remoteSha = sha(parsed.text); record.pending = false
     await writeGoogleLedger(slug, records)
-    return { ok: true }
+    const imported = await readDoc(slug)
+    return { ok: true, content: imported.content, version: imported.version }
   })
 }
 export async function handleGoogleApi(req: IncomingMessage, res: ServerResponse, url: string): Promise<boolean> {

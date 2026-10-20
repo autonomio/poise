@@ -11,7 +11,11 @@ export async function googleCall<T>(path: string, body?: unknown): Promise<T> {
 export const googlePath = (slug: string, action = '') => `/api/editor/doc/${encodeURIComponent(slug)}/google${action ? '/' + action : ''}`
 export const escapeGoogleHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 export const GOOGLE_CHANGED = 'poise:google-published'
-export const googleDocument = (slug: string) => googleCall<GoogleDocumentView>(googlePath(slug, 'sync'), {})
+export async function googleDocument(slug: string): Promise<GoogleDocumentView> {
+  const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'sync'), {})
+  if (!Array.isArray(data.publications) || typeof data.version !== 'string') throw new Error('The Google publication response is unreadable.')
+  return data
+}
 export const googleReview = (slug: string, accountId: string) => googleCall<GoogleChangeReview>(googlePath(slug, 'review'), { accountId })
 
 /** OAuth returns through the normal app page; exchange from this same-origin browser only. */

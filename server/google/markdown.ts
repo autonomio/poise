@@ -44,7 +44,7 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
   if (!mapping(data) || !mapping(data.gdoc_comments)) throw invalid()
   const starts = new Map<string, number>(), ranges = new Map<string, { start: number, end: number }>()
   for (const marker of markers) {
-    if (!Object.hasOwn(data.gdoc_comments, marker.id)) throw invalid()
+    if (!Object.prototype.hasOwnProperty.call(data.gdoc_comments, marker.id)) throw invalid()
     if (marker.kind === 'begin') {
       if (starts.has(marker.id) || ranges.has(marker.id)) throw invalid()
       starts.set(marker.id, marker.at)

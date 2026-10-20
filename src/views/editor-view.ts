@@ -4826,14 +4826,11 @@ export async function initEditorView() {
     metaEl         = viewEl.querySelector<HTMLElement>('#editor-meta')
     googleDocuments = new GoogleDocuments({
       view: viewEl, flush: flushEditorSaves,
-      imported: async (slug) => {
+      imported: async (slug, content, version) => {
         // A successful import invalidates the old editor version before any further save.
         if (currentSlug !== slug) return
-        const response = await fetch(`/api/editor/doc/${encodeURIComponent(slug)}`)
-        if (!response.ok) throw new Error('Google changes were imported; reload the document to continue.')
-        const doc = await response.json() as { content: string, version: string }
-        documentVersions.set(slug, doc.version)
-        loadIntoEditor(doc.content); resetEditorHistory()
+        documentVersions.set(slug, version)
+        loadIntoEditor(content); resetEditorHistory()
         googleDocuments?.load(slug)
       },
       freeze: frozen => { if (docEl) docEl.contentEditable = frozen ? 'false' : 'true' },

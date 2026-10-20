@@ -847,6 +847,7 @@ export async function readGoogleLedger(slug: string): Promise<GooglePublication[
   if (!Array.isArray(value) || value.length > 10 || !value.every(item => item && typeof item === 'object'
     && ['accountId', 'fileId', 'title', 'url', 'sourceSha', 'remoteSha'].every(key => typeof item[key] === 'string')
     && /^[A-Za-z0-9_-]+$/.test(item.accountId) && /^[A-Za-z0-9_-]+$/.test(item.fileId)
+    && item.url === `https://docs.google.com/document/d/${item.fileId}/edit`
     && (item.pending === undefined || typeof item.pending === 'boolean'))) throw new Error('The Google publishing record is unreadable.')
   return value as GooglePublication[]
 }

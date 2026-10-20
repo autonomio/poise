@@ -38,7 +38,7 @@ export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost): 
 interface Host {
   view: HTMLElement
   flush(): Promise<boolean>
-  imported(slug: string): Promise<void>
+  imported(slug: string, content: string, version: string): Promise<void>
   freeze(frozen: boolean): void
 }
 export class GoogleDocuments {
@@ -107,11 +107,11 @@ export class GoogleDocuments {
         if (generation === this.generation) this.review = { accountId, value }
       } else if (action === 'import' && this.review) {
         this.host.freeze(true)
-        await googleCall(googlePath(slug, 'import'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, remoteSha: this.review.value.remoteSha })
+        const imported = await googleCall<{ content: string, version: string }>(googlePath(slug, 'import'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, remoteSha: this.review.value.remoteSha })
         this.review = null
-        await this.host.imported(slug)
+        await this.host.imported(slug, imported.content, imported.version)
       }
     } catch (error) { if (generation === this.generation) this.error = (error as Error).message }
-    finally { this.host.freeze(false); this.busy = false; this.render() }
+    finally { this.host.freeze(false); this.busy = false; this.render(); if (generation !== this.generation) void this.refresh() }
   }
 }
