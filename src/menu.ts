@@ -260,14 +260,20 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     }
   }
   function renderNavigation(): void {
+    const active = document.activeElement
+    const focused = active instanceof HTMLButtonElement && (nav.contains(active) || menu.querySelector('.menu-views')!.contains(active)) ? active : null
+    const focusSurface = focused && nav.contains(focused) ? nav : menu
+    const focusView = focused?.dataset.view
     const preferences = getNavigation()
     nav.innerHTML = navigationViews(preferences, 'topBar').map(({ key, label }) => `<button type="button" class="nav-item" data-view="${key}">${label}</button>`).join('')
+    nav.hidden = !nav.childElementCount
     const menuItems = navigationViews(preferences, 'menu')
     menu.querySelector('.menu-views')!.innerHTML = menuItems.map(({ key, label }) => `<button type="button" class="menu-item" data-action="${key}" data-view="${key}">
       <span class="menu-icon">${key === 'analytics' ? ICON_ANALYTICS : ICON_MODELS}</span><span class="menu-text">${label}</span>
     </button>`).join('')
     menu.querySelector<HTMLElement>('.menu-views-divider')!.hidden = menuItems.length === 0
     setActiveItem()
+    if (focusView) (focusSurface.querySelector<HTMLButtonElement>(`[data-view="${focusView}"]`) ?? toggle).focus({ preventScroll: true })
     queuePosition()
   }
   renderNavigation()
@@ -358,7 +364,7 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
     if (event.key !== 'ArrowDown' || openPanel()) return
     event.preventDefault()
     openMenu()
-    menu.querySelector<HTMLButtonElement>('.menu-item')?.focus()
+    menu.querySelector<HTMLButtonElement>('.menu-item:not([hidden])')?.focus()
   })
   document.addEventListener('click', (event) => {
     if (!menu.hidden && !surface.contains(event.target as Node) && !toggle.contains(event.target as Node)) closeMenu()

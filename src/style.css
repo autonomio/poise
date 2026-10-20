@@ -1330,6 +1330,7 @@ tr:hover .review-btn { opacity: 1; }
    button row. */
 /* In normal flow inside #app-bar-global — no fixed positioning and no
    z-index, so it can never be painted over the view's own controls. */
+#top-nav[hidden] { display: none; }
 #top-nav {
   overflow-x: auto;
   scrollbar-width: none;
