@@ -2,7 +2,7 @@ import { effectiveTimezone } from './config'
 import { releaseLine } from './release'
 import type { SettingsSection } from './settings'
 import { cancelMotion, motionValue, reveal, spring } from './motion'
-import { getNavigation, NAVIGATION_CHANGED, NAVIGATION_KEY, VIEW_ITEMS, type ViewName } from './navigation'
+import { getNavigation, NAVIGATION_CHANGED, NAVIGATION_KEY, navigationViews, type ViewName } from './navigation'
 
 const VIEW_KEY = 'poise-view'
 
@@ -261,8 +261,8 @@ export function initMenu(callbacks: MenuCallbacks): { switchTo: (v: ViewName) =>
   }
   function renderNavigation(): void {
     const preferences = getNavigation()
-    nav.innerHTML = VIEW_ITEMS.filter(({ key }) => preferences[key].topBar).map(({ key, label }) => `<button type="button" class="nav-item" data-view="${key}">${label}</button>`).join('')
-    const menuItems = VIEW_ITEMS.filter(({ key }) => preferences[key].menu)
+    nav.innerHTML = navigationViews(preferences, 'topBar').map(({ key, label }) => `<button type="button" class="nav-item" data-view="${key}">${label}</button>`).join('')
+    const menuItems = navigationViews(preferences, 'menu')
     menu.querySelector('.menu-views')!.innerHTML = menuItems.map(({ key, label }) => `<button type="button" class="menu-item" data-action="${key}" data-view="${key}">
       <span class="menu-icon">${key === 'analytics' ? ICON_ANALYTICS : ICON_MODELS}</span><span class="menu-text">${label}</span>
     </button>`).join('')

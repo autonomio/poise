@@ -1369,15 +1369,15 @@ tr:hover .review-btn { opacity: 1; }
    nothing to hide from — and navigation stays available with a panel
    open, which is what you'd expect. */
 
-/* Navigation preferences share the settings panel's quiet table rhythm. */
-.st-navigation { width: 100%; border-collapse: collapse; margin-top: var(--sp-3); font-size: .8125rem; }
-.st-navigation th, .st-navigation td { padding: var(--sp-1) 0; border-bottom: var(--b-hair); }
-.st-navigation th { text-align: left; font-weight: 500; }
-.st-navigation thead th { color: var(--text-tertiary); font-size: .6875rem; }
-.st-navigation th:not(:first-child), .st-navigation td { width: 4rem; text-align: center; }
-.st-navigation-choice { display: flex; justify-content: center; align-items: center; min-height: 32px; cursor: pointer; border-radius: var(--r-sm); }
-.st-navigation-choice:hover { background: var(--hover); }
-.st-navigation input { width: 14px; height: 14px; margin: 0; accent-color: var(--text); cursor: pointer; }
+/* Navigation uses the same quiet rows and controls as other settings. */
+.st-navigation-list { list-style: none; padding: 0; margin: 0; }
+.st-navigation-row { display: flex; align-items: center; gap: var(--sp-1); min-height: 36px; border-bottom: var(--b-hair); }
+.st-navigation-choice { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; min-height: 36px; font-size: .8125rem; cursor: pointer; }
+.st-navigation-choice input { width: 14px; height: 14px; margin: 0; accent-color: var(--text); cursor: pointer; }
+.st-navigation-move { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-secondary); cursor: pointer; }
+.st-navigation-move:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.st-navigation-move:disabled { opacity: .25; cursor: default; }
+.st-navigation-add { margin-top: var(--sp-2); }
 
 /* Burger toggle — top right, aligned to the view-header's filter row. */
 #menu-toggle {

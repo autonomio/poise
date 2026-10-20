@@ -13,14 +13,19 @@ to the running program.
 If Writer mode is enabled with a panel open, the single close button remains
 visible until the surface is dismissed.
 
-Navigation chooses which views appear above Settings in the menu and in the
-top bar. Each view has an independent checkbox for each surface: show it in
-either, both, or neither. Changes apply immediately and stay in this browser,
-including across reloads and other open tabs. Reset navigation restores the
-original layout: Analytics and Logging in the menu; Current, Swarm, Chat,
-Archive, Behaviors, Snippets and Editor in the top bar. Settings and the release
-information remain accessible. Hiding the current view's shortcuts leaves
-that view open. Selecting Analytics on either surface opens Today.
+Navigation chooses and arranges the shortcuts above Settings in the menu and
+in the top bar. Each surface has its own ordered list. Add a view with the
+picker; uncheck it to remove its shortcut from that surface. A view can appear
+in either list, both, or neither. Move shortcuts up or down with the arrow
+buttons; the two lists have independent orders. Controls work with a keyboard
+and announce each move.
+
+Changes apply immediately and stay in this browser, including across reloads
+and other open tabs. Reset navigation restores the original visibility and
+order: Analytics then Logging in the menu; Current, Swarm, Chat, Archive,
+Behaviors, Snippets then Editor in the top bar. Settings and release information
+remain accessible. Hiding the current view's shortcuts leaves that view open.
+Selecting Analytics on either surface opens Today.
 
 General holds GitHub identities, accounts to follow, time, notifications,
 chat defaults and theme. Models holds named configurations and model choices.

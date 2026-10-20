@@ -15,13 +15,15 @@ export const VIEW_ITEMS = [
 ] as const
 export type ViewName = typeof VIEW_ITEMS[number]['key']
 export type NavigationPlacement = { menu: boolean, topBar: boolean }
-export type NavigationPreferences = Record<ViewName, NavigationPlacement>
+export type NavigationSurface = keyof NavigationPlacement
+export type NavigationPreferences = Record<ViewName, NavigationPlacement> & { menuOrder: ViewName[], topBarOrder: ViewName[] }
 
 export function defaultNavigation(): NavigationPreferences {
-  return Object.fromEntries(VIEW_ITEMS.map(({ key }) => [key, {
+  return { ...Object.fromEntries(VIEW_ITEMS.map(({ key }) => [key, {
     menu: key === 'analytics' || key === 'logging',
     topBar: key !== 'analytics' && key !== 'logging',
-  }])) as NavigationPreferences
+  }])), menuOrder: ['analytics', 'logging', ...VIEW_ITEMS.map(({ key }) => key).filter((key) => key !== 'analytics' && key !== 'logging')],
+  topBarOrder: VIEW_ITEMS.map(({ key }) => key) } as NavigationPreferences
 }
 
 export function parseNavigation(value: unknown): NavigationPreferences {
@@ -37,7 +39,34 @@ export function parseNavigation(value: unknown): NavigationPreferences {
     }
     preferences[key] = { menu: placement.menu, topBar: placement.topBar }
   }
+  for (const surface of ['menu', 'topBar'] as const) {
+    const field = `${surface}Order` as const
+    const order = saved[field]
+    if (order === undefined) continue
+    if (!Array.isArray(order) || !order.every((key): key is ViewName => VIEW_ITEMS.some((view) => view.key === key)) || new Set(order).size !== order.length) {
+      throw new Error(`Saved ${surface} order is invalid. Reset it in Settings → Navigation.`)
+    }
+    preferences[field] = [...order, ...preferences[field].filter((key) => !order.includes(key))]
+  }
   return preferences
+}
+
+export function navigationViews(preferences: NavigationPreferences, surface: NavigationSurface): typeof VIEW_ITEMS[number][] {
+  return preferences[`${surface}Order`].filter((key) => preferences[key][surface]).map((key) => VIEW_ITEMS.find((view) => view.key === key)!)
+}
+
+export function moveNavigation(preferences: NavigationPreferences, surface: NavigationSurface, view: ViewName, direction: -1 | 1): NavigationPreferences {
+  const visible = navigationViews(preferences, surface).map(({ key }) => key)
+  const index = visible.indexOf(view)
+  const target = visible[index + direction]
+  if (index < 0 || target === undefined) return preferences
+  const order = [...preferences[`${surface}Order`]]
+  const from = order.indexOf(view)
+  const to = order.indexOf(target)
+  const moved = order[from]
+  order[from] = order[to]
+  order[to] = moved
+  return { ...preferences, [`${surface}Order`]: order }
 }
 
 export function getNavigation(): NavigationPreferences {
