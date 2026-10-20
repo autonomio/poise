@@ -44,6 +44,7 @@ async function publish(slug: string, input: Record<string, unknown>) {
     const records = ledger.records
     let ledgerVersion = ledger.version
     let record = records.find(r => r.accountId === id)
+    if (input.reviewedRemoteSha !== undefined && (!record || input.fileId !== record.fileId || input.connectionVersion !== googleConnectionVersion(id))) throw new HttpError(409, 'The Google connection or document binding changed after review.')
     if (!record) {
       if (records.length >= 10) throw new HttpError(422, 'A document can have at most ten Google destinations.')
       // Reserve and persist the remote ID before a network write. An uncertain create cannot duplicate it.
@@ -52,7 +53,6 @@ async function publish(slug: string, input: Record<string, unknown>) {
       records.push(record)
       ledgerVersion = await writeGoogleLedger(slug, records, ledgerVersion)
     }
-    if (input.reviewedRemoteSha !== undefined && (input.fileId !== record.fileId || input.connectionVersion !== googleConnectionVersion(id))) throw new HttpError(409, 'The Google connection or document binding changed after review.')
     let remote
     try { remote = await readGoogleFile(id, record.fileId) }
     catch (error) {

@@ -209,3 +209,12 @@ it('serializes OAuth configuration changes behind admitted publication work', as
   expect((await configuring).status).toBe(200)
   expect(mocks.configure).toHaveBeenCalledTimes(1)
 })
+it('rejects a reviewed publication on a replacement draft before reserving a new destination', async () => {
+  await publish(); raw = body + '\nGoogle edit.'
+  const reviewed = (await call('review', { accountId: 'one' })).body
+  await editor.deleteDoc(slug); await editor.writeDoc(slug, body)
+  expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: reviewed.remoteSha, fileId, connectionVersion: reviewed.connectionVersion })).status).toBe(409)
+  expect(await editor.readGoogleLedger(slug)).toEqual([])
+  expect(mocks.id).toHaveBeenCalledTimes(1)
+  expect(mocks.create).toHaveBeenCalledTimes(1)
+})
