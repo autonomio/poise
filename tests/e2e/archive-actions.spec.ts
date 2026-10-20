@@ -109,9 +109,10 @@ for (const width of [390, 1280]) test(`fourteen repository snapshot limits produ
 })
 
 
-test('empty Actions report no failures and account changes while hidden do not read workflows', async ({ page }) => {
+test('empty Actions stay free of messages and account changes while hidden do not read workflows', async ({ page }) => {
   await workspace(page, 'main')
-  await expect(page.locator('#empty')).toHaveText('No failed workflow runs for the current filters.')
+  await expect(page.locator('#empty')).toHaveCount(0)
+  await expect(page.locator('#view-main')).not.toContainText('No failed workflow runs')
   let reads = 0
   await page.route('**/api/gh', route => { reads++; return route.fulfill({ json: { records: [], count: 0 } }) })
   await page.getByRole('button', { name: 'Swarm', exact: true }).click()

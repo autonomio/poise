@@ -453,6 +453,7 @@ test('opts repositories and trusted authors into Review New Issues from Behavior
   await dialog.getByLabel('Trusted authors').fill('mikkokotila name!')
   await page.keyboard.press('Escape')
   await expect(await feedback(page)).toContainText('Not a GitHub username: name!')
+  await page.locator('#notification-bell').click()
   await expect(dialog).toBeVisible()
   // Escape saves as well, like every other way of closing.
   await dialog.getByLabel('Trusted authors').fill('mikkokotila')
