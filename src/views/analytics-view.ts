@@ -35,7 +35,6 @@ function reserveQuotaRead(): void {
   const heights = new Map([...viewEl.querySelectorAll<HTMLElement>('[data-group="quota"]')].map(card => [card.dataset.id, card.offsetHeight || parseFloat(card.style.height) || 0]))
   for (const card of template.content.children) {
     const header = card.querySelector('.github-quota-card-header')!
-    header.querySelector('.github-quota-checked')?.remove()
     const loading = document.createElement('div')
     loading.className = 'github-quota-unavailable github-quota-loading'
     loading.setAttribute('aria-label', 'Reading live quota')
@@ -148,7 +147,7 @@ async function readQuota(): Promise<void> {
         <div class="github-quota-identity">
           <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar${failedAvatars.has(avatar(account.login)) ? ' broken' : ''}" src="${avatar(account.login)}" alt="" width="40" height="40"></span>
           <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
-          ${account.checkedAt ? `<p class="analytics-note github-quota-checked">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}</div>
+          </div>
         </div></div>
         ${account.error ? '<div class="github-quota-unavailable" aria-label="Quota unavailable">—</div>' : account.buckets.filter((bucket) => bucket.resource === 'core' || bucket.resource === 'graphql').map((bucket) => {
           const minutes = Math.max(0, (Date.parse(bucket.resetAt) - now) / 60_000)
