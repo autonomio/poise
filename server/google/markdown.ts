@@ -35,7 +35,7 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
     last = match.index! + match[0].length
   }
   text += body.slice(last)
-  if (/gdoc_comment_(?:begin|end):|gdoc_comments[ \t]*:/.test(text) || (!suffix && markers.length)) throw invalid()
+  if (/gdoc_comment_(?:begin|end):|\bgdoc_comments\b/.test(text) || (!suffix && markers.length)) throw invalid()
   if (!suffix) return { text, comments: [], markers, suffix }
   const ending = /\r?\n---\s*$/.exec(suffix)
   if (!ending) throw invalid()
@@ -79,7 +79,7 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
 
 /** Re-anchor only exact, unambiguous passages; never silently detach reviewer feedback. */
 export function updateGoogleMarkdown(raw: string, next: string): string {
-  if (/gdoc_comment_(?:begin|end):|gdoc_comments[ \t]*:/.test(next)) throw new HttpError(422, 'The Poise draft contains reserved Google comment metadata.')
+  if (/gdoc_comment_(?:begin|end):|\bgdoc_comments\b/.test(next)) throw new HttpError(422, 'The Poise draft contains reserved Google comment metadata.')
   const doc = readGoogleMarkdown(raw)
   if (doc.text === next) return raw
   const ranges = new Map<string, { start: number, end: number }>()

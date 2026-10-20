@@ -50,7 +50,7 @@ describe('Google Markdown native comments', () => {
     expect(updateGoogleMarkdown('# Draft\n' + footer, '# Updated\n')).toBe('# Updated\n' + footer)
   })
   it('rejects unsupported footer boundaries before exposing provider metadata', () => {
-    for (const header of ['  gdoc_comments:', 'gdoc_comments :']) {
+    for (const header of ['  gdoc_comments:', 'gdoc_comments :', '"gdoc_comments":', "'gdoc_comments':"]) {
       const value = '# Draft\n' + suffix.replace('gdoc_comments:', header)
       expect(() => readGoogleMarkdown(value)).toThrow('unsupported')
       expect(() => updateGoogleMarkdown('', value)).toThrow('reserved')
