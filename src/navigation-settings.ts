@@ -19,7 +19,9 @@ export function navigationSection(): HTMLElement {
     <p class="st-help" role="status" aria-live="polite" hidden></p>`
   const status = section.querySelector<HTMLElement>('[role="status"]')!
   function sync(): void {
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.navigationFocus : undefined
+    const focusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const active = focusedElement?.dataset.navigationFocus
+    const adding = focusedElement instanceof HTMLSelectElement ? focusedElement.dataset.add : undefined
     const preferences = getNavigation()
     for (const surface of ['menu', 'topBar'] as const) {
       const name = surface === 'menu' ? 'menu' : 'top bar'
@@ -33,6 +35,7 @@ export function navigationSection(): HTMLElement {
       const available = VIEW_ITEMS.filter(({ key }) => !preferences[key][surface])
       add.innerHTML = `<option value="">Add a view…</option>${available.map(({ key, label }) => `<option value="${key}">${label}</option>`).join('')}`
       add.hidden = available.length === 0
+      if (adding === surface && add.hidden) section.querySelector<HTMLElement>(`[data-list="${surface}"] li:last-child input`)?.focus({ preventScroll: true })
     }
     if (active) {
       const control = section.querySelector<HTMLElement>(`[data-navigation-focus="${CSS.escape(active)}"]`)

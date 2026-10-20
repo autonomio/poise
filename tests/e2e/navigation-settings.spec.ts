@@ -141,6 +141,7 @@ for (const width of [420, 640, 900]) test(`all top bar shortcuts fit at ${width}
   await workspace(page)
   await navigation(page)
   for (const name of views) await add(page, name, 'top bar')
+  await expect(shortcut(page, 'Logging', 'top bar')).toBeFocused()
   await page.locator('#menu-toggle').click()
   await expect(page.locator('#top-nav .nav-item')).toHaveCount(9)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
