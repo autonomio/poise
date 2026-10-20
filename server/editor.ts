@@ -843,7 +843,17 @@ export async function readGoogleLedgerState(slug: string): Promise<{ records: Go
   await editorReady
   let raw: string
   try { raw = (await readUtf8Limited(googleLedgerFile(slug), MAX_PUBLISH_LEDGER_BYTES, 'Google publishing record')).content }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { records: [], version: MISSING_GOOGLE_LEDGER_VERSION }; throw error }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // A missing ledger still belongs to one file incarnation, including before ID allocation.
+    try {
+      const file = await stat(fileFor(slug))
+      return { records: [], version: versionFor(`${MISSING_GOOGLE_LEDGER_VERSION}:${file.dev}:${file.ino}:${file.birthtimeMs}`) }
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code === 'ENOENT') return { records: [], version: MISSING_GOOGLE_LEDGER_VERSION }
+      throw missing
+    }
+  }
   const value: unknown = JSON.parse(raw)
   if (!Array.isArray(value) || value.length > 10 || !value.every(item => item && typeof item === 'object'
     && ['accountId', 'fileId', 'title', 'url', 'sourceSha', 'remoteSha'].every(key => typeof item[key] === 'string')
@@ -858,7 +868,7 @@ export async function writeGoogleLedger(slug: string, records: GooglePublication
   await editorReady
   const body = JSON.stringify(records)
   if (Buffer.byteLength(body) > MAX_PUBLISH_LEDGER_BYTES || records.length > 10) throw new Error('The Google publishing record exceeds its limit.')
-  await serializeMutation(googleLedgerFile(slug), async () => {
+  await serializeMutation(fileFor(slug), async () => {
     await stat(fileFor(slug))
     const current = await readGoogleLedgerState(slug)
     if (current.version !== baseVersion) throw new EditorConflictError(current.version)

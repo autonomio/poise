@@ -147,3 +147,15 @@ it('does not restore a deleted binding onto a replacement document after an in-f
   expect(await editor.readGoogleLedger(slug)).toEqual([])
   expect((await editor.readDoc(slug)).content).toBe('# Replacement document')
 })
+it('refuses initial publication if the original document is replaced during remote ID allocation', async () => {
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
+  mocks.id.mockImplementationOnce(async () => { started(); await held; return fileId })
+  const publication = publish(); await pending
+  await editor.deleteDoc(slug); await editor.writeDoc(slug, body)
+  release()
+  expect((await publication).status).toBe(409)
+  expect(await editor.readGoogleLedger(slug)).toEqual([])
+  expect(mocks.create).not.toHaveBeenCalled()
+  expect((await editor.readDoc(slug)).content).toBe(body)
+})
