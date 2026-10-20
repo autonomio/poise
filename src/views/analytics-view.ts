@@ -59,6 +59,7 @@ let analyticsRead: AbortController | null = null
 let lastReadAt = 0
 let quotaGeneration = 0
 let historyGeneration = 0
+let historyRead: AbortController | null = null
 let quotaTimer: ReturnType<typeof setInterval> | undefined
 // The day on screen and the past year it is drawn with. The year arrives on
 // its own: until then each headline tile holds its chart's place.
@@ -385,12 +386,15 @@ function onPlotKey(event: KeyboardEvent): void {
 
 async function readHistory(bounds: string[]): Promise<void> {
   const generation = ++historyGeneration
+  historyRead?.abort()
+  const controller = new AbortController()
+  historyRead = controller
   history = { data: null, error: '' }
   cursors.clear()
   cancelHover()
   hoveredSeries = null
   try {
-    const res = await fetch(organizationUrl(`/api/analytics/history?${new URLSearchParams({ bounds: bounds.join(',') })}`))
+    const res = await fetch(organizationUrl(`/api/analytics/history?${new URLSearchParams({ bounds: bounds.join(',') })}`), { signal: controller.signal })
     const data = await res.json().catch(() => null)
     if (!res.ok || !Array.isArray(data?.periods)) throw new Error(data?.error || `The past year could not be read (HTTP ${res.status})`)
     if (generation !== historyGeneration) return
@@ -400,6 +404,8 @@ async function readHistory(bounds: string[]): Promise<void> {
     if (generation !== historyGeneration) return
     history = { data: null, error: error instanceof Error ? error.message : String(error) }
     noticeFeed.reportReadErrors('analytics-history', [readFailure('Analytics history is unavailable', error)])
+  } finally {
+    if (historyRead === controller) historyRead = null
   }
   render()
 }
@@ -421,8 +427,14 @@ async function readAnalytics(background = false): Promise<void> {
   }).format(capturedAt) : undefined
   if (!background) {
     shown = null
+    historyGeneration++
+    historyRead?.abort()
+    historyRead = null
+    history = { data: null, error: '' }
+    cursors.clear()
+    cancelHover()
+    hoveredSeries = null
     render()
-    void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
     cardLayout.cancel()
     const skeleton = document.createElement('template')
     skeleton.innerHTML = metricMarkup
@@ -470,6 +482,9 @@ async function readAnalytics(background = false): Promise<void> {
       viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
       groups.removeAttribute('aria-busy')
       groups.style.minHeight = ''
+      // Admit the year only after the selected-day cards have rendered.
+      // Its synchronous SQLite slices must not compete with the first paint.
+      void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
     }
   }
 }
@@ -553,6 +568,8 @@ export function stopAnalyticsRefresh(): void {
   analyticsRead = null
   quotaGeneration++
   historyGeneration++
+  historyRead?.abort()
+  historyRead = null
   cancelHover()
   hoveredSeries = null
   clearInterval(quotaTimer)

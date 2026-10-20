@@ -125,6 +125,10 @@ reviews do not parse unrelated discussion payloads; year history therefore
 does not hold up day or quota reads while processing its records.
 Involvement membership comes directly from the indexed associations, without
 aggregating the evidence descriptions that the full user view supplies.
+The date filter narrows items before each indexed membership lookup; merged
+PR sizes and merger identity come from one parse of each stored payload.
+The selected day and its baseline load first. The year request starts after
+the cards render, so its larger scan cannot delay their initial appearance.
 Leaving Analytics stops its reads: a late answer is discarded, and quota is
 not refreshed until it is chosen again.
 

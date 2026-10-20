@@ -1754,6 +1754,42 @@ for (const failure of ['HTTP', 'account'] as const) {
   })
 }
 
+test('renders day cards before admitting year history and skips history after leaving a pending day', async ({ page }) => {
+  await workspace(page)
+  let release!: () => void
+  let held = new Promise<void>(resolve => { release = resolve })
+  let dayReads = 0
+  let historyReads = 0
+  let historySawCards = false
+  await page.route('**/api/analytics?**', async route => {
+    dayReads++
+    await held
+    await route.fallback()
+  })
+  await page.route('**/api/analytics/history?**', async route => {
+    historyReads++
+    historySawCards = await page.locator('#view-analytics .analytics-tile').count() > 0
+    await route.fallback()
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  try {
+    await expect.poll(() => dayReads).toBe(2)
+    expect(historyReads).toBe(0)
+    release()
+    await expect(value(page, 'Pull requests merged')).toHaveText('4')
+    await expect.poll(() => historyReads).toBe(1)
+    expect(historySawCards).toBe(true)
+    held = new Promise<void>(resolve => { release = resolve })
+    await page.locator('#view-analytics').getByRole('button', { name: 'Previous day' }).click()
+    await expect.poll(() => dayReads).toBe(4)
+    expect(historyReads).toBe(1)
+    await leaveAnalytics(page)
+  } finally { release() }
+  await page.waitForLoadState('networkidle')
+  expect(historyReads).toBe(1)
+})
+
 test('shows the standard loader with no old values on initial load, day/account changes and reopening', async ({ page }, info) => {
   await workspace(page)
   let release!: () => void
