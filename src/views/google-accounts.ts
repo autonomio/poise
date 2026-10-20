@@ -1,4 +1,4 @@
-import { escapeGoogleHtml as escape, googleCall, type GoogleSettings } from '../google'
+import { escapeGoogleHtml as escape, googleCall, takeGoogleConnectionResult, type GoogleSettings } from '../google'
 
 export function googleAccountsSection(element: HTMLElement): { refresh(): Promise<void> } {
   let settings: GoogleSettings | null = null, busy = false
@@ -15,8 +15,8 @@ export function googleAccountsSection(element: HTMLElement): { refresh(): Promis
   const refresh = async () => {
     try {
       settings = await googleCall<GoogleSettings>('/api/google/accounts'); render()
-      const result = sessionStorage.getItem('poise-google-result')
-      if (result) { say(result); sessionStorage.removeItem('poise-google-result') }
+      const result = takeGoogleConnectionResult()
+      if (result) say(result)
     } catch (error) { say((error as Error).message) }
   }
   element.addEventListener('click', event => {

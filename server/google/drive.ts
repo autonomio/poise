@@ -23,7 +23,7 @@ async function metadata(accountId: string, id: string) {
 }
 export async function readGoogleFile(accountId: string, id: string): Promise<{ raw: string, etag: string, file: GoogleFile }> {
   const { file, etag } = await metadata(accountId, id)
-  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers: { 'If-Match': etag } })
+  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, { headers: { 'If-Match': etag } })
   if (Number(response.headers.get('content-length')) > MAX_BYTES) throw new HttpError(422, 'The Google Markdown file exceeds 10 MB.')
   if (!response.body) throw new HttpError(502, 'Google returned no file content.')
   const reader = response.body.getReader(), chunks: Uint8Array[] = []

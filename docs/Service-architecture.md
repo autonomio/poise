@@ -833,7 +833,9 @@ identity and origin checks cover every Google API action.
 - `GET /api/editor/doc/:slug/google` returns local publication bindings. POST
   suffixes `/sync`, `/publish`, `/review` and `/import` read remote state, publish
   the specified `{accountId,localVersion}`, review that account's remote text,
-  and import `{accountId,localVersion,remoteSha}` respectively.
+  and import `{accountId,localVersion,remoteSha}` respectively. A reviewed
+  publish also supplies `reviewedRemoteSha`, the exact remote raw-file hash
+  shown by `/review`; a changed hash refuses the overwrite.
 
 Imports check the reviewed local and remote versions and retain the old local
 file. Publication requires an unchanged remote text baseline and a live ETag.

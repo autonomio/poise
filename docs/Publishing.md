@@ -254,7 +254,9 @@ publication with a message. Handle those passages in Google Docs first.
 An open Editor checks connected publications every minute. Refresh Google checks
 immediately. Incoming edits produce an updates notice; they never overwrite the
 Poise draft automatically. Review Google changes shows the Poise and Google
-versions. Keep Poise draft dismisses the review. Import Google version explicitly
+versions. Keep Poise draft dismisses the review. Publish Poise version instead
+explicitly publishes the reviewed local draft over that exact Google version;
+a later edit on either side refuses the action. Import Google version explicitly
 replaces the local text, after checking that neither version changed during
 review. It stores the previous local Markdown under
 `~/.poise/editor/.google-history/<slug>/` (or `$POISE_EDITOR_DIR/.google-history/`).

@@ -11,6 +11,8 @@ export async function googleCall<T>(path: string, body?: unknown): Promise<T> {
 export const googlePath = (slug: string, action = '') => `/api/editor/doc/${encodeURIComponent(slug)}/google${action ? '/' + action : ''}`
 export const escapeGoogleHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 export const GOOGLE_CHANGED = 'poise:google-published'
+let connectionResult: string | null = null
+export function takeGoogleConnectionResult(): string | null { const value = connectionResult; connectionResult = null; return value }
 export async function googleDocument(slug: string): Promise<GoogleDocumentView> {
   const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'sync'), {})
   if (!Array.isArray(data.publications) || typeof data.version !== 'string') throw new Error('The Google publication response is unreadable.')
@@ -29,6 +31,6 @@ export async function finishGoogleConnection(): Promise<void> {
   try {
     if (error) throw new Error('Google sign-in was cancelled or refused. Connect again in Settings → Accounts.')
     await googleCall('/api/google/callback', { code, state })
-    sessionStorage.setItem('poise-google-result', 'Google account connected.')
-  } catch (error) { sessionStorage.setItem('poise-google-result', (error as Error).message) }
+    connectionResult = 'Google account connected.'
+  } catch (error) { connectionResult = (error as Error).message }
 }

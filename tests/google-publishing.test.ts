@@ -81,6 +81,14 @@ describe('Google document publication and reviewed import', () => {
     expect((await call('import', { accountId: 'one', localVersion: (await editor.readDoc(slug)).version, remoteSha: review.remoteSha })).status).toBe(409)
     expect((await editor.readDoc(slug)).content).toContain('Local edit.')
   })
+  it('permits a reviewed Poise overwrite only for the exact remote version that was shown', async () => {
+    await publish(); raw = body + '\nRemote edit.'
+    const reviewed = (await call('review', { accountId: 'one' })).body
+    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: 'stale' })).status).toBe(409)
+    expect(mocks.update).not.toHaveBeenCalled()
+    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: reviewed.remoteSha })).status).toBe(200)
+    expect(raw).toBe(body)
+  })
   it('retains the reserved ID after uncertain creation rather than generating duplicate documents', async () => {
     mocks.create.mockImplementationOnce(async (_a, _id, _name, content: string) => { raw = content; throw new Error('connection lost') })
     expect((await publish()).status).toBe(500)
