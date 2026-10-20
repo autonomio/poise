@@ -28,8 +28,9 @@ async function setup(page: Page, options: { initialSyncFailure?: boolean, remote
     if (path.endsWith('/google/import')) { content = remoteText; return route.fulfill({ json: { ok: true, content, version: VERSION } }) }
     return route.fulfill({ json: {} })
   })
+  const emptyLoadFailed = options.emptyFirstLoad ? page.waitForEvent('console', { predicate: message => message.text().includes('[editor] newDoc failed:') }) : null
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
-  if (options.emptyFirstLoad) await expect.poll(() => actions.some(action => action.path === '/api/editor/docs')).toBe(true)
+  if (emptyLoadFailed) await emptyLoadFailed
   else await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
   return actions
 }
