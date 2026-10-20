@@ -124,7 +124,7 @@ test('a partial trigger save retains rejected-author feedback after leaving Beha
   const opener = page.locator('tr[data-behavior="review-new-issues"] .behavior-triggers-btn')
   await opener.click()
   const dialog = page.getByRole('dialog', { name: /Review New Issues/ })
-  await dialog.getByRole('checkbox', { name: 'project', exact: true }).check()
+  await dialog.getByRole('checkbox', { name: 'acme/project', exact: true }).check()
   await dialog.getByLabel('Trusted authors').fill('invalid!')
   try {
     await page.getByRole('button', { name: 'Swarm', exact: true }).click()
