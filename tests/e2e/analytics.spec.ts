@@ -3,6 +3,7 @@ import type { AnalyticsReport } from '../../src/analytics-format'
 import type { AnalyticsHistory } from '../../src/analytics-history'
 import type { GithubQuotaReport } from '../../src/github-quota'
 import { WORK_TYPES } from '../../src/analytics-work-review'
+import { freeze, resume, settled } from './fixtures/motion'
 
 test('reorders the card board by its headers, persists across reads and reload, and supports cancellation and reduced motion', async ({ page }) => {
   await workspace(page)
@@ -15,20 +16,40 @@ test('reorders the card board by its headers, persists across reads and reload, 
   const original = await ids()
   const first = board.getByRole('button', { name: 'Move Pull requests opened', exact: true })
   const second = board.getByRole('button', { name: 'Move Pull requests merged', exact: true })
+  await settled(page)
   const a = (await first.boundingBox())!, b = (await second.boundingBox())!
-  await page.mouse.move(a.x + 60, a.y + 20)
-  await page.mouse.down()
-  await page.mouse.move(b.x + 60, b.y + 20, { steps: 12 })
-  await expect(board.locator('.analytics-card-held')).toHaveCount(1)
-  await expect(page.locator('.analytics-drop-slot')).toBeVisible()
-  expect(Math.abs((await first.boundingBox())!.x - b.x)).toBeLessThan(1)
-  await expect.poll(() => board.locator('.analytics-panel:not(.analytics-card-held)[data-motion-running]').count()).toBeGreaterThan(0)
+  await freeze(page)
+  try {
+    await page.mouse.move(a.x + 60, a.y + 20)
+    await page.mouse.down()
+    await page.mouse.move(b.x + 60, b.y + 20, { steps: 12 })
+    // Inspection can arrive after a live spring would have settled under load.
+    await page.waitForTimeout(600)
+    await expect(board.locator('.analytics-card-held')).toHaveCount(1)
+    await expect(page.locator('.analytics-drop-slot')).toBeVisible()
+    expect(Math.abs((await first.boundingBox())!.x - b.x)).toBeLessThan(1)
+    await expect.poll(() => board.locator('.analytics-panel:not(.analytics-card-held)[data-motion-running]').count()).toBeGreaterThan(0)
+    expect(await second.evaluate(button => button.closest('[data-id]')!.matches(':not(.analytics-card-held)[data-motion-running]'))).toBe(true)
+    expect(Math.abs((await second.boundingBox())!.x - b.x)).toBeLessThan(1)
+  } finally { await resume(page) }
+  await expect.poll(async () => (await second.boundingBox())!.x).toBeLessThan(b.x - 1)
+  await settled(page)
+  expect(Math.abs((await second.boundingBox())!.x - a.x)).toBeLessThan(1)
+  expect(Math.abs((await second.boundingBox())!.y - a.y)).toBeLessThan(1)
   await page.mouse.move(a.x + 60, a.y + 20, { steps: 4 })
   expect(Math.abs((await first.boundingBox())!.x - a.x)).toBeLessThan(1)
   await page.mouse.move(b.x + 60, b.y + 20, { steps: 4 })
   await expect(board.locator('.analytics-panel')).toHaveCount(18)
   await page.mouse.up()
   await expect.poll(async () => (await ids()).slice(0, 2)).toEqual([original[1], original[0]])
+  await expect.poll(async () => Math.abs((await second.boundingBox())!.x - a.x)).toBeLessThan(1)
+  await settled(page)
+  for (const [handle, slot] of [[first, b], [second, a]] as const) {
+    const box = (await handle.boundingBox())!
+    expect(Math.abs(box.x - slot.x)).toBeLessThan(1)
+    expect(Math.abs(box.y - slot.y)).toBeLessThan(1)
+  }
+  await expect(board.locator('[data-motion-running]')).toHaveCount(0)
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
   const placed = await ids()
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
@@ -1611,14 +1632,15 @@ test('reads both periods for the selected account and shows slower merges in red
   await expect(mergeTrend(page).getByRole('img')).toHaveAccessibleName('200% slower versus the preceding 7-day median')
 })
 
-test('names an empty baseline instead of inventing a trend', async ({ page }) => {
+test('keeps empty-baseline values without inventing a trend or status message', async ({ page }) => {
   const state = await workspace(page)
   state.baselineMerged = 0
   await page.goto('/')
   await openAnalytics(page)
   await expect(value(page, 'Time to merge')).toHaveText('6h')
   await expect(mergeTrend(page).getByRole('img')).toHaveCount(0)
-  await expect(page.locator('#view-analytics')).toContainText('7-day median: — · 0 PRs · No baseline')
+  await expect(page.locator('#view-analytics')).toContainText('7-day median: — · 0 PRs')
+  await expect(page.locator('#view-analytics')).not.toContainText('No baseline')
 })
 
 for (const day of [
@@ -1983,7 +2005,7 @@ test('shows only the 24-hour quota chart and visibly explains an unset agent', a
   await expect(page.locator('.quota-distribution')).toHaveCount(0)
   const agent = page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Merged by agent$/ }) })
   await expect(agent.locator('.analytics-value')).toHaveText('—')
-  await expect(agent.locator('.analytics-note')).toHaveText('No agent account in Settings')
+  await expect(agent.locator('.analytics-note')).toHaveText('')
 })
 
 test('reopens a chart readout after keyboard focus leaves while the pointer stays inside', async ({ page }) => {
