@@ -2232,11 +2232,13 @@ async function readDocs(): Promise<boolean> {
     if (!Array.isArray(data.docs)) throw new Error('Malformed document list')
     docs = data.docs as DocSummary[]
     docsLoaded = true
+    viewFeedback('editor-documents', 'Editor documents unavailable', '')
     if (currentSlug) setTriggerTitle()
     return true
   } catch (err) {
     console.error('[editor] fetchDocs failed:', err)
     docsError = true
+    viewFeedback('editor-documents', 'Editor documents unavailable', (err as Error).message, 'read_failed')
     setMeta('Could not load documents')
     return false
   }

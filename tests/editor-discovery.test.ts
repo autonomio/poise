@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, unlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -50,6 +50,9 @@ describe('editor discovery I/O', () => {
     const first = await editor.listDocs()
     const coldMs = performance.now() - start
     const coldBytes = io.bytes
+    for (const doc of first) {
+      expect(doc.updated_at).toBe((await stat(join(root, `${doc.slug}.md`))).mtime.toISOString())
+    }
     expect(first.map(doc => doc.title)).toEqual(Array.from({ length: count }, (_, index) => `Note ${count - index - 1}`))
     expect(coldBytes).toBeLessThanOrEqual(count * 4096)
     expect(io.peak).toBeGreaterThan(1)
@@ -69,7 +72,7 @@ describe('editor discovery I/O', () => {
     const changed = await editor.listDocs()
     expect(changed.find(doc => doc.slug === 'note-00')?.title).toBe('Edit 0')
     expect(changed.some(doc => doc.slug === 'note-01')).toBe(false)
-    console.log(`EDITOR_DISCOVERY ${JSON.stringify({ documents: count, legacyBytes: count * (size + 10), coldBytes, warmBytes: 0, coldMs, warmMs, peakOpenFiles: io.peak })}`)
+    console.log(`EDITOR_DISCOVERY ${JSON.stringify({ documents: count, legacyBytes: first.reduce((sum, doc) => sum + doc.size, 0), coldBytes, warmBytes: 0, coldMs, warmMs, peakOpenFiles: io.peak })}`)
   })
 
   it('preserves title derivation across UTF-8 boundaries, blank prefixes and long first lines', async () => {

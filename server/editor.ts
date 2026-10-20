@@ -304,7 +304,7 @@ export async function listDocs(): Promise<DocSummary[]> {
         let cached = summaryCache.get(slug)
         if (cached?.fingerprint !== fingerprint) {
           const title = await readTitle(fullPath, Math.min(Number(st.size), MAX_DOC_BYTES))
-          cached = { fingerprint, summary: { slug, title, updated_at: new Date(Number(st.mtimeMs)).toISOString(), size: Number(st.size) } }
+          cached = { fingerprint, summary: { slug, title, updated_at: new Date(Math.round(Number(st.mtimeNs) / 1_000_000)).toISOString(), size: Number(st.size) } }
           summaryCache.set(slug, cached)
         }
         out.push({ ...cached.summary })
