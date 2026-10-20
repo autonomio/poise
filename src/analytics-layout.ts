@@ -152,6 +152,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     template.innerHTML = markup
     const nodes = new Map([...template.content.children].map(element => [element.getAttribute('data-id')!, element]))
     order = reconcileCardOrder(saved, [...nodes.keys()])
+    saved = [...saved, ...order.filter(id => !saved.includes(id))]
     for (const id of order) template.content.append(nodes.get(id)!)
     patchContent(board, template.innerHTML)
     const next = new Map<string, Card>()
