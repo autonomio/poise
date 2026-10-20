@@ -64,12 +64,12 @@ async function publish(slug: string, input: Record<string, unknown>) {
       record.remoteSha = sha(readGoogleMarkdown(raw).text)
     }
     const parsed = readGoogleMarkdown(remote.raw)
-    // Pending retries may adopt only the exact reserved publication, never unknown remote edits.
-    if (record.pending && !record.remoteSha) {
+    if (input.reviewedRemoteSha !== undefined && input.reviewedRemoteSha !== sha(remote.raw)) throw new HttpError(409, 'Google changed after the review opened. Review the latest version.')
+    // Unreviewed retries may adopt only the exact reserved publication.
+    if (record.pending && !record.remoteSha && input.reviewedRemoteSha === undefined) {
       if (sha(parsed.text) !== record.sourceSha) throw new HttpError(409, 'The reserved Google publication differs from this draft. Review the Google file.')
       record.remoteSha = sha(parsed.text)
     }
-    if (input.reviewedRemoteSha !== undefined && input.reviewedRemoteSha !== sha(remote.raw)) throw new HttpError(409, 'Google changed after the review opened. Review the latest version.')
     if (sha(parsed.text) !== record.remoteSha && input.reviewedRemoteSha === undefined) throw new HttpError(409, 'Google has unseen edits. Review Google changes before publishing.')
     const raw = updateGoogleMarkdown(remote.raw, doc.content)
     if (raw !== remote.raw) await updateGoogleFile(id, record.fileId, raw, remote.etag)

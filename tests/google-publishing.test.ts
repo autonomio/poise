@@ -102,6 +102,22 @@ describe('Google document publication and reviewed import', () => {
     expect((await publish()).status).toBe(200)
     expect(mocks.id).toHaveBeenCalledTimes(1); expect(mocks.create).toHaveBeenCalledTimes(1)
   })
+  it('allows exact reviewed recovery when an uncertain create was subsequently edited in Google', async () => {
+    mocks.create.mockImplementationOnce(async (_a, _id, _name, content: string) => { raw = content; throw new Error('connection lost') })
+    expect((await publish()).status).toBe(500)
+    raw = body + '\nGoogle edit after uncertain creation.'
+    expect((await publish()).status).toBe(409)
+    const reviewed = (await call('review', { accountId: 'one' })).body
+    const approved = { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: reviewed.remoteSha, fileId, connectionVersion: reviewed.connectionVersion }
+    raw += '\nNewer Google edit.'
+    expect((await call('publish', approved)).status).toBe(409)
+    expect(mocks.update).not.toHaveBeenCalled()
+    raw = reviewed.remoteText
+    expect((await call('publish', approved)).status).toBe(200)
+    expect(raw).toBe(body)
+    expect((await editor.readGoogleLedger(slug))[0].pending).toBe(false)
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+  })
   it('keeps account bindings independent and deletes local bindings with the document', async () => {
     await publish(); mocks.id.mockResolvedValueOnce('google-file-two'); raw = null
     expect((await publish('two')).status).toBe(200)
