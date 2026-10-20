@@ -587,10 +587,19 @@ test('view departure batches presentation reads before completing rows', async (
     for (const actor of root.children) window.Motion.reveal(actor as HTMLElement)
   })
   const before = await cdp.send('Performance.getMetrics')
-  await page.evaluate(() => window.Motion.finishMotion(document.getElementById('finish-batch')!, true))
+  // Exercise delayed driver delivery as well as an idle local inspector.
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const active = await page.evaluate(() => {
+    const root = document.getElementById('finish-batch')!
+    const active = root.querySelectorAll('[data-motion-running]').length
+    window.Motion.finishMotion(root, true)
+    return active
+  })
   const after = await cdp.send('Performance.getMetrics')
   const styles = (metrics: typeof before) => metrics.metrics.find(metric => metric.name === 'RecalcStyleCount')!.value
+  console.log(JSON.stringify({ motionCompletion: { styleRecalculations: styles(after) - styles(before), active } }))
   expect(styles(after) - styles(before)).toBeLessThan(10)
+  expect(active).toBe(80)
   await expect(page.locator('#finish-batch [data-motion-running]')).toHaveCount(0)
 })
 
