@@ -385,11 +385,13 @@ test('Editor populates an already-open selector on first discovery and reports a
     fail = false
     await page.locator('.editor-doc-trigger').click()
     await expect(page.locator('.editor-doc-item')).toHaveCount(1)
-    await page.locator('.editor-doc-item').click()
-    await expect(page.locator('#editor-doc')).toContainText('Available writing')
     const recovered = await feedback(page)
     await expect(recovered.locator('.nr-card').filter({ hasText: 'Editor documents unavailable' })).toHaveCount(0)
     await expect(recovered.locator('.nr-card').filter({ hasText: 'Could not load documents' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await page.locator('.editor-doc-trigger').click()
+    await page.locator('.editor-doc-item').click()
+    await expect(page.locator('#editor-doc')).toContainText('Available writing')
   } finally { library.release() }
 })
 
