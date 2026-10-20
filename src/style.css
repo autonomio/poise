@@ -1365,6 +1365,16 @@ tr:hover .review-btn { opacity: 1; }
    nothing to hide from — and navigation stays available with a panel
    open, which is what you'd expect. */
 
+/* Navigation preferences share the settings panel's quiet table rhythm. */
+.st-navigation { width: 100%; border-collapse: collapse; margin-top: var(--sp-3); font-size: .8125rem; }
+.st-navigation th, .st-navigation td { padding: var(--sp-1) 0; border-bottom: var(--b-hair); }
+.st-navigation th { text-align: left; font-weight: 500; }
+.st-navigation thead th { color: var(--text-tertiary); font-size: .6875rem; }
+.st-navigation th:not(:first-child), .st-navigation td { width: 4rem; text-align: center; }
+.st-navigation-choice { display: flex; justify-content: center; align-items: center; min-height: 32px; cursor: pointer; border-radius: var(--r-sm); }
+.st-navigation-choice:hover { background: var(--hover); }
+.st-navigation input { width: 14px; height: 14px; margin: 0; accent-color: var(--text); cursor: pointer; }
+
 /* Burger toggle — top right, aligned to the view-header's filter row. */
 #menu-toggle {
   flex: 0 0 auto;                     /* last item in the bar's right half */

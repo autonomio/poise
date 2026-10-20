@@ -3,8 +3,9 @@
 **Analytics** in the burger menu opens a view of its own, like Current or
 Behaviors, but reached from the menu rather than the top nav. The menu
 closes and focus returns to the burger. No top-nav item is highlighted on
-Analytics; the menu marks Analytics as the current page instead. A reload
-stays on Analytics, and choosing a view in the top nav leaves it.
+Analytics; the menu marks Analytics as the current page instead. Settings → Navigation can also place Analytics in the top bar, where it marks
+the current page like other views. A reload stays on Analytics, and choosing
+another view leaves it.
 
 The page reads top to bottom:
 
