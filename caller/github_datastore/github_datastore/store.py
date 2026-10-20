@@ -671,6 +671,7 @@ def iter_expanded(
                 # cancel queued pagination and wait for already-running calls.
                 for future in futures:
                     future.cancel()
+                pool.shutdown(wait=True, cancel_futures=True)
                 errors = [error for future in futures if not future.cancelled()
                           and (error := future.exception()) is not None]
                 for error in errors:
