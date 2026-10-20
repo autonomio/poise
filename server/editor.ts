@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { withProcessLock } from './process-lock'
+import type { GooglePublication } from './google/types'
 
 const EDITOR_DIR = process.env.POISE_EDITOR_DIR || join(homedir(), '.poise', 'editor')
 const EDITOR_LOCK_PATH = join(EDITOR_DIR, '.poise-editor-lock.sqlite3')
@@ -480,7 +481,7 @@ export async function deleteDoc(slug: string): Promise<{ ok: true }> {
   // The doc first: a publishing record written meanwhile is either removed
   // with the side-cars or finds the doc gone (writePublishLedger).
   await remove(path)
-  await Promise.all([annPath, chatPath, publishPath].map(remove))
+  await Promise.all([annPath, chatPath, publishPath, googleLedgerFile(slug)].map(remove))
   return { ok: true }
 }
 
@@ -833,4 +834,46 @@ export async function withPublishLock<T>(operation: () => Promise<T>, timeoutMs 
     unavailableMessage: 'the publishing lock is unavailable',
     timeoutMessage: 'Another Poise is publishing from this Editor folder; try again once it has finished.',
   }, operation)
+}
+
+function googleLedgerFile(slug: string): string { return join(EDITOR_DIR, canonicalSlug(slug) + '.google.json') }
+
+export async function readGoogleLedger(slug: string): Promise<GooglePublication[]> {
+  await editorReady
+  let raw: string
+  try { raw = (await readUtf8Limited(googleLedgerFile(slug), MAX_PUBLISH_LEDGER_BYTES, 'Google publishing record')).content }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+  const value: unknown = JSON.parse(raw)
+  if (!Array.isArray(value) || value.length > 10 || !value.every(item => item && typeof item === 'object'
+    && ['accountId', 'fileId', 'title', 'url', 'sourceSha', 'remoteSha'].every(key => typeof item[key] === 'string')
+    && /^[A-Za-z0-9_-]+$/.test(item.accountId) && /^[A-Za-z0-9_-]+$/.test(item.fileId)
+    && (item.pending === undefined || typeof item.pending === 'boolean'))) throw new Error('The Google publishing record is unreadable.')
+  return value as GooglePublication[]
+}
+
+export async function writeGoogleLedger(slug: string, records: GooglePublication[]): Promise<void> {
+  await editorReady
+  const body = JSON.stringify(records)
+  if (Buffer.byteLength(body) > MAX_PUBLISH_LEDGER_BYTES || records.length > 10) throw new Error('The Google publishing record exceeds its limit.')
+  await serializeMutation(googleLedgerFile(slug), async () => {
+    await stat(fileFor(slug))
+    await writeAtomic(googleLedgerFile(slug), body)
+  })
+}
+
+/** Back up and replace under the same process-shared lock and exact content precondition. */
+export async function importGoogleDocument(slug: string, content: string, baseVersion: string): Promise<void> {
+  if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_DOC_BYTES) throw new Error('The Google document exceeds the Editor limit.')
+  await editorReady
+  const path = fileFor(slug)
+  await serializeMutation(path, async () => {
+    const current = await readUtf8Limited(path, MAX_DOC_BYTES, 'doc')
+    const version = versionFor(current.content)
+    if (baseVersion !== version) throw new EditorConflictError(version)
+    const folder = join(EDITOR_DIR, '.google-history', canonicalSlug(slug))
+    await mkdir(folder, { recursive: true, mode: 0o700 })
+    await writeAtomic(join(folder, `${Date.now()}-${randomUUID()}.md`), current.content)
+    await writeAtomic(path, content)
+    forgetClientWrites(path)
+  })
 }

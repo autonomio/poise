@@ -1,3 +1,4 @@
+import { mountGooglePublish } from './google-documents'
 import { retire, reveal } from '../motion'
 import { patchContent } from '../dom-patch'
 import {
@@ -561,6 +562,7 @@ export function togglePublishPanel(anchor: HTMLElement, host: PublishPanelHost):
   panel.setAttribute('role', 'dialog')
   panel.setAttribute('aria-label', 'Publish')
   panel.innerHTML = '<div class="ep-body"></div>'
+  mountGooglePublish(panel, host)
   panel.addEventListener('input', onInput)
   panel.addEventListener('change', onInput)
   panel.addEventListener('click', (event) => onClick(event, host))

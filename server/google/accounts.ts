@@ -1,0 +1,106 @@
+import { createHash, randomBytes } from 'node:crypto'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { db, getMeta, setMeta } from '../db'
+import { HttpError } from '../http'
+
+const CONFIG = 'google:config'
+const PREFIX = 'google:account:'
+const STATE = 'google:state:'
+const SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/drive.file']
+export interface GoogleAccount { id: string, email: string, connected: boolean }
+interface StoredAccount extends GoogleAccount { refreshToken: string, accessToken: string, expires: number, clientId: string }
+interface Config { clientId: string, clientSecret: string, origin: string }
+const hash = (value: string) => createHash('sha256').update(value).digest('base64url')
+function read<T>(key: string): T | null { const raw = getMeta(key); return raw ? JSON.parse(raw) as T : null }
+export function googleConfig(): Config {
+  const config = read<Config>(CONFIG)
+  if (!config) throw new HttpError(422, 'Configure the Google OAuth client in Settings → Accounts first.')
+  return config
+}
+export function googleAccountSettings() {
+  const config = read<Config>(CONFIG)
+  return { configured: !!config, clientId: config?.clientId ?? '', origin: config?.origin ?? '', accounts: googleAccounts() }
+}
+export function configureGoogle(input: Record<string, unknown>): void {
+  if (typeof input.clientId !== 'string' || !/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(input.clientId)) throw new HttpError(400, 'Enter the Google web OAuth client ID.')
+  if (typeof input.origin !== 'string') throw new HttpError(400, 'Enter this Poise origin.')
+  let origin: URL
+  try { origin = new URL(input.origin) } catch { throw new HttpError(400, 'Invalid Poise origin.') }
+  if (origin.origin !== input.origin || (origin.protocol !== 'https:' && !(origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)))) throw new HttpError(400, 'Use an HTTPS origin, or HTTP on localhost.')
+  const previous = read<Config>(CONFIG)
+  const secret = typeof input.clientSecret === 'string' && input.clientSecret ? input.clientSecret : previous?.clientId === input.clientId ? previous.clientSecret : ''
+  if (!secret || secret.length > 4096) throw new HttpError(400, 'Enter the Google OAuth client secret.')
+  if (previous && previous.clientId !== input.clientId && googleAccounts().some(a => a.connected)) throw new HttpError(409, 'Disconnect the Google accounts before changing the OAuth client.')
+  setMeta(CONFIG, JSON.stringify({ clientId: input.clientId, clientSecret: secret, origin: origin.origin }))
+}
+export function googleAccounts(): GoogleAccount[] {
+  return (db.prepare('SELECT value FROM meta WHERE key LIKE ? ORDER BY key').all(`${PREFIX}%`) as Array<{ value: string }>).map(row => {
+    const a = JSON.parse(row.value) as StoredAccount
+    return { id: a.id, email: a.email, connected: a.connected }
+  })
+}
+function account(id: string): StoredAccount {
+  const a = read<StoredAccount>(PREFIX + id)
+  if (!a?.connected) throw new HttpError(422, 'Reconnect this Google account in Settings → Accounts.')
+  return a
+}
+export function disconnectGoogle(id: string): void {
+  const a = account(id)
+  // Other grants can share Google's refresh token. Forget this connection without revoking them.
+  setMeta(PREFIX + id, JSON.stringify({ id: a.id, email: a.email, connected: false }))
+}
+async function tokenRequest(values: Record<string, string>): Promise<{ access_token: string, refresh_token?: string, expires_in: number, scope?: string }> {
+  const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(values), signal: AbortSignal.timeout(30_000), redirect: 'error' })
+  if (!response.ok) throw new HttpError(502, 'Google rejected the sign-in or refresh token. Reconnect the account.')
+  const data = await response.json() as { access_token?: string, refresh_token?: string, expires_in?: number, scope?: string }
+  if (typeof data.access_token !== 'string' || !Number.isFinite(data.expires_in) || data.expires_in! <= 0) throw new HttpError(502, 'Google returned an invalid token response.')
+  return { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in!, scope: data.scope }
+}
+export function beginGoogleLogin(req: IncomingMessage, res: ServerResponse): { url: string } {
+  const config = googleConfig()
+  if (req.headers.origin !== config.origin) throw new HttpError(403, 'The configured Google origin must match this Poise browser.')
+  const state = randomBytes(32).toString('base64url'), browser = randomBytes(32).toString('base64url'), verifier = randomBytes(48).toString('base64url')
+  db.prepare('DELETE FROM meta WHERE key LIKE ? AND json_extract(value, \'$.expires\') < ?').run(`${STATE}%`, Date.now())
+  setMeta(STATE + hash(state), JSON.stringify({ browser: hash(browser), verifier, expires: Date.now() + 600_000, clientId: config.clientId, origin: config.origin }))
+  res.setHeader('Set-Cookie', `poise_google=${browser}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=600${config.origin.startsWith('https:') ? '; Secure' : ''}`)
+  const params = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.origin + '/', response_type: 'code', scope: SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', state, code_challenge: hash(verifier), code_challenge_method: 'S256' })
+  return { url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` }
+}
+export async function completeGoogleLogin(req: IncomingMessage, res: ServerResponse, input: Record<string, unknown>): Promise<void> {
+  if (typeof input.state !== 'string' || typeof input.code !== 'string' || input.state.length > 256 || input.code.length > 4096) throw new HttpError(400, 'Google sign-in code and state are required.')
+  const config = googleConfig(), key = STATE + hash(input.state)
+  const pending = read<{ browser: string, verifier: string, expires: number, clientId: string, origin: string }>(key)
+  const cookie = /(?:^|;\s*)poise_google=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')?.[1]
+  if (!pending || !cookie || hash(cookie) !== pending.browser || Date.now() >= pending.expires || pending.clientId !== config.clientId || pending.origin !== config.origin || req.headers.origin !== config.origin) throw new HttpError(403, 'Google sign-in expired or belongs to another browser. Connect again.')
+  const removed = db.prepare('DELETE FROM meta WHERE key = ?').run(key)
+  if (!removed.changes) throw new HttpError(403, 'Google sign-in was already used.')
+  res.setHeader('Set-Cookie', `poise_google=; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=0${config.origin.startsWith('https:') ? '; Secure' : ''}`)
+  const tokens = await tokenRequest({ grant_type: 'authorization_code', code: input.code, client_id: config.clientId, client_secret: config.clientSecret, redirect_uri: config.origin + '/', code_verifier: pending.verifier })
+  if (!tokens.scope?.split(' ').includes(SCOPES[2])) throw new HttpError(403, 'Google Drive file access was not granted.')
+  const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(30_000), redirect: 'error' })
+  if (!response.ok) throw new HttpError(502, 'Google account identity could not be verified.')
+  const identity = await response.json() as { sub?: string, email?: string, email_verified?: boolean }
+  if (!identity.sub || !/^[A-Za-z0-9_-]{1,128}$/.test(identity.sub) || !identity.email || identity.email_verified !== true) throw new HttpError(403, 'Google did not return a verified account identity.')
+  const previous = read<StoredAccount>(PREFIX + identity.sub)
+  const refreshToken = tokens.refresh_token ?? (previous?.clientId === config.clientId ? previous.refreshToken : '')
+  if (!refreshToken) throw new HttpError(422, 'Google did not grant offline access. Connect again and grant consent.')
+  setMeta(PREFIX + identity.sub, JSON.stringify({ id: identity.sub, email: identity.email, connected: true, clientId: config.clientId, refreshToken, accessToken: tokens.access_token, expires: Date.now() + tokens.expires_in * 1000 }))
+}
+const refreshes = new Map<string, Promise<string>>()
+export async function googleAccessToken(id: string): Promise<string> {
+  const a = account(id)
+  if (a.expires > Date.now() + 60_000) return a.accessToken
+  const pending = refreshes.get(id)
+  if (pending) return pending
+  const operation = (async () => {
+    const config = googleConfig()
+    if (a.clientId !== config.clientId) throw new HttpError(422, 'Reconnect this Google account with the configured OAuth client.')
+    const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: a.refreshToken, client_id: config.clientId, client_secret: config.clientSecret })
+    // A disconnect while refreshing must never resurrect credentials.
+    if (getMeta(PREFIX + id) !== JSON.stringify(a)) throw new HttpError(409, 'Google connection changed during refresh. Try again.')
+    setMeta(PREFIX + id, JSON.stringify({ ...a, accessToken: t.access_token, refreshToken: t.refresh_token ?? a.refreshToken, expires: Date.now() + t.expires_in * 1000 }))
+    return t.access_token
+  })()
+  refreshes.set(id, operation)
+  try { return await operation } finally { refreshes.delete(id) }
+}

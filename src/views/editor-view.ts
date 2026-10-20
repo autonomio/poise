@@ -4,6 +4,7 @@ import { patchContent } from '../dom-patch'
 import { registerReloadGuard } from '../self-update-watch'
 import { ICON_PUBLISH, closePublishPanel, togglePublishPanel } from './editor-publish'
 import { EditorReviews } from './editor-reviews'
+import { GoogleDocuments } from './google-documents'
 import type { ArticleReview } from '../publishing-review'
 // Editor — minimalist markdown writing surface.
 //
@@ -112,6 +113,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 // across annotations — only one is visible at a time.
 let annotations: Annotation[] = []
 let articleReviews: EditorReviews | undefined
+let googleDocuments: GoogleDocuments | null = null
 const reviewSessions = new Map<string, string>()
 let annotationsReadySlug: string | null = null
 const documentVersions = new Map<string, string>()
@@ -2278,6 +2280,7 @@ async function loadDoc(slug: string) {
     if (!(await flushBeforeLeavingDocument('switch documents')) || requestId !== loadRequestId) return
     currentSlug = nextSlug
     articleReviews?.clear()
+    googleDocuments?.load(null)
     documentVersions.set(currentSlug, data.version)
     loadIntoEditor(data.content)
     // History is per-document: undo must never walk back into the
@@ -2294,6 +2297,7 @@ async function loadDoc(slug: string) {
     if (requestId !== loadRequestId) return
     renderAnnotationOverlay()
     void articleReviews?.load(currentSlug)
+    googleDocuments?.load(currentSlug)
   } catch (err) {
     console.error('[editor] loadDoc failed:', err)
   }
@@ -2380,6 +2384,7 @@ async function deleteCurrent() {
   annotationsVersions.delete(d.slug)
   currentSlug = null
   articleReviews?.clear()
+    googleDocuments?.load(null)
   annotations = []
   annotationsReadySlug = null
   if (docEl) {
@@ -4819,6 +4824,20 @@ export async function initEditorView() {
     triggerTitleEl = viewEl.querySelector<HTMLElement>('.editor-doc-trigger-title')
     menuEl         = viewEl.querySelector<HTMLElement>('#editor-doc-menu')
     metaEl         = viewEl.querySelector<HTMLElement>('#editor-meta')
+    googleDocuments = new GoogleDocuments({
+      view: viewEl, flush: flushEditorSaves,
+      imported: async (slug) => {
+        // A successful import invalidates the old editor version before any further save.
+        if (currentSlug !== slug) return
+        const response = await fetch(`/api/editor/doc/${encodeURIComponent(slug)}`)
+        if (!response.ok) throw new Error('Google changes were imported; reload the document to continue.')
+        const doc = await response.json() as { content: string, version: string }
+        documentVersions.set(slug, doc.version)
+        loadIntoEditor(doc.content); resetEditorHistory()
+        googleDocuments?.load(slug)
+      },
+      freeze: frozen => { if (docEl) docEl.contentEditable = frozen ? 'false' : 'true' },
+    })
     articleReviews = new EditorReviews({
       view: viewEl, document: docEl!, text: serializeDoc,
       range: (start, end) => domRangeForCharRange(docTextSnapshot(), start, end),
@@ -4837,6 +4856,7 @@ export async function initEditorView() {
   // refreshes its picker; reopening the same file would replace that state.
   if (currentSlug) {
     articleReviews?.resume()
+    googleDocuments?.resume()
     void fetchDocs()
     requestAnimationFrame(() => { if (!viewEl.hidden) renderAnnotationOverlay() })
     return
@@ -4863,6 +4883,7 @@ async function openInitialDocument(): Promise<void> {
 
 export function stopEditorRefresh() {
   articleReviews?.stop()
+  googleDocuments?.stop()
   clearSaveTimer()
   clearAnnotationsSaveTimer()
   void flushEditorSaves()

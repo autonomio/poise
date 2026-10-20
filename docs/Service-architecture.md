@@ -816,3 +816,29 @@ no new Caller reads, gateway scope, public machine credential or proxy delivery
 is introduced. It shares the current workspace owner/operator boundary and
 cannot influence execution. Concrete pilot deployment remains outside this
 package contract.
+
+## Google document publishing
+
+Google OAuth belongs to the individual workspace, independently of gateway
+sign-in and CLI accounts. Only browser scope reaches its routes; existing
+identity and origin checks cover every Google API action.
+
+- `GET /api/google/accounts` returns configuration status, client ID/origin and
+  `{id,email,connected}` accounts. It never returns secrets or tokens.
+- `POST /api/google/config` configures `{clientId,clientSecret,origin}`;
+  `/connect` starts browser-bound PKCE authorization, `/callback` exchanges
+  `{code,state}`, and `/disconnect` forgets `{accountId}`.
+- The OAuth redirect URI is the workspace's ordinary root page. Google callback
+  parameters are exchanged via a same-origin POST, then removed from the URL.
+- `GET /api/editor/doc/:slug/google` returns local publication bindings. POST
+  suffixes `/sync`, `/publish`, `/review` and `/import` read remote state, publish
+  the specified `{accountId,localVersion}`, review that account's remote text,
+  and import `{accountId,localVersion,remoteSha}` respectively.
+
+Imports check the reviewed local and remote versions and retain the old local
+file. Publication requires an unchanged remote text baseline and a live ETag.
+Provider comment tokens stay server-side; only comment text, author, quote,
+resolution state and local offsets reach the browser. The Google metadata
+round-trip and the API behavior are tested in `tests/google-*.test.ts`; browser
+journeys are in `tests/e2e/google-publishing.spec.ts`. See
+[Publishing](Publishing.md#google-docs) for setup and user behavior.

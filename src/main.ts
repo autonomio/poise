@@ -1,3 +1,4 @@
+import { finishGoogleConnection } from './google'
 import './style.css'
 import './motion.css'
 import { finishMotion, initMotion, reveal } from './motion'
@@ -193,6 +194,7 @@ watchForUpdates()
 watchForSignOut()
 
 ;(async () => {
+  await finishGoogleConnection()
   await loadSettings()
   if (new URLSearchParams(location.search).get('view') === 'logging') menu.switchTo('logging')
   else showView(menu.currentView())

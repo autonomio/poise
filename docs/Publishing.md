@@ -206,7 +206,7 @@ retried. A PR's cached review history is limited to 2 MB.
 ## Limits
 
 - Images are not published yet: the Editor holds none.
-- Only sites in GitHub repositories.
+- Website publishing supports sites in GitHub repositories. Google publishing uses Markdown files in Drive.
 - Up to ten sites at once, and a document's record of where it is published
   stays under 1 MB. A publication plainly too large is refused before
   anything is written; a site whose record a commit could take past it is
@@ -216,3 +216,57 @@ retried. A PR's cached review history is limited to 2 MB.
   for one in progress.
 - A site's patterns are checked with a time limit of 500 ms, since a
   description comes from a repository.
+
+## Google Docs
+
+Connect Google accounts in Settings → Accounts. Each account has its own grant;
+select an email in the Editor's Publish panel to create or update that account's
+private Markdown file in My Drive. Google Docs edits the `.md` file without
+conversion. One document can have one Google file per connected account, up to
+ten accounts. Google publishing is independent of website publishing.
+
+Settings → Accounts → Google OAuth setup accepts a Google **web application**
+OAuth client ID and secret. Enable Google Drive API in that client's Google Cloud
+project, configure its consent screen, and register the exact redirect URI shown
+in Settings (the Poise origin plus `/`). Add your accounts as test users while
+the consent screen is in Testing. Google can expire testing grants; reconnect
+when Google rejects a grant. Poise requests `openid`, `email` and `drive.file`,
+which covers files Poise creates. Existing arbitrary Drive files and folder
+selection are not supported. All users of a service deployment configure their
+own client in their isolated workspace. Changing client IDs requires disconnecting
+connected accounts first. Disconnect forgets the local grant and leaves remote
+files and other applications' grants intact.
+
+Credentials remain in the workspace's private SQLite database (mode 0600), never
+in browser responses or agent process environments. The OAuth code exchange
+uses a one-time, ten-minute state, PKCE and an HttpOnly browser binding cookie.
+Google redirects to Poise's normal page; it then exchanges the code through a
+same-origin API request and removes OAuth parameters from the address bar.
+
+The Editor's Google Docs section displays native Markdown comments with their
+author, quoted passage and resolution state. Open Google for replies and comment
+resolution. Native comments are embedded in the Markdown, separately from Drive
+file comments. Poise preserves their opaque metadata and moves their inline
+markers only when the passage is exact and unambiguous. Editing or deleting a
+commented passage, ambiguous locations, and unrecognized metadata stop
+publication with a message. Handle those passages in Google Docs first.
+
+An open Editor checks connected publications every minute. Refresh Google checks
+immediately. Incoming edits produce an updates notice; they never overwrite the
+Poise draft automatically. Review Google changes shows the Poise and Google
+versions. Keep Poise draft dismisses the review. Import Google version explicitly
+replaces the local text, after checking that neither version changed during
+review. It stores the previous local Markdown under
+`~/.poise/editor/.google-history/<slug>/` (or `$POISE_EDITOR_DIR/.google-history/`).
+These files can be restored as ordinary Markdown. Imports never publish to
+another Google account or website.
+
+Publishing refuses unseen Google text edits and uses Google's ETag precondition
+to reject edits made during the write. A missing ETag also refuses publication.
+A file ID is reserved and recorded before its first write so a lost create
+response cannot cause duplicate documents. Local bindings live in
+`<slug>.google.json` beside the draft. Deleting a draft removes its bindings;
+Google files and import history remain. Revoked access, deleted or trashed files,
+and disconnected accounts require action; Poise never silently substitutes an
+account or creates a replacement file. Only Markdown is supported, with a 10 MB
+remote file limit and the Editor's 5 MB text limit.

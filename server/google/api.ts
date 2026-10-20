@@ -1,0 +1,124 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createHash } from 'node:crypto'
+import { HttpError, httpStatus, readJson } from '../http'
+import { EditorConflictError, importGoogleDocument, readDoc, readGoogleLedger, withPublishLock, writeGoogleLedger } from '../editor'
+import { beginGoogleLogin, completeGoogleLogin, configureGoogle, disconnectGoogle, googleAccounts, googleAccountSettings } from './accounts'
+import { createGoogleFile, googleFileId, readGoogleFile, updateGoogleFile } from './drive'
+import { readGoogleMarkdown, updateGoogleMarkdown } from './markdown'
+import { releaseBackgroundPaused, trackReleaseBackground } from '../release-background'
+import type { GoogleChangeReview, GoogleDocumentView, GooglePublication, GooglePublicationView } from './types'
+
+const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+function text(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value || value.length > 256) throw new HttpError(400, `${field} is required.`)
+  return value
+}
+function binding(records: GooglePublication[], id: string) {
+  const record = records.find(record => record.accountId === id)
+  if (!record) throw new HttpError(404, 'This document is not published to that Google account.')
+  return record
+}
+async function documentView(slug: string, sync: boolean): Promise<GoogleDocumentView> {
+  const doc = await readDoc(slug), records = await readGoogleLedger(slug), accounts = googleAccounts()
+  const publications: GooglePublicationView[] = []
+  for (const record of records) {
+    const a = accounts.find(a => a.id === record.accountId)
+    const view: GooglePublicationView = { ...record, email: a?.email ?? 'Disconnected Google account', connected: a?.connected ?? false, remoteChanged: false, localChanged: doc.version !== record.sourceSha, comments: [] }
+    if (sync && a?.connected) {
+      try {
+        const file = await readGoogleFile(record.accountId, record.fileId), parsed = readGoogleMarkdown(file.raw)
+        view.remoteChanged = sha(parsed.text) !== record.remoteSha
+        view.comments = parsed.comments
+      } catch (error) { view.problem = (error as Error).message }
+    }
+    publications.push(view)
+  }
+  return { version: doc.version, publications }
+}
+async function publish(slug: string, input: Record<string, unknown>) {
+  const id = text(input.accountId, 'Google account'), version = text(input.localVersion, 'Document version')
+  if (!googleAccounts().some(a => a.id === id && a.connected)) throw new HttpError(422, 'Connect that Google account first.')
+  return withPublishLock(async () => {
+    const doc = await readDoc(slug)
+    if (doc.version !== version) throw new EditorConflictError(doc.version)
+    const records = await readGoogleLedger(slug)
+    let record = records.find(r => r.accountId === id)
+    if (!record) {
+      if (records.length >= 10) throw new HttpError(422, 'A document can have at most ten Google destinations.')
+      // Reserve and persist the remote ID before a network write. An uncertain create cannot duplicate it.
+      const fileId = await googleFileId(id)
+      record = { accountId: id, fileId, title: doc.content.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '').slice(0, 200) || slug, url: `https://docs.google.com/document/d/${fileId}/edit`, sourceSha: doc.version, remoteSha: '', pending: true }
+      records.push(record)
+      await writeGoogleLedger(slug, records)
+    }
+    let remote
+    try { remote = await readGoogleFile(id, record.fileId) }
+    catch (error) {
+      if (!record.pending || !(error instanceof HttpError) || error.statusCode !== 404) throw error
+      const raw = updateGoogleMarkdown('', doc.content)
+      await createGoogleFile(id, record.fileId, record.title + '.md', raw)
+      remote = await readGoogleFile(id, record.fileId)
+      if (remote.raw !== raw) throw new HttpError(409, 'Google changed immediately after publication. Review the Google file.')
+      record.remoteSha = sha(readGoogleMarkdown(raw).text)
+    }
+    const parsed = readGoogleMarkdown(remote.raw)
+    // Pending retries may adopt only the exact reserved publication, never unknown remote edits.
+    if (record.pending && !record.remoteSha) {
+      if (parsed.text !== doc.content) throw new HttpError(409, 'The reserved Google publication differs from this draft. Review the Google file.')
+      record.remoteSha = sha(parsed.text)
+    }
+    if (sha(parsed.text) !== record.remoteSha) throw new HttpError(409, 'Google has unseen edits. Review Google changes before publishing.')
+    const raw = updateGoogleMarkdown(remote.raw, doc.content)
+    if (raw !== remote.raw) await updateGoogleFile(id, record.fileId, raw, remote.etag)
+    record.sourceSha = doc.version; record.remoteSha = sha(doc.content); record.pending = false
+    await writeGoogleLedger(slug, records)
+    return documentView(slug, true)
+  })
+}
+async function review(slug: string, input: Record<string, unknown>): Promise<GoogleChangeReview> {
+  const record = binding(await readGoogleLedger(slug), text(input.accountId, 'Google account'))
+  const [doc, remote] = await Promise.all([readDoc(slug), readGoogleFile(record.accountId, record.fileId)])
+  const parsed = readGoogleMarkdown(remote.raw)
+  return { localText: doc.content, remoteText: parsed.text, localVersion: doc.version, remoteSha: sha(remote.raw), comments: parsed.comments }
+}
+async function importChanges(slug: string, input: Record<string, unknown>) {
+  const id = text(input.accountId, 'Google account'), version = text(input.localVersion, 'Document version'), remoteSha = text(input.remoteSha, 'Google version')
+  return withPublishLock(async () => {
+    const records = await readGoogleLedger(slug), record = binding(records, id)
+    const remote = await readGoogleFile(id, record.fileId)
+    if (sha(remote.raw) !== remoteSha) throw new HttpError(409, 'Google changed after the review opened. Review the latest version.')
+    const parsed = readGoogleMarkdown(remote.raw)
+    await importGoogleDocument(slug, parsed.text, version)
+    record.sourceSha = sha(parsed.text); record.remoteSha = sha(parsed.text); record.pending = false
+    await writeGoogleLedger(slug, records)
+    return { ok: true }
+  })
+}
+export async function handleGoogleApi(req: IncomingMessage, res: ServerResponse, url: string): Promise<boolean> {
+  const path = url.split('?')[0], match = /^\/api\/editor\/doc\/([A-Za-z0-9._-]+)\/google(?:\/(sync|publish|review|import))?$/.exec(path)
+  if (!path.startsWith('/api/google/') && !match) return false
+  const send = (status: number, body: unknown) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-store'); res.end(JSON.stringify(body)); return true }
+  let done: (() => void) | undefined
+  try {
+    if (req.method === 'GET' && path === '/api/google/accounts') return send(200, googleAccountSettings())
+    if (req.method === 'GET' && match && !match[2]) return send(200, await documentView(match[1], false))
+    if (req.method !== 'POST') return send(405, { error: 'Use POST for Google actions.' })
+    if (releaseBackgroundPaused()) throw new HttpError(503, 'Poise is installing an update; try again afterwards.')
+    done = trackReleaseBackground()
+    const body = await readJson<Record<string, unknown>>(req)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'A Google action object is required.')
+    if (path === '/api/google/config') { configureGoogle(body); return send(200, googleAccountSettings()) }
+    if (path === '/api/google/connect') return send(200, beginGoogleLogin(req, res))
+    if (path === '/api/google/callback') { await completeGoogleLogin(req, res, body); return send(200, googleAccountSettings()) }
+    if (path === '/api/google/disconnect') { disconnectGoogle(text(body.accountId, 'Google account')); return send(200, googleAccountSettings()) }
+    if (match) {
+      if (match[2] === 'sync') return send(200, await documentView(match[1], true))
+      if (match[2] === 'publish') return send(200, await publish(match[1], body))
+      if (match[2] === 'review') return send(200, await review(match[1], body))
+      if (match[2] === 'import') return send(200, await importChanges(match[1], body))
+    }
+    return send(404, { error: 'Unknown Google action.' })
+  } catch (error) {
+    return send((error as NodeJS.ErrnoException).code === 'ENOENT' ? 404 : error instanceof EditorConflictError ? 409 : httpStatus(error, 500), { error: (error as Error).message })
+  } finally { done?.() }
+}
