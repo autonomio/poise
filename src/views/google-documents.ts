@@ -1,7 +1,6 @@
 import { escapeGoogleHtml as escape, GOOGLE_CHANGED, googleCall, googleDocument, googlePath, googleReview, type GoogleSettings } from '../google'
 import type { GoogleChangeReview, GoogleDocumentView } from '../../server/google/types'
 import type { PublishPanelHost } from './editor-publish'
-import './google-documents.css'
 
 export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost): void {
   const element = document.createElement('section'); element.className = 'google-publish'

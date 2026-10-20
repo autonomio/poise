@@ -32,6 +32,7 @@ import './views/notification-rail.css'
 import './views/updating.css'
 import './views/editor-publish.css'
 import './views/editor-reviews.css'
+import './views/google-documents.css'
 
 const viewMainEl = document.getElementById('view-main')!
 const viewCurrentEl = document.getElementById('view-current')!
