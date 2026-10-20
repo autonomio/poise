@@ -51,6 +51,7 @@ prepare, binding and row materialization. It is part of those worker phases,
 not total SQL-engine time; do not add nested durations together. Missing,
 invalid or over-one-day timings are omitted. A still-active operation has no
 completed worker timings. No early headers or late-result wait is added.
+Rejected selectors may measure their existing health fallback.
 Headers contain fixed metric names and numeric milliseconds only, with no
 identifiers or payloads; they are not retained. When a client receives no
 usable response, handler arrival and the missing phases remain unknown.
