@@ -526,6 +526,31 @@ function clearReplayRefusal(id: string): void {
   viewFeedback(`swarm-replay:${id}`, 'Swarm replay refused', '')
 }
 
+function replayCell(e: LogEntry): string {
+  if (!isReplayable(e)) return '<span class="agent-dash">—</span>'
+  const busy = replaysInFlight.has(e.id)
+  return `<button class="replay-btn${busy ? ' spinning' : ''}"${busy ? ' disabled' : ''}`
+    + ` title="${busy ? 'Replay in progress…' : 'Replay this run'}" aria-label="Replay this run">${REPLAY_SVG}</button>`
+}
+
+// The filter must match what the column shows. It matched `repo` and `pr_id`
+// separately but never the rendered "name#123", so copying the Target cell and
+// pasting it in — the first thing anyone tries — returned nothing. The error
+// text and the outcome are searchable too: those are the rows a person is
+// usually hunting for, and neither had any way to be found.
+function matchesSearch(e: LogEntry): boolean {
+  if (!searchQuery) return true
+  const q = searchQuery.toLowerCase()
+  return [
+    e.id, e.model, e.recovery_model, e.behavior, e.prompt, e.status, e.actor, e.repo, e.pr_id,
+    targetText(e), e.session_id, e.outcome, e.error,
+  ].some((f) => (f || '').toLowerCase().includes(q))
+}
+
+function visible(): LogEntry[] {
+  return entries.filter(matchesSearch)
+}
+
 // Every column in the header row; the expanded detail row spans all of them.
 const COLUMN_COUNT = 11
 

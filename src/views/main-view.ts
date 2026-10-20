@@ -637,9 +637,10 @@ function attachHandlers() {
       }
       reviewed.add(item.html_url)
       saveReviewed()
+      viewFeedback(`archive-review:${item.html_url}`, 'Archive action needs attention', '')
     } catch (err) {
       console.error('Review failed:', err)
-      viewFeedback('main-view-action', 'Archive action needs attention', `Review failed: ${(err as Error).message}`)
+      viewFeedback(`archive-review:${item.html_url}`, 'Archive action needs attention', `Review failed: ${(err as Error).message}`)
     } finally {
       reviewing.delete(item.html_url)
       // The button that was clicked may be long gone — the table is rebuilt by

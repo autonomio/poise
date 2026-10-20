@@ -1513,6 +1513,7 @@ function attachCardClickHandlers() {
           const text = await res.text().catch(() => '')
           throw new Error(text ? `${res.status}: ${text.slice(0, 200)}` : `HTTP ${res.status}`)
         }
+        viewFeedback(`current-review:${item.url}`, 'Current action needs attention', '')
         reviewBtn.classList.remove('running')
         reviewBtn.classList.add('done')
         reviewBtn.innerHTML = PR_REVIEW_PLAY_SVG
@@ -1536,7 +1537,7 @@ function attachCardClickHandlers() {
         reviewBtn.disabled = false
         reviewBtn.innerHTML = PR_REVIEW_PLAY_SVG
         console.error('PR review trigger failed:', err)
-        viewFeedback('current-view-action', 'Current action needs attention', `Could not start review: ${(err as Error).message}`)
+        viewFeedback(`current-review:${item.url}`, 'Current action needs attention', `Could not start review: ${(err as Error).message}`)
       }
       return
     }
@@ -1552,8 +1553,8 @@ function attachCardClickHandlers() {
       const card = manualCards.find((c) => c.id === id)
       const preview = (card?.text || '').trim().replace(/\s+/g, ' ').slice(0, 80)
       if (!window.confirm(preview ? `Delete this card?\n\n${preview}${preview.length === 80 ? '…' : ''}` : 'Delete this card?')) return
-      try { await deleteManualCard(id) }
-      catch (err) { viewFeedback('current-view-action', 'Current action needs attention', `Could not delete the card: ${(err as Error).message}`) }
+      try { await deleteManualCard(id); viewFeedback(`current-delete:${id}`, 'Current action needs attention', '') }
+      catch (err) { viewFeedback(`current-delete:${id}`, 'Current action needs attention', `Could not delete the card: ${(err as Error).message}`) }
       return
     }
     const cardEl = target.closest<HTMLElement>('.card')

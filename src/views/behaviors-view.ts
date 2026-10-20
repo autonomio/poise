@@ -259,8 +259,8 @@ function reviewersCell(meta: typeof BEHAVIORS[number]): string {
 
 function writeReviewers(key: BehaviorKey, value: ReviewerCount): void {
   reviewersInFlight.add(key)
-  void setReviewers(key, value).catch((err: unknown) => {
-    viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not update the reviewer count: ${(err as Error).message}`)
+  void setReviewers(key, value).then(() => viewFeedback(`behavior-reviewers:${key}`, 'Behavior action needs attention', '')).catch((err: unknown) => {
+    viewFeedback(`behavior-reviewers:${key}`, 'Behavior action needs attention', `Could not update the reviewer count: ${(err as Error).message}`)
   }).then(() => {
     reviewersInFlight.delete(key)
     const current = viewEl?.querySelector<HTMLSelectElement>(
@@ -674,6 +674,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
   }
   setTriggersStatus('Saving…')
   triggersSaving = setSettingFields(key, changes).then(() => {
+    setTriggersStatus('')
     finishClosingTriggersPanel()
     return true
   }, (err: unknown) => {
@@ -1111,8 +1112,8 @@ function attachHandlers() {
       const requested = cb.checked
       cb.disabled = true
       togglesInFlight.add(key)
-      void setEnabled(key, requested).catch((err: unknown) => {
-        viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not update behavior: ${(err as Error).message}`)
+      void setEnabled(key, requested).then(() => viewFeedback(`behavior-toggle:${key}`, 'Behavior action needs attention', '')).catch((err: unknown) => {
+        viewFeedback(`behavior-toggle:${key}`, 'Behavior action needs attention', `Could not update behavior: ${(err as Error).message}`)
       }).finally(() => {
         // On failure setEnabled restores its local mirror. On success the
         // change event may have rebuilt this row, so repaint whichever input
