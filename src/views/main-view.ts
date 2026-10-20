@@ -639,7 +639,7 @@ function attachHandlers() {
       saveReviewed()
     } catch (err) {
       console.error('Review failed:', err)
-      alert(`Review failed: ${(err as Error).message}`)
+      viewFeedback('main-view-action', 'Archive action needs attention', `Review failed: ${(err as Error).message}`)
     } finally {
       reviewing.delete(item.html_url)
       // The button that was clicked may be long gone — the table is rebuilt by

@@ -260,7 +260,7 @@ function reviewersCell(meta: typeof BEHAVIORS[number]): string {
 function writeReviewers(key: BehaviorKey, value: ReviewerCount): void {
   reviewersInFlight.add(key)
   void setReviewers(key, value).catch((err: unknown) => {
-    alert(`Could not update the reviewer count: ${(err as Error).message}`)
+    viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not update the reviewer count: ${(err as Error).message}`)
   }).then(() => {
     reviewersInFlight.delete(key)
     const current = viewEl?.querySelector<HTMLSelectElement>(
@@ -653,7 +653,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
         setTriggersStatus(`Not a GitHub username: ${invalid.join(', ')}`, 'error')
         return Promise.resolve(false)
       }
-      alert(`The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`)
+      viewFeedback('behaviors-view-action', 'Behavior action needs attention', `The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`)
       delete changes.authors
     }
   }
@@ -666,7 +666,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
       setTriggersStatus(`Not saved — the current ${meta.hasSkips ? 'setting' : 'repositories'} could not be read from the server.`, 'error')
       return Promise.resolve(false)
     }
-    alert(meta.hasSkips
+    viewFeedback('behaviors-view-action', 'Behavior action needs attention', meta.hasSkips
       ? `The ${meta.label} setting was not saved: the current one could not be read from the server.`
       : 'The Review New Issues repositories were not saved: the current ones could not be read from the server.')
     finishClosingTriggersPanel()
@@ -678,7 +678,7 @@ function closeTriggersPanel(force = false): Promise<boolean> {
     return true
   }, (err: unknown) => {
     if (force) {
-      alert(`Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`)
+      viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`)
       finishClosingTriggersPanel()
       return true
     }
@@ -1112,7 +1112,7 @@ function attachHandlers() {
       cb.disabled = true
       togglesInFlight.add(key)
       void setEnabled(key, requested).catch((err: unknown) => {
-        alert(`Could not update behavior: ${(err as Error).message}`)
+        viewFeedback('behaviors-view-action', 'Behavior action needs attention', `Could not update behavior: ${(err as Error).message}`)
       }).finally(() => {
         // On failure setEnabled restores its local mirror. On success the
         // change event may have rebuilt this row, so repaint whichever input

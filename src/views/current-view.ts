@@ -1536,7 +1536,7 @@ function attachCardClickHandlers() {
         reviewBtn.disabled = false
         reviewBtn.innerHTML = PR_REVIEW_PLAY_SVG
         console.error('PR review trigger failed:', err)
-        alert(`Could not start review: ${(err as Error).message}`)
+        viewFeedback('current-view-action', 'Current action needs attention', `Could not start review: ${(err as Error).message}`)
       }
       return
     }
@@ -1553,7 +1553,7 @@ function attachCardClickHandlers() {
       const preview = (card?.text || '').trim().replace(/\s+/g, ' ').slice(0, 80)
       if (!window.confirm(preview ? `Delete this card?\n\n${preview}${preview.length === 80 ? '…' : ''}` : 'Delete this card?')) return
       try { await deleteManualCard(id) }
-      catch (err) { alert(`Could not delete the card: ${(err as Error).message}`) }
+      catch (err) { viewFeedback('current-view-action', 'Current action needs attention', `Could not delete the card: ${(err as Error).message}`) }
       return
     }
     const cardEl = target.closest<HTMLElement>('.card')

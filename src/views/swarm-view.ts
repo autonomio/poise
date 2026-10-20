@@ -518,62 +518,12 @@ function isReplayable(e: LogEntry): boolean {
 // outlive the DOM node.
 const replaysInFlight = new Set<string>()
 
-// Why a replay was refused, by row id. The server holds a replay to the check
-// the scheduler applies and names the check that failed; that answer belongs
-// under the row Replay was pressed on, and stays until it is dismissed or the
-// row is replayed again. Kept here, like the in-flight guard, so a render does
-// not lose it.
-const replayRefusals = new Map<string, string>()
-
-// The message alone is the alert, so the Dismiss button is not read with it.
-function refusalMarkup(message: string): string {
-  return `<td colspan="${COLUMN_COUNT}"><div class="agent-refusal">`
-    + `<span class="agent-refusal-text" role="alert">${escapeHtml(message)}</span>`
-    + '<button type="button" class="agent-refusal-dismiss" aria-label="Dismiss">&times;</button></div></td>'
-}
-
-function buildRefusalRow(id: string, message: string): HTMLTableRowElement {
-  const tr = document.createElement('tr')
-  tr.className = 'agent-refusal-row'
-  tr.dataset.refusalFor = id
-  tr.innerHTML = refusalMarkup(message)
-  return tr
-}
-
 function showReplayRefusal(id: string, message: string): void {
-  replayRefusals.set(id, message)
-  bodyEl.querySelector(`tr.agent-refusal-row[data-refusal-for="${id}"]`)?.remove()
-  bodyEl.querySelector(`tr.agent-row[data-id="${id}"]`)?.insertAdjacentElement('afterend', buildRefusalRow(id, message))
+  viewFeedback(`swarm-replay:${id}`, 'Swarm replay refused', message, 'action_needed')
 }
 
 function clearReplayRefusal(id: string): void {
-  replayRefusals.delete(id)
-  bodyEl.querySelector(`tr.agent-refusal-row[data-refusal-for="${id}"]`)?.remove()
-}
-
-function replayCell(e: LogEntry): string {
-  if (!isReplayable(e)) return '<span class="agent-dash">—</span>'
-  const busy = replaysInFlight.has(e.id)
-  return `<button class="replay-btn${busy ? ' spinning' : ''}"${busy ? ' disabled' : ''}`
-    + ` title="${busy ? 'Replay in progress…' : 'Replay this run'}" aria-label="Replay this run">${REPLAY_SVG}</button>`
-}
-
-// The filter must match what the column shows. It matched `repo` and `pr_id`
-// separately but never the rendered "name#123", so copying the Target cell and
-// pasting it in — the first thing anyone tries — returned nothing. The error
-// text and the outcome are searchable too: those are the rows a person is
-// usually hunting for, and neither had any way to be found.
-function matchesSearch(e: LogEntry): boolean {
-  if (!searchQuery) return true
-  const q = searchQuery.toLowerCase()
-  return [
-    e.id, e.model, e.recovery_model, e.behavior, e.prompt, e.status, e.actor, e.repo, e.pr_id,
-    targetText(e), e.session_id, e.outcome, e.error,
-  ].some((f) => (f || '').toLowerCase().includes(q))
-}
-
-function visible(): LogEntry[] {
-  return entries.filter(matchesSearch)
+  viewFeedback(`swarm-replay:${id}`, 'Swarm replay refused', '')
 }
 
 // Every column in the header row; the expanded detail row spans all of them.
@@ -755,16 +705,13 @@ function reconcileRows(nextRows: RunRow[]): void {
   layout(bodyEl, () => {
   const main = new Map<string, HTMLTableRowElement>()
   const detail = new Map<string, HTMLTableRowElement>()
-  const refusal = new Map<string, HTMLTableRowElement>()
   for (const row of [...bodyEl.children] as HTMLTableRowElement[]) {
     if (row.dataset.id) main.set(row.dataset.id, row)
     if (row.dataset.expandFor) detail.set(row.dataset.expandFor, row)
-    if (row.dataset.refusalFor) refusal.set(row.dataset.refusalFor, row)
   }
   const ids = new Set(nextRows.map(({ entry }) => entry.id))
   for (const [id, row] of main) if (!ids.has(id)) retire(row)
   for (const [id, row] of detail) if (!ids.has(id) || !expanded.has(id)) retire(row)
-  for (const [id, row] of refusal) if (!ids.has(id) || !replayRefusals.has(id)) retire(row)
   let cursor: ChildNode | null = bodyEl.firstChild
   const place = (row: HTMLTableRowElement) => {
     if (cursor !== row) bodyEl.insertBefore(row, cursor)
@@ -789,8 +736,6 @@ function reconcileRows(nextRows: RunRow[]): void {
       mainRowMarkup.set(row, markup)
     }
     place(row)
-    const refused = replayRefusals.get(entry.id)
-    if (refused !== undefined) place(refusal.get(entry.id) ?? buildRefusalRow(entry.id, refused))
     if (expanded.has(entry.id)) {
       const expandedRow = detail.get(entry.id) || buildExpandRow(entry)
       refreshRunDetail(expandedRow, entry)
@@ -911,12 +856,13 @@ function attachClicks() {
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(String(data.error || `HTTP ${res.status}`))
+        viewFeedback(`swarm-stop:${id}`, 'Swarm stop failed', '')
         // Pull the log right away so the row settles without waiting for
         // the 15s poll.
         window.setTimeout(() => { void pollOnce() }, 300)
       } catch (err) {
         console.error('[swarm] stop failed:', err)
-        alert(`Stop failed: ${(err as Error).message}`)
+        viewFeedback(`swarm-stop:${id}`, 'Swarm stop failed', (err as Error).message)
       } finally {
         stopsInFlight.delete(id)
         const cell = bodyEl.querySelector<HTMLElement>(`tr.agent-row[data-id="${id}"] .stop-cell`)
@@ -965,7 +911,7 @@ function attachClicks() {
         window.setTimeout(() => { void pollOnce() }, 800)
       } catch (err) {
         console.error('[swarm] replay failed:', err)
-        alert(`Replay failed: ${(err as Error).message}`)
+        viewFeedback(`swarm-replay:${id}`, 'Swarm replay failed', (err as Error).message)
       } finally {
         replaysInFlight.delete(id)
         // The button that was clicked may have been replaced by a render while
@@ -979,15 +925,6 @@ function attachClicks() {
           current.title = 'Replay this run'
         }
       }
-      return
-    }
-
-    // Dismissing a refusal hands focus back to the Replay it answered.
-    const dismiss = target.closest<HTMLButtonElement>('.agent-refusal-dismiss')
-    if (dismiss) {
-      const id = dismiss.closest<HTMLTableRowElement>('tr')?.dataset.refusalFor || ''
-      clearReplayRefusal(id)
-      bodyEl.querySelector<HTMLButtonElement>(`tr.agent-row[data-id="${id}"] .replay-btn`)?.focus()
       return
     }
 
