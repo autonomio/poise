@@ -18,7 +18,7 @@ async function metadata(accountId: string, id: string) {
   const file = await response.json() as GoogleFile
   if (file.id !== id || file.mimeType !== 'text/markdown' || file.trashed) throw new HttpError(422, 'The linked Google file must be an available Markdown file.')
   const etag = response.headers.get('etag')
-  if (!etag) throw new HttpError(502, 'Google returned no write precondition; publishing is refused.')
+  if (!etag || !/^"[^"\r\n]+"$/.test(etag)) throw new HttpError(502, 'Google returned no usable strong write precondition; publishing is refused.')
   return { file, etag }
 }
 export async function readGoogleFile(accountId: string, id: string): Promise<{ raw: string, etag: string, file: GoogleFile }> {
@@ -51,7 +51,7 @@ export async function createGoogleFile(accountId: string, id: string, name: stri
   await driveRequest(accountId, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body })
 }
 export async function updateGoogleFile(accountId: string, id: string, raw: string, etag: string): Promise<void> {
-  if (!etag) throw new HttpError(428, 'A Google write precondition is required.')
+  if (!etag || !/^"[^"\r\n]+"$/.test(etag)) throw new HttpError(428, 'A strong Google write precondition is required.')
   if (Buffer.byteLength(raw) > MAX_BYTES) throw new HttpError(422, 'The Google Markdown file exceeds 10 MB.')
   await driveRequest(accountId, `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(id)}?uploadType=media&fields=id&supportsAllDrives=true`, { method: 'PATCH', headers: { 'Content-Type': 'text/markdown; charset=UTF-8', 'If-Match': etag }, body: raw })
 }

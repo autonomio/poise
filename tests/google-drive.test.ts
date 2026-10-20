@@ -17,11 +17,13 @@ describe('Google Drive conditional content access', () => {
   })
   it('fails closed when a write precondition is missing or Google rejects it', async () => {
     fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown' })))
-    await expect(readGoogleFile('one', 'file')).rejects.toThrow('no write precondition')
+    await expect(readGoogleFile('one', 'file')).rejects.toThrow('no usable strong write precondition')
     await expect(updateGoogleFile('one', 'file', 'new', '')).rejects.toThrow('precondition is required')
     fake.mockResolvedValueOnce(new Response('{}', { status: 412 }))
     await expect(updateGoogleFile('one', 'file', 'new', '"old"')).rejects.toThrow('changed during publishing')
     expect(fake).toHaveBeenCalledTimes(2)
+    fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown' }), { headers: { etag: 'W/"weak"' } }))
+    await expect(readGoogleFile('one', 'file')).rejects.toThrow('strong write precondition')
   })
   it('rejects native rich Google Docs, trashed files and invalid UTF-8', async () => {
     fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'application/vnd.google-apps.document' }), { headers: { etag: '"rev"' } }))

@@ -266,8 +266,9 @@ review. It stores the previous local Markdown under
 These files can be restored as ordinary Markdown. Imports never publish to
 another Google account or website.
 
-Publishing refuses unseen Google text edits and uses Google's ETag precondition
-to reject edits made during the write. A missing ETag also refuses publication.
+Publishing refuses unseen Google text edits and sends a strong ETag write
+precondition. Missing, weak or unusable ETags refuse publication. Provider-side
+stale-write rejection must be verified before release (see the proof below).
 A file ID is reserved and recorded before its first write so a lost create
 response cannot cause duplicate documents. Local bindings live in
 `<slug>.google.json` beside the draft. Deleting a draft removes its bindings;
@@ -275,3 +276,36 @@ Google files and import history remain. Revoked access, deleted or trashed files
 and disconnected accounts require action; Poise never silently substitutes an
 account or creates a replacement file. Only Markdown is supported, with a 10 MB
 remote file limit and the Editor's 5 MB text limit.
+
+### Credentials, recovery and proof boundary
+
+Google client secrets, access tokens and refresh tokens are stored unencrypted
+in the workspace's private SQLite file. The operating-system user, unsandboxed
+agents running as that user, and the service operator can read them. Workspace
+backups contain them too and require the protections described in
+[Security → The host](../SECURITY.md#the-host). Browser API responses and upstream
+error messages never include these credentials. OAuth client configuration is
+per workspace; it does not require sharing a secret through the gateway.
+
+Disconnect waits for admitted Google publish/import work to settle, then forgets
+the grant. It supersedes older unfinished OAuth flows. Client configuration
+changes and reconnects invalidate pending review confirmations. An already
+submitted remote write is never reported as cancelled merely because a browser
+closed or a disconnect was requested. Automatic refresh never acknowledges a
+remote text change as a publication.
+
+Each destination owns its native comment metadata. Imports remove it from the
+canonical Poise draft, so another Google account or GitHub publication cannot
+receive that destination's thread IDs or opaque tokens. An explicit later
+publication preserves the selected destination's own comments.
+
+Pre-import history is retained until removed by its owner. A failed ledger
+checkpoint never deletes that history or acknowledges a newer remote version;
+reopen Review Google changes to reconcile it explicitly. Restoration is manual:
+copy a history Markdown file into the Editor as a separate document, then choose
+any replacement/publication explicitly. No recovery path automatically publishes.
+
+The [live compatibility proof](Google-markdown-proof.md) establishes native
+comment preservation for the sampled format. Live stale-write rejection and
+Poise OAuth verification remain release requirements; the mock-provider tests
+alone do not establish Google's concurrency guarantee.
