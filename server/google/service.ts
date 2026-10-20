@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { IncomingMessage } from 'node:http'
+import { request, type IncomingMessage } from 'node:http'
 import { isIP } from 'node:net'
-import { HttpError } from '../http'
+import { HttpError, readBuffer } from '../http'
 import type { ServiceConfig } from '../service/config'
 import { verifiedRequestIdentity } from '../service/request-identity'
 
@@ -20,12 +20,21 @@ function settings(value: unknown): Settings {
   return s as Settings
 }
 async function broker<T>(origin: string, host: string, token: string, action: string, body: Record<string, unknown> = {}): Promise<T> {
-  let response: Response
-  try { response = await fetch(origin + '/_gateway/google', { method: 'POST', headers: { Host: host, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, action }), redirect: 'error', signal: AbortSignal.timeout(35_000) }) }
+  let response: { status: number; body: string }
+  try {
+    const payload = JSON.stringify({ ...body, action })
+    response = await new Promise((resolve, reject) => {
+      const outgoing = request(new URL('/_gateway/google', origin), { method: 'POST', headers: { Host: host, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }, signal: AbortSignal.timeout(35_000) }, incoming => {
+        void readBuffer(incoming, 1024 * 1024).then(bytes => resolve({ status: incoming.statusCode ?? 502, body: bytes.toString('utf8') }), reject)
+      })
+      outgoing.on('error', reject)
+      outgoing.end(payload)
+    })
+  }
   catch { throw new HttpError(502, 'Google connections are temporarily unavailable. Try again.') }
   let data: unknown
-  try { data = await response.json() } catch { throw new HttpError(502, 'Google connections returned an unreadable response.') }
-  if (!response.ok) {
+  try { data = JSON.parse(response.body) } catch { throw new HttpError(502, 'Google connections returned an unreadable response.') }
+  if (response.status < 200 || response.status >= 300) {
     const message = data && typeof data === 'object' && 'message' in data && typeof data.message === 'string' ? data.message : 'Google connections are unavailable. Try again.'
     throw new HttpError(response.status, message)
   }

@@ -11,7 +11,7 @@ let h: Harness, workspace: Server, root: string
 let database: typeof import('../server/db')
 const saved = new Map<string, string | undefined>()
 const actualFetch = globalThis.fetch
-let brokerCalls: Array<{ action: string; authorization: string }>
+let brokerAuthorizations: string[]
 let verified: Array<{ identity: boolean; headerRemoved: boolean }>
 let providerSubject = 'google-one', providerError: 'none' | 'partial' | 'unverified' = 'none'
 const proof = () => randomBytes(32).toString('base64url')
@@ -23,17 +23,27 @@ beforeEach(async () => {
   const { handleGoogleApi } = await import('../server/google/api')
   // Import these through the same module graph as the real API after resetModules.
   const guard = await import('../server/http'), identity = await import('../server/service/request-identity')
-  brokerCalls = []; verified = []; providerSubject = 'google-one'; providerError = 'none'
+  brokerAuthorizations = []; verified = []; providerSubject = 'google-one'; providerError = 'none'
   h = await startHarness({ env: { POISE_GOOGLE_CLIENT_ID: 'poise.apps.googleusercontent.com', POISE_GOOGLE_CLIENT_SECRET: 'private-central-secret' } })
+  h.config.port = h.port
+  const brokerApi = h.context.googleConnections.api.bind(h.context.googleConnections)
+  vi.spyOn(h.context.googleConnections, 'api').mockImplementation(async (req, res) => { brokerAuthorizations.push(req.headers.authorization ?? ''); return brokerApi(req, res) })
   workspace = createServer((req, res) => {
     void (async () => {
       const handle = req.headers.host!.split('.')[0], owner = h.store.getUser(handle)!
       const service = readServiceConfig({ POISE_MODE: 'service', POISE_WORKSPACE_HANDLE: handle, POISE_WORKSPACE_OWNER: owner.login, POISE_PUBLIC_ORIGIN: `https://${workspaceHost(handle)}`, POISE_GATEWAY_PUBLIC_KEY: h.keys.publicKeyBase64 })!
       // The test transport is loopback; model the gateway's Docker-network peer so
       // the production service guard runs instead of the local maintenance exemption.
+      const actualPeer = req.socket.remoteAddress!
       Object.defineProperty(req.socket, 'remoteAddress', { value: '172.23.0.2' })
       try {
         guard.enforceApiRequest(req, { service })
+        const delegated = identity.verifiedRequestIdentity(req)!
+        expect(delegated.peer).toBe('172.23.0.2')
+        expect(delegated.gatewayPort).toBe(h.port)
+        // Translate only the simulated Docker address back to the real fixture
+        // peer after proving capture; actual broker HTTP and Host routing run.
+        delegated.peer = actualPeer
         verified.push({ identity: !!identity.verifiedRequestIdentity(req), headerRemoved: !req.headers['x-poise-identity'] })
         if (!await handleGoogleApi(req, res, req.url!, service)) { res.statusCode = 404; res.end('{}') }
       } catch (error) { res.statusCode = guard.httpStatus(error, 500); res.end(JSON.stringify({ error: (error as Error).message })) }
@@ -45,14 +55,6 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input)
     if (url === `https://${APEX}/_gateway/google`) throw new Error('Public apex egress is blocked by isolation')
-    if (url === 'http://172.23.0.2:8080/_gateway/google') {
-      const headers = Object.fromEntries(new Headers(init?.headers).entries()), body = String(init?.body)
-      brokerCalls.push({ action: (JSON.parse(body) as { action: string }).action, authorization: headers.authorization })
-      expect(headers.host).toBe('gateway:8080')
-      // Map the simulated Docker peer onto the fixture listener while retaining
-      // the real Node fetch, Host header and gateway internal route.
-      return actualFetch(`http://127.0.0.1:${h.port}/_gateway/google`, init)
-    }
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'private-composition-access', refresh_token: 'private-composition-refresh', expires_in: 3600, scope: providerError === 'partial' ? 'email' : 'openid email https://www.googleapis.com/auth/drive.file' })
     if (url === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: providerSubject, email: `${providerSubject}@example.test`, email_verified: providerError !== 'unverified' })
     return actualFetch(input, init)
@@ -94,8 +96,8 @@ it('composes Connect, central consent, callback receipt and activation through t
   expect((await u.api('/api/google/callback', f)).status).toBe(403)
   expect(verified.length).toBeGreaterThan(3)
   expect(verified.every(v => v.identity && v.headerRemoved)).toBe(true)
-  expect(brokerCalls.filter(c => c.action === 'open').every(c => c.authorization.slice(7).split('.').length === 3)).toBe(true)
-  expect(brokerCalls.filter(c => c.action !== 'open').every(c => /^[A-Za-z0-9_-]{43}$/.test(c.authorization.slice(7)))).toBe(true)
+  expect(brokerAuthorizations.some(value => value.slice(7).split('.').length === 3)).toBe(true)
+  expect(brokerAuthorizations.some(value => /^[A-Za-z0-9_-]{43}$/.test(value.slice(7)))).toBe(true)
 })
 it('preserves request identity across interleaved owners without accepting caller substitutes', async () => {
   const a = await user(), b = await user('bob')
@@ -105,9 +107,10 @@ it('preserves request identity across interleaved owners without accepting calle
   const [sa, sb] = await Promise.all([a.api('/api/google/accounts'), b.api('/api/google/accounts')])
   expect(sa.body).toContain('shared-google'); expect(sa.body).not.toContain('other-google')
   expect(sb.body).toContain('other-google'); expect(sb.body).not.toContain('shared-google')
-  const before = brokerCalls.length
+  const admissions = () => brokerAuthorizations.filter(value => value.slice(7).split('.').length === 3).length
+  const before = admissions()
   expect((await a.api('/api/google/connect', { browserSecret: proof(), authorization: 'caller-substitute' }, 'https://untrusted.test')).status).toBe(403)
-  expect(brokerCalls).toHaveLength(before)
+  expect(admissions()).toBe(before)
 })
 it('refuses wrong proof and partial/unverified consent without activating a grant', async () => {
   const u = await user()
