@@ -197,8 +197,8 @@ watchForSignOut()
 ;(async () => {
   const initialView = menu.currentView()
   const logging = new URLSearchParams(location.search).get('view') === 'logging'
-  // Personal documents and snippets do not depend on GitHub settings.
-  const openedEarly = !logging && (initialView === 'editor' || initialView === 'snippets')
+  // Documents, snippets and Chat read their own independent APIs.
+  const openedEarly = !logging && (initialView === 'editor' || initialView === 'snippets' || initialView === 'chat')
   if (openedEarly) showView(initialView)
   const [googleReturned] = await Promise.all([finishGoogleConnection(), loadSettings()])
   if (logging) menu.switchTo('logging')
