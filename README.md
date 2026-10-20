@@ -206,6 +206,8 @@ in-flight GraphQL batch may finish beyond that budget. Each chunk is followed
 by an ordinary sync and the unchanged 120-second health gate; incomplete chunks
 resume on the next refresh without marking the daily reconciliation complete.
 Interrupted full-build retries also retain item progress instead of starting over.
+For retry markers left by older releases, Poise first repairs the index in the
+same short chunks; it publishes no fresh success until repair and a delta sync finish.
 Failed syncs back off from one minute to one hour. When GitHub exhausts the
 authenticated user’s API quota, all managed accounts wait until GitHub’s reset
 time, including after a restart. Settings shows that time and resumes activation

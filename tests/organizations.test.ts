@@ -282,6 +282,44 @@ describe('organization activation', () => {
 })
 
 describe('managed organization synchronization', () => {
+  it('repairs legacy full-build retry markers in bounded chunks before requesting a delta sync', async () => {
+    organizations!.addOrganization('acme')
+    await ready('acme')
+    const path = organizations!.getOrganizations()[0]!.datastorePath!
+    const index = new Database(path)
+    index.prepare('INSERT INTO sync_state VALUES (?, ?, ?)').run('repo:10', 'full_build_retry_required', '1')
+    index.close()
+    mocks.runFile.mockClear()
+    database!.db.prepare('UPDATE organizations SET last_sync_at = 0, last_reconcile_at = 0, sync_failures = 8').run()
+    let complete = false
+    mocks.runFile.mockImplementation(async (command, args, options) => {
+      if (command === 'github-datastore' && args.includes('--reconcile')) {
+        if (complete) {
+          const fixture = new Database(path)
+          fixture.prepare("DELETE FROM sync_state WHERE key = 'full_build_retry_required'").run()
+          fixture.close()
+        }
+        return { stdout: JSON.stringify({ reconcile_complete: complete }), stderr: '' }
+      }
+      return cli(command, args, options)
+    })
+    organizations!.startOrganizationsRuntime()
+    await vi.waitFor(() => expect(operations('sync')).toHaveLength(1))
+    await vi.waitFor(() => expect(database!.db.prepare('SELECT next_sync_at FROM organizations').get()).toEqual({ next_sync_at: 0 }))
+    expect(operations('sync')[0]![1].slice(2)).toEqual(['sync', '--reconcile', '--reconcile-max-seconds', '20'])
+    expect(operations('health')).toHaveLength(0)
+    expect(database!.db.prepare('SELECT last_sync_at, last_reconcile_at, sync_failures FROM organizations').get()).toEqual({ last_sync_at: 0, last_reconcile_at: 0, sync_failures: 8 })
+    complete = true
+    organizations!.retryOrganization('acme')
+    await vi.waitFor(() => expect(operations('health')).toHaveLength(1))
+    await vi.waitFor(() => expect(organizations!.getOrganizations()[0]).toMatchObject({ stage: 'ready', error: null }))
+    expect(operations('sync').map((call) => call[1].slice(2))).toEqual([
+      ['sync', '--reconcile', '--reconcile-max-seconds', '20'],
+      ['sync', '--reconcile', '--reconcile-max-seconds', '20'], ['sync'],
+    ])
+    expect(database!.db.prepare('SELECT sync_failures FROM organizations').get()).toEqual({ sync_failures: 0 })
+  })
+
   it('refreshes between bounded reconciliation chunks and records daily completion only at the end', async () => {
     organizations!.addOrganization('acme')
     await ready('acme')
