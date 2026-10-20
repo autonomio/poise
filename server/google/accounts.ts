@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { db, getMeta, setMeta } from '../db'
 import { HttpError } from '../http'
@@ -6,9 +6,11 @@ import { HttpError } from '../http'
 const CONFIG = 'google:config'
 const PREFIX = 'google:account:'
 const STATE = 'google:state:'
+const EPOCH = 'google:connections-epoch'
+const connectionEpoch = () => Number(getMeta(EPOCH) ?? '0')
 const SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/drive.file']
 export interface GoogleAccount { id: string, email: string, connected: boolean }
-interface StoredAccount extends GoogleAccount { refreshToken: string, accessToken: string, expires: number, clientId: string }
+interface StoredAccount extends GoogleAccount { refreshToken: string, accessToken: string, expires: number, clientId: string, connectionVersion: string }
 interface Config { clientId: string, clientSecret: string, origin: string }
 const hash = (value: string) => createHash('sha256').update(value).digest('base64url')
 function read<T>(key: string): T | null { const raw = getMeta(key); return raw ? JSON.parse(raw) as T : null }
@@ -31,7 +33,10 @@ export function configureGoogle(input: Record<string, unknown>): void {
   const secret = typeof input.clientSecret === 'string' && input.clientSecret ? input.clientSecret : previous?.clientId === input.clientId ? previous.clientSecret : ''
   if (!secret || secret.length > 4096) throw new HttpError(400, 'Enter the Google OAuth client secret.')
   if (previous && previous.clientId !== input.clientId && googleAccounts().some(a => a.connected)) throw new HttpError(409, 'Disconnect the Google accounts before changing the OAuth client.')
-  setMeta(CONFIG, JSON.stringify({ clientId: input.clientId, clientSecret: secret, origin: origin.origin }))
+  db.transaction(() => {
+    setMeta(CONFIG, JSON.stringify({ clientId: input.clientId, clientSecret: secret, origin: origin.origin }))
+    setMeta(EPOCH, String(connectionEpoch() + 1))
+  }).immediate()
 }
 export function googleAccounts(): GoogleAccount[] {
   return (db.prepare('SELECT value FROM meta WHERE key LIKE ? ORDER BY key').all(`${PREFIX}%`) as Array<{ value: string }>).map(row => {
@@ -44,10 +49,14 @@ function account(id: string): StoredAccount {
   if (!a?.connected) throw new HttpError(422, 'Reconnect this Google account in Settings → Accounts.')
   return a
 }
+export function googleConnectionVersion(id: string): string { return `${connectionEpoch()}:${account(id).connectionVersion}` }
 export function disconnectGoogle(id: string): void {
   const a = account(id)
   // Other grants can share Google's refresh token. Forget this connection without revoking them.
-  setMeta(PREFIX + id, JSON.stringify({ id: a.id, email: a.email, connected: false }))
+  db.transaction(() => {
+    setMeta(EPOCH, String(connectionEpoch() + 1))
+    setMeta(PREFIX + id, JSON.stringify({ id: a.id, email: a.email, connected: false }))
+  }).immediate()
 }
 async function tokenRequest(values: Record<string, string>): Promise<{ access_token: string, refresh_token?: string, expires_in: number, scope?: string }> {
   const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(values), signal: AbortSignal.timeout(30_000), redirect: 'error' })
@@ -62,16 +71,16 @@ export function beginGoogleLogin(req: IncomingMessage, input: Record<string, unk
   if (typeof input.browserSecret !== 'string' || !/^[A-Za-z0-9_-]{43,128}$/.test(input.browserSecret)) throw new HttpError(400, 'A private browser binding is required for Google sign-in.')
   const state = randomBytes(32).toString('base64url'), verifier = randomBytes(48).toString('base64url')
   db.prepare('DELETE FROM meta WHERE key LIKE ? AND json_extract(value, \'$.expires\') < ?').run(`${STATE}%`, Date.now())
-  setMeta(STATE + hash(state), JSON.stringify({ browser: hash(input.browserSecret), verifier, expires: Date.now() + 600_000, clientId: config.clientId, origin: config.origin }))
+  setMeta(STATE + hash(state), JSON.stringify({ browser: hash(input.browserSecret), verifier, expires: Date.now() + 600_000, epoch: connectionEpoch(), clientId: config.clientId, origin: config.origin }))
   const params = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.origin + '/', response_type: 'code', scope: SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', state, code_challenge: hash(verifier), code_challenge_method: 'S256' })
   return { url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` }
 }
 export async function completeGoogleLogin(req: IncomingMessage, input: Record<string, unknown>): Promise<void> {
   if (typeof input.state !== 'string' || typeof input.code !== 'string' || input.state.length > 256 || input.code.length > 4096) throw new HttpError(400, 'Google sign-in code and state are required.')
   const config = googleConfig(), key = STATE + hash(input.state)
-  const pending = read<{ browser: string, verifier: string, expires: number, clientId: string, origin: string }>(key)
+  const pending = read<{ browser: string, verifier: string, expires: number, epoch: number, clientId: string, origin: string }>(key)
   const browserSecret = typeof input.browserSecret === 'string' && /^[A-Za-z0-9_-]{43,128}$/.test(input.browserSecret) ? input.browserSecret : ''
-  if (!pending || !browserSecret || hash(browserSecret) !== pending.browser || Date.now() >= pending.expires || pending.clientId !== config.clientId || pending.origin !== config.origin || req.headers.origin !== config.origin) throw new HttpError(403, 'Google sign-in expired or belongs to another browser. Connect again.')
+  if (!pending || !browserSecret || hash(browserSecret) !== pending.browser || Date.now() >= pending.expires || pending.epoch !== connectionEpoch() || pending.clientId !== config.clientId || pending.origin !== config.origin || req.headers.origin !== config.origin) throw new HttpError(403, 'Google sign-in expired or belongs to another browser. Connect again.')
   const removed = db.prepare('DELETE FROM meta WHERE key = ?').run(key)
   if (!removed.changes) throw new HttpError(403, 'Google sign-in was already used.')
   const tokens = await tokenRequest({ grant_type: 'authorization_code', code: input.code, client_id: config.clientId, client_secret: config.clientSecret, redirect_uri: config.origin + '/', code_verifier: pending.verifier })
@@ -83,7 +92,10 @@ export async function completeGoogleLogin(req: IncomingMessage, input: Record<st
   const previous = read<StoredAccount>(PREFIX + identity.sub)
   const refreshToken = tokens.refresh_token ?? (previous?.clientId === config.clientId ? previous.refreshToken : '')
   if (!refreshToken) throw new HttpError(422, 'Google did not grant offline access. Connect again and grant consent.')
-  setMeta(PREFIX + identity.sub, JSON.stringify({ id: identity.sub, email: identity.email, connected: true, clientId: config.clientId, refreshToken, accessToken: tokens.access_token, expires: Date.now() + tokens.expires_in * 1000 }))
+  db.transaction(() => {
+    if (pending.epoch !== connectionEpoch()) throw new HttpError(409, 'Google connections changed during sign-in. Connect again.')
+    setMeta(PREFIX + identity.sub, JSON.stringify({ id: identity.sub, email: identity.email, connected: true, connectionVersion: randomUUID(), clientId: config.clientId, refreshToken, accessToken: tokens.access_token, expires: Date.now() + tokens.expires_in * 1000 }))
+  }).immediate()
 }
 const refreshes = new Map<string, Promise<string>>()
 export async function googleAccessToken(id: string): Promise<string> {
@@ -96,8 +108,8 @@ export async function googleAccessToken(id: string): Promise<string> {
     if (a.clientId !== config.clientId) throw new HttpError(422, 'Reconnect this Google account with the configured OAuth client.')
     const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: a.refreshToken, client_id: config.clientId, client_secret: config.clientSecret })
     // A disconnect while refreshing must never resurrect credentials.
-    if (getMeta(PREFIX + id) !== JSON.stringify(a)) throw new HttpError(409, 'Google connection changed during refresh. Try again.')
-    setMeta(PREFIX + id, JSON.stringify({ ...a, accessToken: t.access_token, refreshToken: t.refresh_token ?? a.refreshToken, expires: Date.now() + t.expires_in * 1000 }))
+    const changed = db.prepare('UPDATE meta SET value = ? WHERE key = ? AND value = ?').run(JSON.stringify({ ...a, accessToken: t.access_token, refreshToken: t.refresh_token ?? a.refreshToken, expires: Date.now() + t.expires_in * 1000 }), PREFIX + id, JSON.stringify(a))
+    if (!changed.changes) throw new HttpError(409, 'Google connection changed during refresh. Try again.')
     return t.access_token
   })()
   refreshes.set(id, operation)

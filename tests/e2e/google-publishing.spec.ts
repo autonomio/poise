@@ -18,7 +18,7 @@ async function setup(page: Page) {
     if (path.endsWith('/reviews') || path.endsWith('/reviews/sync')) return route.fulfill({ json: { reviews: [], checkedAt: null, active: false, stale: false, problems: [] } })
     if (path.endsWith('/publishing')) return route.fulfill({ json: { title: 'Draft', slug: 'draft', today: '2026-10-20', publications: [] } })
     if (path.endsWith('/google') || path.endsWith('/google/sync') || path.endsWith('/google/publish')) return route.fulfill({ json: { version: VERSION, publications: [publication] } })
-    if (path.endsWith('/google/review')) return route.fulfill({ json: { localText: content, remoteText: '# Draft\n\nThe Google paragraph.\n', localVersion: VERSION, remoteSha: REMOTE, comments: publication.comments } })
+    if (path.endsWith('/google/review')) return route.fulfill({ json: { localText: content, remoteText: '# Draft\n\nThe Google paragraph.\n', localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one', comments: publication.comments } })
     if (path.endsWith('/google/import')) { content = '# Draft\n\nThe Google paragraph.\n'; return route.fulfill({ json: { ok: true, content, version: VERSION } }) }
     return route.fulfill({ json: {} })
   })
@@ -51,7 +51,7 @@ test('shows native comments, reviews incoming changes and imports only after exp
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await expect(page.locator('#editor-doc')).toContainText('The Google paragraph.')
-  expect(actions.find(action => action.path.endsWith('/google/import'))?.body).toEqual({ accountId: 'one', localVersion: VERSION, remoteSha: REMOTE })
+  expect(actions.find(action => action.path.endsWith('/google/import'))?.body).toEqual({ accountId: 'one', localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one' })
   expect(actions.some(action => action.path.endsWith('/google/publish'))).toBe(false)
 })
 
@@ -62,7 +62,7 @@ test('requires review before explicitly publishing the Poise version over Google
   await expect(google.locator('.google-remote')).toContainText('The Google paragraph.')
   await google.getByRole('button', { name: 'Publish Poise version instead', exact: true }).click()
   await expect(google.locator('.google-change-review')).toHaveCount(0)
-  expect(actions.find(action => action.path.endsWith('/google/publish'))?.body).toEqual({ accountId: 'one', localVersion: VERSION, reviewedRemoteSha: REMOTE })
+  expect(actions.find(action => action.path.endsWith('/google/publish'))?.body).toEqual({ accountId: 'one', localVersion: VERSION, reviewedRemoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one' })
   await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
 })
 test('lists multiple Google connections and disconnects only the chosen account', async ({ page }) => {
@@ -190,7 +190,7 @@ test('a minute tick during a busy Google review cannot stop future polling', asy
   let reads = 0, release!: () => void, started!: () => void
   const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
   await page.route('**/api/editor/doc/google-draft/google/sync', route => { reads++; return route.fulfill({ json: { version: VERSION, publications: [publication] } }) })
-  await page.route('**/api/editor/doc/google-draft/google/review', async route => { started(); await held; return route.fulfill({ json: { localText: TEXT, remoteText: '# Google version', localVersion: VERSION, remoteSha: REMOTE, comments: [] } }) })
+  await page.route('**/api/editor/doc/google-draft/google/review', async route => { started(); await held; return route.fulfill({ json: { localText: TEXT, remoteText: '# Google version', localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one', comments: [] } }) })
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
   await pending
   await page.clock.fastForward(65_000)
@@ -208,4 +208,21 @@ test('an OAuth return without its tab binding still opens Accounts and explains 
   await expect(page.locator('.st-google-accounts')).toBeVisible()
   await expect(page.locator('.google-account-status')).toContainText('another browser tab')
   expect(new URL(page.url()).searchParams.has('code')).toBe(false)
+})
+test('a stale clean Editor tab cannot publish another tab\'s unseen server version', async ({ page }) => {
+  await setup(page)
+  let mutated = false, sentVersion: unknown
+  await page.route('**/api/editor/doc/google-draft/google', route => route.fulfill({ json: { version: REMOTE, publications: [publication] } }))
+  await page.route('**/api/editor/doc/google-draft/google/publish', route => {
+    sentVersion = (route.request().postDataJSON() as Record<string, unknown>).localVersion
+    if (sentVersion !== REMOTE) return route.fulfill({ status: 409, json: { error: 'The document changed in another tab. Reload before publishing.' } })
+    mutated = true
+    return route.fulfill({ json: { version: REMOTE, publications: [publication] } })
+  })
+  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Publish', exact: true })
+  await dialog.getByRole('button', { name: 'Publish to Google', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('changed in another tab')
+  expect(sentVersion).toBe(VERSION); expect(mutated).toBe(false)
+  await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
 })

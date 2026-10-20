@@ -23,8 +23,9 @@ export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost): 
       try {
         if (!await host.flush()) throw new Error('Save the document before publishing.')
         if (host.slug() !== slug) throw new Error('The open document changed.')
-        const doc = await googleCall<GoogleDocumentView>(googlePath(slug))
-        await googleCall(googlePath(slug, 'publish'), { accountId, localVersion: doc.version })
+        const localVersion = host.version()
+        if (!localVersion) throw new Error('Reload the document before publishing.')
+        await googleCall(googlePath(slug, 'publish'), { accountId, localVersion })
         status.textContent = 'Published. The same Google document will receive future updates.'
         publish.textContent = 'Update Google document'
         window.dispatchEvent(new CustomEvent(GOOGLE_CHANGED))
@@ -108,10 +109,10 @@ export class GoogleDocuments {
         const value = await googleReview(slug, accountId)
         if (generation === this.generation) this.review = { accountId, value }
       } else if (action === 'publish-reviewed' && this.review) {
-        const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'publish'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, reviewedRemoteSha: this.review.value.remoteSha })
+        const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'publish'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, reviewedRemoteSha: this.review.value.remoteSha, fileId: this.review.value.fileId, connectionVersion: this.review.value.connectionVersion })
         if (generation === this.generation) { this.data = data; this.review = null }
       } else if (action === 'import' && this.review) {
-        const imported = await googleCall<{ content: string, version: string }>(googlePath(slug, 'import'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, remoteSha: this.review.value.remoteSha })
+        const imported = await googleCall<{ content: string, version: string }>(googlePath(slug, 'import'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, remoteSha: this.review.value.remoteSha, fileId: this.review.value.fileId, connectionVersion: this.review.value.connectionVersion })
         this.review = null
         await this.host.imported(slug, imported.content, imported.version)
       }

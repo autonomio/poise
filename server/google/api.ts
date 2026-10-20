@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { HttpError, httpStatus, readJson } from '../http'
-import { EditorConflictError, importGoogleDocument, readDoc, readGoogleLedger, withPublishLock, writeGoogleLedger } from '../editor'
-import { beginGoogleLogin, completeGoogleLogin, configureGoogle, disconnectGoogle, googleAccounts, googleAccountSettings } from './accounts'
+import { EditorConflictError, importGoogleDocument, readDoc, readGoogleLedger, readGoogleLedgerState, withPublishLock, writeGoogleLedger } from '../editor'
+import { beginGoogleLogin, completeGoogleLogin, configureGoogle, disconnectGoogle, googleAccounts, googleAccountSettings, googleConnectionVersion } from './accounts'
 import { createGoogleFile, googleFileId, readGoogleFile, updateGoogleFile } from './drive'
 import { readGoogleMarkdown, updateGoogleMarkdown } from './markdown'
 import { releaseBackgroundPaused, trackReleaseBackground } from '../release-background'
@@ -41,7 +41,8 @@ async function publish(slug: string, input: Record<string, unknown>) {
   return withPublishLock(async () => {
     const doc = await readDoc(slug)
     if (doc.version !== version) throw new EditorConflictError(doc.version)
-    const records = await readGoogleLedger(slug)
+    const ledger = await readGoogleLedgerState(slug), records = ledger.records
+    let ledgerVersion = ledger.version
     let record = records.find(r => r.accountId === id)
     if (!record) {
       if (records.length >= 10) throw new HttpError(422, 'A document can have at most ten Google destinations.')
@@ -49,8 +50,9 @@ async function publish(slug: string, input: Record<string, unknown>) {
       const fileId = await googleFileId(id)
       record = { accountId: id, fileId, title: doc.content.split('\n').find(line => line.trim())?.replace(/^#+\s*/, '').slice(0, 200) || slug, url: `https://docs.google.com/document/d/${fileId}/edit`, sourceSha: doc.version, remoteSha: '', pending: true }
       records.push(record)
-      await writeGoogleLedger(slug, records)
+      ledgerVersion = await writeGoogleLedger(slug, records, ledgerVersion)
     }
+    if (input.reviewedRemoteSha !== undefined && (input.fileId !== record.fileId || input.connectionVersion !== googleConnectionVersion(id))) throw new HttpError(409, 'The Google connection or document binding changed after review.')
     let remote
     try { remote = await readGoogleFile(id, record.fileId) }
     catch (error) {
@@ -72,26 +74,30 @@ async function publish(slug: string, input: Record<string, unknown>) {
     const raw = updateGoogleMarkdown(remote.raw, doc.content)
     if (raw !== remote.raw) await updateGoogleFile(id, record.fileId, raw, remote.etag)
     record.sourceSha = doc.version; record.remoteSha = sha(doc.content); record.pending = false
-    await writeGoogleLedger(slug, records)
+    await writeGoogleLedger(slug, records, ledgerVersion)
     return documentView(slug, true)
   })
 }
 async function review(slug: string, input: Record<string, unknown>): Promise<GoogleChangeReview> {
   const record = binding(await readGoogleLedger(slug), text(input.accountId, 'Google account'))
+  const connectionVersion = googleConnectionVersion(record.accountId)
   const [doc, remote] = await Promise.all([readDoc(slug), readGoogleFile(record.accountId, record.fileId)])
   const parsed = readGoogleMarkdown(remote.raw)
-  return { localText: doc.content, remoteText: parsed.text, localVersion: doc.version, remoteSha: sha(remote.raw), comments: parsed.comments }
+  if (connectionVersion !== googleConnectionVersion(record.accountId)) throw new HttpError(409, 'The Google connection changed during review.')
+  return { fileId: record.fileId, connectionVersion, localText: doc.content, remoteText: parsed.text, localVersion: doc.version, remoteSha: sha(remote.raw), comments: parsed.comments }
 }
 async function importChanges(slug: string, input: Record<string, unknown>) {
   const id = text(input.accountId, 'Google account'), version = text(input.localVersion, 'Document version'), remoteSha = text(input.remoteSha, 'Google version')
   return withPublishLock(async () => {
-    const records = await readGoogleLedger(slug), record = binding(records, id)
+    const ledger = await readGoogleLedgerState(slug), records = ledger.records, record = binding(records, id)
+    if (input.fileId !== record.fileId || input.connectionVersion !== googleConnectionVersion(id)) throw new HttpError(409, 'The Google connection or document binding changed after review.')
     const remote = await readGoogleFile(id, record.fileId)
+    if (input.connectionVersion !== googleConnectionVersion(id)) throw new HttpError(409, 'The Google connection changed during import.')
     if (sha(remote.raw) !== remoteSha) throw new HttpError(409, 'Google changed after the review opened. Review the latest version.')
     const parsed = readGoogleMarkdown(remote.raw)
     await importGoogleDocument(slug, parsed.text, version)
     record.sourceSha = sha(parsed.text); record.remoteSha = sha(parsed.text); record.pending = false
-    await writeGoogleLedger(slug, records)
+    await writeGoogleLedger(slug, records, ledger.version)
     const imported = await readDoc(slug)
     return { ok: true, content: imported.content, version: imported.version }
   })
@@ -112,7 +118,7 @@ export async function handleGoogleApi(req: IncomingMessage, res: ServerResponse,
     if (path === '/api/google/config') { configureGoogle(body); return send(200, googleAccountSettings()) }
     if (path === '/api/google/connect') return send(200, beginGoogleLogin(req, body))
     if (path === '/api/google/callback') { await completeGoogleLogin(req, body); return send(200, googleAccountSettings()) }
-    if (path === '/api/google/disconnect') { disconnectGoogle(text(body.accountId, 'Google account')); return send(200, googleAccountSettings()) }
+    if (path === '/api/google/disconnect') { return send(200, await withPublishLock(async () => { disconnectGoogle(text(body.accountId, 'Google account')); return googleAccountSettings() })) }
     if (match) {
       if (match[2] === 'sync') return send(200, await documentView(match[1], true))
       if (match[2] === 'publish') return send(200, await publish(match[1], body))

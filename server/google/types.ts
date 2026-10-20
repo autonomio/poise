@@ -17,4 +17,4 @@ export interface GooglePublicationView extends GooglePublication {
   problem?: string
 }
 export interface GoogleDocumentView { version: string, publications: GooglePublicationView[] }
-export interface GoogleChangeReview { localText: string, remoteText: string, localVersion: string, remoteSha: string, comments: GoogleComment[] }
+export interface GoogleChangeReview { fileId: string, connectionVersion: string, localText: string, remoteText: string, localVersion: string, remoteSha: string, comments: GoogleComment[] }

@@ -71,3 +71,28 @@ describe('Google OAuth browser and account boundaries', () => {
     expect(accounts.googleAccounts()).toEqual([])
   })
 })
+it('disconnect supersedes an authorization completion already waiting for Google', async () => {
+  let auth = begin()
+  fakeFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(identity())
+  await accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })
+  auth = begin()
+  let release!: (value: Response) => void
+  const held = new Promise<Response>(resolve => { release = resolve })
+  fakeFetch.mockReturnValueOnce(held).mockResolvedValueOnce(identity())
+  const completion = accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })
+  accounts.disconnectGoogle('account-one')
+  const outcome = expect(completion).rejects.toThrow('connections changed')
+  release(token()); await outcome
+  expect(accounts.googleAccounts()).toEqual([{ id: 'account-one', email: 'one@example.com', connected: false }])
+  expect(database.getMeta('google:account:account-one')).not.toContain('private-refresh')
+})
+it('client reconfiguration invalidates older unfinished authorizations', async () => {
+  const auth = begin()
+  let release!: (value: Response) => void
+  fakeFetch.mockReturnValueOnce(new Promise<Response>(resolve => { release = resolve })).mockResolvedValueOnce(identity())
+  const completion = accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })
+  accounts.configureGoogle({ clientId: 'poise.apps.googleusercontent.com', clientSecret: 'rotated-private-secret', origin })
+  const outcome = expect(completion).rejects.toThrow('connections changed')
+  release(token()); await outcome
+  expect(accounts.googleAccounts()).toEqual([])
+})

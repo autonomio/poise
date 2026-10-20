@@ -3,8 +3,8 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ accounts: vi.fn(), read: vi.fn(), create: vi.fn(), update: vi.fn(), id: vi.fn() }))
-vi.mock('../server/google/accounts', async original => ({ ...(await original<typeof import('../server/google/accounts')>()), googleAccounts: mocks.accounts }))
+const mocks = vi.hoisted(() => ({ accounts: vi.fn(), connection: vi.fn(), read: vi.fn(), create: vi.fn(), update: vi.fn(), id: vi.fn() }))
+vi.mock('../server/google/accounts', async original => ({ ...(await original<typeof import('../server/google/accounts')>()), googleAccounts: mocks.accounts, googleConnectionVersion: mocks.connection }))
 vi.mock('../server/google/drive', () => ({ readGoogleFile: mocks.read, createGoogleFile: mocks.create, updateGoogleFile: mocks.update, googleFileId: mocks.id }))
 let root: string, server: Server, base: string
 let db: typeof import('../server/db'), editor: typeof import('../server/editor')
@@ -24,7 +24,7 @@ beforeEach(async () => {
   const { HttpError } = await import('../server/http')
   await editor.writeDoc(slug, body); raw = null; etag = '"revision-one"'
   mocks.accounts.mockReturnValue([{ id: 'one', email: 'one@example.com', connected: true }, { id: 'two', email: 'two@example.com', connected: true }])
-  mocks.id.mockResolvedValue(fileId)
+  mocks.id.mockResolvedValue(fileId); mocks.connection.mockReturnValue('connection-one')
   mocks.read.mockReset().mockImplementation(async () => { if (raw === null) throw new HttpError(404, 'missing'); return { raw, etag, file: { id: fileId, name: 'A draft.md', mimeType: 'text/markdown' } } })
   mocks.create.mockReset().mockImplementation(async (_account, _id, _title, text: string) => { raw = text })
   mocks.update.mockReset().mockImplementation(async (_account, _id, text: string, expected: string) => { if (expected !== etag) throw new HttpError(409, 'Google changed'); raw = text })
@@ -71,7 +71,7 @@ describe('Google document publication and reviewed import', () => {
     await publish(); raw = body + '\nGoogle edit.'
     const review = await call('review', { accountId: 'one' })
     expect(review.body.remoteText).toContain('Google edit.')
-    const imported = await call('import', { accountId: 'one', localVersion: review.body.localVersion, remoteSha: review.body.remoteSha })
+    const imported = await call('import', { accountId: 'one', localVersion: review.body.localVersion, remoteSha: review.body.remoteSha, fileId, connectionVersion: review.body.connectionVersion })
     expect(imported.status).toBe(200); expect((await editor.readDoc(slug)).content).toBe(raw)
     const folder = join(root, 'editor', '.google-history', slug), names = await readdir(folder)
     expect(await readFile(join(folder, names[0]), 'utf8')).toBe(body)
@@ -82,17 +82,17 @@ describe('Google document publication and reviewed import', () => {
     await publish(); raw = body + '\nRemote edit.'
     const review = (await call('review', { accountId: 'one' })).body
     await editor.writeDoc(slug, body + '\nLocal edit.')
-    expect((await call('import', { accountId: 'one', localVersion: review.localVersion, remoteSha: review.remoteSha })).status).toBe(409)
+    expect((await call('import', { accountId: 'one', localVersion: review.localVersion, remoteSha: review.remoteSha, fileId, connectionVersion: review.connectionVersion })).status).toBe(409)
     raw += '\nNewer remote edit.'
-    expect((await call('import', { accountId: 'one', localVersion: (await editor.readDoc(slug)).version, remoteSha: review.remoteSha })).status).toBe(409)
+    expect((await call('import', { accountId: 'one', localVersion: (await editor.readDoc(slug)).version, remoteSha: review.remoteSha, fileId, connectionVersion: review.connectionVersion })).status).toBe(409)
     expect((await editor.readDoc(slug)).content).toContain('Local edit.')
   })
   it('permits a reviewed Poise overwrite only for the exact remote version that was shown', async () => {
     await publish(); raw = body + '\nRemote edit.'
     const reviewed = (await call('review', { accountId: 'one' })).body
-    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: 'stale' })).status).toBe(409)
+    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: 'stale', fileId, connectionVersion: reviewed.connectionVersion })).status).toBe(409)
     expect(mocks.update).not.toHaveBeenCalled()
-    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: reviewed.remoteSha })).status).toBe(200)
+    expect((await call('publish', { accountId: 'one', localVersion: reviewed.localVersion, reviewedRemoteSha: reviewed.remoteSha, fileId, connectionVersion: reviewed.connectionVersion })).status).toBe(200)
     expect(raw).toBe(body)
   })
   it('retains the reserved ID after uncertain creation rather than generating duplicate documents', async () => {
@@ -109,4 +109,25 @@ describe('Google document publication and reviewed import', () => {
     await editor.deleteDoc(slug)
     expect(await editor.readGoogleLedger(slug)).toEqual([])
   })
+})
+it('rejects approval from an earlier Google connection or another file binding', async () => {
+  await publish(); raw = body + '\nGoogle edit.'
+  const reviewed = (await call('review', { accountId: 'one' })).body
+  mocks.connection.mockReturnValue('reconnected')
+  expect((await call('import', { accountId: 'one', localVersion: reviewed.localVersion, remoteSha: reviewed.remoteSha, fileId, connectionVersion: reviewed.connectionVersion })).status).toBe(409)
+  mocks.connection.mockReturnValue('connection-one')
+  expect((await call('import', { accountId: 'one', localVersion: reviewed.localVersion, remoteSha: reviewed.remoteSha, fileId: 'another-file', connectionVersion: reviewed.connectionVersion })).status).toBe(409)
+  expect((await editor.readDoc(slug)).content).toBe(body)
+})
+it('does not restore a deleted binding onto a replacement document after an in-flight publication', async () => {
+  await publish(); await editor.writeDoc(slug, body + '\nPublished change.')
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
+  mocks.update.mockImplementationOnce(async () => { started(); await held })
+  const publication = publish(); await pending
+  await editor.deleteDoc(slug); await editor.writeDoc(slug, '# Replacement document')
+  release()
+  expect((await publication).status).toBe(409)
+  expect(await editor.readGoogleLedger(slug)).toEqual([])
+  expect((await editor.readDoc(slug)).content).toBe('# Replacement document')
 })

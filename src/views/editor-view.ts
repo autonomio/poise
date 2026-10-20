@@ -2839,11 +2839,11 @@ function scheduleAnnotationsSave(): void {
 }
 
 async function flushEditorSaves(): Promise<boolean> {
-  const [docSaved, annotationsSaved] = await Promise.all([
-    flushSave(),
-    flushAnnotationsSave(),
-  ])
-  return docSaved && annotationsSaved
+  for (;;) {
+    const [docSaved, annotationsSaved] = await Promise.all([flushSave(), flushAnnotationsSave()])
+    if (!docSaved || !annotationsSaved) return false
+    if (!documentSaveQueue.isDirty() && !annotationsSaveQueue.isDirty()) return true
+  }
 }
 
 async function discardEditorSaves(): Promise<void> {
@@ -4063,7 +4063,7 @@ function attachHandlers() {
     .addEventListener('click', () => { void deleteCurrent() })
   const publishBtn = viewEl.querySelector<HTMLButtonElement>('.editor-publish-btn')!
   publishBtn.addEventListener('click', () => {
-    togglePublishPanel(publishBtn, { slug: () => currentSlug, flush: flushEditorSaves, published: () => { void articleReviews?.synchronize(true) } })
+    togglePublishPanel(publishBtn, { slug: () => currentSlug, flush: flushEditorSaves, version: () => currentSlug ? documentVersions.get(currentSlug) ?? null : null, published: () => { void articleReviews?.synchronize(true) } })
   })
   copyBtnEl = viewEl.querySelector<HTMLButtonElement>('.editor-copy-btn')!
   copyBtnEl.addEventListener('click', () => { void copyDoc() })
