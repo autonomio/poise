@@ -4,8 +4,8 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ accounts: vi.fn(), connection: vi.fn(), read: vi.fn(), create: vi.fn(), update: vi.fn(), id: vi.fn() }))
-vi.mock('../server/google/accounts', async original => ({ ...(await original<typeof import('../server/google/accounts')>()), googleAccounts: mocks.accounts, googleConnectionVersion: mocks.connection }))
+const mocks = vi.hoisted(() => ({ accounts: vi.fn(), settings: vi.fn(), configure: vi.fn(), connection: vi.fn(), read: vi.fn(), create: vi.fn(), update: vi.fn(), id: vi.fn() }))
+vi.mock('../server/google/accounts', async original => ({ ...(await original<typeof import('../server/google/accounts')>()), googleAccounts: mocks.accounts, googleAccountSettings: mocks.settings, configureGoogle: mocks.configure, googleConnectionVersion: mocks.connection }))
 vi.mock('../server/google/drive', () => ({ readGoogleFile: mocks.read, createGoogleFile: mocks.create, updateGoogleFile: mocks.update, googleFileId: mocks.id }))
 vi.mock('node:fs/promises', async original => { const actual = await original<typeof import('node:fs/promises')>(); return { ...actual, open: vi.fn(actual.open) } })
 let root: string, server: Server, base: string
@@ -26,6 +26,7 @@ beforeEach(async () => {
   const { HttpError } = await import('../server/http')
   await editor.writeDoc(slug, body); raw = null; etag = '"revision-one"'
   mocks.accounts.mockReturnValue([{ id: 'one', email: 'one@example.com', connected: true }, { id: 'two', email: 'two@example.com', connected: true }])
+  mocks.configure.mockReset(); mocks.settings.mockReturnValue({ configured: true, accounts: mocks.accounts() })
   mocks.id.mockResolvedValue(fileId); mocks.connection.mockReturnValue('connection-one')
   mocks.read.mockReset().mockImplementation(async () => { if (raw === null) throw new HttpError(404, 'missing'); return { raw, etag, file: { id: fileId, name: 'A draft.md', mimeType: 'text/markdown' } } })
   mocks.create.mockReset().mockImplementation(async (_account, _id, _title, text: string) => { raw = text })
@@ -202,8 +203,9 @@ it('serializes OAuth configuration changes behind admitted publication work', as
   const publication = publish(); await pending
   const configuring = fetch(`${base}/api/google/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: 'proof.apps.googleusercontent.com', clientSecret: 'private-test-client', origin: base }) })
   await new Promise(resolve => setTimeout(resolve, 100))
-  expect(db.getMeta('google:config')).toBeNull()
+  expect(mocks.configure).not.toHaveBeenCalled()
   release()
   expect((await publication).status).toBe(200)
   expect((await configuring).status).toBe(200)
+  expect(mocks.configure).toHaveBeenCalledTimes(1)
 })
