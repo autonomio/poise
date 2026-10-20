@@ -1092,7 +1092,7 @@ tr:hover .review-btn { opacity: 1; }
 .quota-hour-empty { border-bottom: 1px dotted var(--text-tertiary); }
 .quota-charts > .analytics-chart-heading:not(:first-child) { margin-top: var(--sp-4); }
 /* All panels share one order and two content-safe height families. */
-#view-analytics main { position: relative; }
+#view-analytics main { position: relative; min-height: var(--sp-6); }
 .analytics-board { position: relative; min-width: 0; }
 .analytics-panel { position: absolute; top: 0; left: 0; box-sizing: border-box; min-width: 0; border: var(--b-base); border-radius: var(--r-sm); background: var(--surface); }
 .analytics-panel[data-size="tall"] { min-height: 22rem; }

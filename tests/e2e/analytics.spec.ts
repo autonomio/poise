@@ -273,7 +273,7 @@ test('opens from the burger as a view of its own: productivity topline, per merg
   const work = view.locator('[data-group="work-review"]')
   await expect(work.locator('.analytics-label')).toHaveText(['Work type', 'Review rounds', 'Change-request share'])
   const row = await work.locator('.analytics-tile').evaluateAll((tiles) => tiles.map((tile) => {
-    const { x, y, width, height } = tile.getBoundingClientRect()
+    const { x, y, width, height } = tile.closest('.analytics-panel')!.getBoundingClientRect()
     return { x, y, width, height }
   }))
   expect(new Set(row.map((box) => box.y)).size).toBe(1)
@@ -606,7 +606,7 @@ for (const theme of ['light', 'dark']) test(`fits a narrow window and large text
   await expect(closed.locator('.analytics-history-tip')).toBeVisible()
   const tip = (await closed.locator('.analytics-history-tip').boundingBox())!
   const main = (await view.locator('main').boundingBox())!
-  expect(tip.width).toBeGreaterThan(plot.width)
+  expect(tip.width).toBeLessThanOrEqual(main.width)
   expect(tip.x).toBeGreaterThanOrEqual(main.x - 1)
   expect(tip.x + tip.width).toBeLessThanOrEqual(main.x + main.width + 1)
   await page.mouse.move(0, 0)

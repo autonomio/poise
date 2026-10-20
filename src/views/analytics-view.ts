@@ -18,7 +18,16 @@ let cardLayout: ReturnType<typeof analyticsLayout>
 let metricMarkup = ''
 let quotaMarkup = ''
 const dragGrip = '<span class="analytics-drag-grip" aria-hidden="true"></span>'
-function renderCards(): void { cardLayout.patch(metricMarkup + quotaMarkup) }
+function renderCards(): void {
+  const broken = new Set([...viewEl.querySelectorAll<HTMLImageElement>('.github-quota-avatar img.broken')].map(img => img.getAttribute('src')))
+  if (broken.size) {
+    const quota = document.createElement('template')
+    quota.innerHTML = quotaMarkup
+    for (const image of quota.content.querySelectorAll('img')) if (broken.has(image.getAttribute('src'))) image.classList.add('broken')
+    quotaMarkup = quota.innerHTML
+  }
+  cardLayout.patch(metricMarkup + quotaMarkup)
+}
 function dragHandle(label: string): string {
   return `<button type="button" class="analytics-drag-handle" aria-label="Move ${escapeHtml(label)}" aria-pressed="false" aria-describedby="analytics-drag-help">${dragGrip}<span>${escapeHtml(label)}</span></button>`
 }
