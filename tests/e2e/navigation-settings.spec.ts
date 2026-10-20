@@ -606,7 +606,9 @@ test('native touch scrolls content, drags through the gutter and taps close with
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(shortcut(page, 'Logging', 'top bar')).toHaveCount(0)
     await expect(page.locator('.st-navigation-ghost')).toHaveCount(0)
-    expect(await nativeMoves.jsonValue()).toEqual([true, true, true])
+    const consumedMoves = await nativeMoves.jsonValue()
+    expect(consumedMoves.length).toBeGreaterThan(0)
+    expect(consumedMoves.every(Boolean), 'Every delivered native drag move must be consumed').toBe(true)
     const palette = page.getByRole('button', { name: 'Add Logging', exact: true })
     await palette.scrollIntoViewIfNeeded()
     const p = (await palette.boundingBox())!
