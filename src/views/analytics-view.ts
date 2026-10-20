@@ -1,5 +1,5 @@
 import { reveal } from '../motion'
-import { patchContent } from '../dom-patch'
+import { analyticsLayout } from '../analytics-layout'
 // Analytics — a view of its own, opened from the burger menu rather than the
 // top nav: productivity, work and review, then the numbers per merged
 // pull request, each with a weekly line and distribution, then
@@ -14,6 +14,14 @@ import { GITHUB_QUOTA_REFRESH_MS, quotaRiskTone, quotaHours, type GithubQuotaRep
 
 let viewEl: HTMLElement
 let initialized = false
+let cardLayout: ReturnType<typeof analyticsLayout>
+let metricMarkup = ''
+let quotaMarkup = ''
+const dragGrip = '<span class="analytics-drag-grip" aria-hidden="true"></span>'
+function renderCards(): void { cardLayout.patch(metricMarkup + quotaMarkup) }
+function dragHandle(label: string): string {
+  return `<button type="button" class="analytics-drag-handle" aria-label="Move ${escapeHtml(label)}" aria-pressed="false" aria-describedby="analytics-drag-help">${dragGrip}<span>${escapeHtml(label)}</span></button>`
+}
 // From entering the view until leaving it. Timers, account changes and the
 // tab becoming visible read only while the view is on screen.
 let active = false
@@ -55,11 +63,9 @@ function renderShell(): string {
     </header>
     <main>
       <div class="analytics-loader loader" role="status" aria-label="Loading analytics" hidden><span></span><span></span><span></span></div>
-      <div class="analytics-groups" aria-live="polite"></div>
-      <section class="github-quota-section" aria-labelledby="analytics-github-quota">
-        <h2 class="tp-group-label" id="analytics-github-quota">GitHub API · Live</h2>
-        <div class="github-quota-accounts" aria-live="polite"></div>
-      </section>
+      <span class="analytics-sr" id="analytics-drag-help">Drag a card header to move it. Or press Space, use arrow keys, then Space to drop. Escape cancels.</span>
+      <div class="analytics-groups analytics-board"></div>
+      <div class="analytics-sr" id="analytics-layout-status" role="status" aria-live="polite"></div>
     </main>`
 }
 
@@ -83,11 +89,7 @@ function quotaCharts(bucket: GithubQuotaBucket, now: number): string {
   const observations = (bucket.history ?? []).filter((sample) => Math.floor(sample.at / 3_600_000) >= Math.floor(now / 3_600_000) - 167 && sample.at <= now && sample.limit > 0)
   const hours = quotaHours(observations, now)
   const time = (at: number) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(at)
-  const used = histogram(observations.map((sample) => sample.used / sample.limit * 100), 0, 100)
-  const left = histogram(observations.map((sample) => sample.remaining / sample.limit * 100), 0, 100)
-  const peak = Math.max(1, ...used.map((bin) => bin.count), ...left.map((bin) => bin.count))
   const help = 'Used and remaining quota at the latest observation in each hour, past 24 hours including this hour. Empty columns have no observation. Heights show percentage of the quota limit.'
-  const distribution = `Past 7 days: distribution of used and remaining quota percentages in 10 bins, from ${observations.length} hourly observations. Gaps are excluded.`
   return `<div class="quota-charts">
     <div class="analytics-chart-heading"><span>Past 24 hours</span><span class="quota-legend"><i class="quota-used"></i>Used <i class="quota-left"></i>Left</span></div>
     <div class="quota-hours" role="img" tabindex="0" aria-label="${help}" data-help="${help}">${hours.map((sample, i) => {
@@ -96,15 +98,12 @@ function quotaCharts(bucket: GithubQuotaBucket, now: number): string {
       return `<span class="quota-hour${sample ? '' : ' quota-hour-empty'}" data-help="${escapeHtml(text)}">${sample ? `<i class="quota-left" style="height:${sample.remaining / sample.limit * 100}%"></i><i class="quota-used" style="height:${sample.used / sample.limit * 100}%"></i>` : ''}</span>`
     }).join('')}</div>
     <span class="analytics-chart-axis"><span>24h ago</span><span>Now</span></span>
-    <div class="analytics-chart-heading"><span>Past 7 days</span><span>${observations.length}/168 hours</span></div>
-    <div class="quota-distribution" role="img" tabindex="0" aria-label="${escapeHtml(distribution)}" data-help="${escapeHtml(distribution)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">${used.map((bin, i) => `<g data-help="${bin.from}–${bin.until}% quota: ${bin.count} used observations · ${left[i].count} remaining observations"><rect class="quota-used" x="${i * 10 + 1}" y="${39 - bin.count / peak * 36}" width="3.5" height="${bin.count / peak * 36}"/><rect class="quota-left" x="${i * 10 + 5}" y="${39 - left[i].count / peak * 36}" width="3.5" height="${left[i].count / peak * 36}"/></g>`).join('')}</svg></div>
-    <span class="analytics-chart-axis"><span>0%</span><span>${observations.length ? 'Quota utilization' : 'Collecting history…'}</span><span>100%</span></span>
   </div>`
 }
 
 async function readQuota(): Promise<void> {
   const generation = ++quotaGeneration
-  const content = viewEl.querySelector<HTMLElement>('.github-quota-accounts')!
+  const content = viewEl.querySelector<HTMLElement>('.analytics-board')!
   try {
     const response = await fetch('/api/github-quota')
     const data: GithubQuotaReport & { error?: string } = await response.json()
@@ -118,13 +117,14 @@ async function readQuota(): Promise<void> {
     const failedAvatars = new Set(Array.from(content.querySelectorAll<HTMLImageElement>('.github-quota-avatar img.broken'), (img) => img.getAttribute('src')))
     const number = (n: number) => n.toLocaleString('en-US')
     const time = (value: string) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date(value))
-    patchContent(content, data.accounts.length ? data.accounts.map((account) => `
-      <article class="github-quota-account" data-account="${escapeHtml(account.login)}">
-        <header class="github-quota-identity">
+    quotaMarkup = data.accounts.length ? data.accounts.map((account) => `
+      <article class="analytics-panel github-quota-account" data-size="tall" data-group="quota" data-id="quota:${escapeHtml(account.login.toLowerCase())}" data-account="${escapeHtml(account.login)}" data-label="GitHub API · ${escapeHtml(account.login)}">
+        <div class="github-quota-card-header">${dragHandle(`GitHub API · ${account.login}`)}
+        <div class="github-quota-identity">
           <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar${failedAvatars.has(avatar(account.login)) ? ' broken' : ''}" src="${avatar(account.login)}" alt="" width="40" height="40"></span>
           <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
           ${account.checkedAt ? `<p class="analytics-note">Checked ${escapeHtml(time(account.checkedAt))}</p>` : ''}</div>
-        </header>
+        </div></div>
         ${account.error ? '<div class="github-quota-unavailable" aria-label="Quota unavailable">—</div>' : account.buckets.filter((bucket) => bucket.resource === 'core' || bucket.resource === 'graphql').map((bucket) => {
           const minutes = Math.max(0, (Date.parse(bucket.resetAt) - now) / 60_000)
           const risk = minutes > 0 ? bucket.riskPercent : null
@@ -140,10 +140,11 @@ async function readQuota(): Promise<void> {
             ${quotaCharts(bucket, now)}
           </div>`
         }).join('')}
-      </article>`).join('') : '')
+      </article>`).join('') : ''
+    renderCards()
   } catch (error: unknown) {
     if (generation !== quotaGeneration) return
-    content.replaceChildren()
+    quotaMarkup = ''; renderCards()
     noticeFeed.reportReadErrors('analytics-quota', [readFailure('GitHub quota is unavailable', error)])
   }
 }
@@ -173,13 +174,10 @@ function hasNewAccountFailure(report: AnalyticsReport, previous: AnalyticsReport
   return report.errors.some((error) => !error.stale && !missing.has(error.org.toLowerCase()))
 }
 
-function historyMarkup(tile: AnalyticsTile, all: HistorySeries[] | null): string {
+function historyMarkup(tile: AnalyticsTile, all: HistorySeries[] | null, compact = false): string {
   const { label } = tile
-  if (label === 'Review rounds' && (history.error || !all)) {
-    return `<dd class="analytics-history"><span class="analytics-history-max"></span><div class="analytics-history-plot" ${history.error ? 'aria-label="Year history unavailable"' : 'aria-busy="true"'}></div>${histogramMarkup({ label, values: [], format: formatRate }, tile)}</dd>`
-  }
   if (history.error) return '<dd class="analytics-history" aria-label="History unavailable"></dd>'
-  if (!all) return '<dd class="analytics-history" aria-busy="true"><span class="analytics-history-max"></span><div class="analytics-history-plot"></div><div class="analytics-histogram"></div></dd>'
+  if (!all) return `<dd class="analytics-history" aria-busy="true"><span class="analytics-history-max"></span><div class="analytics-history-plot" aria-busy="true"></div>${compact ? '' : '<div class="analytics-histogram"></div>'}</dd>`
   const series = all.find((s) => s.label === label)
   if (!series) return ''
   const chart = historyChart(series.values)
@@ -197,7 +195,7 @@ function historyMarkup(tile: AnalyticsTile, all: HistorySeries[] | null): string
       ${chart.isolated.map((point) => `<span class="analytics-history-dot" style="${at(point)}"></span>`).join('')}
       ${latest ? `<span class="analytics-history-latest" style="${at(latest)}"></span>` : ''}
     </div>
-    ${histogramMarkup(series, tile)}
+    ${compact ? '' : histogramMarkup(series, tile)}
   </dd>`
 }
 
@@ -232,20 +230,16 @@ function workTypeMarkup(tile: AnalyticsTile): string {
 function groupMarkup(group: AnalyticsGroup): string {
   const series = history.data ? historySeries(history.data) : null
   return `
-    <section class="analytics-group" data-group="${group.id}" aria-labelledby="analytics-${group.id}">
-      <h2 class="tp-group-label" id="analytics-${group.id}">${escapeHtml(group.label)}</h2>
-      <dl class="analytics-tiles">
         ${group.tiles.map((tile) => `
-          <div class="analytics-tile${tile.workTypes ? ' analytics-work-tile' : ''}">
-            <dt class="analytics-label">${escapeHtml(tile.label)}</dt>
+          <article class="analytics-panel${tile.workTypes ? ' analytics-work-panel' : ''}" data-id="metric:${escapeHtml(group.id)}:${escapeHtml(tile.label)}" data-group="${group.id}" data-size="${group.id === 'productivity' ? 'tall' : 'short'}" data-label="${escapeHtml(tile.label)}">
+          <dl class="analytics-tile${tile.workTypes ? ' analytics-work-tile' : ''}">
+            <dt class="analytics-label">${dragHandle(tile.label)}</dt>
             <dd class="analytics-summary ${tile.trend?.direction ?? 'neutral'}${tile.trend?.onPace ? ' on-pace' : ''}">
               <div class="analytics-value-row"><span class="analytics-value" data-help="${escapeHtml([measurementHelp[tile.label], tile.note].filter(Boolean).join(' '))}" tabindex="0">${escapeHtml(tile.value)}</span>${tile.valueLabel ? `<span class="analytics-work-label">${escapeHtml(tile.valueLabel)}</span>` : ''}${tile.trend ? `<span class="analytics-arrow" role="img" aria-label="${escapeHtml(tile.trend.description)}" data-help="${escapeHtml(tile.trend.caption)}" tabindex="0">${escapeHtml(tile.trend.text.slice(0, 1))}</span>` : ''}</div>
               ${tile.workTypes ? '' : `<div class="analytics-trend">${tile.trend ? `<span class="analytics-delta" data-help="${escapeHtml(tile.trend.description)}" tabindex="0">${escapeHtml(tile.trend.text.slice(2))}</span>` : ''}<span class="analytics-note">${tile.comparison ? escapeHtml(tile.comparison) : ''}</span></div>`}
             </dd>
-            ${tile.workTypes ? workTypeMarkup(tile) : historyMarkup(tile, series)}
-          </div>`).join('')}
-      </dl>
-    </section>`
+            ${tile.workTypes ? workTypeMarkup(tile) : historyMarkup(tile, series, group.id === 'work-review')}
+          </dl></article>`).join('')}`
 }
 
 function render(): void {
@@ -253,7 +247,8 @@ function render(): void {
   viewEl.querySelector('.analytics-date')!.textContent = day.label
   viewEl.querySelector<HTMLButtonElement>('[data-day="1"]')!.disabled = day.isToday
   if (!shown) return
-  patchContent(viewEl.querySelector('.analytics-groups')!, analyticsGroups(shown.report, shown.baseline, day.isToday ? shown.progress : undefined, day.isToday ? shown.snapshotTime : undefined).map(groupMarkup).join(''))
+  metricMarkup = analyticsGroups(shown.report, shown.baseline, day.isToday ? shown.progress : undefined, day.isToday ? shown.snapshotTime : undefined).map(groupMarkup).join('')
+  renderCards()
   for (const [label, index] of cursors) showCursor(label, index)
 }
 
@@ -392,7 +387,6 @@ async function readAnalytics(background = false): Promise<void> {
   const controller = new AbortController()
   analyticsRead = controller
   const groups = viewEl.querySelector<HTMLElement>('.analytics-groups')!
-  const quota = viewEl.querySelector<HTMLElement>('.github-quota-section')!
   const day = analyticsDay(dayOffset, dayAnchor)
   // Totals and typical-by-now must describe the same read, even on later renders.
   const capturedAt = Date.now()
@@ -405,14 +399,17 @@ async function readAnalytics(background = false): Promise<void> {
     shown = null
     render()
     void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
-    // The emptied sections keep their space while the next day loads, so
-    // GitHub below does not jump up under the loader and back down after.
-    const quotaTop = quota.offsetTop
-    groups.style.minHeight = ''
-    groups.replaceChildren()
+    cardLayout.cancel()
+    const skeleton = document.createElement('template')
+    skeleton.innerHTML = metricMarkup
+    for (const card of skeleton.content.children) {
+      card.replaceChildren()
+      card.setAttribute('aria-hidden', 'true')
+    }
+    metricMarkup = skeleton.innerHTML
+    renderCards()
     viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = false
     groups.setAttribute('aria-busy', 'true')
-    groups.style.minHeight = `${Math.max(0, quotaTop - quota.offsetTop)}px`
   }
   const read = async (since: string, until: string, dailyBounds?: string[]): Promise<AnalyticsReport> => {
     const query = new URLSearchParams({ since, until, ...(dailyBounds ? { dailyBounds: dailyBounds.join(',') } : {}) })
@@ -438,7 +435,7 @@ async function readAnalytics(background = false): Promise<void> {
   } catch (error) {
     if (generation !== readGeneration) return
     // A failed refresh keeps the last totals and their matching pace timestamp.
-    if (!background) groups.innerHTML = ''
+    if (!background) { metricMarkup = ''; renderCards() }
     noticeFeed.reportReadErrors('analytics-day', [readFailure(background ? 'Analytics could not refresh' : 'Analytics is unavailable', error)])
   } finally {
     controller.abort()
@@ -467,6 +464,7 @@ export function initAnalyticsView(): void {
   if (!initialized) {
     initialized = true
     viewEl.innerHTML = renderShell()
+    cardLayout = analyticsLayout(viewEl.querySelector<HTMLElement>('.analytics-board')!, viewEl.querySelector<HTMLElement>('#analytics-layout-status')!)
     mountOrganizationFilter(viewEl.querySelector<HTMLElement>('#analytics-filters')!)
     viewEl.querySelector('.analytics-day')!.addEventListener('click', (e) => {
       const button = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-day]')
@@ -509,9 +507,6 @@ export function initAnalyticsView(): void {
     active = true
     dayOffset = 0
     dayAnchor = new Date()
-    const quota = viewEl.querySelector<HTMLElement>('.github-quota-accounts')!
-    quota.textContent = 'Reading live quota…'
-    quota.classList.remove('st-help-error')
     clearInterval(quotaTimer)
     quotaTimer = setInterval(refreshQuota, GITHUB_QUOTA_REFRESH_MS)
   }
@@ -523,6 +518,7 @@ export function initAnalyticsView(): void {
 export function stopAnalyticsRefresh(): void {
   if (!active) return
   active = false
+  cardLayout.cancel()
   readGeneration++
   analyticsRead?.abort()
   analyticsRead = null
