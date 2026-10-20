@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { isolatedEnvironment } from '../fixtures/cli-isolation'
 import { expect, test, type Page } from '@playwright/test'
-import type { BehaviorDiagnostics } from '../../src/behaviors'
+import { BEHAVIORS, type BehaviorDiagnostics } from '../../src/behaviors'
 import type { Notice } from '../../src/notices'
 import { freeze, resume, settled } from './fixtures/motion'
 import { emptyAnalyticsReport } from './fixtures/analytics'
@@ -102,6 +102,7 @@ async function workspace(page: Page, notices: Notice[], options: { enabled?: boo
     if (pathname === '/api/workspace') return route.fulfill({ json: { mode: 'local' } })
     if (pathname === '/api/claude-auth') return route.fulfill({ json: { status: 'authenticated', loginInProgress: false } })
     if (pathname === '/api/agent-logs') return route.fulfill({ json: { logs: [failedRun()] } })
+    if (pathname === '/api/behavior-metrics') return route.fulfill({ json: { behaviors: Object.fromEntries(BEHAVIORS.map(({ key }) => [key, null])), error: null } })
     if (pathname === '/api/analytics') return route.fulfill({ json: emptyAnalyticsReport(new URL(request.url())) })
     return route.fulfill({ json: {} })
   })
