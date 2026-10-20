@@ -33,6 +33,7 @@ export function googleAccountsSection(element: HTMLElement): { refresh(): Promis
           say('Opening Google…')
           await beginGoogleConnection({ ...(target.dataset.googleReconnect ? { accountId: target.dataset.googleReconnect } : {}) })
           leaving = true
+          window.addEventListener('pageshow', () => { busy = false; render(); say('Google sign-in was not completed.') }, { once: true })
         }
       } catch (error) { say((error as Error).message, true) }
       finally { if (!leaving) { busy = false; render() } }

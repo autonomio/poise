@@ -218,3 +218,20 @@ it('rejects a reviewed publication on a replacement draft before reserving a new
   expect(mocks.id).toHaveBeenCalledTimes(1)
   expect(mocks.create).toHaveBeenCalledTimes(1)
 })
+it('retains the original destination and baseline when another Google app cannot authorize its file', async () => {
+  await publish()
+  const before = await editor.readGoogleLedgerState(slug), creates = mocks.create.mock.calls.length, updates = mocks.update.mock.calls.length
+  const { HttpError } = await import('../server/http')
+  for (const status of [422, 404]) {
+    mocks.read.mockRejectedValueOnce(new HttpError(status, 'This linked file is unavailable to the deployment Google app. Reconnecting cannot grant file access.'))
+    expect((await publish()).status).toBe(status)
+    expect(await editor.readGoogleLedgerState(slug)).toEqual(before)
+  }
+  expect(mocks.create).toHaveBeenCalledTimes(creates)
+  expect(mocks.update).toHaveBeenCalledTimes(updates)
+})
+it('refuses browser configuration without applying private setup', async () => {
+  const response = await fetch(`${base}/api/google/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: 'proof.apps.googleusercontent.com', clientSecret: 'private-test-secret', origin: base }) })
+  expect(response.status).toBe(404)
+  expect(await response.text()).not.toContain('private-test-secret')
+})

@@ -34,7 +34,7 @@ function parseObject(raw: string): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(raw)
     if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
-  } catch { /* Refuse malformed input without repeating credential fragments. */ }
+  } catch { throw new HttpError(400, 'A Google action object is required.') }
   throw new HttpError(400, 'A Google action object is required.')
 }
 
@@ -132,18 +132,26 @@ export class GoogleConnections {
   start(req: IncomingMessage, res: ServerResponse, url: URL): void {
     const principal = pagePrincipal(this.ctx, req, res, url)
     if (!principal) return
-    const state = url.searchParams.get('state') ?? '', f = this.flow(state), config = this.configuration()
-    if (principal.user.githubId !== f.owner || principal.session.idHash !== f.value.parent || f.value.stage !== 'created') throw new HttpError(403, 'This Google sign-in belongs to another login or was already started.')
-    const verifier = this.vault.unseal<string>(f.value.verifier, `verifier:${f.owner}:${f.key}`)
-    this.vault.put('flow', f.owner, f.key, { ...f.value, stage: 'started' }, f.value.expires)
+    const state = url.searchParams.get('state') ?? '', config = this.configuration()
+    const verifier = this.vault.transaction(() => {
+      const f = this.flow(state)
+      if (principal.user.githubId !== f.owner || principal.session.idHash !== f.value.parent || f.value.stage !== 'created') throw new HttpError(403, 'This Google sign-in belongs to another login or was already started.')
+      const value = this.vault.unseal<string>(f.value.verifier, `verifier:${f.owner}:${f.key}`)
+      this.vault.put('flow', f.owner, f.key, { ...f.value, stage: 'started' }, f.value.expires)
+      return value
+    })
     const params = new URLSearchParams({ client_id: config.clientId, redirect_uri: this.ctx.apexOrigin + '/auth/google/callback', response_type: 'code', scope: GOOGLE_SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', state, code_challenge: hash(verifier), code_challenge_method: 'S256' })
     redirect(res, `https://accounts.google.com/o/oauth2/v2/auth?${params}`, 302, { 'referrer-policy': 'no-referrer' })
   }
   async callback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const principal = this.ctx.apexPrincipal(req), state = url.searchParams.get('state') ?? '', f = this.flow(state)
-    if (!principal || principal.user.githubId !== f.owner || principal.session.idHash !== f.value.parent || f.value.stage !== 'started') throw new HttpError(403, 'Google sign-in could not be verified in this login. Connect again.')
+    const principal = this.ctx.apexPrincipal(req), state = url.searchParams.get('state') ?? ''
+    const f = this.vault.transaction(() => {
+      const found = this.flow(state)
+      if (!principal || principal.user.githubId !== found.owner || principal.session.idHash !== found.value.parent || found.value.stage !== 'started') throw new HttpError(403, 'Google sign-in could not be verified in this login. Connect again.')
+      this.vault.put('flow', found.owner, found.key, { ...found.value, stage: 'exchanging' }, found.value.expires)
+      return found
+    })
     const config = this.configuration()
-    this.vault.put('flow', f.owner, f.key, { ...f.value, stage: 'exchanging' }, f.value.expires)
     let result: Result
     if (url.searchParams.get('error') === 'access_denied') result = { outcome: 'cancelled' }
     else if (url.searchParams.has('error')) result = { outcome: 'failed', message: 'Google did not complete sign-in. Connect again.' }
@@ -167,9 +175,11 @@ export class GoogleConnections {
         result = { outcome: 'failed', message: error instanceof HttpError ? error.message : 'Google sign-in could not be completed. Connect again.' }
       }
     }
-    const current = this.flow(state)
-    if (current.value.stage !== 'exchanging') throw new HttpError(409, 'Google sign-in changed while completing.')
-    this.vault.put('flow', f.owner, f.key, { ...current.value, stage: 'ready', verifier: '', result: this.vault.seal(result, `result:${f.owner}:${f.key}`) }, f.value.expires)
+    this.vault.transaction(() => {
+      const current = this.flow(state)
+      if (current.value.stage !== 'exchanging') throw new HttpError(409, 'Google sign-in changed while completing.')
+      this.vault.put('flow', f.owner, f.key, { ...current.value, stage: 'ready', verifier: '', result: this.vault.seal(result, `result:${f.owner}:${f.key}`) }, f.value.expires)
+    })
     redirect(res, `${this.ctx.workspaceOrigin(f.value.handle)}/?google_state=${state}`, 302, { 'referrer-policy': 'no-referrer' })
   }
   private finish(p: Principal, input: Record<string, unknown>): GoogleCompletion {
@@ -221,14 +231,17 @@ export class GoogleConnections {
       operation = (async () => {
         try {
           const tokens = await googleTokenRequest({ grant_type: 'refresh_token', refresh_token: grant.refreshToken, client_id: config.clientId, client_secret: config.clientSecret })
-          unchanged()
-          const live = this.vault.get<Account>('account', owner, id)
-          if (live?.grant !== a.grant) throw new HttpError(409, 'The Google grant changed during refresh.')
-          this.vault.put('account', owner, id, { ...a, grant: this.vault.seal({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token ?? grant.refreshToken, expires: this.now() + tokens.expires_in * 1000 }, `account:${owner}:${id}`) })
+          this.vault.transaction(() => {
+            unchanged()
+            const replacement = { ...a, grant: this.vault.seal({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token ?? grant.refreshToken, expires: this.now() + tokens.expires_in * 1000 }, `account:${owner}:${id}`) }
+            if (!this.vault.replace('account', owner, id, a, replacement)) throw new HttpError(409, 'The Google grant changed during refresh.')
+          })
           return tokens.access_token
         } catch (error) {
-          unchanged()
-          if (error instanceof GoogleGrantExpired) this.vault.put('account', owner, id, { ...a, state: 'expired', version: randomUUID(), grant: null })
+          this.vault.transaction(() => {
+            unchanged()
+            if (error instanceof GoogleGrantExpired && !this.vault.replace('account', owner, id, a, { ...a, state: 'expired', version: randomUUID(), grant: null })) throw new HttpError(409, 'The Google grant changed during refresh.')
+          })
           throw error
         }
       })()

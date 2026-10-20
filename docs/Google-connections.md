@@ -81,13 +81,13 @@ checks reread current broker metadata; credential requests require the admitted
 version. Refresh is single-flight per owner, subject and connection version, with
 compare-and-swap before installing results. Terminal `invalid_grant` requires
 Reconnect; transient provider failures and file permission loss do not disconnect
-an account. A Drive401 probes refresh without replaying the original remote
+an account. A Drive 401 probes refresh without replaying the original remote
 request. Disconnect forgets this deployment owner's grant and invalidates older
 flows; it does not globally revoke another owner's shared Google authorization.
 
 ## Browser completion
 
-A flow uses a random32-byte state,48-byte PKCE verifier with S256, ten-minute
+A flow uses a random 32-byte state, 48-byte PKCE verifier with S256, ten-minute
 expiry, hashed browser proof, original sessions, connection epoch, expected
 subject and client fingerprint. Apex start and callback require the exact parent
 login. Callback stages an encrypted result; it cannot install a grant. It returns

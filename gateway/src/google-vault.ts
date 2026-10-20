@@ -48,6 +48,9 @@ export class GoogleVault {
   put(kind: Kind, owner: number, id: string, value: unknown, expires = 0): void {
     this.db.prepare('INSERT INTO google_records VALUES (?,?,?,?,?) ON CONFLICT(kind,owner,id) DO UPDATE SET value=excluded.value,expires=excluded.expires').run(kind, owner, id, JSON.stringify(value), expires)
   }
+  replace(kind: Kind, owner: number, id: string, previous: unknown, value: unknown): boolean {
+    return this.db.prepare('UPDATE google_records SET value=? WHERE kind=? AND owner=? AND id=? AND value=?').run(JSON.stringify(value), kind, owner, id, JSON.stringify(previous)).changes === 1
+  }
   remove(kind: Kind, owner: number, id: string): void { this.db.prepare('DELETE FROM google_records WHERE kind=? AND owner=? AND id=?').run(kind, owner, id) }
   seal(value: unknown, binding: string): string {
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv)

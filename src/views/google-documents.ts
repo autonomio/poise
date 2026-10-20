@@ -18,6 +18,7 @@ export function mountGooglePublish(panel: HTMLElement, host: PublishPanelHost, r
       try {
         await beginGoogleConnection({ slug, beforeNavigate: async () => { if (!await host.flush()) throw new Error('The draft could not be saved. Keep it open and resolve the save before connecting Google.') }, assertCurrent: () => { if (host.slug() !== slug) throw new Error('The open document changed. Connect Google from that document again.') } })
         leaving = true
+        window.addEventListener('pageshow', () => { busy = false; panel.inert = false; status.textContent = 'Google sign-in was not completed.' }, { once: true })
       } catch (error) { status.textContent = (error as Error).message }
       finally { if (!leaving) { busy = false; panel.inert = false; status.focus({ preventScroll: true }) } }
     })()

@@ -24,7 +24,7 @@ beforeEach(async () => {
   accounts.configureGoogle({ clientId: 'poise.apps.googleusercontent.com', clientSecret: 'private-client-secret', origin })
   fakeFetch.mockReset(); vi.stubGlobal('fetch', fakeFetch)
 })
-afterEach(async () => { vi.unstubAllGlobals(); database.closeDatabase(); if (previous === undefined) delete process.env.POISE_DB; else process.env.POISE_DB = previous; await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); database.closeDatabase(); if (previous === undefined) delete process.env.POISE_DB; else process.env.POISE_DB = previous; await rm(root, { recursive: true, force: true }) })
 
 describe('Google OAuth browser and account boundaries', () => {
   it('uses offline consent, account selection and PKCE without putting the tab binding in the redirect URL', async () => {
@@ -102,4 +102,30 @@ it('redacts private JSON fragments from corrupt stored state and malformed token
   await expect(accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })).rejects.toThrow('Google returned an unreadable response.')
   database.setMeta('google:config', '{"clientSecret":"private-client-secret')
   expect(() => accounts.googleAccountSettings()).toThrow('Saved Google connection state is unreadable.')
+})
+it('requires a complete operator environment and keeps private configuration out of account responses', () => {
+  vi.stubEnv('POISE_GOOGLE_CLIENT_ID', 'configured.apps.googleusercontent.com')
+  vi.stubEnv('POISE_GOOGLE_CLIENT_SECRET', '')
+  vi.stubEnv('POISE_GOOGLE_ORIGIN', '')
+  expect(() => accounts.validateGoogleEnvironment(false)).toThrow('must configure')
+  vi.stubEnv('POISE_GOOGLE_CLIENT_SECRET', 'private-env-secret')
+  vi.stubEnv('POISE_GOOGLE_ORIGIN', origin)
+  expect(() => accounts.validateGoogleEnvironment(false)).not.toThrow()
+  expect(JSON.stringify(accounts.googleAccountSettings())).not.toMatch(/configured.apps|private-env-secret|clientId|origin/)
+  vi.stubEnv('POISE_GOOGLE_ORIGIN', 'https://external.example')
+  expect(() => accounts.validateGoogleEnvironment(false)).toThrow('loopback')
+  vi.unstubAllEnvs()
+})
+it('requires the same subject during local reconnect and reports authoritative grant failure', async () => {
+  let auth = await begin()
+  fakeFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(identity())
+  await accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })
+  const browserSecret = randomBytes(32).toString('base64url')
+  auth = { url: new URL((await accounts.beginGoogleLogin(request(), { browserSecret, accountId: 'account-one' })).url), browserSecret }
+  fakeFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(identity('different', 'other@example.com'))
+  await expect(accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret })).rejects.toThrow('same Google account')
+  expect(accounts.googleAccounts()).toHaveLength(1)
+  fakeFetch.mockResolvedValueOnce(Response.json({ error: 'invalid_grant', error_description: 'private-error-fragment' }, { status: 400 }))
+  await expect(accounts.googleAccessToken('account-one', true)).rejects.toThrow('sign-in has ended')
+  expect(accounts.googleAccounts()).toEqual([{ id: 'account-one', email: 'one@example.com', connected: false, state: 'expired' }])
 })

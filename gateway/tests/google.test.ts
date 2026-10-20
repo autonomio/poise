@@ -196,7 +196,7 @@ describe('owner grants and refresh', () => {
     expect((await token(l, 'google-one', version, true)).status).toBe(422)
     expect((await settings(l)).accounts[0]).toMatchObject({ connected: false, state: 'expired' })
   })
-  it('does not install a held refresh after logout, disconnect or a newer reconnect', async () => {
+  it('does not install a held refresh after logout or a newer reconnect', async () => {
     const l = await login(); await connect(l)
     const before = await settings(l)
     let started!: () => void, release!: () => void
@@ -222,4 +222,55 @@ describe('owner grants and refresh', () => {
     expect((await settings(l)).accounts[0]).toMatchObject({ connected: false, state: 'expired' })
     expect(JSON.stringify(h.logs)).not.toContain('tampered-private-fragment')
   })
+})
+
+it('admits only one tenth account when two ready flows race, and bounds pending stages', async () => {
+  const l = await login()
+  for (let i = 0; i < 9; i++) await connect(l, `google-${i}`)
+  const a = await stage(l, 'tenth-a'), b = await stage(l, 'tenth-b')
+  const results = await Promise.all([finish(l, a), finish(l, b)])
+  expect(results.map(r => r.status).sort()).toEqual([200, 429])
+  expect((await settings(l)).accounts.filter(a => a.connected)).toHaveLength(10)
+  // The refused ready flow still occupies a pending slot; created and started
+  // flows count too, rather than just flows waiting at the first screen.
+  for (let i = 0; i < 9; i++) await pending(l)
+  const op = await open(l, 'connect')
+  expect((await post(op, 'begin', { browserSecret: proof() })).status).toBe(429)
+})
+it('expires a ready result and rejects reconfiguration while a callback is awaiting Google', async () => {
+  const l = await login(), ready = await stage(l, 'google-one')
+  h.advance(601_000)
+  expect((await finish(l, ready)).status).toBe(403)
+  expect((await settings(l)).accounts).toEqual([])
+  const f = await pending(l), code = proof(); subjects.set(code, 'google-one')
+  const previousFetch = globalThis.fetch
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(r => { release = r }), pendingExchange = new Promise<void>(r => { started = r })
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => { if (String(input) === 'https://oauth2.googleapis.com/token') { started(); await held }; return previousFetch(input, init) }))
+  const completing = h.request({ host: APEX, path: `/auth/google/callback?state=${f.state}&code=${code}`, headers: { cookie: l.apexCookie } })
+  await pendingExchange
+  h.config.google = { clientId: CLIENT, clientSecret: 'rotated-private-google-secret' }
+  release()
+  expect((await completing).status).toBe(403)
+  expect((await settings(l)).accounts).toEqual([])
+  expect(JSON.stringify(h.logs)).not.toContain('rotated-private-google-secret')
+})
+it('ends delegation on originating-session expiry and disable→enable, including held refresh', async () => {
+  const l = await login(), second = await login(), op = await open(l)
+  const db = new Database(join(h.config.dataDir, 'gateway.db'))
+  db.prepare('UPDATE sessions SET expires_at=? WHERE id_hash=?').run(Date.now() + 5000, l.session.idHash); db.close()
+  h.advance(10_000)
+  expect((await post(op, 'settings')).status).toBe(401)
+  expect((await settings(second)).configured).toBe(true)
+  await connect(second)
+  const version = (await settings(second)).accounts[0].connectionVersion
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(r => { release = r }), pendingRefresh = new Promise<void>(r => { started = r })
+  holdRefresh = async () => { started(); await held }
+  const refreshing = token(second, 'google-one', version, true)
+  await pendingRefresh
+  h.store.disableUser('alice', 'root'); h.store.enableUser('alice')
+  release()
+  expect((await refreshing).status).toBe(401)
+  expect(h.context.isAllowed(h.store.getUser('alice')!)).toBe(true)
 })

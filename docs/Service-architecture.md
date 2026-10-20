@@ -837,7 +837,7 @@ deadlines, browser proof and migration limits.
 - `POST /api/google/callback` accepts `{state,browserSecret}` from the returning
   flow, consumes its staged result under the publication lock, and returns
   settings plus `{connection:{outcome,accountId?,message?}}`.
-- `POST /api/google/disconnect` forgets `{accountId}`. `/config` returns404;
+- `POST /api/google/disconnect` forgets `{accountId}`. `/config` returns 404;
   Google app configuration is deployment-owned.
 - Browser assertions carry signed `sid`. The workspace guard strips the header
   and retains only verified delegation privately against that request. The fixed
