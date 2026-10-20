@@ -48,6 +48,7 @@ for (const kind of ['issue', 'snippet'] as const) test(`reading an Editor ${kind
   const composer = page.locator(`.editor-floating-composer.composer-${kind}`)
   const title = composer.locator(kind === 'issue' ? '.issue-title' : '.snippet-trigger')
   await title.fill(kind === 'issue' ? 'Keep issue title' : ';keep-draft')
+  if (kind === 'issue') await composer.locator('.issue-repo').selectOption('acme/project')
   const body = composer.locator(kind === 'issue' ? '.issue-body' : '.snippet-body')
   await body.fill('Keep this unsaved body')
   await composer.getByRole('button', { name: kind === 'issue' ? 'Open issue' : 'Save snippet', exact: true }).click()
