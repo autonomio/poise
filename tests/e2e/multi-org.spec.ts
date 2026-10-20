@@ -1,3 +1,4 @@
+import { feedback } from './fixtures/view-feedback'
 import { expect, test, type Page } from '@playwright/test'
 import { settled } from './fixtures/motion'
 import type { Organization } from '../../src/config'
@@ -157,7 +158,7 @@ test('uses one global behavior configuration regardless of the dashboard account
   const state = await setup(page, [organization('acme'), organization('beta')])
   state.partial = true
   await page.goto('/')
-  await expect(page.locator('#main-load-error')).toContainText('beta: Sync unavailable')
+  await expect(await feedback(page)).toContainText('beta: Sync unavailable')
   await expect(page.locator('#tbody tr')).toHaveCount(2)
   await page.locator('#main-filters').getByLabel('Organization filter').selectOption('beta')
   await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
@@ -232,7 +233,7 @@ test('continues Archive pagination when an organization is missing only from the
   })
   await page.goto('/')
   await expect(page.locator('#tbody tr')).toHaveCount(20)
-  await expect(page.locator('#main-load-error')).toContainText('beta: Count unavailable')
+  await expect(await feedback(page)).toContainText('beta: Count unavailable')
   await page.locator('#main-sentinel').scrollIntoViewIfNeeded()
   await expect(page.locator('#tbody tr')).toHaveCount(25)
   await expect(page.locator('#count')).toHaveText('25 available')

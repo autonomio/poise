@@ -1,3 +1,4 @@
+import { feedback } from './fixtures/view-feedback'
 import { expect, test, type Page } from '@playwright/test'
 import { CATALOG } from '../model-catalog-fixture'
 
@@ -451,7 +452,7 @@ test('opts repositories and trusted authors into Review New Issues from Behavior
   await expect(dialog.locator('.bt-repo')).toHaveCount(3)
   await dialog.getByLabel('Trusted authors').fill('mikkokotila name!')
   await page.keyboard.press('Escape')
-  await expect(dialog.locator('.bt-status')).toContainText('Not a GitHub username: name!')
+  await expect(await feedback(page)).toContainText('Not a GitHub username: name!')
   await expect(dialog).toBeVisible()
   // Escape saves as well, like every other way of closing.
   await dialog.getByLabel('Trusted authors').fill('mikkokotila')
@@ -648,22 +649,20 @@ test('keeps healthy Swarm rows live while identifying unreadable records', async
   await page.goto('/')
   await page.getByRole('button', { name: 'Swarm', exact: true }).click()
   await expect(page.locator('.agent-row')).toHaveCount(1)
-  await expect(page.locator('#swarm-stale')).toContainText('2 unreadable worker log row(s) isolated')
-  await expect(page.locator('#swarm-stale')).toHaveCSS('color', 'rgb(184, 80, 72)')
-  const diagnostics = page.getByRole('region', { name: 'Unreadable worker records' })
-  await expect(diagnostics.locator('.swarm-quarantine-record')).toHaveCount(2)
-  await expect(diagnostics).toContainText('Reported target: o/r#2')
+  await expect(await feedback(page)).toContainText('2 unreadable worker log row(s) isolated')
+  const diagnostics = await feedback(page, 'Unreadable Swarm records')
+  await expect(diagnostics).toContainText('o/r#2')
   await expect(diagnostics).toContainText('Call: ' + 'b'.repeat(32))
   await expect(diagnostics).toContainText('Correlation: claim-2')
   await expect(diagnostics).toContainText('invalid terminal outcome')
-  await expect(diagnostics).toContainText('Target unknown')
+  await expect(diagnostics).toContainText('Unknown target')
   await expect(diagnostics).toContainText('log row is not an object')
-  await expect(diagnostics.locator('button, .agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
+  await expect(diagnostics.locator('.agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
   logs[0].status = 'failed'
   logs[0].error = 'task-local failure'
   await page.clock.fastForward(15_001)
   await expect(page.locator('.agent-row .agent-status-icon')).toHaveAttribute('title', 'Failed')
-  await expect(page.locator('#swarm-stale')).toContainText('Other runs continue updating')
+  await expect(await feedback(page)).toContainText('Other runs continue updating')
 })
 
 test('shows conflicting identity diagnostics when no validated Swarm row remains, then clears recovered evidence', async ({ page }) => {
@@ -679,20 +678,18 @@ test('shows conflicting identity diagnostics when no validated Swarm row remains
   await page.clock.install()
   await page.goto('/')
   await page.getByRole('button', { name: 'Swarm', exact: true }).click()
-  const diagnostics = page.getByRole('region', { name: 'Unreadable worker records' })
+  const diagnostics = await feedback(page, 'Unreadable Swarm records')
   await expect(page.locator('.agent-row')).toHaveCount(0)
-  await expect(page.locator('#swarm-empty')).toHaveText('No readable agent calls.')
-  await expect(page.locator('#swarm-stale')).toHaveCSS('color', 'rgb(184, 80, 72)')
-  await expect(diagnostics).toContainText('Reported target: elsewhere/repo#1')
+  await expect(page.locator('#swarm-empty')).toHaveCount(0)
+  await expect(diagnostics).toContainText('elsewhere/repo#1')
   await expect(diagnostics).toContainText('Call: ' + id)
   await expect(diagnostics).toContainText('incomplete terminal outcome')
-  await expect(diagnostics.locator('button, .agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
+  await expect(diagnostics.locator('.agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
   unreadable = false
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
   await expect(page.locator('.agent-row')).toHaveCount(1)
-  await expect(page.locator('#swarm-quarantine')).toBeHidden()
-  await expect(page.locator('#swarm-quarantine')).toHaveText('')
-  await expect(page.locator('#swarm-stale')).toBeHidden()
+  await expect(page.locator('#swarm-quarantine')).toHaveCount(0)
+  await expect(page.locator('#swarm-stale')).toHaveCount(0)
 })
 
 test('shows missing worker heartbeat, refreshes failures, and stops polling when hidden', async ({ page }) => {

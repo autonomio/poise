@@ -3469,7 +3469,6 @@ function openIssueComposerFromSelection(): void {
     if (!repo)  { showError('Repo is required'); return }
 
     addB.disabled = true
-    addB.textContent = 'Opening…'
     showError('')
     try {
       const ghRes = await fetch('/api/gh', {
@@ -3579,7 +3578,6 @@ function openSnippetComposerFromSelection(): void {
     if (!replace.trim()) { showError('Snippet text is required'); bodyTa.focus(); return }
 
     addB.disabled = true
-    addB.textContent = 'Saving…'
     showError('')
     try {
       const res = await fetch('/api/snippets', {

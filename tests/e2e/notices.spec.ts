@@ -1,3 +1,4 @@
+import { feedback } from './fixtures/view-feedback'
 import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -318,7 +319,7 @@ test('focuses an older grouped failure while already in Swarm, clears filters, a
   await expect(focused).toHaveCount(0)
   await expect(page.locator(`.agent-row[data-id="${newest}"]`).getByRole('button', { name: 'Show 1 identical earlier run (2 total)' })).toBeVisible()
   await page.locator('#swarm-search').fill('does-not-match-any-run')
-  await expect(page.locator('#swarm-empty')).toHaveText('No runs match this filter.')
+  await expect(page.locator('#swarm-empty')).toHaveCount(0)
   const accountLoaded = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/agent-logs'
     && new URL(response.url()).searchParams.get('org') === 'beta')
   await page.locator('#swarm-filters').getByRole('combobox', { name: 'Organization filter' }).selectOption('beta')
@@ -362,7 +363,7 @@ test('reports a missing notification run instead of opening another run on the s
   await expand(page, HELD.id)
   await card(page, HELD.id).getByRole('button', { name: 'Open the run in Swarm' }).click()
   await expect(page.locator('#view-swarm')).toBeVisible()
-  await expect(page.locator('#swarm-stale')).toHaveText(`No run found for call ${absent}.`)
+  await expect(await feedback(page)).toContainText(`No run found for call ${absent}.`)
   await expect(page.locator('.agent-row-focus')).toHaveCount(0)
 })
 
@@ -413,7 +414,7 @@ test('keeps the last opened notice in control when two navigations share a pendi
   await expect(focused).toHaveClass(/agent-row-focus/)
   await expect(focused.getByRole('button', { name: 'Toggle detail' })).toBeFocused()
   await expect(account).toHaveValue('beta')
-  await expect(page.locator('#swarm-stale')).toBeHidden()
+  await expect(page.locator('#swarm-stale')).toHaveCount(0)
   await expect(page.locator(`.agent-row[data-id="${HELD_CALL}"]`)).toHaveCount(0)
   expect(allRequests).toBe(unfilteredBefore)
   expect(heldRequests).toBe(1)

@@ -1017,7 +1017,6 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
 
     submitting = true
     addB.disabled = true
-    addB.textContent = 'Opening…'
     reportError('')
     try {
       const ghRes = await fetch('/api/gh', {

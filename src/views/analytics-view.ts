@@ -38,7 +38,7 @@ function reserveQuotaRead(): void {
     header.querySelector('.github-quota-checked')?.remove()
     const loading = document.createElement('div')
     loading.className = 'github-quota-unavailable github-quota-loading'
-    loading.textContent = 'Reading live quota…'
+    loading.setAttribute('aria-label', 'Reading live quota')
     card.replaceChildren(header, loading)
     card.setAttribute('aria-busy', 'true')
     card.setAttribute('data-placeholder-height', String(heights.get(card.getAttribute('data-id')!) ?? 0))

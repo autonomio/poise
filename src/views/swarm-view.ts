@@ -344,8 +344,8 @@ const reasoning = new Map<string, { chars: number, body: string, loading: boolea
 function reasoningDetail(e: LogEntry): string {
   if (e.progress?.reasoning_available === undefined) return ''
   const saved = reasoning.get(e.id)
-  const body = saved?.body || (e.progress.reasoning_available ? 'Open to load provider reasoning.' : 'The provider has not exposed reasoning text.')
-  return `<details class="agent-reasoning" data-reasoning-id="${escapeHtml(e.id)}"><summary>Provider reasoning</summary><p>Latest 65,536 characters supplied by the provider.</p><pre class="agent-reasoning-body">${escapeHtml(body)}</pre></details>`
+  const body = saved?.body || ''
+  return `<details class="agent-reasoning" data-reasoning-id="${escapeHtml(e.id)}"><summary>Provider reasoning</summary><pre class="agent-reasoning-body">${escapeHtml(body)}</pre></details>`
 }
 
 async function loadReasoning(id: string): Promise<void> {
@@ -355,15 +355,17 @@ async function loadReasoning(id: string): Promise<void> {
   const saved = reasoning.get(id)
   const chars = entry.progress.reasoning_chars || 0
   if (saved?.loading || saved?.chars === chars) return
-  reasoning.set(id, { chars: saved?.chars ?? -1, body: saved?.body || 'Loading…', loading: true })
+  reasoning.set(id, { chars: saved?.chars ?? -1, body: saved?.body || '', loading: true })
   try {
     const response = await fetch(`/api/agent-reasoning/${encodeURIComponent(id)}`)
     if (!response.ok) throw new Error(`Could not load reasoning (${response.status})`)
     const data = await response.json()
     if (typeof data.body !== 'string') throw new Error('Invalid reasoning response')
-    reasoning.set(id, { chars, body: data.body || 'No reasoning text available.', loading: false })
+    reasoning.set(id, { chars, body: data.body || '', loading: false })
+    viewFeedback(`swarm-reasoning:${id}`, 'Swarm reasoning unavailable', '')
   } catch (error) {
-    reasoning.set(id, { chars: -1, body: (error as Error).message, loading: false })
+    reasoning.set(id, { chars: -1, body: saved?.body || '', loading: false })
+    viewFeedback(`swarm-reasoning:${id}`, 'Swarm reasoning unavailable', (error as Error).message, 'read_failed')
   }
   const row = bodyEl.querySelector<HTMLTableRowElement>(`.agent-expand-row[data-expand-for="${id}"]`)
   if (row) refreshRunDetail(row, entry)
@@ -843,8 +845,10 @@ async function loadResponse(id: string, refresh = false) {
     }
     const data = await res.json()
     next = { body: data.body || '', loading: false }
+    viewFeedback(`swarm-response:${id}`, 'Swarm response unavailable', '')
   } catch (err) {
-    next = { body: `Error: ${(err as Error).message}`, loading: false }
+    next = { body: null, loading: false }
+    viewFeedback(`swarm-response:${id}`, 'Swarm response unavailable', (err as Error).message, 'read_failed')
   }
 
   // The person may have collapsed the row while this was out. Writing the
