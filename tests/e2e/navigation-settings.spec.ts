@@ -523,7 +523,7 @@ for (const [width, fontSize, theme] of [[320, 32, 'light'], [420, 20, 'dark'], [
   await expect(rows(page, 'menu')).toHaveText(['Analytics', 'Logging'])
 })
 
-test('native touch scrolls content, drags through the gutter and taps close without picking up', async ({ page, browserName }, info) => {
+test('native touch scrolls content, drags through the gutter and taps close without picking up', async ({ page, browser, browserName }, info) => {
   test.skip(browserName !== 'chromium', 'Chromium provides native CDP touch input.')
   await page.setViewportSize({ width: 640, height: 820 })
   await workspace(page)
@@ -575,7 +575,10 @@ test('native touch scrolls content, drags through the gutter and taps close with
     return entries
   })
   let requestedRemove: { x: number; y: number; width: number; height: number } | null = null
+  let tracing = false, sequenceFailed = false
   try {
+    await browser.startTracing(undefined, { categories: ['-*', 'input', 'latencyInfo'], screenshots: false })
+    tracing = true
     await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
     await settingsBody(page).evaluate(element => { element.scrollTop = 0 })
     const origin = (await shortcut(page, 'Logging', 'menu').boundingBox())!
@@ -618,12 +621,29 @@ test('native touch scrolls content, drags through the gutter and taps close with
     await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(targetTap.x + 20, targetTap.y + 3) })
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(page.locator('#top-nav .nav-item').first()).toHaveText('Logging')
+  } catch (error) {
+    sequenceFailed = true
+    throw error
   } finally {
     try {
-      await info.attach('navigation-native-removal', {
-        body: JSON.stringify({ requestedRemove, events: await delivery.jsonValue() }, null, 2), contentType: 'application/json',
-      })
-    } finally { await Promise.all([delivery.dispose(), client.detach()]) }
+      if (tracing) {
+        try {
+          const trace = await browser.stopTracing()
+          if (sequenceFailed || info.status !== info.expectedStatus) {
+            await info.attach('navigation-chromium-input', { body: trace, contentType: 'application/json' })
+          }
+        } catch (error) {
+          if (!sequenceFailed) throw error
+          console.error('Chromium input trace unavailable; preserving the original native failure:', error)
+        }
+      }
+    } finally {
+      try {
+        await info.attach('navigation-native-removal', {
+          body: JSON.stringify({ requestedRemove, events: await delivery.jsonValue() }, null, 2), contentType: 'application/json',
+        })
+      } finally { await Promise.all([delivery.dispose(), client.detach()]) }
+    }
   }
 })
 
