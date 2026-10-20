@@ -29,9 +29,13 @@ test('reorders the card board by its headers, persists across reads and reload, 
     await expect(page.locator('.analytics-drop-slot')).toBeVisible()
     expect(Math.abs((await first.boundingBox())!.x - b.x)).toBeLessThan(1)
     await expect.poll(() => board.locator('.analytics-panel:not(.analytics-card-held)[data-motion-running]').count()).toBeGreaterThan(0)
+    expect(await second.evaluate(button => button.closest('[data-id]')!.matches(':not(.analytics-card-held)[data-motion-running]'))).toBe(true)
     expect(Math.abs((await second.boundingBox())!.x - b.x)).toBeLessThan(1)
   } finally { await resume(page) }
   await expect.poll(async () => (await second.boundingBox())!.x).toBeLessThan(b.x - 1)
+  await settled(page)
+  expect(Math.abs((await second.boundingBox())!.x - a.x)).toBeLessThan(1)
+  expect(Math.abs((await second.boundingBox())!.y - a.y)).toBeLessThan(1)
   await page.mouse.move(a.x + 60, a.y + 20, { steps: 4 })
   expect(Math.abs((await first.boundingBox())!.x - a.x)).toBeLessThan(1)
   await page.mouse.move(b.x + 60, b.y + 20, { steps: 4 })
@@ -39,6 +43,13 @@ test('reorders the card board by its headers, persists across reads and reload, 
   await page.mouse.up()
   await expect.poll(async () => (await ids()).slice(0, 2)).toEqual([original[1], original[0]])
   await expect.poll(async () => Math.abs((await second.boundingBox())!.x - a.x)).toBeLessThan(1)
+  await settled(page)
+  for (const [handle, slot] of [[first, b], [second, a]] as const) {
+    const box = (await handle.boundingBox())!
+    expect(Math.abs(box.x - slot.x)).toBeLessThan(1)
+    expect(Math.abs(box.y - slot.y)).toBeLessThan(1)
+  }
+  await expect(board.locator('[data-motion-running]')).toHaveCount(0)
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
   const placed = await ids()
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
