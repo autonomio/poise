@@ -161,3 +161,22 @@ it('refuses a local refresh completing after an environment client change', asyn
   release(token()); await failed
   expect(accounts.googleAccounts()[0].connected).toBe(false)
 })
+it('counts a former-app reconnect as a new current-app account at the limit', async () => {
+  const connect = async (sub: string) => {
+    const auth = await begin()
+    fakeFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(identity(sub, `${sub}@example.com`))
+    return accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })
+  }
+  await connect('former-app')
+  vi.stubEnv('POISE_GOOGLE_CLIENT_ID', 'different.apps.googleusercontent.com')
+  vi.stubEnv('POISE_GOOGLE_CLIENT_SECRET', 'private-other-client')
+  vi.stubEnv('POISE_GOOGLE_ORIGIN', origin)
+  for (let n = 0; n < 10; n++) await connect(`current-${n}`)
+  await expect(connect('former-app')).rejects.toThrow('At most ten')
+  expect(accounts.googleAccounts().find(a => a.id === 'former-app')).toMatchObject({ connected: false, state: 'expired' })
+  expect(accounts.googleAccounts().filter(a => a.connected)).toHaveLength(10)
+  await expect(connect('current-0')).resolves.toMatchObject({ outcome: 'connected', accountId: 'current-0' })
+  await accounts.disconnectGoogle('current-1')
+  await expect(connect('former-app')).resolves.toMatchObject({ outcome: 'connected', accountId: 'former-app' })
+  expect(accounts.googleAccounts().filter(a => a.connected)).toHaveLength(10)
+})

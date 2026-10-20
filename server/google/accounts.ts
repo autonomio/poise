@@ -137,7 +137,8 @@ export async function completeGoogleLogin(req: IncomingMessage, input: Record<st
   db.transaction(() => {
     const current = googleConfig()
     if (pending.epoch !== connectionEpoch() || pending.client !== hash(current.clientId + '\0' + current.clientSecret) || pending.origin !== current.origin) throw new HttpError(409, 'Google connections changed during sign-in. Connect again.')
-    if (!previous?.connected && googleAccounts().filter(a => a.connected).length >= 10) throw new HttpError(429, 'At most ten Google accounts can be connected.')
+    const connected = googleAccounts().filter(a => a.connected)
+    if (!connected.some(a => a.id === identity.sub) && connected.length >= 10) throw new HttpError(429, 'At most ten Google accounts can be connected.')
     setMeta(PREFIX + identity.sub, JSON.stringify({ id: identity.sub, email: identity.email, connected: true, connectionVersion: randomUUID(), clientId: config.clientId, refreshToken, accessToken: tokens.access_token, expires: Date.now() + tokens.expires_in * 1000 }))
   }).immediate()
   return { outcome: 'connected', accountId: identity.sub }

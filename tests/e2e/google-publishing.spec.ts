@@ -285,6 +285,8 @@ for (const theme of ['light', 'dark']) test(`Google accounts reuse compact agent
   })
   expect(sizes.name).toEqual(sizes.agentName); expect(sizes.status).toEqual(sizes.agentStatus); expect(sizes.overflow).toBeLessThanOrEqual(1)
   await page.screenshot({ path: info.outputPath(`google-accounts-${theme}.png`) })
+  await page.evaluate(() => { document.documentElement.style.removeProperty('font-size'); document.body.style.removeProperty('font-family') })
+  await google.screenshot({ path: info.outputPath(`google-accounts-default-${theme}.png`) })
 })
 test('central completion restores the exact draft and verified subject without publishing', async ({ page }) => {
   const actions = await setup(page)
@@ -475,12 +477,20 @@ for (const place of ['accounts', 'publish'] as const) test(`persisted pageshow r
     await page.getByRole('dialog', { name: 'Publish', exact: true }).getByRole('button', { name: 'Add Google account', exact: true }).click({ noWaitAfter: true })
   }
   await started
-  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false })))
-  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
+  // Locator assertions wait for the deliberately held navigation to finish.
+  // Inspect the retained document directly while exercising its real handlers.
+  const states = await page.evaluate(() => {
+    const editor = document.querySelector('#editor-doc')!
+    const before = editor.getAttribute('contenteditable')
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }))
+    const ordinary = editor.getAttribute('contenteditable')
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    return { before, ordinary, restored: editor.getAttribute('contenteditable') }
+  })
+  expect(states).toEqual({ before: 'false', ordinary: 'false', restored: 'true' })
+  const aborted = page.waitForEvent('requestfailed', { predicate: req => req.url().startsWith('https://accounts.google.com/') })
+  release(); await aborted
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
   if (place === 'accounts') await expect(page.locator('.st-google-accounts').getByRole('button', { name: 'Add Google account', exact: true })).toBeEnabled()
   else expect(await page.getByRole('dialog', { name: 'Publish', exact: true }).evaluate(el => (el as HTMLElement).inert)).toBe(false)
-  release()
 })
