@@ -26,7 +26,7 @@ class ResumeReader(BatchReader):
     def list_org_repos(self, org: str) -> list[dict]:
         return self.repos
 
-    def list_repo_issues(self, name: str) -> list[dict]:
+    def list_repo_issues(self, name: str, include_issues: bool = True) -> list[dict]:
         self.enumerated.append(name)
         return [{"id": item, "number": item, "item_kind": "issue",
                  "updated_at": self.versions.get(item, "2026-01-02T00:00:00Z")}
@@ -159,8 +159,7 @@ class ReconcileResumeTest(unittest.TestCase):
         self.reader.repos[0]["has_issues"] = False
         self.reader.repos.append(dict(repo_row(), id=20, node_id="R_20", name="Second", full_name="Vaquum/Second"))
         self.reader.items = []
-        with patch.object(self.reader, "list_repo_pull_requests", return_value=[]):
-            self.assertFalse(self.chunk())
+        self.assertFalse(self.chunk())
         self.reader.repos[0]["has_issues"] = True
         stub = {"id": 100, "number": 100, "item_kind": "issue", "updated_at": "2026-01-02T00:00:00Z"}
         with patch.object(self.reader, "list_repo_issues", side_effect=lambda name: [stub] if name == "Vaquum/Test" else []):
