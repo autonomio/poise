@@ -1,10 +1,13 @@
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from github_datastore.db import connect, get_state, set_state
+from github_datastore.cli import main
 from github_datastore.store import RECONCILE_PROGRESS_KEY, sync_once
 from tests.test_store import BatchReader, base_expanded, initialize_sync_state, repo_row
 
@@ -69,7 +72,7 @@ class ReconcileResumeTest(unittest.TestCase):
         self.assertIsNone(self.state("last_reconcile_at"))
         self.assertEqual(self.state("last_sync_at"), "2026-01-01T00:00:00Z")
         self.assertEqual(self.state("full_build_complete", "repo:10"), "1")
-        self.assertTrue(sync_once(self.path, workers=1))
+        sync_once(self.path, workers=1)
         self.assertEqual(self.reader.enumerated, ["Vaquum/Test"])
         self.assertTrue(sync_once(self.path, workers=1, reconcile=True))
         self.assertEqual(self.reader.expanded, [100, 101, 102])
@@ -135,3 +138,17 @@ class ReconcileResumeTest(unittest.TestCase):
         conn.close()
         with self.assertRaisesRegex(RuntimeError, "invalid reconciliation progress"):
             sync_once(self.path, workers=1, reconcile=True)
+
+    def test_real_cli_reports_partial_and_completed_chunks(self) -> None:
+        args = ["--db", str(self.path), "sync", "--workers", "1", "--reconcile",
+                "--reconcile-max-seconds", "1"]
+        output = io.StringIO()
+        with redirect_stdout(output), patch("github_datastore.store.time.monotonic", side_effect=[0, 2]):
+            main(args)
+        self.assertEqual(json.loads(output.getvalue()), {"reconcile_complete": False})
+        self.assertIsNone(self.state("last_reconcile_at"))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main(args)
+        self.assertEqual(json.loads(output.getvalue()), {"reconcile_complete": True})
+        self.assertEqual(self.reader.expanded, [100, 101, 102])

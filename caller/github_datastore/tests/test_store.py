@@ -303,7 +303,7 @@ class StoreTest(unittest.TestCase):
 
     def test_failed_new_repo_full_build_is_retried_until_complete(self) -> None:
         previous_watermark = "2026-08-29T12:00:00Z"
-        stub = {"id": 100, "number": 1, "item_kind": "issue"}
+        stub = {"id": 100, "number": 1, "item_kind": "issue", "updated_at": "2026-01-02T00:00:00Z"}
 
         class FullReader(BatchReader):
             def __init__(self, fail: bool) -> None:
