@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, loadModules, arrangeCli, recordCompletedInitialReview, fixture, type ReviewActivityFixture } from './behaviors-runtime-fixture'
+import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, loadModules, restartModules, arrangeCli, recordCompletedInitialReview, launchApprovalBeforeCrash, agentLog, fixture, type ReviewActivityFixture } from './behaviors-runtime-fixture'
 
 describe('approval eligibility and review activity', () => {
 
@@ -503,5 +503,120 @@ describe('approval eligibility and review activity', () => {
       ([command, args]) => command === 'github-interface'
         && args[0] === '--review-activity-since',
     )).toBe(false)
+  })
+
+  it('recovers a dismissed superseded approval from a completed negative review', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const prior = await launchApprovalBeforeCrash()
+    recordCompletedInitialReview(prior.database, {
+      target: `${pr.repo}#${pr.number}:tertiary`, outcome: 'changes_requested',
+    })
+    prior.database.recordSeen('review-new-prs', `${pr.repo}#${pr.number}`)
+    prior.database.recordSeen('review-new-prs', `${pr.repo}#${pr.number}:secondary`)
+    expect(prior.database.latestApprovalBasisLaunch(pr.repo, pr.number)).toBeNull()
+    fixture.agentLogs = [agentLog({
+      behavior: 'pr_approve', status: 'superseded', outcome: 'superseded',
+      expected_head: prior.expectedHead, head_sha: NEXT_HEAD_SHA,
+      started_at: new Date(Date.parse(prior.requestedAt) + 1_000).toISOString(),
+      completed_at: new Date().toISOString(), review_id: 91,
+      actor: prior.actor, source: prior.source, correlation_id: prior.correlationId,
+    })]
+    arrangeCli(false, false, {
+      headSha: NEXT_HEAD_SHA, reviewerLatestState: 'DISMISSED', reviewerLatestCommit: HEAD_SHA,
+      latestActivityAt: new Date().toISOString(),
+    }, { reviewer_latest_state: 'DISMISSED' })
+    let modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+
+    await modules.behaviors.runEnabledBehaviorsOnce()
+
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+    const args: string[] = mocks.spawnDetached.mock.calls[1][1]
+    expect(args).toEqual(expect.arrayContaining(['--pr-approve', '#17', '--expected-head', NEXT_HEAD_SHA]))
+    expect(modules.database.hasSeen('approve-prs', `${pr.repo}#17@head=${NEXT_HEAD_SHA}`)).toBe(true)
+    expect(modules.database.latestApprovalBasisLaunch(pr.repo, pr.number)).toBeNull()
+    expect(mocks.captureOutcome).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'approved' }))
+    expect(mocks.runFile.mock.calls.some(([, argv]) => argv[0] === '--approve-pr')).toBe(false)
+
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+
+    vi.setSystemTime(Date.now() + 2_000)
+    fixture.agentLogs.push(agentLog({
+      id: 'e'.repeat(32), behavior: 'pr_approve', status: 'completed',
+      action: 'approved', outcome: 'approved', expected_head: NEXT_HEAD_SHA, head_sha: NEXT_HEAD_SHA,
+      review_id: 92, correlation_id: args[args.indexOf('--correlation-id') + 1],
+    }))
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.latestApprovalBasisLaunch(pr.repo, pr.number)?.headSha).toBe(NEXT_HEAD_SHA)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+  })
+
+  it('can use a completed approval change request by the same reviewer', async () => {
+    const prior = await launchApprovalBeforeCrash()
+    const callId = 'b'.repeat(32)
+    expect(prior.database.linkBehaviorLaunchCallOwned('approve-prs', prior.target, prior.correlationId, callId)).toBe(true)
+    expect(prior.database.completeBehaviorLaunchOwned({
+      key: 'approve-prs', target: prior.target, claimId: prior.correlationId,
+      action: 'requested_changes', outcome: 'changes_requested',
+      completedAt: new Date().toISOString(), headSha: HEAD_SHA,
+    })).toBe(true)
+    expect(prior.database.latestApprovalBasisLaunch(pr.repo, pr.number)).toBeNull()
+    expect(prior.database.latestCompletedChangeRequestLaunch(pr.repo, pr.number, 'REVIEW-BOT')).toMatchObject({
+      callId, headSha: HEAD_SHA,
+    })
+  })
+
+  it.each([
+    ['launch_actor', 'another-reviewer'], ['launch_source', 'another-system'],
+    ['launch_behavior', 'issue_review'], ['launch_action', 'approved'],
+    ['launch_outcome', 'superseded'], ['claim_id', 'inflight'],
+    ['launch_error', 'unreadable'], ['launch_quarantine', 'unreadable'],
+    ['launch_requested_at', null], ['launch_call_id', null], ['launch_call_id', ''],
+    ['launch_completed_at', null], ['launch_completed_at', 'invalid'],
+    ['launch_expected_head', NEXT_HEAD_SHA], ['launch_head_sha', 'x'.repeat(40)],
+  ] as const)('rejects invalid prior change-request evidence (%s=%s)', async (column, value) => {
+    const { database: db } = await loadModules()
+    recordCompletedInitialReview(db, { outcome: 'changes_requested' })
+    db.db.prepare(`UPDATE behavior_seen SET ${column} = ? WHERE key = 'review-new-prs'`).run(value)
+    if (column === 'launch_head_sha') db.db.prepare("UPDATE behavior_seen SET launch_expected_head = ?").run(value)
+    expect(db.latestCompletedChangeRequestLaunch(pr.repo, pr.number, 'review-bot')).toBeNull()
+  })
+
+  it.each([
+    'missing-review', 'same-head', 'head-race', 'dismissal-race', 'missing-activity',
+    'active-request', 'live-conversation', 'draft', 'closed',
+  ] as const)('does not recover a dismissal with %s', async (blocked) => {
+    const activity: ReviewActivityFixture = {
+      headSha: blocked === 'same-head' ? HEAD_SHA : NEXT_HEAD_SHA,
+      reviewerLatestState: blocked === 'dismissal-race' ? null : 'DISMISSED',
+      latestActivityAt: blocked === 'missing-activity' ? null : new Date().toISOString(),
+      activeChangeRequestAuthors: blocked === 'active-request' ? ['another-reviewer'] : [],
+      unresolvedLiveConversationCount: blocked === 'live-conversation' ? 1 : 0,
+      unresolvedConversationCount: blocked === 'live-conversation' ? 1 : 0,
+      unresolvedLiveConversationAuthors: blocked === 'live-conversation' ? ['another-reviewer'] : [],
+      draft: blocked === 'draft', state: blocked === 'closed' ? 'CLOSED' : 'OPEN',
+    }
+    arrangeCli(false, false, activity, {
+      reviewer_latest_state: 'DISMISSED',
+      ...(blocked === 'head-race' ? { head_sha: HEAD_SHA } : {}),
+    })
+    const { database: db, behaviors: runtime } = await loadModules()
+    runtime.startBehaviorsRuntime()
+    db.setMeta('me', 'poise-user')
+    db.setMeta('behavior_approve_prs_enabled', '1')
+    if (blocked !== 'missing-review') recordCompletedInitialReview(db, { outcome: 'changes_requested' })
+
+    await runtime.runEnabledBehaviorsOnce()
+
+    expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    expect(db.latestApprovalBasisLaunch(pr.repo, pr.number)).toBeNull()
   })
 })

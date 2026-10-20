@@ -45,6 +45,7 @@ import {
   getMeta as databaseGetMeta,
   hasSeen,
   latestApprovalBasisLaunch,
+  latestCompletedChangeRequestLaunch,
   linkBehaviorLaunchCallOwned,
   listBehaviorLaunchClaims as databaseListBehaviorLaunchClaims,
   listBehaviorDeadLetters as databaseListBehaviorDeadLetters,
@@ -2093,12 +2094,15 @@ async function tickReviewNewPrs(): Promise<void> {
 // For each open PR by the configured user, re-evaluate either an addressed
 // change request left by the configured review agent or a clean PR that
 // explicitly requests that identity's initial approval.
+// A dismissed review can re-arm inspection on a changed head when a completed
+// change request by that reviewer supplies the prior independent review.
 //
 // Follow-ups dedupe by request timestamp + response count. A clean initial
 // review becomes eligible on the next scheduler scan and dedupes by head SHA.
 
 interface ChangesAddressedResult {
   hasChangeRequest: boolean
+  reviewerLatestState: string | null
   latestRequestAt: string | null
   headSha: string
   commitsAfterRequest: number
@@ -2544,6 +2548,7 @@ async function checkChangesAddressed(repo: string, number: number, reviewer: str
   }
   return {
     hasChangeRequest,
+    reviewerLatestState: latestState,
     latestRequestAt,
     headSha,
     commitsAfterRequest,
@@ -2659,9 +2664,14 @@ async function tickApprovePrs(): Promise<void> {
           checked = true
           return
         }
+        let dismissedReview: ReturnType<typeof latestCompletedChangeRequestLaunch> = null
         if (!check.hasChangeRequest && !latestApprovalBasisLaunch(pr.repo, pr.number)) {
-          checked = true
-          return
+          dismissedReview = check.reviewerLatestState === 'DISMISSED'
+            ? latestCompletedChangeRequestLaunch(pr.repo, pr.number, reviewer) : null
+          if (!dismissedReview) {
+            checked = true
+            return
+          }
         }
         if (hasActiveAgentLaunchForPr(pr.repo, pr.number)) return
         operationId = await claimEligiblePrOperation('approve-prs', prTarget)
@@ -2713,7 +2723,8 @@ async function tickApprovePrs(): Promise<void> {
           seenTarget = `${pr.repo}#${pr.number}@req=${check.latestRequestAt}/r=${check.responseCount}/head=${check.headSha}`
           firedReason = `req=${check.latestRequestAt}, r=${check.responseCount}: ${check.commitsAfterRequest}c+${check.authorInlineRepliesAfterRequest}inline+${check.authorPrCommentsAfterRequest}pr-comment+${check.resolvedRequestThreads}resolved, head=${check.headSha.slice(0, 8)}`
         } else {
-          const review = latestApprovalBasisLaunch(pr.repo, pr.number)
+          const cleanReview = latestApprovalBasisLaunch(pr.repo, pr.number)
+          const review = cleanReview ?? dismissedReview
           if (!review) {
             checked = true
             return
@@ -2724,6 +2735,11 @@ async function tickApprovePrs(): Promise<void> {
             reviewer,
             review.completedAt,
           )
+          if (!cleanReview && (activity.reviewerLatestState !== 'DISMISSED'
+            || activity.headSha !== check.headSha || activity.headSha === review.headSha)) {
+            checked = true
+            return
+          }
           const reapprovalOwnsEveryUnresolvedConversation =
             activity.reviewerLatestState === 'APPROVED'
             && activity.reviewerLatestCommit !== null
@@ -2747,7 +2763,7 @@ async function tickApprovePrs(): Promise<void> {
           }
           expectedHead = activity.headSha
           seenTarget = `${pr.repo}#${pr.number}@head=${activity.headSha}`
-          firedReason = `clean review ${review.callId.slice(0, 8)}, head=${activity.headSha.slice(0, 8)}`
+          firedReason = `${cleanReview ? 'clean' : 'dismissed'} review ${review.callId.slice(0, 8)}, head=${activity.headSha.slice(0, 8)}`
         }
         if (!behaviorRetryDue('approve-prs', seenTarget)) return
         let claimId = claimSeenOwnedAs('approve-prs', seenTarget, operationId)

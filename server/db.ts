@@ -1277,6 +1277,33 @@ export function latestApprovalBasisLaunch(
   } : null
 }
 
+// A completed negative review proves prior inspection, never approval.
+export function latestCompletedChangeRequestLaunch(
+  repo: string,
+  pr: number,
+  actor: string,
+): CompletedApprovalBasisLaunch | null {
+  const row = db.prepare(`
+    SELECT launch_call_id AS callId, launch_completed_at AS completedAt, launch_head_sha AS headSha
+    FROM behavior_seen
+    WHERE claim_id = '' AND launch_error IS NULL AND launch_quarantine IS NULL
+      AND launch_repo = ? AND launch_pr = ? AND lower(launch_actor) = lower(?)
+      AND launch_action = 'requested_changes' AND launch_outcome = 'changes_requested'
+      AND (
+        (key = 'review-new-prs' AND launch_behavior = 'pr_review'
+          AND launch_source IN ('poise:review-new-prs', 'poise:replay'))
+        OR (key = 'approve-prs' AND launch_behavior = 'pr_approve'
+          AND launch_source IN ('poise:approve-prs', 'poise:replay'))
+      )
+      AND launch_requested_at IS NOT NULL
+      AND launch_call_id IS NOT NULL AND launch_call_id <> ''
+      AND launch_completed_at IS NOT NULL AND launch_expected_head = launch_head_sha
+    ORDER BY launch_completed_at DESC LIMIT 1
+  `).get(repo, pr, actor) as CompletedApprovalBasisLaunch | undefined
+  return row && /^[0-9a-f]{40}$/.test(row.headSha)
+    && Number.isFinite(Date.parse(row.completedAt)) ? row : null
+}
+
 // Wipe the ledger for a key — used when the user disables the
 // behavior. Re-enabling will trigger a fresh snapshot.
 export function clearSeen(key: string): void {
