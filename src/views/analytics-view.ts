@@ -266,7 +266,7 @@ function plotFor(label: string): HTMLElement | null {
   return viewEl.querySelector<HTMLElement>(`.analytics-history[data-series="${CSS.escape(label)}"] .analytics-history-plot`)
 }
 
-function showCursor(label: string, index: number): void {
+function showCursor(label: string, index: number, animate = true): void {
   const plot = plotFor(label)
   const data = history.data
   const series = data && historySeries(data).find((s) => s.label === label)
@@ -298,7 +298,7 @@ function showCursor(label: string, index: number): void {
   explanation.textContent = `${series.label} · Past year, one value per 7-day period. ${['Issues opened', 'Issues closed', 'Pull requests merged', 'Lines changed', 'Pull requests opened', 'Closed without merging'].includes(label) ? 'Daily averages.' : label === 'Time to merge' ? 'Period medians.' : 'Period values.'} Last period: the 7 days before the selected day.`
   const firstShow = !tip.childElementCount
   tip.replaceChildren(value, detail, explanation)
-  if (firstShow) reveal(tip, { distance: 4 })
+  if (firstShow && animate) reveal(tip, { distance: 4 })
   // Centre the readout on the cursor but keep it on the page: a chart in the
   // right column of a narrow page is narrower than its readout. Only a
   // readout wider than the page itself wraps.
@@ -476,7 +476,7 @@ export function initAnalyticsView(): void {
     initialized = true
     viewEl.innerHTML = renderShell()
     cardLayout = analyticsLayout(viewEl.querySelector<HTMLElement>('.analytics-board')!, viewEl.querySelector<HTMLElement>('#analytics-layout-status')!, () => {
-      for (const [label, index] of cursors) showCursor(label, index)
+      for (const [label, index] of cursors) showCursor(label, index, false)
     })
     mountOrganizationFilter(viewEl.querySelector<HTMLElement>('#analytics-filters')!)
     viewEl.querySelector('.analytics-day')!.addEventListener('click', (e) => {
