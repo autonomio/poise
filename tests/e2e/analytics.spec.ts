@@ -220,13 +220,13 @@ test('fits all work types and retains interleaved account positions through fail
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await expect(board.locator('.github-quota-account')).toHaveCount(2)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
-  const before = await board.locator('[data-id="quota:octocat"]').evaluate(card => (card as HTMLElement).style.transform)
+  const before = (await board.locator('[data-id="quota:octocat"]').boundingBox())!.y
   hold = true
   try {
     await page.getByRole('button', { name: 'Previous day', exact: true }).click()
     await expect(board).toHaveAttribute('aria-busy', 'true')
     await expect(board.locator('.analytics-value')).toHaveCount(0)
-    await expect.poll(() => board.locator('[data-id="quota:octocat"]').evaluate(card => (card as HTMLElement).style.transform)).toBe(before)
+    await expect.poll(async () => Math.abs((await board.locator('[data-id="quota:octocat"]').boundingBox())!.y - before)).toBeLessThan(1)
   } finally { hold = false; release() }
   await expect(board.locator('.analytics-value')).toHaveCount(16)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
@@ -235,6 +235,62 @@ test('fits all work types and retains interleaved account positions through fail
   await expect(board.locator('.analytics-panel')).toHaveCount(18)
   await expect(page.locator('#analytics-layout-status')).toContainText('Saved analytics layout could not be read')
   expect(new Set(await order()).size).toBe(18)
+})
+
+test('places a wide account card at both boundaries sharing a wrapped destination', async ({ page }) => {
+  await workspace(page)
+  await page.setViewportSize({ width: 1280, height: 2600 })
+  await page.route('**/api/github-quota', route => route.fulfill({ json: quotaReport() }))
+  await page.goto('/')
+  await openAnalytics(page)
+  const board = page.locator('.analytics-board')
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
+  const quota = board.getByRole('button', { name: 'Move GitHub API · Live · octocat', exact: true })
+  for (const index of [3, 4]) {
+    await quota.focus()
+    await quota.press('Space')
+    await quota.press('End')
+    await quota.press('Space')
+    await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+    const target = (await board.locator('[data-group="productivity"]').nth(index - 1).boundingBox())!
+    const start = (await quota.boundingBox())!
+    await page.mouse.move(start.x + 30, start.y + 20)
+    await page.mouse.down()
+    await page.mouse.move(target.x + target.width - 2, target.y + 20, { steps: 16 })
+    await page.mouse.up()
+    await expect.poll(() => board.locator(':scope > [data-id]').nth(index).getAttribute('data-id')).toBe('quota:octocat')
+    await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+  }
+})
+
+test('paints history readouts above neighboring cards and retains their period through quota polling', async ({ page }) => {
+  await workspace(page)
+  let quotaReads = 0
+  await page.route('**/api/github-quota', route => { quotaReads++; return route.fulfill({ json: quotaReport() }) })
+  await page.goto('/')
+  await openAnalytics(page)
+  const panel = page.locator('[data-id="metric:productivity:Pull requests opened"]')
+  const plot = panel.locator('.analytics-history-plot')
+  await plot.focus()
+  await plot.press('End')
+  const tip = panel.locator('.analytics-history-tip')
+  await expect(tip).toBeVisible()
+  expect(await tip.evaluate(element => {
+    const card = element.closest<HTMLElement>('.analytics-panel')!, box = element.getBoundingClientRect(), bounds = card.getBoundingClientRect()
+    if (box.right <= bounds.right + 8) throw new Error('The fixture must overlap a neighbor.')
+    const previous = (element as HTMLElement).style.pointerEvents
+    ;(element as HTMLElement).style.pointerEvents = 'auto'
+    const hit = document.elementFromPoint(bounds.right + 8, box.top + 8)?.closest<HTMLElement>('.analytics-panel')?.dataset.id
+    ;(element as HTMLElement).style.pointerEvents = previous
+    return hit
+  })).toBe('metric:productivity:Pull requests opened')
+  await plot.press('Home')
+  const selected = await tip.locator('span').first().innerText()
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await expect.poll(() => quotaReads).toBe(2)
+  await expect(tip).toBeVisible()
+  await expect(tip.locator('span').first()).toHaveText(selected)
+  await expect(plot).toBeFocused()
 })
 
 function report(merged: number, hours = 27): AnalyticsReport {

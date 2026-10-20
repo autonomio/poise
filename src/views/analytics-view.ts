@@ -259,7 +259,6 @@ function render(): void {
   if (!shown) return
   metricMarkup = analyticsGroups(shown.report, shown.baseline, day.isToday ? shown.progress : undefined, day.isToday ? shown.snapshotTime : undefined).map(groupMarkup).join('')
   renderCards()
-  for (const [label, index] of cursors) showCursor(label, index)
 }
 
 // ── A chart's cursor: the period under the pointer or the arrow keys ──
@@ -412,9 +411,11 @@ async function readAnalytics(background = false): Promise<void> {
     cardLayout.cancel()
     const skeleton = document.createElement('template')
     skeleton.innerHTML = metricMarkup
+    const heights = new Map([...viewEl.querySelectorAll<HTMLElement>('.analytics-panel')].map(card => [card.dataset.id, card.offsetHeight]))
     for (const card of skeleton.content.children) {
       card.replaceChildren()
       card.setAttribute('aria-hidden', 'true')
+      card.setAttribute('data-placeholder-height', String(heights.get(card.getAttribute('data-id')!) ?? 0))
     }
     metricMarkup = skeleton.innerHTML
     renderCards()
@@ -474,7 +475,9 @@ export function initAnalyticsView(): void {
   if (!initialized) {
     initialized = true
     viewEl.innerHTML = renderShell()
-    cardLayout = analyticsLayout(viewEl.querySelector<HTMLElement>('.analytics-board')!, viewEl.querySelector<HTMLElement>('#analytics-layout-status')!)
+    cardLayout = analyticsLayout(viewEl.querySelector<HTMLElement>('.analytics-board')!, viewEl.querySelector<HTMLElement>('#analytics-layout-status')!, () => {
+      for (const [label, index] of cursors) showCursor(label, index)
+    })
     mountOrganizationFilter(viewEl.querySelector<HTMLElement>('#analytics-filters')!)
     viewEl.querySelector('.analytics-day')!.addEventListener('click', (e) => {
       const button = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-day]')

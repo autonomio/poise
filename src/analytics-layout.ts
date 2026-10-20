@@ -29,7 +29,26 @@ export function cardPositions(cards: Pick<Card, 'id' | 'span' | 'height'>[], wid
   return boxes
 }
 
-export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
+/** Stable boundaries distinguish insertion orders even when the held card wraps to the same box. */
+export function cardInsertion(cards: Pick<Card, 'id' | 'span' | 'height'>[], width: number, x: number, y: number, current: number): number {
+  if (!cards.length) return 0
+  const positions = cardPositions(cards, width), costs = Array<number>(cards.length + 1).fill(Infinity)
+  const anchor = (index: number, ax: number, ay: number) => { costs[index] = Math.min(costs[index], Math.hypot(x - ax, y - ay)) }
+  cards.forEach((card, index) => {
+    const box = positions.get(card.id)!
+    anchor(index, box.x - GAP / 2, box.y + 20)
+    anchor(index + 1, box.x + box.width + GAP / 2, box.y + 20)
+    if (card.span === 20) {
+      anchor(index, box.x + box.width / 2, box.y - GAP / 2)
+      anchor(index + 1, box.x + box.width / 2, box.y + box.height + GAP / 2)
+    }
+  })
+  let best = current
+  for (let index = 0; index < costs.length; index++) if (costs[index] < costs[best]) best = index
+  return costs[best] + 24 < costs[current] ? best : current
+}
+
+export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch?: () => void) {
   let saved: string[] = []
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
@@ -83,7 +102,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     const heights = new Map<string, number>()
     for (const card of cards.values()) {
       const family = card.element.dataset.size!
-      heights.set(family, Math.max(heights.get(family) ?? 0, card.element.scrollHeight, card.element.offsetHeight))
+      heights.set(family, Math.max(heights.get(family) ?? 0, card.element.scrollHeight, card.element.offsetHeight, Number(card.element.dataset.placeholderHeight ?? 0)))
     }
     const clearance = 5 * parseFloat(getComputedStyle(document.documentElement).fontSize)
     heights.set('tall', Math.max(heights.get('tall') ?? 0, (heights.get('short') ?? 0) + clearance))
@@ -109,6 +128,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     }
     cards = next
     measure(); arrange(!animate)
+    onPatch?.()
   }
 
   function finish(cancel = false): void {
@@ -162,17 +182,8 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     card.x = Math.max(0, Math.min(width - card.element.offsetWidth, move.clientX - rect.left - move.offsetX))
     card.y = Math.max(0, Math.min(board.offsetHeight - card.height, move.clientY - rect.top - move.offsetY))
     draw(card)
-    const x = card.x + card.element.offsetWidth / 2, y = card.y + card.height / 2
-    const rest = order.filter(id => id !== card.id), current = order.indexOf(card.id)
-    let best = current, bestCost = Infinity, currentCost = Infinity
-    for (let i = 0; i < order.length; i++) {
-      const candidate = [...rest]; candidate.splice(i, 0, card.id)
-      const box = positions(candidate).get(card.id)!
-      const cost = Math.hypot(x - box.x - box.width / 2, y - box.y - box.height / 2)
-      if (i === current) currentCost = cost
-      if (cost < bestCost) { best = i; bestCost = cost }
-    }
-    if (bestCost + 24 < currentCost) moveTo(best)
+    const rest = order.filter(id => id !== card.id).map(id => cards.get(id)!)
+    moveTo(cardInsertion(rest, width, move.clientX - rect.left, move.clientY - rect.top, order.indexOf(card.id)))
   }
 
   function autoScroll(): void {

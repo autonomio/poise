@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardPositions, reconcileCardOrder } from '../src/analytics-layout'
+import { cardInsertion, cardPositions, reconcileCardOrder } from '../src/analytics-layout'
 
 describe('analytics card order', () => {
   it('retains saved identities, removes duplicates and missing cards, and appends new cards', () => {
@@ -22,5 +22,15 @@ describe('analytics card order', () => {
   it('places full-width cards in separate rows at narrow widths', () => {
     expect([...cardPositions([{ id: 'first', span: 20, height: 272 }, { id: 'second', span: 20, height: 352 }], 320).values()])
       .toEqual([{ x: 0, y: 0, width: 320, height: 272 }, { x: 0, y: 284, width: 320, height: 352 }])
+  })
+  it('distinguishes wide-card insertions with identical wrapped destination boxes', () => {
+    const cards = Array.from({ length: 8 }, (_, i) => ({ id: String(i), span: 5, height: 352 }))
+    const wide = { id: 'quota', span: 10, height: 352 }
+    const beforeFourth = [...cards]; beforeFourth.splice(3, 0, wide)
+    const afterFourth = [...cards]; afterFourth.splice(4, 0, wide)
+    expect(cardPositions(beforeFourth, 988).get('quota')).toEqual(cardPositions(afterFourth, 988).get('quota'))
+    expect(cardInsertion(cards, 988, 744, 20, 8)).toBe(3)
+    expect(cardInsertion(cards, 988, 994, 20, 8)).toBe(4)
+    expect(cardInsertion(cards, 988, 0, 384, 8)).toBe(4)
   })
 })

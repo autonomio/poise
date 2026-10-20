@@ -61,8 +61,9 @@ The whole header is a Pointer Events handle, with a grip, a 40px minimum target
 (44px for coarse pointers), `touch-action: none`, pointer capture and a 5px
 movement threshold. Only the primary pointer and primary button initiate a move.
 Plots and the page keep their ordinary interactions outside the header. Insertion
-uses the nearest hypothetical slot center, with a 24px switching margin to avoid
-oscillation. Drop outside the board places at the nearest valid slot. Edge
+uses stable boundaries between the other cards, with a 24px switching margin to
+avoid oscillation. Distinct orders remain reachable when a wide card wraps into
+the same destination box. Drop outside the board places at the nearest valid slot. Edge
 scrolling is bounded by the board; the held card cannot extend the page.
 Escape, pointer cancellation/capture loss, window blur, hidden tab, departure,
 font changes and viewport resize restore the committed order and release capture.
@@ -81,7 +82,8 @@ Malformed data and denied/exhausted storage show an accessible visible error;
 Analytics remains usable in memory. A successful later move writes a valid array.
 
 Foreground reads replace metric bodies with keyed empty slots while retaining
-their geometry, including quota cards interleaved among them. Errors remove
+their measured family heights, including quota cards interleaved among them.
+The loader overlays the board without shifting it. Errors remove
 those placeholders. Background reads retain the semantic card/control nodes;
 the latest combined metric/quota patch waits during a move and applies on drop
 or cancellation, including after a failed preference save. The order survives
@@ -91,6 +93,8 @@ chart reads remain unchanged. `src/analytics-layout.ts` is the new controller
 for geometry, DOM reconciliation, persistence and gesture handling. It reuses
 the existing `data-id` reconciliation keys and shared 180/20/1 spring, without
 changing `dom-patch.ts`, `motion.ts` or the gateway motion model.
+Active history readouts raise their card above neighbors and replay their cursor
+after every combined patch, including quota polls and patches deferred by a move.
 
 ## The day
 

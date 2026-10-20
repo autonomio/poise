@@ -1094,6 +1094,7 @@ tr:hover .review-btn { opacity: 1; }
 /* All panels share one order and two content-safe height families. */
 #view-analytics main { position: relative; min-height: var(--sp-6); }
 .analytics-board { position: relative; min-width: 0; }
+.analytics-loader { position: absolute; top: 0; inset-inline: 0; z-index: 3; pointer-events: none; }
 .analytics-panel { position: absolute; top: 0; left: 0; box-sizing: border-box; min-width: 0; border: var(--b-base); border-radius: var(--r-sm); background: var(--surface); }
 .analytics-panel[data-size="tall"] { min-height: 22rem; }
 .analytics-panel[data-size="short"] { min-height: 17rem; }
@@ -1104,7 +1105,8 @@ tr:hover .review-btn { opacity: 1; }
 .analytics-drag-handle > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .analytics-drag-handle:focus-visible { outline: var(--b-focus); outline-offset: 2px; }
 .analytics-drag-grip { flex: none; width: 8px; height: 14px; background: radial-gradient(circle, currentColor 1px, transparent 1.2px) 0 0 / 4px 4px; opacity: .65; }
-.analytics-card-held { z-index: 5; border-color: var(--a1); box-shadow: var(--e-1); }
+.analytics-panel:focus-within, .analytics-panel:has(.analytics-history-tip) { z-index: 2; }
+.analytics-panel.analytics-card-held { z-index: 5; border-color: var(--a1); box-shadow: var(--e-1); }
 .analytics-card-held .analytics-drag-handle { cursor: grabbing; }
 .analytics-drop-slot { position: absolute; box-sizing: border-box; border: 1px dashed var(--a1); border-radius: var(--r-sm); background: var(--tint-a1); pointer-events: none; }
 .analytics-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
