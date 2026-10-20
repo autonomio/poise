@@ -153,6 +153,8 @@ test('import freezes typing and agent edits before draining pending annotation s
     event.stopImmediatePropagation()
   }, { capture: true }))
   await page.locator('.editor-chat-btn').click()
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click()
+  await page.clock.fastForward(1000)
   await google.locator('summary').click()
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
   let release!: () => void, started!: () => void
@@ -169,7 +171,6 @@ test('import freezes typing and agent edits before draining pending annotation s
   })
   await page.locator('#editor-comment-btn').click()
   await page.getByRole('textbox', { name: 'Add a comment…', exact: true }).fill('Keep this annotation during import.')
-  await page.getByRole('button', { name: 'Close chat', exact: true }).click()
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await pending
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
