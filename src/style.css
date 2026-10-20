@@ -1114,8 +1114,8 @@ tr:hover .review-btn { opacity: 1; }
 [data-group="work-review"] .analytics-value { font-size: 1.5rem; }
 [data-group="work-review"] .analytics-history { min-height: 110px; }
 [data-group="work-review"] .analytics-history-plot { height: 40px; }
-.analytics-work-types { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-1) var(--sp-3); margin-top: var(--sp-3); }
-.analytics-work-type { grid-template-columns: 4.5em minmax(0, 1fr) 4em; gap: var(--sp-1); }
+.analytics-work-types { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--sp-1) var(--sp-3); margin-top: var(--sp-3); }
+.analytics-work-type { grid-template-columns: 8em minmax(0, 1fr) 4em; gap: var(--sp-1); }
 @media (pointer: coarse) { .analytics-drag-handle { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .analytics-drag-handle { transition: none; } }
 @container analytics (max-width: 639px) {

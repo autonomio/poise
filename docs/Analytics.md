@@ -46,8 +46,9 @@ dense backfill. Mixed rows advance by their tallest card; shorter cards retain
 their own height. The minimum heights are 22rem and 17rem. At every content,
 font or width change each family grows to its largest member's measured content
 height, with the taller family retaining at least 5rem clearance above the shorter
-family. Work type uses two columns of category rows, reducing to one below a
-640px board width; all twelve types remain visible and focusable. There is no
+family. Work type uses two columns when each has at least 14rem of space,
+reducing to one below a 640px board width or when larger type needs it;
+all twelve types remain visible and focusable. There is no
 internal card scrolling or content clipping.
 
 | Board width | Productivity / review | Work type / API account | Per-PR |
