@@ -59,6 +59,42 @@ test('reorders the card board by its headers, persists across reads and reload, 
   await expect(board.locator('[data-group="work-review"] .analytics-histogram, .quota-distribution')).toHaveCount(0)
 })
 
+test('retains the held card through live reads, restores cancelled pointer moves, and refits typography', async ({ page }) => {
+  await workspace(page)
+  await page.route('**/api/github-quota', route => route.fulfill({ json: quotaReport() }))
+  await page.goto('/')
+  await openAnalytics(page)
+  const board = page.locator('.analytics-board')
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
+  await expect(board.locator('.analytics-history-line')).toHaveCount(15)
+  const first = board.getByRole('button', { name: 'Move Pull requests opened', exact: true })
+  const second = board.getByRole('button', { name: 'Move Pull requests merged', exact: true })
+  const retained = await first.elementHandle()
+  const order = () => board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))
+  const original = await order()
+  const a = (await first.boundingBox())!, b = (await second.boundingBox())!
+  await first.evaluate(button => button.addEventListener('pointerdown', event => button.setAttribute('data-test-pointer', String(event.pointerId)), { once: true }))
+  await page.mouse.move(a.x + 60, a.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(b.x + 60, b.y + 20, { steps: 12 })
+  const pointerId = Number(await first.getAttribute('data-test-pointer'))
+  await page.evaluate(() => { window.dispatchEvent(new Event('poise:refresh-tick')); document.dispatchEvent(new Event('visibilitychange')) })
+  await expect(first).toHaveAttribute('aria-pressed', 'true')
+  expect(await retained!.evaluate(button => button.isConnected)).toBe(true)
+  await first.dispatchEvent('pointercancel', { pointerId })
+  await page.mouse.up()
+  await expect.poll(order).toEqual(original)
+  await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+  await expect(first).toHaveCSS('touch-action', 'none')
+  await page.setViewportSize({ width: 500, height: 900 })
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--typo-size', '24px')
+    document.documentElement.style.setProperty('--typo-lh', '1.8')
+  })
+  await expect.poll(() => board.locator('.analytics-panel').evaluateAll(cards => cards.every(card => card.scrollHeight <= card.clientHeight + 2 && card.scrollWidth <= card.clientWidth + 1)))).toBe(true)
+  for (const family of ['tall', 'short']) await expect.poll(() => board.locator(`[data-size="${family}"]`).evaluateAll(cards => new Set(cards.map(card => card.getBoundingClientRect().height)).size)).toBe(1)
+})
+
 function report(merged: number, hours = 27): AnalyticsReport {
   return {
     window: { since: null, until: null },
