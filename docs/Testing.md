@@ -58,7 +58,7 @@ Run `npm run build` first when using it locally.
 
 ## Motion completion measurements
 
-The Chromium completion guard pauses animation time while sampling CDP style
+The Chromium completion guard freezes animation frames while sampling CDP style
 counters around synchronous `finishMotion`. A deliberate driver delay exercises
 the gap between inspector commands. The guard verifies that all 80 actors are
 active at completion, fewer than 10 style recalculations occur, and no actors

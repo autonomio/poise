@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { build } from 'esbuild'
 import { workspace } from './fixtures/workspace'
-import { settled } from './fixtures/motion'
+import { freeze, settled } from './fixtures/motion'
 
 declare global { interface Window { Motion: typeof import('../../src/motion'); Patch: typeof import('../../src/dom-patch'); Builder: typeof import('../../src/views/jev-builder'); Results: typeof import('../../src/views/jev-results') } }
 
@@ -582,7 +582,7 @@ test('view departure batches presentation reads before completing rows', async (
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
   // Inspector round trips must not count intervening animation frames.
-  await cdp.send('Emulation.setVirtualTimePolicy', { policy: 'pause' })
+  await freeze(page)
   await page.evaluate(() => {
     const root = document.createElement('div'); root.id = 'finish-batch'; root.style.cssText = 'position:fixed;top:0;left:0;width:240px'
     root.innerHTML = '<div style="height:4px">Row</div>'.repeat(80); document.body.append(root)
