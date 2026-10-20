@@ -35,7 +35,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     const raw: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
     if (!Array.isArray(raw) || !raw.every(id => typeof id === 'string')) throw new Error('Expected a list of card IDs.')
     saved = [...new Set(raw)]
-  } catch (error) { status.textContent = `Saved analytics layout could not be read: ${String(error)}` }
+  } catch (error) { status.classList.remove('analytics-sr'); status.textContent = `Saved analytics layout could not be read: ${String(error)}` }
   let cards = new Map<string, Card>(), order: string[] = [], width = 0
   let move: Move | null = null, pending: string | null = null, resizeFrame = 0, scrollFrame = 0
   const placeholder = document.createElement('div')
@@ -91,8 +91,9 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     }
   }
 
-  function patch(markup: string): void {
+  function patch(markup: string, animate = false): void {
     if (move) { pending = markup; return }
+    animate ||= !!board.querySelector('[data-motion-running]')
     const template = document.createElement('template')
     template.innerHTML = markup
     const nodes = new Map([...template.content.children].map(element => [element.getAttribute('data-id')!, element]))
@@ -105,7 +106,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
       next.set(id, { id, element, span: 0, height: 0, x: cards.get(id)?.x ?? 0, y: cards.get(id)?.y ?? 0 })
     }
     cards = next
-    measure(); arrange(true)
+    measure(); arrange(!animate)
   }
 
   function finish(cancel = false): void {
@@ -120,17 +121,18 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     if (focused instanceof HTMLElement && focused.isConnected) focused.focus({ preventScroll: true })
     arrange()
     if (active) {
+      let failure: string | null = null
       if (!cancel) {
         // Missing account IDs remain saved, so temporary credential failures do not reset their place.
         const visible = new Set(order)
         const remaining = [...order]
         saved = [...saved.map(id => visible.has(id) ? remaining.shift()! : id), ...remaining]
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)) }
-        catch (error) { announce(`Analytics layout could not be saved: ${String(error)}`); return }
+        catch (error) { status.classList.remove('analytics-sr'); failure = `Analytics layout could not be saved: ${String(error)}` }
       }
-      announce(cancel ? 'Card move cancelled.' : `${previous.card.element.dataset.label} placed, position ${order.indexOf(previous.card.id) + 1} of ${order.length}.`)
+      announce(failure ?? (cancel ? 'Card move cancelled.' : `${previous.card.element.dataset.label} placed, position ${order.indexOf(previous.card.id) + 1} of ${order.length}.`))
     }
-    if (pending !== null) { const markup = pending; pending = null; patch(markup) }
+    if (pending !== null) { const markup = pending; pending = null; patch(markup, true) }
   }
 
   function begin(): void {
@@ -171,7 +173,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
 
   function autoScroll(): void {
     if (!move?.active || move.pointer === null) return
-    const top = document.querySelector('.app-header')?.getBoundingClientRect().bottom ?? 100
+    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bar-h')) || 100
     const delta = move.clientY < top + 40 ? -12 : move.clientY > innerHeight - 48 ? 12 : 0
     if (delta) { window.scrollBy(0, delta); track() }
     scrollFrame = requestAnimationFrame(autoScroll)
@@ -225,6 +227,16 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     cancelAnimationFrame(resizeFrame)
     resizeFrame = requestAnimationFrame(() => { if (board.clientWidth && board.clientWidth !== width) { finish(true); measure(); arrange(true) } })
   }).observe(board)
-  window.addEventListener('poise:typography-changed', () => { finish(true); measure(); arrange(true) })
+  const typography = () => ['--typo-body', '--typo-heading', '--typo-size', '--typo-lh'].map(name => document.documentElement.style.getPropertyValue(name)).join('|')
+  let lastTypography = typography()
+  const refit = () => {
+    cancelAnimationFrame(resizeFrame)
+    resizeFrame = requestAnimationFrame(() => { if (board.clientWidth) { finish(true); measure(); arrange(true) } })
+  }
+  new MutationObserver(() => {
+    const next = typography()
+    if (next !== lastTypography) { lastTypography = next; refit() }
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+  document.fonts.addEventListener('loadingdone', refit)
   return { patch, cancel: () => finish(true) }
 }

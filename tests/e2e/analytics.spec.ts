@@ -1450,7 +1450,7 @@ test('shows quota charts from the existing read and centers every organization s
   const view = page.locator('#view-analytics')
   await expect(view.locator('.quota-hour')).toHaveCount(48)
   await expect(view.locator('.quota-hour-empty')).toHaveCount(0)
-  await expect(view.locator('.quota-distribution rect')).toHaveCount(40)
+  await expect(view.locator('.quota-distribution')).toHaveCount(0)
   await expect(view.locator('.github-quota-avatar img').first()).toHaveAttribute('src', 'https://github.com/octocat.png?size=80')
   await expect(view.locator('.github-quota-avatar').first()).toHaveCSS('border-radius', '999px')
   await expect(view.locator('.analytics-history-latest').first()).toHaveCSS('border-radius', '999px')
@@ -1492,7 +1492,7 @@ test('attaches delayed help to measurements, with plain headings and no quota ex
   await expect(tooltip).toBeHidden()
 })
 
-test('caps seven-day quota charts at 168 hours and visibly explains an unset agent', async ({ page }) => {
+test('shows only the 24-hour quota chart and visibly explains an unset agent', async ({ page }) => {
   await workspace(page)
   const quota = quotaReport()
   const now = Date.parse('2026-10-09T12:00:00Z')
@@ -1501,7 +1501,8 @@ test('caps seven-day quota charts at 168 hours and visibly explains an unset age
   await page.route('**/api/analytics?**', route => route.fulfill({ json: { ...report(4), agentAccount: null, pullRequests: { ...report(4).pullRequests, mergedByAgent: null } } }))
   await page.goto('/')
   await openAnalytics(page)
-  await expect(page.locator('.quota-charts').first()).toContainText('168/168 hours')
+  await expect(page.locator('.quota-charts').first().locator('.quota-hour')).toHaveCount(24)
+  await expect(page.locator('.quota-distribution')).toHaveCount(0)
   const agent = page.locator('.analytics-tile').filter({ has: page.locator('.analytics-label', { hasText: /^Merged by agent$/ }) })
   await expect(agent.locator('.analytics-value')).toHaveText('—')
   await expect(agent.locator('.analytics-note')).toHaveText('No agent account in Settings')
