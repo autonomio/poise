@@ -148,6 +148,8 @@ class TestModelCatalog(TestCase):
                 self.assertNotIn("cursor", rendered)
                 if command == "muse":
                     self.assertEqual(argv[argv.index("--contributor-mode") + 1], "on")
+                else:
+                    self.assertNotIn("--contributor-mode", argv)
 
     def test_antigravity_records_the_conversation_it_was_given_back(self) -> None:
         with tempfile.TemporaryDirectory() as root:

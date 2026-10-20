@@ -201,7 +201,6 @@ def run(
             base = [
                 os.getenv("CODEX_CLI", "codex"),
                 "exec",
-                "--contributor-mode", "on",
                 "--model",
                 spec.selector,
                 "-c",
