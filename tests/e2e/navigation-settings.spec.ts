@@ -485,6 +485,7 @@ for (const cause of ['blur', 'beforeprint', 'resize', 'typography', 'fonts', 'vi
 for (const reduced of [false, true]) test(`drag geometry and motion remain usable with reduced motion ${reduced}`, async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: reduced ? 'reduce' : 'no-preference' })
   await workspace(page)
+  await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, reduced ? 'dark' : 'light')
   await navigation(page)
   await beginDrag(page, shortcut(page, 'Logging', 'menu'))
   const target = shortcut(page, 'Analytics', 'menu')
@@ -595,4 +596,33 @@ test('native touch and stationary edge scrolling stay inside a short settings bo
     await page.getByRole('button', { name: 'Restore defaults', exact: true }).focus()
     await expect(page.getByRole('button', { name: 'Restore defaults', exact: true })).toBeInViewport()
   } finally { await client.detach() }
+})
+
+test('failed addition keeps the initiating choice focused and reset aborts a keyboard pickup', async ({ page }) => {
+  await workspace(page)
+  await navigation(page)
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'poise-navigation' && !document.documentElement.hasAttribute('data-storage-recovered')) throw new Error('Storage is full')
+      original.call(this, key, value)
+    }
+  })
+  await page.getByRole('button', { name: 'Add Current', exact: true }).click()
+  const choice = page.getByRole('button', { name: 'Add to menu', exact: true })
+  await choice.click()
+  await expect(choice).toBeFocused()
+  await expect(status(page)).toHaveText('Navigation was not saved: Storage is full')
+  await expect(shortcut(page, 'Current', 'menu')).toHaveCount(0)
+  await page.evaluate(() => document.documentElement.setAttribute('data-storage-recovered', ''))
+  await choice.click()
+  await expect(shortcut(page, 'Current', 'menu')).toBeFocused()
+  await shortcut(page, 'Logging', 'menu').press('Space')
+  await page.locator('[data-keyboard]').press('ArrowLeft')
+  const reset = page.getByRole('button', { name: 'Restore defaults', exact: true })
+  await reset.press('Enter')
+  await expect(reset).toBeFocused()
+  await expect(status(page)).toHaveText('Navigation reset.')
+  await expect(page.locator('.st-navigation-ghost, .st-navigation-gap')).toHaveCount(0)
+  await expect(rows(page, 'menu')).toHaveText(['Analytics', 'Logging'])
 })

@@ -79,7 +79,7 @@ export function navigationSection(): HTMLElement {
   }
   function showChoices(): void {
     choices.hidden = adding === null
-    choices.innerHTML = adding ? `<span>${viewLabel(adding)}</span>${surfaces.map(surface => `<button type="button" class="st-clear" data-add="${surface}" ${getNavigation()[adding!][surface] ? 'disabled' : ''}>Add to ${surfaceName(surface)}</button>`).join('')}` : ''
+    choices.innerHTML = adding ? `<span>${viewLabel(adding)}</span>${surfaces.map(surface => `<button type="button" class="st-clear" data-add="${surface}" data-navigation-focus="add-${surface}-${adding}" ${getNavigation()[adding!][surface] ? 'disabled' : ''}>Add to ${surfaceName(surface)}</button>`).join('')}` : ''
   }
   function sync(): void {
     const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.navigationFocus : undefined
@@ -236,7 +236,7 @@ export function navigationSection(): HTMLElement {
     if (pickup?.mode === 'click' && !section.contains(event.target as Node)) cancel(false)
   })
   section.addEventListener('click', event => {
-    if (suppressClick) { event.preventDefault(); return }
+    if (suppressClick && event.detail !== 0) { event.preventDefault(); return }
     const button = (event.target as Element).closest<HTMLButtonElement>('button')
     if (pickup?.mode === 'click' && !button?.hasAttribute('data-reset') && !button?.dataset.remove) { track(event.clientX, event.clientY); finish(); return }
     if (!button) return
