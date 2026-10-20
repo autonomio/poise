@@ -55,6 +55,12 @@ export function readAnalyticsSnapshot(offset: number, anchor: Date, signal?: Abo
     const data = await response.json().catch(() => null)
     entry.controller.signal.throwIfAborted()
     if (!response.ok || !data) throw new Error(data?.error || `Analytics could not be read (HTTP ${response.status})`)
+    const validErrors = Array.isArray(data.errors) && data.errors.every((value: unknown) =>
+      typeof value === 'object' && value !== null && 'org' in value && typeof value.org === 'string'
+      && 'error' in value && typeof value.error === 'string')
+    if (!validErrors || !data.window || !data.issues || !data.pullRequests) {
+      throw new Error(`Analytics returned an invalid report (HTTP ${response.status})`)
+    }
     return data as AnalyticsReport
   }
   const pending = Promise.all([

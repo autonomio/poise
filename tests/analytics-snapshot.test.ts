@@ -105,4 +105,11 @@ describe('prepared Analytics snapshots', () => {
     await expect(readAnalyticsSnapshot(0, anchor)).rejects.toThrow('connection reset')
     expect(preparedAnalytics(0, anchor)).toBe(original)
   })
+
+  it.each([{}, { window: {}, issues: {}, pullRequests: {}, errors: [{}] }])('rejects malformed preparation envelopes through the read error path', async payload => {
+    vi.mocked(fetch).mockImplementation(async () => Response.json(payload))
+    const { readAnalyticsSnapshot, preparedAnalytics } = await import('../src/analytics-snapshot')
+    await expect(readAnalyticsSnapshot(0, anchor)).rejects.toThrow('Analytics returned an invalid report')
+    expect(preparedAnalytics(0, anchor)).toBeNull()
+  })
 })
