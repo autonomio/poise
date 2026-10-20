@@ -711,5 +711,8 @@ for (const failure of ['corrupt', 'unreadable'] as const) test(`${failure} prefe
   await expect(rows(page, 'menu')).toHaveText(['Analytics', 'Logging'])
   await expect(page.locator('#top-nav .nav-item')).toHaveText(views.slice(0, 7))
   expect(JSON.parse((await saved(page))!).menuOrder.slice(0, 2)).toEqual(['analytics', 'logging'])
+  await page.locator('#menu-toggle').click()
+  await page.locator('#notification-bell').click()
+  await expect(page.locator('#notification-rail')).toBeVisible()
   await expect(page.locator('#notification-rail')).not.toContainText('Navigation preferences could not be read')
 })

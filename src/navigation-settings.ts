@@ -19,7 +19,7 @@ export function navigationSection(): HTMLElement {
   section.dataset.tab = 'navigation'
   section.hidden = true
   section.innerHTML = `
-    <p class="st-help st-navigation-intro">Drag to reorder or move between areas.</p>
+    <p class="st-help st-navigation-intro">Drag or click to arrange your shortcuts.</p>
     <p id="st-navigation-instructions" class="st-navigation-sr">Click a shortcut to pick up, then click to place. With a keyboard, Space or Enter picks up; Up and Down arrange, Left chooses top bar, Right chooses menu, Home and End reach the ends, Enter drops and Escape cancels.</p>
     <div class="st-navigation-columns">${surfaces.map(surface => `<div role="group" aria-label="${surface === 'menu' ? 'Menu' : 'Top bar'} shortcuts">
       <div class="st-navigation-heading">${surface === 'menu' ? 'Menu' : 'Top bar'}</div>
@@ -128,7 +128,7 @@ export function navigationSection(): HTMLElement {
     if (source && !preferences[view][source]) { pending = null; sync(); announce('Navigation changed. Move cancelled.'); return }
     pickup = { view, source, target: source, index: source ? navigationViews(preferences, source).findIndex(item => item.key === view) : 0, preferences, mode, pointer, x, y }
     section.classList.add('st-navigation-held')
-    intro.textContent = mode === 'click' ? 'Click to place. Escape cancels.' : 'Drag to reorder or move between areas.'
+    intro.textContent = mode === 'click' ? 'Click a position, or outside to cancel.' : 'Drag or click to arrange your shortcuts.'
     controller.hidden = false
     controller.setAttribute('aria-label', `Moving ${viewLabel(view)}. Escape cancels.`)
     controller.focus({ preventScroll: true })
@@ -148,7 +148,7 @@ export function navigationSection(): HTMLElement {
     controller.hidden = true
     ghost.remove()
     section.classList.remove('st-navigation-held')
-    intro.textContent = 'Drag to reorder or move between areas.'
+    intro.textContent = 'Drag or click to arrange your shortcuts.'
     if (previous?.pointer !== null && previous?.pointer !== undefined && section.hasPointerCapture(previous.pointer)) section.releasePointerCapture(previous.pointer)
     return previous
   }

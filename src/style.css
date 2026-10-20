@@ -1419,7 +1419,7 @@ tr:hover .review-btn { opacity: 1; }
 .st-navigation-choices button:disabled { opacity: .4; cursor: default; }
 .st-navigation-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; border-top: var(--b-hair); padding-top: var(--sp-3); margin-top: var(--sp-5); color: var(--text-secondary); font-size: .6875rem; }
 .st-navigation-reset { padding: var(--sp-1) 0; color: var(--text-secondary); background: transparent; border: none; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.st-navigation-held .st-navigation-handle { cursor: grabbing; }
+.st-navigation-held, .st-navigation-held * { cursor: grabbing; }
 .st-navigation-ghost { position: fixed; z-index: 200; display: flex; align-items: center; gap: var(--sp-2); max-width: calc(100vw - 8px); min-width: 120px; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--text-secondary); border-radius: var(--r-sm); color: var(--text); background: var(--surface); box-shadow: var(--e-2); font-size: .8125rem; transform: rotate(-2deg); pointer-events: none; user-select: none; }
 .st-navigation-ghost span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-navigation-ghost svg { flex-shrink: 0; color: var(--text-tertiary); }
