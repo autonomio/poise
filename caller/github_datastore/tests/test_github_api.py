@@ -501,10 +501,11 @@ class GitHubRepositoryBatchTest(unittest.TestCase):
             GitHubOrgReader(ScriptedClient([{"repo_0": first}])).list_repos_changed_items(
                 ["owner/repo"], WATERMARK, {}, include_issues=False,
             )
-        first = self.batch_page("owner/repo", "pullRequests", [pull_stub(1, WATERMARK)], True, "same", 3)
-        second = self.batch_page("owner/repo", "pullRequests", [pull_stub(2, WATERMARK)], True, "same", 3)
+        first = self.batch_page("owner/repo", "pullRequests", [pull_stub(1, WATERMARK)], True, "first", 4)
+        second = self.batch_page("owner/repo", "pullRequests", [pull_stub(2, WATERMARK)], True, "second", 4)
+        third = self.batch_page("owner/repo", "pullRequests", [pull_stub(3, WATERMARK)], True, "first", 4)
         with self.assertRaisesRegex(GitHubApiError, "cyclic page cursor"):
-            GitHubOrgReader(ScriptedClient([{"repo_0": first}, {"page_0": second}])).list_repos_changed_items(
+            GitHubOrgReader(ScriptedClient([{"repo_0": first}, {"page_0": second}, {"page_0": third}])).list_repos_changed_items(
                 ["owner/repo"], WATERMARK, {}, include_issues=False,
             )
 
