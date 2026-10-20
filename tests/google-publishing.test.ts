@@ -194,3 +194,16 @@ it('refuses import before touching a replacement draft when its reviewed binding
   expect(await editor.readGoogleLedger(slug)).toEqual([])
   await expect(readdir(join(root, 'editor', '.google-history', slug))).rejects.toMatchObject({ code: 'ENOENT' })
 })
+it('serializes OAuth configuration changes behind admitted publication work', async () => {
+  await publish(); await editor.writeDoc(slug, body + '\nNew local text.')
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
+  mocks.update.mockImplementationOnce(async () => { started(); await held })
+  const publication = publish(); await pending
+  const configuring = fetch(`${base}/api/google/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: 'proof.apps.googleusercontent.com', clientSecret: 'private-test-client', origin: base }) })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  expect(db.getMeta('google:config')).toBeNull()
+  release()
+  expect((await publication).status).toBe(200)
+  expect((await configuring).status).toBe(200)
+})

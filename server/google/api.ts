@@ -115,9 +115,9 @@ export async function handleGoogleApi(req: IncomingMessage, res: ServerResponse,
     done = trackReleaseBackground()
     const body = await readJson<Record<string, unknown>>(req)
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'A Google action object is required.')
-    if (path === '/api/google/config') { configureGoogle(body); return send(200, googleAccountSettings()) }
+    if (path === '/api/google/config') return send(200, await withPublishLock(async () => { configureGoogle(body); return googleAccountSettings() }))
     if (path === '/api/google/connect') return send(200, beginGoogleLogin(req, body))
-    if (path === '/api/google/callback') { await completeGoogleLogin(req, body); return send(200, googleAccountSettings()) }
+    if (path === '/api/google/callback') return send(200, await withPublishLock(async () => { await completeGoogleLogin(req, body); return googleAccountSettings() }))
     if (path === '/api/google/disconnect') { return send(200, await withPublishLock(async () => { disconnectGoogle(text(body.accountId, 'Google account')); return googleAccountSettings() })) }
     if (match) {
       if (match[2] === 'sync') return send(200, await documentView(match[1], true))
