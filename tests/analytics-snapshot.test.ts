@@ -93,4 +93,16 @@ describe('prepared Analytics snapshots', () => {
     expect((await second).report.issues.opened).toBe(1)
     expect(fetch).toHaveBeenCalledTimes(4)
   })
+
+  it('retains a complete prepared snapshot when a later account read becomes unavailable', async () => {
+    const { readAnalyticsSnapshot, preparedAnalytics } = await import('../src/analytics-snapshot')
+    const original = await readAnalyticsSnapshot(0, anchor)
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ ...await response().json(), errors: [{ org: 'alpha', error: 'offline' }] }))
+    const degraded = await readAnalyticsSnapshot(0, anchor)
+    expect(degraded.report.errors).toHaveLength(1)
+    expect(preparedAnalytics(0, anchor)).toBe(original)
+    vi.mocked(fetch).mockRejectedValue(new Error('connection reset'))
+    await expect(readAnalyticsSnapshot(0, anchor)).rejects.toThrow('connection reset')
+    expect(preparedAnalytics(0, anchor)).toBe(original)
+  })
 })

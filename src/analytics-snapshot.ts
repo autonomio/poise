@@ -17,6 +17,11 @@ interface Prepared {
 }
 let prepared: Prepared | null = null
 
+export function hasNewAccountFailure(report: AnalyticsReport, previous: AnalyticsReport): boolean {
+  const missing = new Set(previous.errors.filter(error => !error.stale).map(error => error.org.toLowerCase()))
+  return report.errors.some(error => !error.stale && !missing.has(error.org.toLowerCase()))
+}
+
 function scope(offset: number, anchor: Date): string {
   const day = analyticsDay(offset, anchor)
   const settings = getSettings()
@@ -57,7 +62,8 @@ export function readAnalyticsSnapshot(offset: number, anchor: Date, signal?: Abo
     read(day.baselineSince, day.since, analyticsDailyBounds(offset, anchor)),
   ]).then(([report, baseline]) => {
     const snapshot = { report, baseline, capturedAt }
-    if (prepared === entry) entry.snapshot = snapshot
+    const previous = entry.snapshot
+    if (prepared === entry && (!previous || !(hasNewAccountFailure(report, previous.report) || hasNewAccountFailure(baseline, previous.baseline)))) entry.snapshot = snapshot
     return snapshot
   }).finally(() => {
     signal?.removeEventListener('abort', abort)

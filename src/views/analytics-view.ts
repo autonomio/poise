@@ -3,7 +3,7 @@ import { analyticsLayout } from '../analytics-layout'
 // Day, history and live quota retain independent read ownership on one card board.
 import { analyticsGroups, formatCount, formatRate, type AnalyticsGroup, type AnalyticsReport, type AnalyticsTile } from '../analytics-format'
 import { analyticsDay, analyticsDayProgress, analyticsHistoryBounds } from '../analytics-day'
-import { preparedAnalytics, readAnalyticsSnapshot, type AnalyticsSnapshot } from '../analytics-snapshot'
+import { hasNewAccountFailure, preparedAnalytics, readAnalyticsSnapshot, type AnalyticsSnapshot } from '../analytics-snapshot'
 import { HISTORY_BASELINE, historyChart, histogram, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
 import { mountOrganizationFilter, organizationUrl } from '../organizations'
 import { effectiveTimezone, settingsReady } from '../config'
@@ -194,11 +194,6 @@ function readFailure(title: string, error: unknown): ReadFailure {
 
 function accountFailures(data: { errors: Array<{ org: string, error: string, stale?: boolean }> }): ReadFailure[] {
   return data.errors.map(({ org, error, stale }) => ({ key: `account:${org.toLowerCase()}`, title: `GitHub data for ${org} ${stale ? 'is not updating' : 'is unavailable'}`, body: error }))
-}
-
-function hasNewAccountFailure(report: AnalyticsReport, previous: AnalyticsReport): boolean {
-  const missing = new Set(previous.errors.filter((error) => !error.stale).map((error) => error.org.toLowerCase()))
-  return report.errors.some((error) => !error.stale && !missing.has(error.org.toLowerCase()))
 }
 
 function historyMarkup(tile: AnalyticsTile, all: HistorySeries[] | null, compact = false): string {
