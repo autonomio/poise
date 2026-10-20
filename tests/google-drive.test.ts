@@ -3,17 +3,31 @@ const credentials = vi.hoisted(() => vi.fn())
 vi.mock('../server/google/accounts', () => ({ googleAccessToken: credentials }))
 import { readGoogleFile, updateGoogleFile } from '../server/google/drive'
 const fake = vi.fn<typeof fetch>()
+const metadata = (etag = '"rev-one"') => new Response(JSON.stringify({ id: 'file', title: 'Draft.md', mimeType: 'text/markdown' }), { headers: { etag } })
 beforeEach(() => { fake.mockReset(); credentials.mockResolvedValue('private-access'); vi.stubGlobal('fetch', fake) })
 afterEach(() => vi.unstubAllGlobals())
 describe('Google Drive conditional content access', () => {
   it('reads metadata and media under the same revision and pins updates with If-Match', async () => {
-    fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', name: 'Draft.md', mimeType: 'text/markdown' }), { headers: { etag: '"rev-one"' } })).mockResolvedValueOnce(new Response('# Draft')).mockResolvedValueOnce(new Response('{}'))
+    fake.mockResolvedValueOnce(metadata()).mockResolvedValueOnce(new Response('# Draft')).mockResolvedValueOnce(metadata()).mockResolvedValueOnce(new Response('{}'))
     const file = await readGoogleFile('account-one', 'file')
     expect(file.raw).toBe('# Draft')
-    expect(fake.mock.calls[1][1]?.headers).toMatchObject({ 'If-Match': '"rev-one"', Authorization: 'Bearer private-access' })
+    expect(file.file.name).toBe('Draft.md')
+    expect(fake.mock.calls[0][0]).toContain('/drive/v2/files/file?fields=')
+    expect(fake.mock.calls[1][1]?.headers).toEqual({ Authorization: 'Bearer private-access' })
     await updateGoogleFile('account-one', 'file', '# Updated draft', file.etag)
-    expect(fake.mock.calls[2][1]).toMatchObject({ method: 'PATCH', body: '# Updated draft', headers: { 'If-Match': '"rev-one"' } })
+    expect(fake.mock.calls[3][0]).toContain('/upload/drive/v2/files/file?')
+    expect(fake.mock.calls[3][1]).toMatchObject({ method: 'PUT', body: '# Updated draft', headers: { 'If-Match': '"rev-one"' } })
     expect(credentials.mock.calls.every(call => call[0] === 'account-one')).toBe(true)
+  })
+  it('rejects a file that changes during the media download', async () => {
+    fake.mockResolvedValueOnce(metadata()).mockResolvedValueOnce(new Response('# Changed')).mockResolvedValueOnce(metadata('"rev-two"'))
+    await expect(readGoogleFile('one', 'file')).rejects.toThrow('changed during reading')
+    expect(fake.mock.calls.every(call => !call[1]?.method)).toBe(true)
+  })
+  it('accepts the strong v2 resource ETag when its HTTP header is absent', async () => {
+    const resource = () => new Response(JSON.stringify({ id: 'file', title: 'Draft.md', mimeType: 'text/markdown', etag: '"body-revision"' }))
+    fake.mockResolvedValueOnce(resource()).mockResolvedValueOnce(new Response('# Draft')).mockResolvedValueOnce(resource())
+    expect((await readGoogleFile('one', 'file')).etag).toBe('"body-revision"')
   })
   it('fails closed when a write precondition is missing or Google rejects it', async () => {
     fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown' })))
@@ -28,7 +42,7 @@ describe('Google Drive conditional content access', () => {
   it('rejects native rich Google Docs, trashed files and invalid UTF-8', async () => {
     fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'application/vnd.google-apps.document' }), { headers: { etag: '"rev"' } }))
     await expect(readGoogleFile('one', 'file')).rejects.toThrow('Markdown')
-    fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown', trashed: true }), { headers: { etag: '"rev"' } }))
+    fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown', labels: { trashed: true } }), { headers: { etag: '"rev"' } }))
     await expect(readGoogleFile('one', 'file')).rejects.toThrow('available')
     fake.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'file', mimeType: 'text/markdown' }), { headers: { etag: '"rev"' } })).mockResolvedValueOnce(new Response(new Uint8Array([255])))
     await expect(readGoogleFile('one', 'file')).rejects.toThrow()

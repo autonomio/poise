@@ -844,7 +844,9 @@ identity and origin checks cover every Google API action.
   shown by `/review`; a changed hash refuses the overwrite.
 
 Imports check the reviewed local and remote versions and retain the old local
-file. Publication requires an unchanged remote text baseline and a live ETag.
+file. Publication requires an unchanged remote text baseline and a live Drive
+v2 ETag, enforced by a conditional media PUT. Downloads check matching metadata
+ETags before and after reading; the metadata validator cannot condition media GETs.
 Import freezes document mutations before draining pending saves; queued saves
 retain the version they were captured against. Provider comment tokens stay server-side; only comment text, author, quote,
 resolution state and local offsets reach the browser. The Google metadata

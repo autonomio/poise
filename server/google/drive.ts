@@ -14,16 +14,19 @@ export async function driveRequest(accountId: string, url: string, init: Request
   return response
 }
 async function metadata(accountId: string, id: string) {
-  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,mimeType,trashed&supportsAllDrives=true`)
-  const file = await response.json() as GoogleFile
+  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v2/files/${encodeURIComponent(id)}?fields=id,title,mimeType,etag,labels/trashed&supportsAllDrives=true`)
+  const data = await response.json() as { id: string, title: string, mimeType: string, etag?: string, labels?: { trashed?: boolean } }
+  const file: GoogleFile = { id: data.id, name: data.title, mimeType: data.mimeType, trashed: data.labels?.trashed }
   if (file.id !== id || file.mimeType !== 'text/markdown' || file.trashed) throw new HttpError(422, 'The linked Google file must be an available Markdown file.')
-  const etag = response.headers.get('etag')
+  const etag = response.headers.get('etag') ?? data.etag
   if (!etag || !/^"[^"\r\n]+"$/.test(etag)) throw new HttpError(502, 'Google returned no usable strong write precondition; publishing is refused.')
   return { file, etag }
 }
 export async function readGoogleFile(accountId: string, id: string): Promise<{ raw: string, etag: string, file: GoogleFile }> {
   const { file, etag } = await metadata(accountId, id)
-  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, { headers: { 'If-Match': etag } })
+  // Drive's metadata ETag cannot condition its media GET. Verify the metadata
+  // again after downloading; use that same validator for the atomic upload.
+  const response = await driveRequest(accountId, `https://www.googleapis.com/drive/v2/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`)
   if (Number(response.headers.get('content-length')) > MAX_BYTES) throw new HttpError(422, 'The Google Markdown file exceeds 10 MB.')
   if (!response.body) throw new HttpError(502, 'Google returned no file content.')
   const reader = response.body.getReader(), chunks: Uint8Array[] = []
@@ -37,7 +40,9 @@ export async function readGoogleFile(accountId: string, id: string): Promise<{ r
       chunks.push(value)
     }
   } finally { reader.releaseLock() }
-  return { raw: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)), etag, file }
+  const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
+  if ((await metadata(accountId, id)).etag !== etag) throw new HttpError(409, 'Google changed during reading. Refresh and review the latest version.')
+  return { raw, etag, file }
 }
 export async function googleFileId(accountId: string): Promise<string> {
   const response = await driveRequest(accountId, 'https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files')
@@ -53,5 +58,5 @@ export async function createGoogleFile(accountId: string, id: string, name: stri
 export async function updateGoogleFile(accountId: string, id: string, raw: string, etag: string): Promise<void> {
   if (!etag || !/^"[^"\r\n]+"$/.test(etag)) throw new HttpError(428, 'A strong Google write precondition is required.')
   if (Buffer.byteLength(raw) > MAX_BYTES) throw new HttpError(422, 'The Google Markdown file exceeds 10 MB.')
-  await driveRequest(accountId, `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(id)}?uploadType=media&fields=id&supportsAllDrives=true`, { method: 'PATCH', headers: { 'Content-Type': 'text/markdown; charset=UTF-8', 'If-Match': etag }, body: raw })
+  await driveRequest(accountId, `https://www.googleapis.com/upload/drive/v2/files/${encodeURIComponent(id)}?uploadType=media&fields=id&supportsAllDrives=true`, { method: 'PUT', headers: { 'Content-Type': 'text/markdown; charset=UTF-8', 'If-Match': etag }, body: raw })
 }

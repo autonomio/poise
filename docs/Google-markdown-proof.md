@@ -44,19 +44,30 @@ Poise exposes only safe comment text and locations to the browser. Unknown or
 broken structures stop publication. Editing a commented passage or losing its
 unambiguous identity also stops publication.
 
-## Remaining provider proof
+## Live conditional-write proof
 
-The initial proof did **not** test HTTP conditional-write enforcement, actual
-Poise OAuth through the service gateway, or two real Google identities. Mocked
-HTTP and browser tests establish client behavior, not Google's enforcement.
+Real Poise OAuth succeeded through the loopback proof workspace with the
+`openid email drive.file` scopes. Drive v3 metadata returned HTTP 200 without
+an ETag, so the original adapter correctly refused publication.
 
-Before release, use an authorized Google OAuth client to read a validator,
-modify that same file through another client, attempt a stale conditional raw
-upload, and verify rejection with the newer bytes/comments unchanged. The
-implementation refuses absent, weak or unusable validators. If Drive ignores
-the conditional header, the current update design must change; a pre-write
-read is not an atomic concurrency guarantee. This remains a release blocker
-tracked in [#258](https://github.com/autonomio/poise/issues/258).
+Drive v2 returned a strong metadata ETag. A fresh conditional media `PUT`
+succeeded; a subsequent stale `PUT` returned HTTP 412, and an independent read
+confirmed that the exact newer bytes survived. These were disposable real
+files using the app's OAuth grant, not mocked HTTP responses.
+
+The metadata ETag also returned 412 on a fresh media GET, so it cannot pin
+downloads. The adapter checks v2 metadata before and after downloading and
+refuses a changed ETag. Updates use the same validator in a conditional v2
+media PUT; the read checks do not substitute for that atomic write condition.
+
+Before release, repeat the concurrency proof with native comment changes and
+verify newer text/comments unchanged. Actual OAuth through the service gateway
+and independent files for two real identities remain unproved. These are
+release blockers tracked in [#258](https://github.com/autonomio/poise/issues/258).
+Missing, weak or unusable validators refuse mutation.
 
 Google documents the underlying file-format capability in
 [View and edit Markdown files in Google Docs](https://support.google.com/docs/answer/18289341?hl=en).
+The API primitives are documented in
+[Drive v2 File](https://developers.google.com/workspace/drive/api/reference/rest/v2/files)
+and [files.update](https://developers.google.com/workspace/drive/api/reference/rest/v2/files/update).

@@ -266,9 +266,11 @@ review. It stores the previous local Markdown under
 These files can be restored as ordinary Markdown. Imports never publish to
 another Google account or website.
 
-Publishing refuses unseen Google text edits and sends a strong ETag write
-precondition. Missing, weak or unusable ETags refuse publication. Provider-side
-stale-write rejection must be verified before release (see the proof below).
+Publishing refuses unseen Google text edits and sends a strong Drive v2 ETag
+write precondition. Downloads verify matching metadata ETags before and after
+reading. Missing, weak or unusable ETags refuse publication. Live stale text
+writes were rejected; native-comment concurrency remains a release proof
+obligation (see the proof below).
 A file ID is reserved and recorded before its first write so a lost create
 response cannot cause duplicate documents. Local bindings live in
 `<slug>.google.json` beside the draft. Deleting a draft removes its bindings;
