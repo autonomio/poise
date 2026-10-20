@@ -130,6 +130,7 @@ describe('self-update routes', () => {
   let base = ''
   let cache: typeof import('../server/cache-plugin')
   let bridge: FakeBridge
+  let cleanupRequest: (() => Promise<void>) | undefined
   const envKeys = ['POISE_DB', 'POISE_EDITOR_DIR', 'POISE_CHAT_ATTACHMENTS_DIR', 'POISE_LOCK_DIR', 'AGENT_INTERFACE_ROOT', 'POISE_ESPANSO_MATCH_DIR']
 
   async function start(withBridge: FakeBridge | null, onHandled?: (url: string | undefined) => void) {
@@ -151,6 +152,9 @@ describe('self-update routes', () => {
     base = `http://127.0.0.1:${address.port}`
   }
   afterEach(async () => {
+    const cleanup = cleanupRequest
+    cleanupRequest = undefined
+    await cleanup?.()
     await cache?.stopPoiseRuntime()
     const { closeDatabase } = await import('../server/db')
     closeDatabase()
@@ -299,6 +303,14 @@ describe('self-update routes', () => {
     server.on('request', observeRequest)
     const gone = httpRequest(`${base}/api/self-update/revert`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
     gone.on('error', () => undefined)
+    const cleanup = async () => {
+      releaseHold()
+      gone.destroy()
+      server.off('request', observeRequest)
+      if (response) await handled
+    }
+    // Teardown also runs when the test deadline leaves an awaited event pending.
+    cleanupRequest = cleanup
     try {
       gone.end(JSON.stringify({ sessionId: mine, changeId: visible.id, expectedReleaseId: 'rel-2' }))
       await expect.poll(() => bridge.calls.filter((c) => c.op === 'status'), { timeout: 5_000 }).toHaveLength(1)
@@ -315,10 +327,7 @@ describe('self-update routes', () => {
       const after = await readiness()
       expect(after.busy).toBe(0)
     } finally {
-      releaseHold()
-      gone.destroy()
-      server.off('request', observeRequest)
-      if (response) await handled
+      await cleanup()
     }
   }, 20_000)
 

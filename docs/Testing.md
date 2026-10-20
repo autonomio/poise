@@ -25,12 +25,14 @@ Behavior runtime tests live in responsibility-named `tests/behaviors-*.test.ts`
 files. Their common fixture registers the original mocks and per-test lifecycle;
 each isolated Vitest file gets its own state and temporary database.
 
-The self-update disconnect regression observes controller entry before closing
-the client, then waits for the server response's close event while the handler
-remains held. It checks that the mutation still counts as busy, releases the
-controller and waits for the middleware to finish before checking rollback and
-readiness. Cleanup releases the hold and destroys the request even after a
-failed assertion; the test retains its 20-second deadline.
+The self-update disconnect regression sends the held request only after public
+readiness reaches `busy === 0`. It observes controller entry before closing the
+client, then waits for the server response's close event while the handler
+remains held and requires total readiness `busy === 1`. It releases the controller
+and waits for the middleware to finish before checking rollback and readiness.
+Both assertion cleanup and test teardown release the hold and destroy the
+request before stopping the runtime, including after the unchanged 20-second
+test deadline leaves an event pending.
 
 ## Profile a run
 
