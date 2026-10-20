@@ -32,7 +32,9 @@ beforeEach(async () => {
   for (const name of ['claude', 'codex', 'grok', 'agy', 'muse']) await writeFile(join(root, 'providers', name), provider, { mode: 0o700 })
   caller = `#!${process.execPath}
 import fs from 'node:fs';
-fs.writeFileSync(process.env.HOME + '/called.json', JSON.stringify({ executable: process.argv[1], args: process.argv.slice(2), env: process.env }));
+const keys = ['CALLER_BIN_ROOT', 'AGENT_INTERFACE_ROOT', 'AGENT_INTERFACE_DATA_DIR', 'CLAUDE_CLI', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'JEV_API_KEY'];
+const env = Object.fromEntries(keys.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
+fs.writeFileSync(process.env.HOME + '/called.json', JSON.stringify({ executable: process.argv[1], args: process.argv.slice(2), env }));
 console.log(JSON.stringify({ families: ${JSON.stringify(families)} }));
 `
   await writeFile(join(bin, 'agent-interface'), caller, { mode: 0o700 })
