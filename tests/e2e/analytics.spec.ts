@@ -101,6 +101,47 @@ test('retains the held card through live reads, restores cancelled pointer moves
   for (const family of ['tall', 'short']) await expect.poll(() => board.locator(`[data-size="${family}"]`).evaluateAll(cards => new Set(cards.map(card => card.getBoundingClientRect().height)).size)).toBe(1)
 })
 
+test('applies and clears a deferred live read even when saving the card order fails', async ({ page }) => {
+  const state = await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const handle = page.getByRole('button', { name: 'Move Pull requests opened', exact: true })
+  await expect(mergeTrend(page)).toContainText('7-day median: 12h')
+  await page.evaluate(() => {
+    const write = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'poise-analytics-card-order') throw new DOMException('Storage full', 'QuotaExceededError')
+      return write.call(this, key, value)
+    }
+  })
+  await handle.focus()
+  await handle.press('Space')
+  await handle.press('ArrowRight')
+  state.baselineHours = 81
+  const baselineRead = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/analytics' && url.searchParams.has('dailyBounds')
+  })
+  const dayRead = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/analytics' && !url.searchParams.has('dailyBounds')
+  })
+  await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+  await Promise.all((await Promise.all([baselineRead, dayRead])).map(response => response.finished()))
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(handle).toHaveAttribute('aria-pressed', 'true')
+  await handle.press('Space')
+  await expect(page.locator('#analytics-layout-status')).toContainText('Analytics layout could not be saved')
+  await expect(mergeTrend(page)).toContainText('7-day median: 18h')
+  state.baselineHours = 108
+  await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+  await expect(mergeTrend(page)).toContainText('7-day median: 24h')
+  await handle.focus()
+  await handle.press('Space')
+  await handle.press('Escape')
+  await expect(mergeTrend(page)).toContainText('7-day median: 24h')
+})
+
 function report(merged: number, hours = 27): AnalyticsReport {
   return {
     window: { since: null, until: null },
