@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { IncomingMessage } from 'node:http'
 import { db, getMeta, setMeta } from '../db'
 import { HttpError } from '../http'
 
@@ -56,25 +56,24 @@ async function tokenRequest(values: Record<string, string>): Promise<{ access_to
   if (typeof data.access_token !== 'string' || !Number.isFinite(data.expires_in) || data.expires_in! <= 0) throw new HttpError(502, 'Google returned an invalid token response.')
   return { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in!, scope: data.scope }
 }
-export function beginGoogleLogin(req: IncomingMessage, res: ServerResponse): { url: string } {
+export function beginGoogleLogin(req: IncomingMessage, input: Record<string, unknown>): { url: string } {
   const config = googleConfig()
   if (req.headers.origin !== config.origin) throw new HttpError(403, 'The configured Google origin must match this Poise browser.')
-  const state = randomBytes(32).toString('base64url'), browser = randomBytes(32).toString('base64url'), verifier = randomBytes(48).toString('base64url')
+  if (typeof input.browserSecret !== 'string' || !/^[A-Za-z0-9_-]{43,128}$/.test(input.browserSecret)) throw new HttpError(400, 'A private browser binding is required for Google sign-in.')
+  const state = randomBytes(32).toString('base64url'), verifier = randomBytes(48).toString('base64url')
   db.prepare('DELETE FROM meta WHERE key LIKE ? AND json_extract(value, \'$.expires\') < ?').run(`${STATE}%`, Date.now())
-  setMeta(STATE + hash(state), JSON.stringify({ browser: hash(browser), verifier, expires: Date.now() + 600_000, clientId: config.clientId, origin: config.origin }))
-  res.setHeader('Set-Cookie', `poise_google=${browser}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=600${config.origin.startsWith('https:') ? '; Secure' : ''}`)
+  setMeta(STATE + hash(state), JSON.stringify({ browser: hash(input.browserSecret), verifier, expires: Date.now() + 600_000, clientId: config.clientId, origin: config.origin }))
   const params = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.origin + '/', response_type: 'code', scope: SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', state, code_challenge: hash(verifier), code_challenge_method: 'S256' })
   return { url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` }
 }
-export async function completeGoogleLogin(req: IncomingMessage, res: ServerResponse, input: Record<string, unknown>): Promise<void> {
+export async function completeGoogleLogin(req: IncomingMessage, input: Record<string, unknown>): Promise<void> {
   if (typeof input.state !== 'string' || typeof input.code !== 'string' || input.state.length > 256 || input.code.length > 4096) throw new HttpError(400, 'Google sign-in code and state are required.')
   const config = googleConfig(), key = STATE + hash(input.state)
   const pending = read<{ browser: string, verifier: string, expires: number, clientId: string, origin: string }>(key)
-  const cookie = /(?:^|;\s*)poise_google=([A-Za-z0-9_-]+)/.exec(req.headers.cookie ?? '')?.[1]
-  if (!pending || !cookie || hash(cookie) !== pending.browser || Date.now() >= pending.expires || pending.clientId !== config.clientId || pending.origin !== config.origin || req.headers.origin !== config.origin) throw new HttpError(403, 'Google sign-in expired or belongs to another browser. Connect again.')
+  const browserSecret = typeof input.browserSecret === 'string' && /^[A-Za-z0-9_-]{43,128}$/.test(input.browserSecret) ? input.browserSecret : ''
+  if (!pending || !browserSecret || hash(browserSecret) !== pending.browser || Date.now() >= pending.expires || pending.clientId !== config.clientId || pending.origin !== config.origin || req.headers.origin !== config.origin) throw new HttpError(403, 'Google sign-in expired or belongs to another browser. Connect again.')
   const removed = db.prepare('DELETE FROM meta WHERE key = ?').run(key)
   if (!removed.changes) throw new HttpError(403, 'Google sign-in was already used.')
-  res.setHeader('Set-Cookie', `poise_google=; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=0${config.origin.startsWith('https:') ? '; Secure' : ''}`)
   const tokens = await tokenRequest({ grant_type: 'authorization_code', code: input.code, client_id: config.clientId, client_secret: config.clientSecret, redirect_uri: config.origin + '/', code_verifier: pending.verifier })
   if (!tokens.scope?.split(' ').includes(SCOPES[2])) throw new HttpError(403, 'Google Drive file access was not granted.')
   const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(30_000), redirect: 'error' })

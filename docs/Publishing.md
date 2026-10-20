@@ -239,7 +239,10 @@ files and other applications' grants intact.
 
 Credentials remain in the workspace's private SQLite database (mode 0600), never
 in browser responses or agent process environments. The OAuth code exchange
-uses a one-time, ten-minute state, PKCE and an HttpOnly browser binding cookie.
+uses a one-time, ten-minute state, PKCE and a private binding kept in the
+connecting browser tab. The binding is posted only to Poise; it is never sent
+in the Google redirect URL. This also works through the service gateway, which
+intentionally strips workspace cookies.
 Google redirects to Poise's normal page; it then exchanges the code through a
 same-origin API request and removes OAuth parameters from the address bar.
 

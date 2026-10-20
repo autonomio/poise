@@ -100,6 +100,7 @@ export class GoogleDocuments {
     if (action === 'cancel') { this.review = null; this.actionError = ''; this.render(); return }
     const generation = this.generation, slug = this.slug
     this.busy = true; this.error = ''; this.actionError = ''; this.refreshRevision++
+    if (action === 'import' && this.review) this.host.freeze(true)
     try {
       if (!await this.host.flush()) throw new Error('Save the Poise draft before reviewing Google changes.')
       if (generation !== this.generation) return
@@ -110,7 +111,6 @@ export class GoogleDocuments {
         const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'publish'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, reviewedRemoteSha: this.review.value.remoteSha })
         if (generation === this.generation) { this.data = data; this.review = null }
       } else if (action === 'import' && this.review) {
-        this.host.freeze(true)
         const imported = await googleCall<{ content: string, version: string }>(googlePath(slug, 'import'), { accountId: this.review.accountId, localVersion: this.review.value.localVersion, remoteSha: this.review.value.remoteSha })
         this.review = null
         await this.host.imported(slug, imported.content, imported.version)

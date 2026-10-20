@@ -31,7 +31,10 @@ export function googleAccountsSection(element: HTMLElement): { refresh(): Promis
           settings = await googleCall<GoogleSettings>('/api/google/config', { clientId: element.querySelector<HTMLInputElement>('[name="google-client-id"]')!.value.trim(), clientSecret: element.querySelector<HTMLInputElement>('[name="google-client-secret"]')!.value, origin: location.origin })
           element.querySelector<HTMLInputElement>('[name="google-client-secret"]')!.value = ''; say('Google setup saved.')
         } else {
-          const result = await googleCall<{ url: string }>('/api/google/connect', {})
+          const browserSecret = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('')
+          // Tab storage survives Google's redirect without passing a secret in its URL.
+          sessionStorage.setItem('poise-google-login-secret', browserSecret)
+          const result = await googleCall<{ url: string }>('/api/google/connect', { browserSecret })
           location.assign(result.url)
         }
       } catch (error) { say((error as Error).message) }

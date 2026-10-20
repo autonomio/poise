@@ -113,6 +113,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 // across annotations — only one is visible at a time.
 let annotations: Annotation[] = []
 let articleReviews: EditorReviews | undefined
+let googleImporting = false
 let googleDocuments: GoogleDocuments | null = null
 const reviewSessions = new Map<string, string>()
 let annotationsReadySlug: string | null = null
@@ -220,6 +221,7 @@ export function createSerializedSaveQueue<T>(
 }
 
 interface DocumentSaveSnapshot {
+  baseVersion: string
   slug: string
   content: string
   clientId: string
@@ -1246,6 +1248,7 @@ function restoreHistoryEntry(entry: EditorHistoryEntry): void {
 }
 
 function undoEditor(): void {
+  if (googleImporting) return
   closeHistoryBatch()
   const prev = historyUndo.pop()
   if (!prev) return
@@ -1255,6 +1258,7 @@ function undoEditor(): void {
 }
 
 function redoEditor(): void {
+  if (googleImporting) return
   closeHistoryBatch()
   const next = historyRedo.pop()
   if (!next) return
@@ -2662,7 +2666,7 @@ function clearEditHoverHighlight(): void {
 // open — rewriting a document the agent never saw, and silently not applying
 // the edit to the one it was about.
 function applyEditToDoc(edit: EditCardData, slug: string): 'applied' | 'conflict' {
-  if (!docEl) return 'conflict'
+  if (!docEl || googleImporting) return 'conflict'
   if (currentSlug !== slug) return 'conflict'
   const snap = docTextSnapshot()
   const charRange = findCharRangeForEdit(snap.text, edit)
@@ -2686,7 +2690,7 @@ function applyEditToDoc(edit: EditCardData, slug: string): 'applied' | 'conflict
 
 async function persistDocumentSnapshot(snapshot: DocumentSaveSnapshot): Promise<void> {
   if (currentSlug === snapshot.slug) setMeta('Saving…')
-  const baseVersion = requiredVersion(documentVersions, snapshot.slug, 'document')
+  const baseVersion = snapshot.baseVersion
   const res = await fetch(`/api/editor/doc/${encodeURIComponent(snapshot.slug)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -2733,8 +2737,9 @@ async function flushSave(): Promise<boolean> {
 }
 
 function scheduleSave(): void {
-  if (!docEl || !currentSlug || currentSlug === deletingSlug) return
+  if (!docEl || !currentSlug || currentSlug === deletingSlug || googleImporting) return
   documentSaveQueue.enqueue({
+    baseVersion: requiredVersion(documentVersions, currentSlug, 'document'),
     slug: currentSlug,
     content: serializeDoc(),
     clientId: EDITOR_CLIENT_ID,
@@ -4531,6 +4536,11 @@ function attachHandlers() {
   // (a few transient absolute divs), so we do it eagerly.
   window.addEventListener('resize', renderAnnotationOverlay)
 
+  for (const eventName of ['keydown', 'beforeinput', 'paste', 'cut', 'drop']) {
+    docEl!.addEventListener(eventName, event => {
+      if (googleImporting) { event.preventDefault(); event.stopImmediatePropagation() }
+    }, { capture: true })
+  }
   docEl!.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault()
@@ -4747,7 +4757,7 @@ function sendPendingEditorBeacons(): void {
   const doc = documentSaveQueue.pending()
   if (doc) {
     try {
-      const baseVersion = requiredVersion(documentVersions, doc.slug, 'document')
+      const baseVersion = doc.baseVersion
       const body = new Blob(
         [JSON.stringify({
           content: doc.content,
@@ -4833,7 +4843,10 @@ export async function initEditorView() {
         loadIntoEditor(content); resetEditorHistory()
         googleDocuments?.load(slug)
       },
-      freeze: frozen => { if (docEl) docEl.contentEditable = frozen ? 'false' : 'true' },
+      freeze: frozen => {
+        googleImporting = frozen
+        if (docEl) docEl.contentEditable = !frozen && currentSlug ? 'true' : 'false'
+      },
     })
     articleReviews = new EditorReviews({
       view: viewEl, document: docEl!, text: serializeDoc,

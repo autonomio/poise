@@ -41,7 +41,7 @@ describe('Google Markdown native comments', () => {
     const doc = readGoogleMarkdown('# Draft\n' + suffix.replace('status: ACTIVE', 'status: RESOLVED'))
     expect(doc.comments[0]).toMatchObject({ resolved: true, start: null, end: null })
   })
-  it('preserves Unicode offsets and overlapping marker ordering', () => {
+  it('preserves Unicode offsets', () => {
     const value = raw.replace('# Draft', '# 🦉 Draft')
     const updated = updateGoogleMarkdown(value, readGoogleMarkdown(value).text.replace('# 🦉 Draft', '# 🦉 Longer draft'))
     expect(readGoogleMarkdown(updated).comments[0].start).toBe(19)
@@ -54,4 +54,19 @@ it('reads the live native reply and resolution-event shape without exposing prov
   expect(doc.comments[0]).toMatchObject({ resolved: true, replies: [{ author: 'Second reviewer', body: 'A reply & clarification.' }] })
   expect(updateGoogleMarkdown(thread, doc.text.replace('# Draft', '# Updated draft'))).toContain('action: RESOLVE')
   expect(() => readGoogleMarkdown(raw.replace('status: ACTIVE', 'status: UNKNOWN_NEW_FORMAT'))).toThrow('unsupported')
+})
+it('refuses to transfer a deleted or edited occurrence onto an originally separate copy', () => {
+  const repeated = raw.replace(' old tower.\n', ' old tower.\n\nOther context: The silver owl circles the other tower.\n')
+  const text = readGoogleMarkdown(repeated).text
+  expect(() => updateGoogleMarkdown(repeated, text.replace('The silver owl circles the old tower.', 'A different first passage.'))).toThrow('ambiguous')
+  expect(() => updateGoogleMarkdown(repeated, text.replace('The silver owl circles the old tower.\n', ''))).toThrow('ambiguous')
+})
+it('preserves crossing comment markers in their original relative order', () => {
+  const overlapping = '# Draft\n\n<!-- gdoc_comment_begin: c1 -->The <!-- gdoc_comment_begin: c2 -->silver owl<!-- gdoc_comment_end: c1 --> circles<!-- gdoc_comment_end: c2 --> the tower.\n' + suffix.replace('---\n\n', '  c2:\n    status: ACTIVE\n    head:\n      author: Second reviewer\n      body: Second comment.\n---\n\n')
+  const text = readGoogleMarkdown(overlapping).text
+  const updated = updateGoogleMarkdown(overlapping, '# Inserted\n\n' + text)
+  const comments = readGoogleMarkdown(updated).comments
+  expect(comments.map(c => c.quote)).toEqual(['The silver owl', 'silver owl circles'])
+  expect(updated.indexOf('gdoc_comment_begin: c1')).toBeLessThan(updated.indexOf('gdoc_comment_begin: c2'))
+  expect(updated.indexOf('gdoc_comment_end: c1')).toBeLessThan(updated.indexOf('gdoc_comment_end: c2'))
 })

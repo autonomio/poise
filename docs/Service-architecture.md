@@ -826,8 +826,9 @@ identity and origin checks cover every Google API action.
 - `GET /api/google/accounts` returns configuration status, client ID/origin and
   `{id,email,connected}` accounts. It never returns secrets or tokens.
 - `POST /api/google/config` configures `{clientId,clientSecret,origin}`;
-  `/connect` starts browser-bound PKCE authorization, `/callback` exchanges
-  `{code,state}`, and `/disconnect` forgets `{accountId}`.
+  `/connect` starts PKCE authorization bound to a client-generated
+  `{browserSecret}` kept in tab storage; `/callback` exchanges
+  `{code,state,browserSecret}`, and `/disconnect` forgets `{accountId}`.
 - The OAuth redirect URI is the workspace's ordinary root page. Google callback
   parameters are exchanged via a same-origin POST, then removed from the URL.
 - `GET /api/editor/doc/:slug/google` returns local publication bindings. POST
@@ -839,7 +840,8 @@ identity and origin checks cover every Google API action.
 
 Imports check the reviewed local and remote versions and retain the old local
 file. Publication requires an unchanged remote text baseline and a live ETag.
-Provider comment tokens stay server-side; only comment text, author, quote,
+Import freezes document mutations before draining pending saves; queued saves
+retain the version they were captured against. Provider comment tokens stay server-side; only comment text, author, quote,
 resolution state and local offsets reach the browser. The Google metadata
 round-trip and the API behavior are tested in `tests/google-*.test.ts`; browser
 journeys are in `tests/e2e/google-publishing.spec.ts`. See

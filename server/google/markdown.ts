@@ -90,8 +90,11 @@ export function updateGoogleMarkdown(raw: string, next: string): string {
     for (let at = next.indexOf(quote); at >= 0; at = next.indexOf(quote, at + 1)) matches.push(at)
     const before = doc.text.slice(Math.max(0, comment.start - 64), comment.start)
     const after = doc.text.slice(comment.end, comment.end + 64)
+    const originalMatches: number[] = []
+    for (let at = doc.text.indexOf(quote); at >= 0; at = doc.text.indexOf(quote, at + 1)) originalMatches.push(at)
+    const originalContext = originalMatches.filter(at => doc.text.slice(Math.max(0, at - before.length), at) === before && doc.text.slice(at + quote.length, at + quote.length + after.length) === after)
     const contextual = matches.filter(at => next.slice(Math.max(0, at - before.length), at) === before && next.slice(at + quote.length, at + quote.length + after.length) === after)
-    const at = matches.length === 1 ? matches[0] : contextual.length === 1 ? contextual[0] : undefined
+    const at = matches.length === 1 && originalMatches.length === 1 ? matches[0] : originalContext.length === 1 && contextual.length === 1 ? contextual[0] : undefined
     if (at === undefined) throw new HttpError(409, 'A Google-commented passage was changed or became ambiguous. Review it in Google Docs before publishing.')
     ranges.set(comment.id, { start: at, end: at + quote.length })
   }

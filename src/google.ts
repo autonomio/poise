@@ -20,17 +20,21 @@ export async function googleDocument(slug: string): Promise<GoogleDocumentView> 
 }
 export const googleReview = (slug: string, accountId: string) => googleCall<GoogleChangeReview>(googlePath(slug, 'review'), { accountId })
 
-/** OAuth returns through the normal app page; exchange from this same-origin browser only. */
-export async function finishGoogleConnection(): Promise<void> {
+/** OAuth returns through the normal app page; exchange from this same-origin browser tab only. The gateway intentionally strips cookies. */
+export async function finishGoogleConnection(): Promise<boolean> {
   const url = new URL(location.href), state = url.searchParams.get('state')
-  if (!state || (!url.searchParams.has('code') && !url.searchParams.has('error'))) return
+  if (!state || (!url.searchParams.has('code') && !url.searchParams.has('error'))) return false
   const code = url.searchParams.get('code'), error = url.searchParams.get('error')
   for (const key of ['code', 'state', 'scope', 'authuser', 'prompt', 'error', 'error_description', 'hd']) url.searchParams.delete(key)
   url.searchParams.set('settings', 'accounts')
   history.replaceState(null, '', url)
   try {
     if (error) throw new Error('Google sign-in was cancelled or refused. Connect again in Settings → Accounts.')
-    await googleCall('/api/google/callback', { code, state })
+    const browserSecret = sessionStorage.getItem('poise-google-login-secret')
+    sessionStorage.removeItem('poise-google-login-secret')
+    if (!browserSecret) throw new Error('Google sign-in belongs to another browser tab or has expired. Connect again.')
+    await googleCall('/api/google/callback', { code, state, browserSecret })
     connectionResult = 'Google account connected.'
   } catch (error) { connectionResult = (error as Error).message }
+  return true
 }

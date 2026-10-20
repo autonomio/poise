@@ -195,7 +195,7 @@ watchForUpdates()
 watchForSignOut()
 
 ;(async () => {
-  await finishGoogleConnection()
+  const googleReturned = await finishGoogleConnection()
   await loadSettings()
   if (new URLSearchParams(location.search).get('view') === 'logging') menu.switchTo('logging')
   else showView(menu.currentView())
@@ -216,6 +216,7 @@ watchForSignOut()
   const place = takeServicePlace()
   // A workspace that still has to be set up opens first-run setup instead, at
   // pairing when Poise Link sent the person here.
+  if (googleReturned) { openSettingsAt('accounts'); return }
   if (await startOnboarding(place)) return
   if (place) {
     void openServicePlace(place)
