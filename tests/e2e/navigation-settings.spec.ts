@@ -716,3 +716,37 @@ for (const failure of ['corrupt', 'unreadable'] as const) test(`${failure} prefe
   await expect(page.locator('#notification-rail')).toBeVisible()
   await expect(page.locator('#notification-rail')).not.toContainText('Navigation preferences could not be read')
 })
+
+test('native tap transfers exclude an existing destination copy from insertion indices in both directions', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium provides native CDP touch input.')
+  await page.setViewportSize({ width: 640, height: 820 })
+  await workspace(page)
+  await navigation(page)
+  await add(page, 'Current', 'menu')
+  await shortcut(page, 'Current', 'menu').press('Space')
+  await page.locator('[data-keyboard]').press('Home')
+  await page.locator('[data-keyboard]').press('Enter')
+  await expect(rows(page, 'menu')).toHaveText(['Current', 'Analytics', 'Logging'])
+  const client = await page.context().newCDPSession(page)
+  const tap = async (target: Locator, y: number) => {
+    await target.scrollIntoViewIfNeeded()
+    const box = (await target.boundingBox())!
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + 25, y: box.y + y, id: 1 }] })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+  try {
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+    await tap(shortcut(page, 'Current', 'top bar'), 15)
+    await tap(shortcut(page, 'Analytics', 'menu'), 3)
+    await expect(rows(page, 'menu')).toHaveText(['Current', 'Analytics', 'Logging'])
+    await expect(shortcut(page, 'Current', 'top bar')).toHaveCount(0)
+    await add(page, 'Current', 'top bar')
+    await shortcut(page, 'Current', 'top bar').press('Space')
+    await page.locator('[data-keyboard]').press('Home')
+    await page.locator('[data-keyboard]').press('Enter')
+    await tap(shortcut(page, 'Current', 'menu'), 15)
+    await tap(shortcut(page, 'Swarm', 'top bar'), 3)
+    await expect(rows(page, 'topBar')).toHaveText(views.slice(0, 7))
+    await expect(rows(page, 'menu')).toHaveText(['Analytics', 'Logging'])
+  } finally { await client.detach() }
+})

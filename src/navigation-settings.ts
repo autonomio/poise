@@ -179,7 +179,7 @@ export function navigationSection(): HTMLElement {
     const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-list]')
     if (!hit || !section.contains(hit)) return null
     const surface = hit.dataset.list as NavigationSurface
-    const rows = [...hit.querySelectorAll<HTMLElement>('.st-navigation-row')]
+    const rows = [...hit.querySelectorAll<HTMLElement>('.st-navigation-row')].filter(row => row.dataset.row !== `${surface}-${pickup!.view}`)
     const gap = hit.querySelector<HTMLElement>('.st-navigation-gap')?.getBoundingClientRect()
     if (gap && y >= gap.top && y < gap.bottom) return { surface, index: pickup.index }
     const box = hit.getBoundingClientRect()
