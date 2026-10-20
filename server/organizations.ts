@@ -72,6 +72,7 @@ const RUNTIME_TICK_MS = 5_000
 const SYNC_INTERVAL_MS = 60_000
 // Match Caller's daily full reconciliation; incremental freshness stays per minute.
 const RECONCILE_INTERVAL_MS = 24 * 60 * 60_000
+const RECONCILE_BUDGET_SECONDS = 20
 const MAX_SYNC_RETRY_MS = 60 * 60_000
 const CLI_TIMEOUT_MS = 30 * 60_000
 let timer: ReturnType<typeof setInterval> | undefined
@@ -382,9 +383,14 @@ async function synchronize(row: OrganizationRow, me: string, signal: AbortSignal
   stage(row.login, 'syncing')
   await caller(path, ['sync'], me, env, signal)
   const reconcile = Date.now() - row.last_reconcile_at >= RECONCILE_INTERVAL_MS
+  let reconcileComplete = false
   if (reconcile) {
     stage(row.login, 'reconciling')
-    await caller(path, ['sync', '--reconcile'], me, env, signal)
+    const result: unknown = JSON.parse(await caller(path, ['sync', '--reconcile', '--reconcile-max-seconds', String(RECONCILE_BUDGET_SECONDS)], me, env, signal))
+    if (!result || typeof result !== 'object' || !('reconcile_complete' in result) || typeof result.reconcile_complete !== 'boolean') {
+      throw new Error('Datastore reconciliation did not report completion status.')
+    }
+    reconcileComplete = result.reconcile_complete
     // Reconciliation does not advance Caller's last_sync_at freshness marker.
     await caller(path, ['sync'], me, env, signal)
   }
@@ -392,7 +398,7 @@ async function synchronize(row: OrganizationRow, me: string, signal: AbortSignal
   db.prepare(`
     UPDATE organizations SET stage = 'ready', error = NULL, last_sync_at = ?,
       last_reconcile_at = ?, indexed_user = ?, next_sync_at = 0, sync_failures = 0, sync_failing_since = 0 WHERE login = ?
-  `).run(Date.now(), reconcile ? Date.now() : row.last_reconcile_at, me, row.login)
+  `).run(Date.now(), reconcileComplete ? Date.now() : row.last_reconcile_at, me, row.login)
   datastoreSyncRecovered(row.login)
 }
 
