@@ -274,3 +274,15 @@ it('ends delegation on originating-session expiry and disable→enable, includin
   expect((await refreshing).status).toBe(401)
   expect(h.context.isAllowed(h.store.getUser('alice')!)).toBe(true)
 })
+it('does not count grants from the previous deployment app against the current connection quota', async () => {
+  const l = await login()
+  for (let i = 0; i < 10; i++) await connect(l, `previous-${i}`)
+  h.config.google = { clientId: 'replacement.apps.googleusercontent.com', clientSecret: 'replacement-private-secret' }
+  expect((await settings(l)).accounts.filter(a => a.connected)).toHaveLength(0)
+  await connect(l, 'new-account')
+  const reconnect = await stage(l, 'previous-0', 'previous-0')
+  expect((await finish(l, reconnect)).status).toBe(200)
+  const current = await settings(l)
+  expect(current.accounts.filter(a => a.connected).map(a => a.id).sort()).toEqual(['new-account', 'previous-0'])
+  expect(current.accounts.find(a => a.id === 'previous-1')).toMatchObject({ connected: false, state: 'expired' })
+})

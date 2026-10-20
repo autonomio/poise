@@ -103,7 +103,7 @@ export class GoogleConnections {
         try { this.vault.unseal<Grant>(a.grant, `account:${owner}:${a.id}`) }
         catch (error) { if (!(error instanceof GoogleCipherError)) throw error; a = { ...a, state: 'expired', grant: null, version: randomUUID() }; this.vault.put('account', owner, a.id, a) }
       }
-      const connected = !!clientId && clientId === a.clientId && a.state === 'connected'
+      const connected = !!clientId && clientId === a.clientId && a.state === 'connected' && !!a.grant
       return { id: a.id, email: a.email, connected, state: a.state === 'disconnected' ? 'disconnected' : connected ? 'connected' : 'expired', connectionVersion: `${this.vault.epoch(owner)}:${a.version}` }
     })
     return { configured: !!clientId, accounts }
@@ -192,8 +192,10 @@ export class GoogleConnections {
       if (result.outcome === 'connected' && result.accountId && result.email && result.grant) {
         const id = result.accountId, existing = this.vault.get<Account>('account', f.owner, id)
         if (existing?.version !== (Object.hasOwn(f.value.versions, id) ? f.value.versions[id] : undefined)) throw new HttpError(409, 'This Google connection changed during sign-in. Connect again.')
-        if (existing?.state !== 'connected' && this.vault.list<Account>('account', f.owner).filter(a => a.state === 'connected').length >= 10) throw new HttpError(429, 'At most ten Google accounts can be connected.')
-        this.vault.put('account', f.owner, id, { id, email: result.email, state: 'connected', clientId: this.configuration().clientId, version: randomUUID(), grant: this.vault.seal(result.grant, `account:${f.owner}:${id}`) } satisfies Account)
+        const clientId = this.configuration().clientId
+        const connected = (a: Account) => a.state === 'connected' && a.clientId === clientId && !!a.grant
+        if ((!existing || !connected(existing)) && this.vault.list<Account>('account', f.owner).filter(connected).length >= 10) throw new HttpError(429, 'At most ten Google accounts can be connected.')
+        this.vault.put('account', f.owner, id, { id, email: result.email, state: 'connected', clientId, version: randomUUID(), grant: this.vault.seal(result.grant, `account:${f.owner}:${id}`) } satisfies Account)
       } else if (result.outcome === 'connected') throw new HttpError(422, 'Google sign-in returned no usable connection. Connect again.')
       this.vault.remove('flow', f.owner, f.key)
       return { outcome: result.outcome, ...(result.accountId ? { accountId: result.accountId } : {}), ...(result.message ? { message: result.message } : {}) }
