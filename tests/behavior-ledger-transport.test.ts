@@ -53,6 +53,32 @@ describe('bounded behavior ledger transport', () => {
     })
   })
 
+  it('persists overflow loss before acknowledgement and retains it after reopening', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'ledger-overflow-'))
+    directories.push(directory)
+    const path = join(directory, 'ledger.db')
+    const observer = new BehaviorLedgerObserver({ path, captureLimit: 1 })
+    observers.push(observer)
+    await observer.start()
+    observer.capture(admission)
+    observer.capture({ ...admission, nativeId: 'dropped' })
+    const prefix = await observer.read({ operation: 'list' })
+    expect(prefix).toMatchObject({ status: 200, body: { health: { status: 'incomplete', pending: 1, dropped: 1 } } })
+    observer.capture({ ...admission, nativeId: 'dropped-again' })
+    expect((await observer.read({ operation: 'health' })).body.health).toMatchObject({ pending: 1, dropped: 2 })
+    const retained = { pending: 0, dropped: 2, generation: prefix.body.health.generation,
+      gaps: expect.arrayContaining([expect.objectContaining({ reason: 'capture_loss' })]) }
+    expect((await observer.read({ operation: 'health' })).body.health).toMatchObject(retained)
+    const journal = JSON.parse(await readFile(path + '.coverage.json', 'utf8')) as { health: LedgerHealth }
+    expect(journal.health).toMatchObject(retained)
+    await observer.stop()
+    const reopened = new BehaviorLedgerObserver({ path })
+    observers.push(reopened)
+    await reopened.start()
+    expect(await reopened.read({ operation: 'health' })).toMatchObject({ status: 200,
+      body: { health: { ...retained, status: 'incomplete' } } })
+  })
+
   it('serves queued reads between captures while preserving capture, read and close order', async () => {
     const observer = await fixture(`
       import { appendFileSync, existsSync, watch } from 'node:fs';
