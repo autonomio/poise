@@ -168,6 +168,8 @@ test('import freezes typing and agent edits before draining pending annotation s
     document.dispatchEvent(new Event('selectionchange'))
   })
   await page.locator('#editor-comment-btn').click()
+  await page.getByRole('textbox', { name: 'Add a comment…', exact: true }).fill('Keep this annotation during import.')
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click()
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await pending
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
