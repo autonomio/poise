@@ -1,3 +1,4 @@
+import { viewFeedback } from '../view-feedback'
 // Main table view — reads through /api/gh from the unified /github API.
 
 import { getSettings, getOrganizations, midnightInZone, startOfWeekInZone } from '../config'
@@ -72,24 +73,15 @@ let tickListening = false
 // DOM
 let tbody: HTMLTableSectionElement
 let loader: HTMLDivElement
-let empty: HTMLParagraphElement
 let table: HTMLTableElement
 let clusterEl: HTMLElement
 let timePickerEl: HTMLElement
 let countEl: HTMLSpanElement
 let searchInput: HTMLInputElement
 let sentinel: HTMLDivElement
-let loadErrorEl: HTMLElement | null = null
 
-// #empty used to carry both "No results." and every fetch error. The error was
-// written into it once and never cleared, so after a single failure every
-// legitimately-empty view reported a stale error for the rest of the session.
-// Errors get their own line; #empty goes back to meaning what it says.
 function showLoadError(message: string): void {
-  if (!loadErrorEl) loadErrorEl = document.getElementById('main-load-error')
-  if (!loadErrorEl) return
-  loadErrorEl.textContent = message
-  loadErrorEl.hidden = !message
+  viewFeedback('archive-read', 'Archive data is incomplete', message, 'read_failed')
 }
 
 function loadFilters(): void {
@@ -414,7 +406,6 @@ function paintSources(): void {
   showLoadError(selected.flatMap(source => [source.error, source.countError]).filter(Boolean).join(' '))
   if (items.length) {
     table.hidden = false
-    empty.hidden = true
     if (rowsChanged) applyMainFlip(items)
     else {
       const byKey = new Map(items.map(item => [rowKey(item), item]))
@@ -430,10 +421,7 @@ function paintSources(): void {
   } else {
     tbody.replaceChildren()
     table.hidden = true
-    empty.hidden = fetching
-    empty.textContent = !selected.length ? 'Select Actions, Issues or PR.'
-      : typeFilters.size === 1 && typeFilters.has('action') && actionStatus === 'failed'
-        ? 'No failed workflow runs for the current filters.' : 'No results for the current filters.'
+
   }
   updateCount()
 }
@@ -696,7 +684,6 @@ export function initMainView() {
 
   tbody = document.getElementById('tbody') as HTMLTableSectionElement
   loader = document.getElementById('loader') as HTMLDivElement
-  empty = document.getElementById('empty') as HTMLParagraphElement
   table = document.getElementById('table') as HTMLTableElement
   clusterEl = document.getElementById('main-filters') as HTMLElement
   timePickerEl = document.getElementById('time-picker') as HTMLElement

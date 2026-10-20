@@ -156,11 +156,11 @@ async function readQuota(): Promise<void> {
           return `<div class="github-quota-bucket">
             <h4>${escapeHtml(bucket.label)}</h4>
             <p class="github-quota-usage">${number(bucket.used)} / ${number(bucket.limit)} used <span>· ${number(bucket.remaining)} left</span></p>
-            ${bucket.limit === 0 ? '<p class="analytics-note">Unavailable for this account</p>' : `
+            ${bucket.limit === 0 ? '<p class="analytics-note">—</p>' : `
               <progress max="${bucket.limit}" value="${bucket.used}" aria-label="${escapeHtml(bucket.label)} quota used"></progress>
               <p class="analytics-note">Reset ${escapeHtml(time(bucket.resetAt))} · ${minutes.toFixed(1)} min left</p>
-              <p class="analytics-note">${bucket.perMinute === null ? 'Collecting usage samples…' : `${number(Math.round(bucket.perMinute * 10) / 10)} / min used · ${(bucket.remaining / Math.max(minutes, 1 / 60)).toFixed(1)} / min available`}</p>
-              <p class="github-quota-risk ${quotaRiskTone(risk)}" tabindex="0" data-help="Estimated chance of exhausting this budget before reset if the recently observed rate continues. Requires at least 15 seconds of samples; live quota is independent of the selected day and organization.">${risk === null ? minutes === 0 ? 'Awaiting reset refresh' : 'Risk: collecting samples…' : `${risk}% estimated risk${bucket.remaining === 0 ? ' · Exhausted' : ''}`}</p>
+              <p class="analytics-note">${bucket.perMinute === null ? '—' : `${number(Math.round(bucket.perMinute * 10) / 10)} / min used · ${(bucket.remaining / Math.max(minutes, 1 / 60)).toFixed(1)} / min available`}</p>
+              <p class="github-quota-risk ${quotaRiskTone(risk)}" tabindex="0" data-help="Estimated chance of exhausting this budget before reset if the recently observed rate continues. Requires at least 15 seconds of samples; live quota is independent of the selected day and organization.">${risk === null ? '—' : `${risk}% estimated risk${bucket.remaining === 0 ? ' · Exhausted' : ''}`}</p>
             `}
             ${quotaCharts(bucket, now)}
           </div>`

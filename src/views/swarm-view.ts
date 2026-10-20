@@ -1,3 +1,4 @@
+import { viewDiagnostic, viewFeedback } from '../view-feedback'
 import { layout, retire, scrollToActor } from '../motion'
 import { patchContent, patchNode } from '../dom-patch'
 import { mountOrganizationFilter, organizationUrl, getSelectedOrganization, setSelectedOrganization } from '../organizations'
@@ -207,30 +208,6 @@ function escapeHtml(s: string): string {
   ))
 }
 
-
-function quarantineRecordMarkup(row: QuarantinedLog): string {
-  const target = row.repo || row.prId
-    ? `Reported target: ${row.repo || 'unknown repository'}${row.prId ? `#${row.prId}` : ''}`
-    : row.sessionId ? `Reported session: ${row.sessionId}` : 'Target unknown'
-  const identity = [
-    `Call: ${row.id || 'unknown'}`,
-    row.correlationId ? `Correlation: ${row.correlationId}` : '',
-    row.behavior ? `Behavior: ${row.behavior}` : '',
-    row.sessionId && (row.repo || row.prId) ? `Session: ${row.sessionId}` : '',
-    `Log index: ${row.index}`,
-  ].filter(Boolean).join(' · ')
-  return `<div role="listitem" class="swarm-quarantine-record"><p class="st-help"><strong>${escapeHtml(target)}</strong></p>`
-    + `<pre class="agent-response-error">${escapeHtml(row.error)}</pre>`
-    + `<p class="st-help">${escapeHtml(identity)}</p></div>`
-}
-
-function renderQuarantine(): void {
-  const el = viewEl.querySelector<HTMLElement>('#swarm-quarantine')!
-  el.hidden = quarantined.length === 0
-  patchContent(el, quarantined.length === 0 ? ''
-    : '<p class="st-help">Unreadable worker records. Reported identity may be incomplete or conflicting; outcomes are unverified.</p>'
-      + `<div role="list">${quarantined.map(quarantineRecordMarkup).join('')}</div>`)
-}
 
 // Status is a coloured icon and the status in a word. The status and outcome
 // used to be two uppercase pills ("FAILED PREFLIGHT", "COMPLETED CHANGES") that
@@ -611,8 +588,6 @@ function renderShell() {
       </div>
     </header>
     <main>
-      <p id="swarm-stale" class="st-help st-help-error" role="status" hidden></p>
-      <section id="swarm-quarantine" aria-label="Unreadable worker records" hidden></section>
       <table id="swarm-table">
         <thead>
           <tr>
@@ -631,7 +606,6 @@ function renderShell() {
         </thead>
         <tbody id="swarm-tbody"></tbody>
       </table>
-      <p id="swarm-empty" hidden>No agent calls.</p>
       <div id="swarm-loader" class="loader" hidden><span></span><span></span><span></span></div>
     </main>
   `
@@ -736,10 +710,10 @@ function setExpandContent(tr: HTMLTableRowElement, id: string) {
     : ''
   const activity = entry ? progressDetail(entry) : ''
   const inner = state.loading
-    ? '<div class="agent-response-loading">Loading…</div>'
+    ? '<div class="loader" role="status" aria-label="Loading response"><span></span><span></span><span></span></div>'
     : (state.body
         ? `<pre class="agent-response-body">${escapeHtml(state.body)}</pre>`
-        : (errorBlock || activity ? '' : '<div class="agent-response-empty">No response body.</div>'))
+        : (errorBlock || activity ? '' : ''))
   patchContent(tr, `<td colspan="${COLUMN_COUNT}">${activity}${errorBlock}${inner}</td>`)
 }
 
@@ -830,39 +804,15 @@ function render() {
   // a fetch, a parse and a full table rebuild every minute, on the main thread,
   // while the person was typing in another view.
   if (!viewEl || viewEl.hidden) return
-  renderQuarantine()
   const list = visible()
   const groups = groupRuns(list)
   displayedGroups = new Map(groups.map((group) => [group.entries[0].id, group]))
-  const empty = viewEl.querySelector<HTMLElement>('#swarm-empty')!
   const table = viewEl.querySelector<HTMLElement>('#swarm-table')!
   const countEl = viewEl.querySelector<HTMLElement>('#swarm-count')!
-  if (entries.length === 0) {
-    table.hidden = true
-    empty.textContent = lastLoadError ? `Error: ${lastLoadError}`
-      : !lastLoadedAt ? 'Loading…' : quarantined.length > 0 ? 'No readable agent calls.' : 'No agent calls.'
-    empty.hidden = false
-    countEl.textContent = ''
-    bodyEl.innerHTML = ''
-    return
-  }
   const runCount = list.length === entries.length ? `${entries.length}` : `${list.length} / ${entries.length}`
-  const count = groups.length < list.length ? `${groups.length} groups · ${runCount} runs` : runCount
-  countEl.textContent = incompleteTotal === null ? count : `${count} · ${entries.length} of ${incompleteTotal} runs loaded`
-  // A filter matching nothing used to leave a bare header strip over blank
-  // space, with only a small count pill to explain it. Archive says so in
-  // words for exactly this case.
-  if (list.length === 0) {
-    table.hidden = true
-    empty.textContent = incompleteTotal === null ? 'No runs match this filter.'
-      : loadingHistory ? 'No loaded runs match this filter. Older runs are still loading.'
-        : 'No loaded runs match this filter. Older runs are unavailable.'
-    empty.hidden = false
-    bodyEl.innerHTML = ''
-    return
-  }
-  table.hidden = false
-  empty.hidden = true
+  countEl.textContent = entries.length ? runCount : ''
+  table.hidden = list.length === 0
+  if (!list.length) { bodyEl.replaceChildren(); return }
   reconcileRows(groupRows(groups))
 }
 
@@ -1186,14 +1136,7 @@ export async function focusCall(callId: string): Promise<void> {
 // Following a link and landing on nothing, with no explanation, is worse than
 // being told the run is not here.
 function notFocusable(message: string): void {
-  const el = viewEl?.querySelector<HTMLElement>('#swarm-stale')
-  if (!el) return
-  el.textContent = message
-  el.hidden = false
-  window.setTimeout(() => {
-    // Leave a real load error in place; only clear our own transient note.
-    if (el.textContent === message) renderStaleBanner()
-  }, 6000)
+  viewFeedback('swarm-navigation', 'Swarm run unavailable', message, 'action_needed')
 }
 
 // The in-flight request itself, not just a flag. `focusRow` awaits pollOnce to
@@ -1264,13 +1207,6 @@ function pollOnce(): Promise<void> {
       loadingHistory = false
       lastLoadError = (err as Error).message
       if (entries.length > 0) render()
-      if (entries.length === 0) {
-        const empty = viewEl?.querySelector<HTMLElement>('#swarm-empty')
-        if (empty) {
-          empty.textContent = `Error: ${lastLoadError}`
-          empty.hidden = false
-        }
-      }
       renderStaleBanner()
     } finally {
       if (mine === pollSequence) pollInFlight = null
@@ -1289,32 +1225,15 @@ let lastLoadError: string | null = null
 let lastLoadedAt = 0
 
 function renderStaleBanner(): void {
-  if (!viewEl) return
-  const el = viewEl.querySelector<HTMLElement>('#swarm-stale')
-  if (!el) return
-  const failed = !!lastLoadError || quarantined.length > 0
-  el.classList.toggle('st-help-error', failed)
-  el.classList.toggle('st-help-info', !failed)
-  if (!lastLoadError && loadingHistory) {
-    el.textContent = `Loading older runs… Showing ${entries.length} of ${incompleteTotal} runs.`
-      + (quarantined.length ? ` ${quarantined.length} unreadable worker log row(s) isolated.` : '')
-    el.hidden = false
-    return
-  }
-  if (!lastLoadError && quarantined.length > 0) {
-    el.textContent = `${quarantined.length} unreadable worker log row(s) isolated. Other runs continue updating.`
-    el.hidden = false
-    return
-  }
-  if (!lastLoadError || (entries.length === 0 && quarantined.length === 0)) {
-    el.hidden = true
-    el.textContent = ''
-    return
-  }
-  const age = lastLoadedAt ? relFromMs(lastLoadedAt) : 'unknown'
-  el.textContent = `Not updating — ${lastLoadError}. Showing the last successful read from ${age} ago.`
-    + (incompleteTotal === null ? '' : ` Only ${entries.length} of ${incompleteTotal} runs loaded.`)
-  el.hidden = false
+  const partial = incompleteTotal === null ? '' : `Only ${entries.length} of ${incompleteTotal} runs loaded.`
+  viewDiagnostic('swarm-history', loadingHistory ? `Loading older runs. ${partial}` : '')
+  const age = lastLoadedAt ? new Date(lastLoadedAt).toISOString() : 'none'
+  viewFeedback('swarm-read', 'Swarm is not updating', lastLoadError
+    ? `${lastLoadError}. Last successful read: ${age}. ${partial}` : '', 'read_failed')
+  viewFeedback('swarm-records', 'Unreadable Swarm records', quarantined.length
+    ? `${quarantined.length} unreadable worker log row(s) isolated. Other runs continue updating.\n`
+      + quarantined.map(row => `${row.repo ?? row.sessionId ?? 'Unknown target'}${row.prId ? `#${row.prId}` : ''} · Call: ${row.id ?? 'unknown'} · Correlation: ${row.correlationId ?? 'unknown'} · Behavior: ${row.behavior ?? 'unknown'} · Log index: ${row.index} · ${row.error}`).join('\n')
+    : '', 'read_failed')
 }
 
 // The Started column shows a relative time ("3m") computed at render.
@@ -1383,8 +1302,6 @@ export async function initSwarmView() {
       loadingHistory = false
       bodyEl.replaceChildren()
       viewEl.querySelector<HTMLElement>('#swarm-table')!.hidden = true
-      const empty = viewEl.querySelector<HTMLElement>('#swarm-empty')!
-      empty.textContent = 'Loading…'; empty.hidden = false
       viewEl.querySelector<HTMLElement>('#swarm-count')!.textContent = ''
       expanded.clear()
       expandedGroups.clear()

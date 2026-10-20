@@ -1,3 +1,4 @@
+import { viewDiagnostic, viewFeedback } from '../view-feedback'
 import { patchContent } from '../dom-patch'
 import { layout, watchPanel } from '../motion'
 // Behaviors — a table view listing automations with on/off toggles.
@@ -47,9 +48,7 @@ function refreshMetricCells(): void {
     const cells = template.content.querySelectorAll('td')
     row.querySelectorAll('.behavior-metric').forEach((cell, i) => cell.replaceWith(cells[i]))
   }
-  const status = viewEl.querySelector<HTMLElement>('#behavior-metrics-error')!
-  status.textContent = metricsError || metricsReport?.error || ''
-  status.hidden = !status.textContent
+  viewFeedback('behavior-metrics', 'Behavior metrics unavailable', metricsError || metricsReport?.error || '', 'read_failed')
 }
 
 async function refreshMetrics(): Promise<void> {
@@ -67,6 +66,7 @@ async function refreshMetrics(): Promise<void> {
     metricsReport = null
     metricsError = error instanceof Error ? error.message : String(error)
   }
+  viewFeedback('behavior-metrics', 'Behavior metrics unavailable', metricsError || metricsReport?.error || '', 'read_failed')
   if (!viewEl.hidden) refreshMetricCells()
 }
 // Owner per behavior, fetched once from /api/behaviors: the agent account
@@ -393,10 +393,8 @@ function loadOrgRepos(): Promise<void> {
 }
 
 function setTriggersStatus(text: string, cls: 'info' | 'error' = 'info') {
-  const el = triggersPanelEl?.querySelector<HTMLElement>('.bt-status')
-  if (!el) return
-  el.textContent = text
-  el.className = `st-help st-help-${cls} bt-status`
+  viewDiagnostic('behavior-triggers', cls === 'info' ? text : '')
+  viewFeedback('behavior-triggers', 'Behavior settings need attention', cls === 'error' ? text : '', 'action_needed')
 }
 
 function renderTriggerRepos() {
@@ -404,7 +402,7 @@ function renderTriggerRepos() {
   if (!list) return
   const filter = (triggersPanelEl!.querySelector<HTMLInputElement>('.bt-filter')?.value || '').trim().toLowerCase()
   if (!orgRepos && orgReposLoading) {
-    list.innerHTML = '<div class="st-help st-help-info">Loading repositories…</div>'
+    list.replaceChildren()
     return
   }
   // A selected repository an account no longer lists stays visible, so
@@ -413,10 +411,14 @@ function renderTriggerRepos() {
     .sort((a, b) => shortRepo(a).localeCompare(shortRepo(b)))
   const shown = all.filter((repo) => !filter || repo.toLowerCase().includes(filter))
   const notes: HTMLElement[] = []
+  viewFeedback('behavior-repositories', 'Behavior repositories unavailable', orgReposError || '', 'read_failed')
   if (orgReposError) {
-    notes.push(triggerReposNote('error', `Could not list the repositories: ${escapeHtml(orgReposError)} <button type="button" class="bt-retry">Retry</button>`))
+    const retry = document.createElement('button')
+    retry.type = 'button'
+    retry.className = 'bt-retry'
+    retry.textContent = 'Retry'
+    notes.push(retry)
   }
-  if (!shown.length) notes.push(triggerReposNote('info', filter ? 'No repository matches.' : 'No repositories.'))
   // A row that stays is kept where it is, not rebuilt: the list can grow while
   // the dropdown is open, and replacing the row under the pointer or the
   // keyboard focus would swallow the click or drop the focus.
@@ -499,13 +501,6 @@ function syncSelectAll() {
   if (all) reflect(all, repoBoxes())
 }
 
-function triggerReposNote(kind: 'info' | 'error', html: string): HTMLElement {
-  const note = document.createElement('div')
-  note.className = `st-help st-help-${kind}`
-  note.innerHTML = html
-  return note
-}
-
 function buildTriggersPanel(): HTMLElement {
   const panel = document.createElement('div')
   panel.id = 'behavior-triggers-panel'
@@ -520,15 +515,12 @@ function buildTriggersPanel(): HTMLElement {
       <label class="bt-label bt-repos-label" for="bt-filter">Repositories</label>
       <input id="bt-filter" class="st-input bt-filter" type="search" placeholder="Filter" autocomplete="off" spellcheck="false" />
       <div class="bt-repos" role="group" aria-label="Repositories"></div>
-      <div class="st-help st-help-info bt-skip-help" hidden>This behavior leaves ticked repositories alone. Unticking one makes its open pull requests eligible again on the next run.</div>
     </div>
     <div class="bt-section bt-authors-section">
       <label class="bt-label" for="bt-authors">Trusted authors</label>
       <input id="bt-authors" class="st-input bt-authors" type="text" autocomplete="off" spellcheck="false" />
-      <div class="st-help st-help-info">Only their new issues are reviewed. Reviewers run with full access on this machine.</div>
     </div>
     <div class="bt-footer">
-      <span class="st-help st-help-info bt-status" role="status"></span>
       <button type="button" class="st-save bt-done">Done</button>
     </div>
   `
@@ -603,7 +595,6 @@ function openTriggersPanel(key: BehaviorKey) {
   triggersPanelEl.setAttribute('aria-label', meta.hasSkips ? `Setting for ${meta.label}` : 'Repositories and authors that trigger Review New Issues')
   triggersPanelEl.querySelector<HTMLElement>('.bt-ceiling')!.hidden = !(meta.hasSkips && meta.hasSetting)
   triggersPanelEl.querySelector<HTMLElement>('.bt-authors-section')!.hidden = meta.hasSkips
-  triggersPanelEl.querySelector<HTMLElement>('.bt-skip-help')!.hidden = !meta.hasSkips
   triggersPanelEl.querySelector('.bt-repos-label')!.textContent = meta.hasSkips ? 'Skip repositories' : 'Repositories'
   triggersPanelEl.querySelector('.bt-repos')!.setAttribute('aria-label', meta.hasSkips ? 'Repositories to skip' : 'Repositories')
   triggersKey = key
@@ -756,16 +747,14 @@ let memoryPanelEl: HTMLElement | null = null
 let memoryTextarea: HTMLTextAreaElement | null = null
 let memoryTitleEl: HTMLElement | null = null
 let memorySaveBtn: HTMLButtonElement | null = null
-let memoryStatusEl: HTMLElement | null = null
 let memoryKey: BehaviorKey | null = null
 // The memory as it stood when the panel opened, so closing can tell whether
 // there is an unsaved change to commit.
 let memoryLoadedValue = ''
 
 function setMemoryStatus(text: string, cls: 'info' | 'ok' | 'error' = 'info') {
-  if (!memoryStatusEl) return
-  memoryStatusEl.textContent = text
-  memoryStatusEl.className = `st-help st-help-${cls} behavior-memory-status`
+  viewDiagnostic('behavior-memory', cls !== 'error' ? text : '')
+  viewFeedback('behavior-memory', 'Behavior memory needs attention', cls === 'error' ? text : '', 'action_needed')
 }
 
 function buildMemoryPanel(): HTMLElement {
@@ -780,19 +769,16 @@ function buildMemoryPanel(): HTMLElement {
       <div class="tp-section">
         <label class="tp-label behavior-memory-for"></label>
         <textarea class="st-textarea behavior-memory-textarea" rows="14" maxlength="8000" spellcheck="false" placeholder="e.g. Always confirm the CHANGELOG is updated. This repo uses pnpm, not npm."></textarea>
-        <div class="st-help st-help-info">Passed to the agent on every run of this behavior — a durable, behavior-specific instruction. Stored locally in <code>~/.poise/cache.db</code>.</div>
       </div>
       <div class="st-row">
         <button type="button" class="st-save behavior-memory-save">Save</button>
         <button type="button" class="st-clear behavior-memory-clear">Clear</button>
-        <span class="st-help st-help-info behavior-memory-status" role="status"></span>
       </div>
     </div>
   `
   memoryTitleEl = panel.querySelector('.behavior-memory-for')
   memoryTextarea = panel.querySelector('.behavior-memory-textarea')
   memorySaveBtn = panel.querySelector('.behavior-memory-save')
-  memoryStatusEl = panel.querySelector('.behavior-memory-status')
 
   // Wrapped, not passed directly: as a listener the click Event would land in
   // `force` and every close from the X button would discard an unsaved change.
@@ -970,7 +956,6 @@ async function performSave(): Promise<boolean> {
   const key = memoryKey
   const text = memoryTextarea.value
   memorySaveBtn.disabled = true
-  memorySaveBtn.textContent = 'Saving…'
   try {
     await setScratchpad(key, text, memoryLoadedValue)
     memoryLoadedValue = text
@@ -1017,7 +1002,6 @@ function renderShell(): string {
       </div>
     </header>
     <main>
-      <p id="behavior-metrics-error" class="st-help st-help-error" role="status" hidden></p>
       <table id="behaviors-table">
         <thead>
           <tr>

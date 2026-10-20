@@ -4737,7 +4737,7 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
    one editor-line (with a <br> filler) even when "empty", to give
    contenteditable a place for the caret. */
 .editor-doc[data-empty="true"]::before {
-  content: 'Start writing…';
+  content: '';
   color: var(--text-tertiary);
   font-style: italic;
   pointer-events: none;
