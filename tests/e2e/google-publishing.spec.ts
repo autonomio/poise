@@ -445,3 +445,42 @@ test('pending annotations must be acknowledged before leaving for Google', async
   expect(actions.some(a => a.path.endsWith('/annotations') && JSON.stringify(a.body).includes('Keep this annotation'))).toBe(true)
   expect(actions.some(a => a.path.endsWith('/publish'))).toBe(false)
 })
+test('a disconnected return account never falls back to another publishing identity', async ({ page }) => {
+  const actions = await setup(page); await retainedFlow(page, 'publish')
+  await page.route('**/api/google/callback', route => route.fulfill({ json: { ...accounts, connection: { outcome: 'connected', accountId: 'two' } } }))
+  await page.route('**/api/google/accounts', route => route.fulfill({ json: { ...accounts, accounts: [accounts.accounts[0]] } }))
+  await page.goto('/?google_state=' + FLOW_STATE)
+  const panel = page.getByRole('dialog', { name: 'Publish', exact: true })
+  await expect(panel.getByRole('status')).toContainText('no longer connected')
+  await expect(panel.getByLabel('Google publishing account')).toHaveValue('')
+  await expect(panel.getByRole('button', { name: 'Publish to Google', exact: true })).toBeDisabled()
+  await expect(panel.getByRole('button', { name: 'Reconnect Google account', exact: true })).toBeVisible()
+  expect(actions.some(a => a.path.endsWith('/publish'))).toBe(false)
+  await panel.getByLabel('Google publishing account').selectOption('one')
+  await expect(panel.getByRole('button', { name: 'Publish to Google', exact: true })).toBeEnabled()
+  expect(actions.some(a => a.path.endsWith('/publish'))).toBe(false)
+})
+for (const place of ['accounts', 'publish'] as const) test(`persisted pageshow releases ${place} connection controls and Editor mutations`, async ({ page }) => {
+  await setup(page)
+  let navigation!: () => void, release!: () => void
+  const started = new Promise<void>(r => { navigation = r }), held = new Promise<void>(r => { release = r })
+  await page.route('**/api/google/connect', route => route.fulfill({ json: { url: 'https://accounts.google.com/o/oauth2/v2/auth?state=' + FLOW_STATE } }))
+  await page.route('https://accounts.google.com/**', async route => { navigation(); await held; return route.abort() })
+  if (place === 'accounts') {
+    await page.getByRole('button', { name: 'Menu', exact: true }).click()
+    await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
+    await page.locator('.st-google-accounts').getByRole('button', { name: 'Add Google account', exact: true }).click({ noWaitAfter: true })
+  } else {
+    await page.getByRole('button', { name: 'Publish', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Publish', exact: true }).getByRole('button', { name: 'Add Google account', exact: true }).click({ noWaitAfter: true })
+  }
+  await started
+  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false })))
+  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
+  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
+  if (place === 'accounts') await expect(page.locator('.st-google-accounts').getByRole('button', { name: 'Add Google account', exact: true })).toBeEnabled()
+  else expect(await page.getByRole('dialog', { name: 'Publish', exact: true }).evaluate(el => (el as HTMLElement).inert)).toBe(false)
+  release()
+})

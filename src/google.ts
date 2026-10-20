@@ -23,6 +23,14 @@ export function setGoogleNavigationGuard(guard: () => Promise<() => void>): void
 export function takeGoogleConnectionResult(): string | null { const value = connectionResult; connectionResult = null; return value }
 export function setGoogleConnectionResult(message: string): void { connectionResult = message }
 export function takeGooglePublishReturn(): GooglePublishReturn | null { const value = publishReturn; publishReturn = null; return value }
+export function onGoogleNavigationReturn(callback: () => void): void {
+  const restored = (event: PageTransitionEvent) => {
+    if (!event.persisted) return
+    window.removeEventListener('pageshow', restored)
+    callback()
+  }
+  window.addEventListener('pageshow', restored)
+}
 export async function googleDocument(slug: string): Promise<GoogleDocumentView> {
   const data = await googleCall<GoogleDocumentView>(googlePath(slug, 'sync'), {})
   if (!Array.isArray(data.publications) || typeof data.version !== 'string') throw new Error('The Google publication response is unreadable.')
@@ -53,7 +61,7 @@ export async function beginGoogleConnection(options: { accountId?: string; slug?
     location.assign(target.href)
     navigating = true
     // Back/forward cache may revive the original page without rebuilding its Editor.
-    if (release) window.addEventListener('pageshow', release, { once: true })
+    if (release) onGoogleNavigationReturn(release)
   } catch (error) {
     if (stored) sessionStorage.removeItem(FLOW_KEY)
     throw error

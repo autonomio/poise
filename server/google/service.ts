@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { IncomingMessage } from 'node:http'
+import { isIP } from 'node:net'
 import { HttpError } from '../http'
 import type { ServiceConfig } from '../service/config'
 import { verifiedRequestIdentity } from '../service/request-identity'
@@ -18,9 +19,9 @@ function settings(value: unknown): Settings {
   if (typeof s.configured !== 'boolean' || !Array.isArray(s.accounts) || s.accounts.length > 1000 || s.accounts.some(a => !a || typeof a.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(a.id) || typeof a.email !== 'string' || a.email.length > 320 || typeof a.connected !== 'boolean' || !['connected', 'expired', 'disconnected'].includes(a.state) || typeof a.connectionVersion !== 'string' || a.connectionVersion.length > 256)) throw new HttpError(502, 'Google account status is unreadable.')
   return s as Settings
 }
-async function broker<T>(origin: string, token: string, action: string, body: Record<string, unknown> = {}): Promise<T> {
+async function broker<T>(origin: string, host: string, token: string, action: string, body: Record<string, unknown> = {}): Promise<T> {
   let response: Response
-  try { response = await fetch(origin + '/_gateway/google', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, action }), redirect: 'error', signal: AbortSignal.timeout(35_000) }) }
+  try { response = await fetch(origin + '/_gateway/google', { method: 'POST', headers: { Host: host, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, action }), redirect: 'error', signal: AbortSignal.timeout(35_000) }) }
   catch { throw new HttpError(502, 'Google connections are temporarily unavailable. Try again.') }
   let data: unknown
   try { data = await response.json() } catch { throw new HttpError(502, 'Google connections returned an unreadable response.') }
@@ -32,23 +33,26 @@ async function broker<T>(origin: string, token: string, action: string, body: Re
 }
 export async function withGoogleRequest<T>(req: IncomingMessage, service: ServiceConfig | null, purpose: Purpose, operation: () => Promise<T>): Promise<T> {
   if (!service) return requests.run(null, operation)
-  const assertion = verifiedRequestIdentity(req)
-  if (!assertion) throw new HttpError(401, 'Google connections require your current browser sign-in.')
-  const apex = new URL(service.publicOrigin)
-  apex.hostname = apex.hostname.slice(service.handle.length + 1)
-  const opened = await broker<{ operationToken: string; expiresAt: number; settings: unknown }>(apex.origin, assertion, 'open', { purpose })
+  const identity = verifiedRequestIdentity(req)
+  if (!identity) throw new HttpError(401, 'Google connections require your current browser sign-in.')
+  const peer = identity.peer.replace(/^::ffff:/, ''), family = isIP(peer), port = identity.gatewayPort
+  if (!family || !port) throw new HttpError(503, 'Google connections require an updated gateway connection.')
+  // The verified request arrived over this private connection. No public-host
+  // hairpin or Docker DNS is required, including behind the VM isolation filter.
+  const origin = `http://${family === 6 ? `[${peer}]` : peer}:${port}`, host = `gateway:${port}`
+  const opened = await broker<{ operationToken: string; expiresAt: number; settings: unknown }>(origin, host, identity.token, 'open', { purpose })
   if (typeof opened.operationToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(opened.operationToken) || !Number.isFinite(opened.expiresAt) || opened.expiresAt <= Date.now() || opened.expiresAt > Date.now() + 20 * 60_000 + 5000) throw new HttpError(502, 'Google did not admit this operation.')
   const context: GoogleRequest = {
     settings: settings(opened.settings),
     call: async <R>(action: string, body?: Record<string, unknown>) => {
       if (Date.now() >= opened.expiresAt) throw new HttpError(401, 'This Google action expired. Review the destination before trying again.')
-      return broker<R>(apex.origin, opened.operationToken, action, body)
+      return broker<R>(origin, host, opened.operationToken, action, body)
     },
     reload: async () => { context.settings = settings(await context.call('settings')) },
   }
   try { return await requests.run(context, operation) }
   finally {
-    try { await broker(apex.origin, opened.operationToken, 'close') }
+    try { await broker(origin, host, opened.operationToken, 'close') }
     catch { console.warn('[google] Operation cleanup was unavailable; its fixed lease will expire.') }
   }
 }

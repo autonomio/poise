@@ -93,7 +93,7 @@ function enforceGatewayRequest(req: IncomingMessage, service: ServiceConfig, api
   if (!scopeAllowsPath(result.assertion.scope, path)) {
     throw new HttpError(403, `an identity assertion with the ${result.assertion.scope} scope does not reach this route`)
   }
-  if (api && result.assertion.scope === 'browser') retainRequestIdentity(req, token)
+  if (api && result.assertion.scope === 'browser') retainRequestIdentity(req, { token, peer: req.socket.remoteAddress ?? '', gatewayPort: result.assertion.gatewayPort })
   return { kind: 'gateway', scope: result.assertion.scope }
 }
 

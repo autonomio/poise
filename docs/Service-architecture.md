@@ -183,6 +183,7 @@ client sent.
   | `iat`, `exp` | seconds; `exp` is `iat + 60` |
   | `jti` | random, unique per assertion |
   | `sid` | browser only: opaque hash reference to the authenticated workspace session |
+  | `gport` | browser only: gateway listening port for private Google delegation |
 
 - The gateway generates its key pair on first start and keeps it in its data
   volume. Workspaces receive the public key as `POISE_GATEWAY_PUBLIC_KEY`, the
@@ -841,9 +842,11 @@ deadlines, browser proof and migration limits.
   Google app configuration is deployment-owned.
 - Browser assertions carry signed `sid`. The workspace guard strips the header
   and retains only verified delegation privately against that request. The fixed
-  apex broker `POST /_gateway/google` admits an operation with `open`, then
+  broker `POST /_gateway/google` admits an operation with `open`, then
   accepts purpose-limited `settings`, `begin`, `finish`, `token`, `disconnect`
-  and `close`. Its server-only credential has a fixed twenty-minute deadline;
+  and `close`. Workspace calls use the verified TCP gateway peer and signed
+  `gport` over the private network, addressed to the fixed internal gateway host;
+  no public-apex egress or Docker DNS is needed. Its server-only credential has a fixed twenty-minute deadline;
   every action requires the exact original live login and current owner/access.
   This changes neither Link/admin scopes nor the ordinary sixty-second assertion
   lifetime. No browser cookie or arbitrary upstream URL reaches the broker.

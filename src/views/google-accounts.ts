@@ -1,4 +1,4 @@
-import { beginGoogleConnection, escapeGoogleHtml as escape, googleCall, takeGoogleConnectionResult, type GoogleSettings } from '../google'
+import { beginGoogleConnection, escapeGoogleHtml as escape, googleCall, onGoogleNavigationReturn, takeGoogleConnectionResult, type GoogleSettings } from '../google'
 
 export function googleAccountsSection(element: HTMLElement): { refresh(): Promise<void> } {
   let settings: GoogleSettings | null = null, busy = false
@@ -33,7 +33,7 @@ export function googleAccountsSection(element: HTMLElement): { refresh(): Promis
           say('Opening Google…')
           await beginGoogleConnection({ ...(target.dataset.googleReconnect ? { accountId: target.dataset.googleReconnect } : {}) })
           leaving = true
-          window.addEventListener('pageshow', () => { busy = false; render(); say('Google sign-in was not completed.') }, { once: true })
+          onGoogleNavigationReturn(() => { busy = false; render(); say('Google sign-in was not completed.') })
         }
       } catch (error) { say((error as Error).message, true) }
       finally { if (!leaving) { busy = false; render() } }

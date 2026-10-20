@@ -44,11 +44,14 @@ beforeEach(async () => {
   h.context.deps.upstream = () => ({ host: '127.0.0.1', port: address.port })
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input)
-    if (url === `https://${APEX}/_gateway/google`) {
+    if (url === `https://${APEX}/_gateway/google`) throw new Error('Public apex egress is blocked by isolation')
+    if (url === 'http://172.23.0.2:8080/_gateway/google') {
       const headers = Object.fromEntries(new Headers(init?.headers).entries()), body = String(init?.body)
       brokerCalls.push({ action: (JSON.parse(body) as { action: string }).action, authorization: headers.authorization })
-      const reply = await h.request({ host: APEX, path: '/_gateway/google', method: 'POST', headers, body })
-      return new Response(reply.body, { status: reply.status, headers: { 'content-type': 'application/json' } })
+      expect(headers.host).toBe('gateway:8080')
+      // Map the simulated Docker peer onto the fixture listener while retaining
+      // the real Node fetch, Host header and gateway internal route.
+      return actualFetch(`http://127.0.0.1:${h.port}/_gateway/google`, init)
     }
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'private-composition-access', refresh_token: 'private-composition-refresh', expires_in: 3600, scope: providerError === 'partial' ? 'email' : 'openid email https://www.googleapis.com/auth/drive.file' })
     if (url === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: providerSubject, email: `${providerSubject}@example.test`, email_verified: providerError !== 'unverified' })

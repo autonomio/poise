@@ -139,6 +139,6 @@ export class Context {
   }
 
   assertion(user: User, scope: Scope, session?: Session): string {
-    return signAssertion(this.deps.keys.privateKey, { handle: user.handle, login: user.login, scope, ...(scope === 'browser' && session ? { sessionIdHash: session.idHash } : {}) }, this.deps.now())
+    return signAssertion(this.deps.keys.privateKey, { handle: user.handle, login: user.login, scope, ...(scope === 'browser' ? { gatewayPort: this.deps.config.port, ...(session ? { sessionIdHash: session.idHash } : {}) } : {}) }, this.deps.now())
   }
 }

@@ -58,7 +58,12 @@ boundary. Existing unused direct service credentials are never a broker fallback
 
 The workspace identity guard removes `X-Poise-Identity` and privately retains the
 verified browser assertion in a request-keyed weak map. Browser assertions add
-signed `sid`, the hash reference to the exact authenticated workspace session.
+signed `sid`, the hash reference to the exact authenticated workspace session, and
+`gport`, the gateway listening port. The broker uses the actual verified TCP peer
+and that signed port over the existing private workspace network, with the fixed
+internal gateway host. It requires neither public-apex egress nor Docker DNS, so
+the isolated-VM deployment remains supported. A missing signed port requires a
+gateway update rather than a public-routing fallback.
 The Google broker verifies signature, issuer/audience, current login/owner,
 browser scope, bounded lifetime and that workspace session and its parent apex
 login. Link/admin assertions, browser cookies, caller-supplied replacements and

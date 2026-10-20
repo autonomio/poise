@@ -114,6 +114,8 @@ async function handle(ctx: Context, req: IncomingMessage, res: ServerResponse): 
     if (owner) return workspaceRequest(ctx, req, res, url, owner)
   } else if (isInternalAddress(ctx, req) && url.pathname === '/_gateway/tls-ask' && req.method === 'GET') {
     return tlsAsk(ctx, res, url)
+  } else if (isInternalAddress(ctx, req) && url.pathname === '/_gateway/google' && req.method === 'POST') {
+    return google.api(ctx, req, res)
   }
   answer(ctx, req, res, 404, 'There is nothing at this address.')
 }

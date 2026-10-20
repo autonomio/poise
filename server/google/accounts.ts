@@ -58,11 +58,12 @@ export function configureGoogle(input: Record<string, unknown>): void {
   }).immediate()
 }
 export function googleAccounts(): GoogleAccount[] {
+  const context = googleRequest(), config = context ? null : localEnvironment() ?? read<Config>(CONFIG)
   const local = (db.prepare('SELECT value FROM meta WHERE key LIKE ? ORDER BY key').all(`${PREFIX}%`) as Array<{ value: string }>).map(row => {
     const a = parseStored<StoredAccount>(row.value)
-    return { id: a.id, email: a.email, connected: a.connected, ...(a.state ? { state: a.state } : {}) }
+    const changedClient = !context && a.connected && a.clientId !== config?.clientId
+    return { id: a.id, email: a.email, connected: a.connected && !changedClient, ...(changedClient ? { state: 'expired' as const } : a.state ? { state: a.state } : {}) }
   })
-  const context = googleRequest()
   if (context) {
     const central = context.settings.accounts.map(({ id, email, connected, state }) => ({ id, email, connected, state }))
     return [...central, ...local.filter(a => !central.some(b => b.id === a.id)).map(a => ({ ...a, connected: false, state: 'disconnected' as const }))]
@@ -73,6 +74,7 @@ export function googleAccounts(): GoogleAccount[] {
 function account(id: string): StoredAccount {
   const a = read<StoredAccount>(PREFIX + id)
   if (!a?.connected) throw new HttpError(422, 'Reconnect this Google account in Settings → Accounts.')
+  if (a.clientId !== googleConfig().clientId) throw new HttpError(422, 'Reconnect this Google account with the configured Google app.')
   return a
 }
 export async function googleConnectionVersion(id: string): Promise<string> { return googleRequest() ? serviceConnectionVersion(id) : `${connectionEpoch()}:${account(id).connectionVersion}` }
@@ -157,6 +159,7 @@ export async function googleAccessToken(id: string, forceRefresh = false): Promi
   if (pending) return pending
   const operation = (async () => {
     const config = googleConfig()
+    const fingerprint = hash(config.clientId + '\0' + config.clientSecret + '\0' + config.origin)
     if (a.clientId !== config.clientId) throw new HttpError(422, 'Reconnect this Google account with the configured OAuth client.')
     let t: Awaited<ReturnType<typeof tokenRequest>>
     try { t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: a.refreshToken, client_id: config.clientId, client_secret: config.clientSecret }) }
@@ -164,6 +167,8 @@ export async function googleAccessToken(id: string, forceRefresh = false): Promi
       if (error instanceof HttpError && error.statusCode === 422) db.prepare('UPDATE meta SET value=? WHERE key=? AND value=?').run(JSON.stringify({ id: a.id, email: a.email, connected: false, state: 'expired' }), PREFIX + id, JSON.stringify(a))
       throw error
     }
+    const current = googleConfig()
+    if (fingerprint !== hash(current.clientId + '\0' + current.clientSecret + '\0' + current.origin)) throw new HttpError(409, 'Google configuration changed during refresh. Connect again.')
     // A disconnect while refreshing must never resurrect credentials.
     const changed = db.prepare('UPDATE meta SET value = ? WHERE key = ? AND value = ?').run(JSON.stringify({ ...a, accessToken: t.access_token, refreshToken: t.refresh_token ?? a.refreshToken, expires: Date.now() + t.expires_in * 1000 }), PREFIX + id, JSON.stringify(a))
     if (!changed.changes) throw new HttpError(409, 'Google connection changed during refresh. Try again.')
