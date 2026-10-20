@@ -20,7 +20,7 @@ async function start(page: Page, info: TestInfo, options: { service?: boolean, r
   const root = info.outputPath('runtime')
   const bin = join(root, 'bin')
   const home = join(root, 'home')
-  await mkdir(root, { recursive: true })
+  await mkdir(join(root, 'agent'), { recursive: true })
   if (!options.reuse) {
     await writeFakeClis(bin, home, {
       claude: script('claude', STATUS.claudeSubscription),
