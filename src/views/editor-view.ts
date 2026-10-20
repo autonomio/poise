@@ -258,7 +258,7 @@ const annotationsSaveQueue = createSerializedSaveQueue(
 // A release refresh must wait for the actual queues, not visible status text.
 registerReloadGuard(() =>
   documentSaveQueue.isDirty() || annotationsSaveQueue.isDirty() || saveTimer || annotationsSaveTimer || deletingSlug
-    ? ['save'] : [],
+    ? ['editor'] : [],
 )
 
 function isEditorVersion(value: unknown): value is string {

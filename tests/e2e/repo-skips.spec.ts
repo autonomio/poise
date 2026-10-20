@@ -183,6 +183,7 @@ test('keeps a replay refusal in notifications until dismissed or replay succeeds
   await expect(page.locator('#swarm-tbody tr.agent-refusal-row')).toHaveCount(0)
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
   await expect(notice).toBeVisible()
+  await notice.locator('.nr-card-head').click()
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
   await expect(notice).toHaveCount(0)
   await page.locator('#notification-bell').click()
