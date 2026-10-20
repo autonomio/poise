@@ -464,10 +464,9 @@ test('a disconnected return account never falls back to another publishing ident
 })
 for (const place of ['accounts', 'publish'] as const) test(`persisted pageshow releases ${place} connection controls and Editor mutations`, async ({ page }) => {
   await setup(page)
-  let navigation!: () => void, release!: () => void
-  const started = new Promise<void>(r => { navigation = r }), held = new Promise<void>(r => { release = r })
   await page.route('**/api/google/connect', route => route.fulfill({ json: { url: 'https://accounts.google.com/o/oauth2/v2/auth?state=' + FLOW_STATE } }))
-  await page.route('https://accounts.google.com/**', async route => { navigation(); await held; return route.abort() })
+  await page.route('https://accounts.google.com/**', route => route.abort('aborted'))
+  const aborted = page.waitForEvent('requestfailed', { predicate: req => req.isNavigationRequest() && req.url().startsWith('https://accounts.google.com/') })
   if (place === 'accounts') {
     await page.getByRole('button', { name: 'Menu', exact: true }).click()
     await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
@@ -476,9 +475,9 @@ for (const place of ['accounts', 'publish'] as const) test(`persisted pageshow r
     await page.getByRole('button', { name: 'Publish', exact: true }).click()
     await page.getByRole('dialog', { name: 'Publish', exact: true }).getByRole('button', { name: 'Add Google account', exact: true }).click({ noWaitAfter: true })
   }
-  await started
-  // Locator assertions wait for the deliberately held navigation to finish.
-  // Inspect the retained document directly while exercising its real handlers.
+  await aborted
+  // Cancel navigation before commit so the original document and its handlers
+  // remain available; exercise the persisted return without a hanging request.
   const states = await page.evaluate(() => {
     const editor = document.querySelector('#editor-doc')!
     const before = editor.getAttribute('contenteditable')
@@ -488,8 +487,6 @@ for (const place of ['accounts', 'publish'] as const) test(`persisted pageshow r
     return { before, ordinary, restored: editor.getAttribute('contenteditable') }
   })
   expect(states).toEqual({ before: 'false', ordinary: 'false', restored: 'true' })
-  const aborted = page.waitForEvent('requestfailed', { predicate: req => req.url().startsWith('https://accounts.google.com/') })
-  release(); await aborted
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
   if (place === 'accounts') await expect(page.locator('.st-google-accounts').getByRole('button', { name: 'Add Google account', exact: true })).toBeEnabled()
   else expect(await page.getByRole('dialog', { name: 'Publish', exact: true }).evaluate(el => (el as HTMLElement).inert)).toBe(false)
