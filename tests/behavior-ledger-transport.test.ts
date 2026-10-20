@@ -28,11 +28,13 @@ async function fixture(body: string, options: ConstructorParameters<typeof Behav
 const workerTiming = { totalMs: 7, readMs: 2, pendingMs: 3, encodeMs: 1, budgetScanMs: .5 }
 function blockedWorker(operation: 'capture' | 'read'): string {
   return `
-    import { existsSync, watch } from 'node:fs';
+    import { appendFileSync, existsSync, watch } from 'node:fs';
     const timing=${JSON.stringify(workerTiming)};
     let blocked=false;
     port.postMessage({ready:true,health,pending:[]});
     port.on('message',request=>{
+      appendFileSync(new URL('./operations',import.meta.url),
+        (request.operation==='read'?request.request.operation:request.operation)+'\\n');
       const reply=()=>port.postMessage({id:request.id,status:200,body:{version:1,health},pending:[],
         ...(request.operation==='read'?{timing}:{})});
       if(request.operation!==${JSON.stringify(operation)}||blocked) { reply(); return; }
@@ -164,8 +166,9 @@ describe('bounded behavior ledger transport', () => {
   })
 
   it('reports a queued timeout with only the blocking capture kind and elapsed time', async () => {
-    const observer = await fixture(blockedWorker('capture'), { readTimeoutMs: 30 })
-    const release = join(directories.at(-1)!, 'release')
+    const observer = await fixture(blockedWorker('capture'), { readLimit: 1, readTimeoutMs: 200 })
+    const directory = directories.at(-1)!
+    const release = join(directory, 'release')
     observer.capture(admission)
     try {
       const reply = await observer.read({ operation: 'list' })
@@ -175,6 +178,11 @@ describe('bounded behavior ledger transport', () => {
       expect(reply.timing!.queueMs).toBeGreaterThanOrEqual(0)
       expect(reply.timing!.blocking!.elapsedMs).toBeGreaterThanOrEqual(0)
       expect(reply.body).not.toHaveProperty('timing')
+      const next = observer.read({ operation: 'health' })
+      expect((await observer.read({ operation: 'list' })).status).toBe(429)
+      await writeFile(release, '')
+      expect((await next).status).toBe(200)
+      expect((await readFile(join(directory, 'operations'), 'utf8')).trim().split('\n')).toEqual(['capture', 'health'])
     } finally { await writeFile(release, '') }
   })
 
