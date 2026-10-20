@@ -13,12 +13,13 @@ const issue = {
   updated_at: '2026-10-13T08:00:00Z', created_at: '2026-10-13T08:00:00Z', merged_at: null,
 }
 
-async function setup(page: Page, view = 'current') {
+async function setup(page: Page, view = 'current', lastDoc = '') {
   const state = { currentReads: 0 }
-  await page.addInitScript((initialView) => {
+  await page.addInitScript(({ initialView, lastDoc }) => {
     localStorage.clear(); localStorage.setItem('poise-filters-v2', JSON.stringify({ types: ['issue'], status: 'all', time: 'all' }))
     localStorage.setItem('poise-view', initialView)
-  }, view)
+    if (lastDoc) localStorage.setItem('poise-editor-last', lastDoc)
+  }, { initialView: view, lastDoc })
   await page.route(/https:\/\/(?:rsms\.me|fonts\.googleapis\.com|fonts\.gstatic\.com|github\.com)\//, (route) => route.abort())
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -322,4 +323,105 @@ test('empty repository discovery preserves live-feed choices in an open issue co
     await expect(picker).toHaveValue(selected)
     await expect(page.getByPlaceholder('Issue title', { exact: true })).toHaveValue('Draft issue')
   } finally { repos.release() }
+})
+
+
+const summary = (slug: string) => ({ slug, title: `Note ${slug}`, updated_at: '2026-10-20T08:00:00Z', size: 30 })
+async function editorDocuments(page: Page) {
+  const version = 'e'.repeat(64)
+  await page.route(/\/api\/editor\/doc\/[^/]+$/, route => {
+    const slug = new URL(route.request().url()).pathname.split('/').at(-1)!
+    return route.fulfill({ json: { slug, content: `# Note ${slug}\n\nAvailable writing`, version } })
+  })
+  await page.route('**/annotations', route => route.fulfill({ json: { annotations: [], version } }))
+}
+
+test('Editor opens its remembered document before settings and library discovery finish', async ({ page }) => {
+  await setup(page, 'editor', 'remembered')
+  await editorDocuments(page)
+  const settings = deferred(), library = deferred()
+  await page.route('**/api/settings', async route => { await settings.promise; await route.fallback() })
+  await page.route('**/api/editor/docs', async route => {
+    await library.promise
+    await route.fulfill({ json: { docs: [summary('remembered'), summary('other')] } })
+  })
+  const start = Date.now()
+  try {
+    await page.goto('/')
+    const doc = page.locator('#editor-doc')
+    await expect(doc).toContainText('Available writing', { timeout: 2000 })
+    console.log(`Editor remembered document: ${Date.now() - start}ms; settings and library still held`)
+    await doc.press('ControlOrMeta+End'); await doc.pressSequentially(' draft')
+    await page.locator('.editor-doc-trigger').click()
+    await expect(page.locator('#editor-doc-menu')).toContainText('Loading documents…')
+    library.release()
+    await expect(page.locator('.editor-doc-item')).toHaveCount(2)
+    await expect(doc).toContainText('draft')
+    settings.release()
+    await expect(doc).toContainText('draft')
+  } finally { settings.release(); library.release() }
+})
+
+test('Editor populates an already-open selector on first discovery and reports a retryable failure', async ({ page }) => {
+  await setup(page, 'editor')
+  await editorDocuments(page)
+  const library = deferred()
+  let fail = true, writes = 0
+  await page.route('**/api/editor/docs', async route => {
+    if (route.request().method() !== 'GET') writes++
+    await library.promise
+    if (fail) return route.fulfill({ status: 502, json: { error: 'Library unavailable' } })
+    await route.fulfill({ json: { docs: [summary('first')] } })
+  })
+  try {
+    await page.goto('/')
+    await page.locator('.editor-doc-trigger').click()
+    await expect(page.locator('#editor-doc-menu')).toContainText('Loading documents…')
+    library.release()
+    await expect(page.locator('#editor-doc-menu')).toContainText('Could not load documents')
+    expect(writes).toBe(0)
+    await page.locator('.editor-doc-trigger').click()
+    fail = false
+    await page.locator('.editor-doc-trigger').click()
+    await expect(page.locator('.editor-doc-item')).toHaveCount(1)
+    await page.locator('.editor-doc-item').click()
+    await expect(page.locator('#editor-doc')).toContainText('Available writing')
+  } finally { library.release() }
+})
+
+test('Editor keeps a focused picker item and draft when background discovery adds a document', async ({ page }) => {
+  await setup(page, 'editor', 'first')
+  await editorDocuments(page)
+  const refresh = deferred()
+  let reads = 0
+  await page.route('**/api/editor/docs', async route => {
+    const later = ++reads > 1
+    if (later) await refresh.promise
+    await route.fulfill({ json: { docs: later ? [summary('first'), summary('second')] : [summary('first')] } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#editor-doc')).toContainText('Available writing')
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    await page.getByRole('button', { name: 'Editor', exact: true }).click()
+    await expect.poll(() => reads).toBe(2)
+    await page.locator('.editor-doc-trigger').click()
+    const first = page.locator('.editor-doc-item[data-slug="first"]')
+    const actor = await first.elementHandle()
+    await first.focus()
+    refresh.release()
+    await expect(page.locator('.editor-doc-item')).toHaveCount(2)
+    expect(await actor!.evaluate(node => node.isConnected && document.activeElement === node)).toBe(true)
+  } finally { refresh.release() }
+})
+
+test('Snippets paints its library while GitHub settings are pending', async ({ page }) => {
+  await setup(page, 'snippets')
+  const settings = deferred()
+  await page.route('**/api/settings', async route => { await settings.promise; await route.fallback() })
+  await page.route('**/api/snippets', route => route.fulfill({ json: { snippets: [{ trigger: ':fast', replace: 'Available snippet' }], version: 'v1' } }))
+  try {
+    await page.goto('/')
+    await expect(page.locator('#snippets-tbody')).toContainText('Available snippet', { timeout: 2000 })
+  } finally { settings.release() }
 })

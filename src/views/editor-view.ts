@@ -2138,6 +2138,10 @@ function setTriggerTitle() {
   triggerTitleEl.title = full     // hover-tooltip shows the full title
 }
 
+let docsRead: Promise<boolean> | null = null
+let docsLoaded = false
+let docsError = false
+
 function renderDocMenu() {
   if (!menuEl) return
   if (!docs.length) {
@@ -2151,7 +2155,7 @@ function renderDocMenu() {
     if (b !== prev) { buckets.push({ name: b, items: [d] }); prev = b }
     else            { buckets[buckets.length - 1].items.push(d) }
   }
-  const parts: string[] = []
+  const parts: string[] = docsError ? ['<div class="editor-doc-empty" role="status">Could not refresh documents. Reopen to retry.</div>'] : []
   for (const b of buckets) {
     parts.push(`<h3 class="editor-doc-bucket">${escapeHtml(b.name)}</h3>`)
     for (const d of b.items) {
@@ -2173,6 +2177,7 @@ function renderDocMenu() {
 
 function openMenu() {
   if (!menuEl || !triggerEl) return
+  if (docsError && !docsRead) void fetchDocs()
   renderDocMenu()
   menuEl.hidden = false
   reveal(menuEl, { distance: 8 })
@@ -2208,17 +2213,31 @@ function onMenuKeydown(e: KeyboardEvent) {
   }
 }
 
-async function fetchDocs(): Promise<boolean> {
+function fetchDocs(): Promise<boolean> {
+  if (docsRead) return docsRead
+  docsError = false
+  const pending = readDocs().finally(() => {
+    if (docsRead === pending) docsRead = null
+    if (menuEl && !menuEl.hidden) renderDocMenu()
+  })
+  docsRead = pending
+  return pending
+}
+
+async function readDocs(): Promise<boolean> {
   try {
     const res = await fetch('/api/editor/docs')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    docs = (data.docs || []) as DocSummary[]
-    viewFeedback('editor-documents', 'Editor documents unavailable', '')
+    if (!Array.isArray(data.docs)) throw new Error('Malformed document list')
+    docs = data.docs as DocSummary[]
+    docsLoaded = true
+    if (currentSlug) setTriggerTitle()
     return true
   } catch (err) {
     console.error('[editor] fetchDocs failed:', err)
-    viewFeedback('editor-documents', 'Editor documents unavailable', (err as Error).message, 'read_failed')
+    docsError = true
+    setMeta('Could not load documents')
     return false
   }
 }
@@ -2280,7 +2299,7 @@ async function loadDoc(slug: string) {
     const res = await fetch(`/api/editor/doc/${encodeURIComponent(slug)}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    if (requestId !== loadRequestId) return
+    if (requestId !== loadRequestId || viewEl.hidden) return
     const nextSlug = String(data.slug || slug)
     if (typeof data.content !== 'string' || !isEditorVersion(data.version)) {
       throw new Error('malformed editor document response')
@@ -2291,6 +2310,7 @@ async function loadDoc(slug: string) {
     if (!(await flushBeforeLeavingDocument('switch documents')) || requestId !== loadRequestId) return
     if (!persistEditorHistory()) return
     currentSlug = nextSlug
+    docEl.contentEditable = googleImporting ? 'false' : 'true'
     articleReviews?.clear()
     googleDocuments?.load(null)
     documentVersions.set(currentSlug, data.version)
@@ -2321,12 +2341,13 @@ async function loadDoc(slug: string) {
     // Annotations live alongside the doc — load and render in parallel
     // with the markdown so the underlines appear when the doc does.
     await fetchAnnotations(currentSlug)
-    if (requestId !== loadRequestId) return
+    if (requestId !== loadRequestId || viewEl.hidden) return
     renderAnnotationOverlay()
     void articleReviews?.load(currentSlug)
     googleDocuments?.load(currentSlug)
   } catch (err) {
     console.error('[editor] loadDoc failed:', err)
+    if (requestId === loadRequestId) setMeta('Could not load document')
   }
 }
 
@@ -4839,7 +4860,7 @@ if (typeof window !== 'undefined') {
         // triggers it. Wait one tick.
         await new Promise((r) => setTimeout(r, 100))
       }
-      await fetchDocs()
+      void fetchDocs()
       await loadDoc(slug)
     })()
   })
@@ -4853,6 +4874,7 @@ export async function initEditorView() {
     initialized = true
     viewEl.innerHTML = renderShell()
     docEl          = viewEl.querySelector<HTMLElement>('#editor-doc')
+    docEl!.contentEditable = 'false'
     triggerEl      = viewEl.querySelector<HTMLButtonElement>('.editor-doc-trigger')
     triggerTitleEl = viewEl.querySelector<HTMLElement>('.editor-doc-trigger-title')
     menuEl         = viewEl.querySelector<HTMLElement>('#editor-doc-menu')
@@ -4900,17 +4922,17 @@ export async function initEditorView() {
 }
 
 async function openInitialDocument(): Promise<void> {
-  if (!await fetchDocs() || viewEl.hidden || currentSlug) return
+  const listing = fetchDocs()
   let target: string | null = null
   try { target = localStorage.getItem(LAST_OPEN_KEY) } catch { /* ignore */ }
-  if (!target || !docs.find((d) => d.slug === target)) {
-    target = docs[0]?.slug || null
-  }
-  if (target) {
-    await loadDoc(target)
-  } else {
-    await newDoc()
-  }
+  const initialRequest = loadRequestId + (target ? 1 : 0)
+  // The remembered file has its own versioned read; library discovery is
+  // independent and must not delay opening it.
+  if (target) await loadDoc(target)
+  if (!await listing || viewEl.hidden || currentSlug || loadRequestId !== initialRequest) return
+  target = docs[0]?.slug || null
+  if (target) await loadDoc(target)
+  else await newDoc()
 }
 
 export function stopEditorRefresh() {
