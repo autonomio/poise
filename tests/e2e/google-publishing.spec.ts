@@ -92,6 +92,8 @@ test('retains the Poise draft when Google changes after review', async ({ page }
   await expect(google.getByRole('alert')).toContainText('Google changed after the review opened.')
   await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
+  await google.getByRole('button', { name: 'Refresh Google', exact: true }).click()
+  await expect(google.getByRole('alert')).toContainText('Google changed after the review opened.')
 })
 
 test('an older Google refresh cannot overwrite a newer publication read', async ({ page }) => {

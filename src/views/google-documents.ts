@@ -51,6 +51,7 @@ export class GoogleDocuments {
   private busy = false
   private stopped = false
   private error = ''
+  private actionError = ''
   constructor(private host: Host) {
     this.element.className = 'google-documents'
     this.element.hidden = true
@@ -62,7 +63,7 @@ export class GoogleDocuments {
     })
   }
   load(slug: string | null): void {
-    this.generation++; this.slug = slug; this.data = null; this.review = null; this.error = ''; this.element.hidden = true
+    this.generation++; this.slug = slug; this.data = null; this.review = null; this.error = ''; this.actionError = ''; this.element.hidden = true
     clearTimeout(this.timer)
     if (slug) void this.refresh()
   }
@@ -86,7 +87,7 @@ export class GoogleDocuments {
     const count = this.data!.publications.reduce((n, p) => n + p.comments.length, 0)
     const controls = this.data!.publications.map(p => `<section class="google-publication"><a href="${escape(p.url)}" target="_blank" rel="noopener noreferrer">${escape(p.title)}</a><span>${escape(p.email)}</span><p>${this.error || p.remoteChanged === null ? 'Google status unavailable.' : p.remoteChanged ? 'Google version changed — review before publishing.' : p.localChanged ? 'Poise draft has unpublished changes.' : 'Published version matches.'}</p>${p.problem ? `<p role="alert">${escape(p.problem)}</p>` : ''}<button type="button" data-google-action="review" data-account="${escape(p.accountId)}"${!p.connected || this.busy ? ' disabled' : ''}>Review Google changes</button>${p.comments.map(c => `<article class="google-comment"><strong>${escape(c.author)}</strong>${c.resolved ? ' · Resolved' : ''}${c.start === null ? ' · Passage unavailable' : ''}<blockquote>${escape(c.quote)}</blockquote><p>${escape(c.body)}</p>${(c.replies ?? []).map(reply => `<div class="google-comment-reply"><strong>${escape(reply.author)}</strong><p>${escape(reply.body)}</p></div>`).join('')}</article>`).join('')}</section>`).join('')
     const review = this.review ? '<section class="google-change-review"><h3>Review Google changes</h3><p>Import replaces this Poise draft and saves its previous text in Google history. Other destinations are updated only when you publish.</p><div class="google-compare"><section><h4>Poise draft</h4><pre class="google-local"></pre></section><section><h4>Google version</h4><pre class="google-remote"></pre></section></div><button type="button" data-google-action="import">Import Google version</button><button type="button" data-google-action="publish-reviewed">Publish Poise version instead</button><button type="button" data-google-action="cancel">Keep Poise draft</button></section>' : ''
-    this.element.innerHTML = `<summary>Google Docs · ${count} comment${count === 1 ? '' : 's'}${this.data!.publications.some(p => p.remoteChanged) ? ' · Updates available' : ''}</summary><div class="google-document-body"><button type="button" data-google-action="refresh"${this.busy ? ' disabled' : ''}>Refresh Google</button>${this.error ? `<p role="alert">${escape(this.error)}</p>` : ''}${controls}${review}</div>`
+    this.element.innerHTML = `<summary>Google Docs · ${count} comment${count === 1 ? '' : 's'}${this.data!.publications.some(p => p.remoteChanged) ? ' · Updates available' : ''}</summary><div class="google-document-body"><button type="button" data-google-action="refresh"${this.busy ? ' disabled' : ''}>Refresh Google</button>${this.actionError || this.error ? `<p role="alert">${escape(this.actionError || this.error)}</p>` : ''}${controls}${review}</div>`
     if (this.review) {
       this.element.querySelector('.google-local')!.textContent = this.review.value.localText
       this.element.querySelector('.google-remote')!.textContent = this.review.value.remoteText
@@ -96,9 +97,9 @@ export class GoogleDocuments {
   private async act(action: string, accountId: string): Promise<void> {
     if (!this.slug) return
     if (action === 'refresh') return this.refresh()
-    if (action === 'cancel') { this.review = null; this.render(); return }
+    if (action === 'cancel') { this.review = null; this.actionError = ''; this.render(); return }
     const generation = this.generation, slug = this.slug
-    this.busy = true; this.error = ''; this.refreshRevision++
+    this.busy = true; this.error = ''; this.actionError = ''; this.refreshRevision++
     try {
       if (!await this.host.flush()) throw new Error('Save the Poise draft before reviewing Google changes.')
       if (generation !== this.generation) return
@@ -114,7 +115,7 @@ export class GoogleDocuments {
         this.review = null
         await this.host.imported(slug, imported.content, imported.version)
       }
-    } catch (error) { if (generation === this.generation) this.error = (error as Error).message }
+    } catch (error) { if (generation === this.generation) this.actionError = (error as Error).message }
     finally { this.host.freeze(false); this.busy = false; this.render(); void this.refresh() }
   }
 }
