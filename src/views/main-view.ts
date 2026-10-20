@@ -267,7 +267,7 @@ function paintRow(tr: HTMLTableRowElement, item: PrRow): void {
 }
 
 function updateCount() {
-  countEl.textContent = partialResults ? `${items.length} available` : total > 0 ? `${Math.min(items.length, total)} / ${total}` : ''
+  countEl.textContent = partialResults ? String(items.length) : total > 0 ? `${Math.min(items.length, total)} / ${total}` : ''
 }
 
 function applyMainFlip(nextItems: PrRow[]) {

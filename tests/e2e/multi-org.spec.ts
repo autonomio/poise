@@ -236,7 +236,7 @@ test('continues Archive pagination when an organization is missing only from the
   await expect(await feedback(page)).toContainText('beta: Count unavailable')
   await page.locator('#main-sentinel').scrollIntoViewIfNeeded()
   await expect(page.locator('#tbody tr')).toHaveCount(25)
-  await expect(page.locator('#count')).toHaveText('25 available')
+  await expect(page.locator('#count')).toHaveText('25')
 })
 
 
