@@ -115,7 +115,9 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     if (cancel) order = [...previous.original]
     move = null; cancelAnimationFrame(scrollFrame)
     placeholder.hidden = true
-    previous.card.element.querySelector('button')?.setAttribute('aria-pressed', 'false')
+    const handle = previous.card.element.querySelector('button')
+    handle?.setAttribute('aria-pressed', 'false')
+    if (previous.pointer !== null && handle?.hasPointerCapture(previous.pointer)) handle.releasePointerCapture(previous.pointer)
     const focused = document.activeElement
     for (const id of order) board.append(cards.get(id)!.element)
     if (focused instanceof HTMLElement && focused.isConnected) focused.focus({ preventScroll: true })
@@ -155,8 +157,8 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
   function track(): void {
     if (!move?.active || move.pointer === null) return
     const card = move.card, rect = board.getBoundingClientRect()
-    card.x = Math.max(-card.element.offsetWidth / 2, Math.min(width - card.element.offsetWidth / 2, move.clientX - rect.left - move.offsetX))
-    card.y = Math.max(0, move.clientY - rect.top - move.offsetY)
+    card.x = Math.max(0, Math.min(width - card.element.offsetWidth, move.clientX - rect.left - move.offsetX))
+    card.y = Math.max(0, Math.min(board.offsetHeight - card.height, move.clientY - rect.top - move.offsetY))
     draw(card)
     const x = card.x + card.element.offsetWidth / 2, y = card.y + card.height / 2
     const rest = order.filter(id => id !== card.id), current = order.indexOf(card.id)
@@ -180,7 +182,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
   }
 
   board.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || move || board.hasAttribute('aria-busy')) return
+    if (!event.isPrimary || event.button !== 0 || move || board.hasAttribute('aria-busy')) return
     const handle = (event.target as Element).closest<HTMLButtonElement>('.analytics-drag-handle')
     if (!handle) return
     const card = cards.get(handle.closest<HTMLElement>('[data-id]')!.dataset.id!)!

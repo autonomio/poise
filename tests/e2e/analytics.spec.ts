@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import type { AnalyticsReport } from '../../src/analytics-format'
 import type { AnalyticsHistory } from '../../src/analytics-history'
 import type { GithubQuotaReport } from '../../src/github-quota'
+import { WORK_TYPES } from '../../src/analytics-work-review'
 
 test('reorders the card board by its headers, persists across reads and reload, and supports cancellation and reduced motion', async ({ page }) => {
   await workspace(page)
@@ -20,6 +21,12 @@ test('reorders the card board by its headers, persists across reads and reload, 
   await page.mouse.move(b.x + 60, b.y + 20, { steps: 12 })
   await expect(board.locator('.analytics-card-held')).toHaveCount(1)
   await expect(page.locator('.analytics-drop-slot')).toBeVisible()
+  expect(Math.abs((await first.boundingBox())!.x - b.x)).toBeLessThan(1)
+  await expect.poll(() => board.locator('.analytics-panel:not(.analytics-card-held)[data-motion-running]').count()).toBeGreaterThan(0)
+  await page.mouse.move(a.x + 60, a.y + 20, { steps: 4 })
+  expect(Math.abs((await first.boundingBox())!.x - a.x)).toBeLessThan(1)
+  await page.mouse.move(b.x + 60, b.y + 20, { steps: 4 })
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
   await page.mouse.up()
   await expect.poll(async () => (await ids()).slice(0, 2)).toEqual([original[1], original[0]])
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
@@ -34,7 +41,7 @@ test('reorders the card board by its headers, persists across reads and reload, 
   await first.press('End')
   await first.press('Escape')
   await expect.poll(ids).toEqual(placed)
-  const quota = board.getByRole('button', { name: 'Move GitHub API · octocat', exact: true })
+  const quota = board.getByRole('button', { name: 'Move GitHub API · Live · octocat', exact: true })
   await quota.focus()
   await quota.press('Space')
   await quota.press('Home')
@@ -140,6 +147,94 @@ test('applies and clears a deferred live read even when saving the card order fa
   await handle.press('Space')
   await handle.press('Escape')
   await expect(mergeTrend(page)).toContainText('7-day median: 20h')
+})
+
+test('touch dragging reaches an off-screen destination without extending the page', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium CDP provides native touch input.')
+  await workspace(page)
+  await page.setViewportSize({ width: 360, height: 800 })
+  await page.goto('/')
+  await openAnalytics(page)
+  const board = page.getByRole('region', { name: 'Analytics panels', exact: true })
+  await expect(board.locator('.analytics-history-line')).toHaveCount(15)
+  const first = board.getByRole('button', { name: 'Move Pull requests opened', exact: true })
+  await first.scrollIntoViewIfNeeded()
+  const a = (await first.boundingBox())!
+  const originalHeight = await page.evaluate(() => document.documentElement.scrollHeight)
+  const client = await page.context().newCDPSession(page)
+  try {
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: a.x + 60, y: a.y + 20, id: 1 }] })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: a.x + 60, y: 784, id: 1 }] })
+    await expect(first).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - innerHeight - scrollY), { timeout: 15_000 }).toBeLessThan(5)
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(originalHeight + 2)
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await expect.poll(() => board.locator(':scope > [data-id]').last().getAttribute('data-label')).toBe('Pull requests opened')
+    await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+    await expect(page.locator('.analytics-drop-slot')).toBeHidden()
+  } finally { await client.detach() }
+})
+
+test('fits all work types and retains interleaved account positions through failures, foreground loads and corrupt preferences', async ({ page }) => {
+  await workspace(page)
+  let quotaFails = false, hold = false, release!: () => void
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  const quota = quotaReport()
+  quota.accounts[1].login = 'averylonggithubaccountwiththirtyninechars'.slice(0, 39)
+  await page.route('**/api/github-quota', route => quotaFails ? route.fulfill({ status: 502, json: { error: 'Quota offline' } }) : route.fulfill({ json: quota }))
+  await page.route('**/api/analytics?**', async route => {
+    if (hold) await waiting
+    const data = report(12)
+    data.pullRequests.workReview!.types = WORK_TYPES.map(type => ({ type, count: 1 }))
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/')
+  const prefix = ['quota:octocat', 'metric:work-review:Work type', 'metric:per-merged-pr:Comments', 'metric:productivity:Lines changed']
+  await page.evaluate(order => localStorage.setItem('poise-analytics-card-order', JSON.stringify([...order, order[0], 'obsolete'])), prefix)
+  await openAnalytics(page)
+  const board = page.getByRole('region', { name: 'Analytics panels', exact: true })
+  const order = () => board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
+  await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
+  await expect(board.getByRole('article', { name: 'Comments per merged pull request', exact: true })).toHaveCount(1)
+  await expect(board.getByRole('article', { name: 'GitHub API · Live · octocat', exact: true })).toHaveAttribute('aria-describedby', 'analytics-quota-help')
+  await expect(board.locator('.analytics-work-type')).toHaveCount(12)
+  for (const width of [1280, 736, 360]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(() => document.documentElement.style.setProperty('--typo-size', '24px'))
+    await expect.poll(() => board.locator('.analytics-panel').evaluateAll(cards => cards.every(card => card.scrollHeight <= card.clientHeight + 2 && card.scrollWidth <= card.clientWidth + 1))).toBe(true)
+    for (const family of ['tall', 'short']) await expect.poll(() => board.locator(`[data-size="${family}"]`).evaluateAll(cards => new Set(cards.map(card => card.getBoundingClientRect().height)).size)).toBe(1)
+  }
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const plot = board.locator('.analytics-history[data-series="Lines changed"] .analytics-history-plot')
+  await plot.focus()
+  await plot.press('Home')
+  const retained = await plot.elementHandle()
+  quotaFails = true
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await expect(board.locator('.github-quota-account')).toHaveCount(0)
+  await expect(plot).toBeFocused()
+  expect(await retained!.evaluate(element => element.closest<HTMLElement>('[data-id]')!.dataset.id)).toBe('metric:productivity:Lines changed')
+  quotaFails = false
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await expect(board.locator('.github-quota-account')).toHaveCount(2)
+  await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
+  const before = await board.locator('[data-id="quota:octocat"]').evaluate(card => (card as HTMLElement).style.transform)
+  hold = true
+  try {
+    await page.getByRole('button', { name: 'Previous day', exact: true }).click()
+    await expect(board).toHaveAttribute('aria-busy', 'true')
+    await expect(board.locator('.analytics-value')).toHaveCount(0)
+    await expect.poll(() => board.locator('[data-id="quota:octocat"]').evaluate(card => (card as HTMLElement).style.transform)).toBe(before)
+  } finally { hold = false; release() }
+  await expect(board.locator('.analytics-value')).toHaveCount(16)
+  await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
+  await page.evaluate(() => localStorage.setItem('poise-analytics-card-order', '{bad json'))
+  await page.reload()
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
+  await expect(page.locator('#analytics-layout-status')).toContainText('Saved analytics layout could not be read')
+  expect(new Set(await order()).size).toBe(18)
 })
 
 function report(merged: number, hours = 27): AnalyticsReport {

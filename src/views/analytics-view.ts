@@ -73,7 +73,8 @@ function renderShell(): string {
     <main>
       <div class="analytics-loader loader" role="status" aria-label="Loading analytics" hidden><span></span><span></span><span></span></div>
       <span class="analytics-sr" id="analytics-drag-help">Drag a card header to move it. Or press Space, use arrow keys, then Space to drop. Escape cancels.</span>
-      <div class="analytics-groups analytics-board"></div>
+      <span class="analytics-sr" id="analytics-quota-help">Live quota, independent of the selected day and organization.</span>
+      <div class="analytics-groups analytics-board" role="region" aria-label="Analytics panels"></div>
       <div class="analytics-sr" id="analytics-layout-status" role="status" aria-live="polite"></div>
     </main>`
 }
@@ -127,8 +128,8 @@ async function readQuota(): Promise<void> {
     const number = (n: number) => n.toLocaleString('en-US')
     const time = (value: string) => new Intl.DateTimeFormat('en-GB', { timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date(value))
     quotaMarkup = data.accounts.length ? data.accounts.map((account) => `
-      <article class="analytics-panel github-quota-account" data-size="tall" data-group="quota" data-id="quota:${escapeHtml(account.login.toLowerCase())}" data-account="${escapeHtml(account.login)}" data-label="GitHub API · ${escapeHtml(account.login)}">
-        <div class="github-quota-card-header">${dragHandle(`GitHub API · ${account.login}`)}
+      <article class="analytics-panel github-quota-account" data-size="tall" data-group="quota" data-id="quota:${escapeHtml(account.login.toLowerCase())}" data-account="${escapeHtml(account.login)}" data-label="GitHub API · Live · ${escapeHtml(account.login)}" aria-label="GitHub API · Live · ${escapeHtml(account.login)}" aria-describedby="analytics-quota-help">
+        <div class="github-quota-card-header">${dragHandle(`GitHub API · Live · ${account.login}`)}
         <div class="github-quota-identity">
           <span class="github-quota-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><img class="last-avatar${failedAvatars.has(avatar(account.login)) ? ' broken' : ''}" src="${avatar(account.login)}" alt="" width="40" height="40"></span>
           <div><h3>${escapeHtml(account.login)}</h3><p class="analytics-note">${escapeHtml(account.roles.join(' + '))}</p>
@@ -240,7 +241,7 @@ function groupMarkup(group: AnalyticsGroup): string {
   const series = history.data ? historySeries(history.data) : null
   return `
         ${group.tiles.map((tile) => `
-          <article class="analytics-panel${tile.workTypes ? ' analytics-work-panel' : ''}" data-id="metric:${escapeHtml(group.id)}:${escapeHtml(tile.label)}" data-group="${group.id}" data-size="${group.id === 'productivity' ? 'tall' : 'short'}" data-label="${escapeHtml(tile.label)}">
+          <article class="analytics-panel${tile.workTypes ? ' analytics-work-panel' : ''}" data-id="metric:${escapeHtml(group.id)}:${escapeHtml(tile.label)}" data-group="${group.id}" data-size="${group.id === 'productivity' ? 'tall' : 'short'}" data-label="${escapeHtml(tile.label)}" aria-label="${escapeHtml(tile.label)}${group.id === 'per-merged-pr' ? ' per merged pull request' : ''}">
           <dl class="analytics-tile${tile.workTypes ? ' analytics-work-tile' : ''}">
             <dt class="analytics-label">${dragHandle(tile.label)}</dt>
             <dd class="analytics-summary ${tile.trend?.direction ?? 'neutral'}${tile.trend?.onPace ? ' on-pace' : ''}">

@@ -32,6 +32,63 @@ per-PR cards retain their histograms. Work & review and GitHub API distributions
 are omitted; API cards retain their 24-hour usage chart. Borders, colors, spacing,
 tooltips and motion follow the shared design system.
 
+## Card layout
+
+The board is one named Analytics panels region. Each card has a semantic name;
+per-PR names retain “per merged pull request”, and quota headers retain “Live”.
+Quota cards describe their independence from the day and organization filter.
+There are sixteen metric cards and one card per reported account, holding that
+account's REST and GraphQL budgets together. A shared user/automation login is
+one account; an unavailable account keeps its identity and an unknown value.
+
+Cards pack in document order over twenty width units, with a 12px gap and no
+dense backfill. Mixed rows advance by their tallest card; shorter cards retain
+their own height. The minimum heights are 22rem and 17rem. At every content,
+font or width change each family grows to its largest member's measured content
+height. Work type uses two columns of category rows; all twelve types remain
+visible and focusable. There is no internal card scrolling or content clipping.
+
+| Board width | Productivity / review | Work type / API account | Per-PR |
+| --- | --- | --- | --- |
+| Below 450px | 20 units | 20 units | 20 units |
+| 450–879px | 10 units | 20 units | 10 units |
+| 880px or wider | 5 units | 10 units | 4 units |
+
+The whole header is a Pointer Events handle, with a grip, a 40px minimum target
+(44px for coarse pointers), `touch-action: none`, pointer capture and a 5px
+movement threshold. Only the primary pointer and primary button initiate a move.
+Plots and the page keep their ordinary interactions outside the header. Insertion
+uses the nearest hypothetical slot center, with a 24px switching margin to avoid
+oscillation. Drop outside the board places at the nearest valid slot. Edge
+scrolling is bounded by the board; the held card cannot extend the page.
+Escape, pointer cancellation/capture loss, window blur, hidden tab, departure,
+font changes and viewport resize restore the committed order and release capture.
+Only a successful drop saves. Reordering announces pickup, position and placement
+or cancellation through one status region; ordinary data reads do not announce
+the entire board. Chart arrow keys remain scoped to the plot; reorder keys are
+scoped to the header. Focus stays on the semantic control after placement.
+
+`poise-analytics-card-order` stores a JSON array of unique card IDs in localStorage.
+This first format is browser/origin-local, shared by logins using that browser,
+and contains layout metadata only. Metric IDs are `metric:<group>:<label>`;
+account IDs are `quota:<lowercase login>`. Renamed metrics and new accounts append
+as new identities; duplicate/obsolete IDs are ignored, and currently missing IDs
+remain remembered when saving another move. No existing format needs migration.
+Malformed data and denied/exhausted storage show an accessible visible error;
+Analytics remains usable in memory. A successful later move writes a valid array.
+
+Foreground reads replace metric bodies with keyed empty slots while retaining
+their geometry, including quota cards interleaved among them. Errors remove
+those placeholders. Background reads retain the semantic card/control nodes;
+the latest combined metric/quota patch waits during a move and applies on drop
+or cancellation, including after a failed preference save. The order survives
+history arrivals, account/day/settings changes, navigation and reload; returning
+to Analytics still resets its day to Today. Existing endpoints, polling and
+chart reads remain unchanged. `src/analytics-layout.ts` is the new controller
+for geometry, DOM reconciliation, persistence and gesture handling. It reuses
+the existing `data-id` reconciliation keys and shared 180/20/1 spring, without
+changing `dom-patch.ts`, `motion.ts` or the gateway motion model.
+
 ## The day
 
 The control bar holds the day: previous day, the date, next day. Analytics
