@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import * as fs from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ accounts: vi.fn(), connection: vi.fn(), read: vi.fn(), create: vi.fn(), update: vi.fn(), id: vi.fn() }))
 vi.mock('../server/google/accounts', async original => ({ ...(await original<typeof import('../server/google/accounts')>()), googleAccounts: mocks.accounts, googleConnectionVersion: mocks.connection }))
 vi.mock('../server/google/drive', () => ({ readGoogleFile: mocks.read, createGoogleFile: mocks.create, updateGoogleFile: mocks.update, googleFileId: mocks.id }))
+vi.mock('node:fs/promises', async original => { const actual = await original<typeof import('node:fs/promises')>(); return { ...actual, open: vi.fn(actual.open) } })
 let root: string, server: Server, base: string
 let db: typeof import('../server/db'), editor: typeof import('../server/editor')
 const previous = new Map<string, string | undefined>()
@@ -158,4 +160,37 @@ it('refuses initial publication if the original document is replaced during remo
   expect(await editor.readGoogleLedger(slug)).toEqual([])
   expect(mocks.create).not.toHaveBeenCalled()
   expect((await editor.readDoc(slug)).content).toBe(body)
+})
+it('captures unpublished text and its binding incarnation under one document lock', async () => {
+  const version = (await editor.readDoc(slug)).version
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
+  const realOpen = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(fs.open).mockImplementationOnce(async (path, flags, mode) => {
+    const handle = await realOpen.open(path, flags, mode), close = handle.close.bind(handle)
+    handle.close = async () => { await close(); started(); await held }
+    return handle
+  })
+  const publication = call('publish', { accountId: 'one', localVersion: version }); await pending
+  const replacement = (async () => { await editor.deleteDoc(slug); await editor.writeDoc(slug, '# Replacement') })()
+  await Promise.race([replacement, new Promise(resolve => setTimeout(resolve, 100))])
+  release(); await replacement
+  expect((await publication).status).toBe(409)
+  expect(await editor.readGoogleLedger(slug)).toEqual([])
+  expect(mocks.create).not.toHaveBeenCalled()
+})
+it('refuses import before touching a replacement draft when its reviewed binding was deleted', async () => {
+  await publish(); raw = body + '\nGoogle edit.'
+  const reviewed = (await call('review', { accountId: 'one' })).body
+  let release!: () => void, started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), pending = new Promise<void>(resolve => { started = resolve })
+  const remote = raw
+  mocks.read.mockImplementationOnce(async () => { started(); await held; return { raw: remote, etag } })
+  const importing = call('import', { accountId: 'one', localVersion: reviewed.localVersion, remoteSha: reviewed.remoteSha, fileId, connectionVersion: reviewed.connectionVersion })
+  await pending; await editor.deleteDoc(slug); await editor.writeDoc(slug, body)
+  release()
+  expect((await importing).status).toBe(409)
+  expect((await editor.readDoc(slug)).content).toBe(body)
+  expect(await editor.readGoogleLedger(slug)).toEqual([])
+  await expect(readdir(join(root, 'editor', '.google-history', slug))).rejects.toMatchObject({ code: 'ENOENT' })
 })

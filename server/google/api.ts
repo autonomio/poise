@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { HttpError, httpStatus, readJson } from '../http'
-import { EditorConflictError, importGoogleDocument, readDoc, readGoogleLedger, readGoogleLedgerState, withPublishLock, writeGoogleLedger } from '../editor'
+import { EditorConflictError, importGoogleDocument, readDoc, readGoogleDocumentState, readGoogleLedger, readGoogleLedgerState, withPublishLock, writeGoogleLedger } from '../editor'
 import { beginGoogleLogin, completeGoogleLogin, configureGoogle, disconnectGoogle, googleAccounts, googleAccountSettings, googleConnectionVersion } from './accounts'
 import { createGoogleFile, googleFileId, readGoogleFile, updateGoogleFile } from './drive'
 import { readGoogleMarkdown, updateGoogleMarkdown } from './markdown'
@@ -39,9 +39,9 @@ async function publish(slug: string, input: Record<string, unknown>) {
   const id = text(input.accountId, 'Google account'), version = text(input.localVersion, 'Document version')
   if (!googleAccounts().some(a => a.id === id && a.connected)) throw new HttpError(422, 'Connect that Google account first.')
   return withPublishLock(async () => {
-    const doc = await readDoc(slug)
+    const { doc, ledger } = await readGoogleDocumentState(slug)
     if (doc.version !== version) throw new EditorConflictError(doc.version)
-    const ledger = await readGoogleLedgerState(slug), records = ledger.records
+    const records = ledger.records
     let ledgerVersion = ledger.version
     let record = records.find(r => r.accountId === id)
     if (!record) {
@@ -95,7 +95,7 @@ async function importChanges(slug: string, input: Record<string, unknown>) {
     if (input.connectionVersion !== googleConnectionVersion(id)) throw new HttpError(409, 'The Google connection changed during import.')
     if (sha(remote.raw) !== remoteSha) throw new HttpError(409, 'Google changed after the review opened. Review the latest version.')
     const parsed = readGoogleMarkdown(remote.raw)
-    await importGoogleDocument(slug, parsed.text, version)
+    await importGoogleDocument(slug, parsed.text, version, ledger.version)
     record.sourceSha = sha(parsed.text); record.remoteSha = sha(parsed.text); record.pending = false
     await writeGoogleLedger(slug, records, ledger.version)
     const imported = await readDoc(slug)

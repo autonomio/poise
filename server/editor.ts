@@ -864,6 +864,11 @@ export async function readGoogleLedgerState(slug: string): Promise<{ records: Go
 }
 export async function readGoogleLedger(slug: string): Promise<GooglePublication[]> { return (await readGoogleLedgerState(slug)).records }
 
+export async function readGoogleDocumentState(slug: string): Promise<{ doc: DocReadResult, ledger: Awaited<ReturnType<typeof readGoogleLedgerState>> }> {
+  await editorReady
+  return serializeMutation(fileFor(slug), async () => ({ doc: await readDoc(slug), ledger: await readGoogleLedgerState(slug) }))
+}
+
 export async function writeGoogleLedger(slug: string, records: GooglePublication[], baseVersion: string): Promise<string> {
   await editorReady
   const body = JSON.stringify(records)
@@ -878,11 +883,12 @@ export async function writeGoogleLedger(slug: string, records: GooglePublication
 }
 
 /** Back up and replace under the same process-shared lock and exact content precondition. */
-export async function importGoogleDocument(slug: string, content: string, baseVersion: string): Promise<void> {
+export async function importGoogleDocument(slug: string, content: string, baseVersion: string, ledgerVersion: string): Promise<void> {
   if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_DOC_BYTES) throw new Error('The Google document exceeds the Editor limit.')
   await editorReady
   const path = fileFor(slug)
   await serializeMutation(path, async () => {
+    if ((await readGoogleLedgerState(slug)).version !== ledgerVersion) throw new EditorConflictError(ledgerVersion)
     const current = await readUtf8Limited(path, MAX_DOC_BYTES, 'doc')
     const version = versionFor(current.content)
     if (baseVersion !== version) throw new EditorConflictError(version)
