@@ -381,3 +381,67 @@ test('an opener clone inherits flow possession but only the first verified compl
   expect(attempts).toBe(2)
   await child.close()
 })
+test('Reconnect from Accounts replaces stale Publish intent and binds the expected subject', async ({ page }) => {
+  await workspace(page, 'current', undefined, { preserveOnReload: true }); await retainedFlow(page, 'publish', 'one')
+  await page.route('**/api/google/accounts', route => route.fulfill({ json: { ...accounts, accounts: [accounts.accounts[0], { ...accounts.accounts[1], connected: false, state: 'expired' }] } }))
+  let connecting: { accountId?: string; browserSecret: string } | undefined
+  await page.route('**/api/google/connect', route => { connecting = route.request().postDataJSON() as typeof connecting; return route.fulfill({ json: { url: 'https://accounts.google.com/o/oauth2/v2/auth?state=' + FLOW_STATE } }) })
+  await page.route('https://accounts.google.com/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Google consent fixture</p>' }))
+  await page.route('**/api/google/callback', route => route.fulfill({ json: { ...accounts, connection: { outcome: 'connected', accountId: 'two' } } }))
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
+  await page.locator('#menu-popover').getByRole('button', { name: 'Accounts', exact: true }).click()
+  await page.locator('[data-google-account="two"]').getByRole('button', { name: 'Reconnect', exact: true }).click()
+  await expect(page).toHaveURL(/accounts\.google\.com/)
+  expect(connecting?.accountId).toBe('two')
+  await page.goto('/?google_state=' + FLOW_STATE)
+  await expect(page.locator('.google-account-status')).toHaveText('Google account connected.')
+  await expect(page.getByRole('dialog', { name: 'Publish', exact: true })).toHaveCount(0)
+})
+test('unavailable browser storage keeps the saved draft on screen and never starts authorization', async ({ page }) => {
+  const actions = await setup(page)
+  let connected = 0
+  await page.route('**/api/google/connect', route => { connected++; return route.fulfill({ json: {} }) })
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key: string, value: string) { if (key === 'poise-google-flow') throw new DOMException('disabled', 'SecurityError'); return original.call(this, key, value) }
+  })
+  await page.locator('#editor-doc').fill('A draft retained when browser storage is unavailable.')
+  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  const panel = page.getByRole('dialog', { name: 'Publish', exact: true })
+  await panel.getByRole('button', { name: 'Add Google account', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('Browser storage is unavailable')
+  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'true')
+  await expect(page.locator('#editor-doc')).toContainText('A draft retained')
+  expect(connected).toBe(0)
+  expect(actions.some(a => a.path.endsWith('/publish'))).toBe(false)
+})
+test('pending annotations must be acknowledged before leaving for Google', async ({ page }) => {
+  await page.clock.install()
+  const actions = await setup(page)
+  let release!: () => void, saving!: () => void, connected = 0
+  const held = new Promise<void>(r => { release = r }), pending = new Promise<void>(r => { saving = r })
+  await page.route('**/api/editor/doc/google-draft/annotations', async route => {
+    if (route.request().method() !== 'GET') { saving(); await held }
+    return route.fallback()
+  })
+  await page.route('**/api/google/connect', route => { connected++; return route.fulfill({ json: { url: 'https://accounts.google.com/o/oauth2/v2/auth?state=' + FLOW_STATE } }) })
+  await page.route('https://accounts.google.com/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Google consent fixture</p>' }))
+  await page.evaluate(() => {
+    const line = document.querySelector('#editor-doc')!.children[2], range = document.createRange()
+    range.selectNodeContents(line)
+    const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  await page.locator('#editor-comment-btn').click()
+  await page.getByRole('textbox', { name: 'Add a comment…', exact: true }).fill('Keep this annotation before connecting.')
+  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Publish', exact: true }).getByRole('button', { name: 'Add Google account', exact: true }).click()
+  await pending
+  await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
+  expect(connected).toBe(0)
+  release()
+  await expect(page).toHaveURL(/accounts\.google\.com/)
+  expect(connected).toBe(1)
+  expect(actions.some(a => a.path.endsWith('/annotations') && JSON.stringify(a.body).includes('Keep this annotation'))).toBe(true)
+  expect(actions.some(a => a.path.endsWith('/publish'))).toBe(false)
+})
