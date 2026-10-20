@@ -529,6 +529,11 @@ test('native touch scrolls content, drags through the gutter and taps close with
   await workspace(page)
   await navigation(page)
   const client = await page.context().newCDPSession(page)
+  const nativeMoves = await shortcut(page, 'Logging', 'menu').evaluateHandle(button => {
+    const consumed: boolean[] = []
+    button.addEventListener('touchmove', event => { consumed.push(event.defaultPrevented) })
+    return consumed
+  })
   // Buffer delivery after the drag commit; export only after the native sequence.
   const delivery = await page.evaluateHandle(() => {
     const entries: Record<string, unknown>[] = []
@@ -601,6 +606,7 @@ test('native touch scrolls content, drags through the gutter and taps close with
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(shortcut(page, 'Logging', 'top bar')).toHaveCount(0)
     await expect(page.locator('.st-navigation-ghost')).toHaveCount(0)
+    expect(await nativeMoves.jsonValue()).toEqual([true, true, true])
     const palette = page.getByRole('button', { name: 'Add Logging', exact: true })
     await palette.scrollIntoViewIfNeeded()
     const p = (await palette.boundingBox())!
@@ -642,7 +648,7 @@ test('native touch scrolls content, drags through the gutter and taps close with
         await info.attach('navigation-native-removal', {
           body: JSON.stringify({ requestedRemove, events: await delivery.jsonValue() }, null, 2), contentType: 'application/json',
         })
-      } finally { await Promise.all([delivery.dispose(), client.detach()]) }
+      } finally { await Promise.all([nativeMoves.dispose(), delivery.dispose(), client.detach()]) }
     }
   }
 })
