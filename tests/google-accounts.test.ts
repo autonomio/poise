@@ -96,3 +96,10 @@ it('client reconfiguration invalidates older unfinished authorizations', async (
   release(token()); await outcome
   expect(accounts.googleAccounts()).toEqual([])
 })
+it('redacts private JSON fragments from corrupt stored state and malformed token responses', async () => {
+  const auth = begin()
+  fakeFetch.mockResolvedValueOnce(new Response('{"access_token":"private-access-secret'))
+  await expect(accounts.completeGoogleLogin(request(), { state: auth.url.searchParams.get('state'), code: 'code', browserSecret: auth.browserSecret })).rejects.toThrow('Google returned an unreadable response.')
+  database.setMeta('google:config', '{"clientSecret":"private-client-secret')
+  expect(() => accounts.googleAccountSettings()).toThrow('Saved Google connection state is unreadable.')
+})
