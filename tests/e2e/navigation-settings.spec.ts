@@ -193,3 +193,43 @@ test('a full menu scrolls on a short phone viewport and still reaches Navigation
   await page.locator('#menu-popover').getByRole('button', { name: 'Navigation', exact: true }).click()
   await expect(page.locator('#settings-panel .tp-title')).toHaveText('Navigation')
 })
+
+test('the live status region is exposed before the first announcement', async ({ page }) => {
+  await workspace(page)
+  await navigation(page)
+  const status = page.locator('[data-tab="navigation"] [role="status"]')
+  await expect(status).toBeEmpty()
+  await expect(status).not.toHaveAttribute('hidden')
+  await expect(status).toHaveAttribute('aria-live', 'polite')
+  await expect(status).toHaveAttribute('aria-atomic', 'true')
+  await expect(status).toHaveCSS('display', 'block')
+  await page.getByRole('button', { name: 'Move Logging up in menu', exact: true }).click()
+  await expect(status).toHaveText('Logging moved to position 1 in menu.')
+  await expect(status).not.toHaveAttribute('hidden')
+  await page.getByRole('button', { name: 'Reset navigation' }).click()
+  await expect(status).toHaveText('Navigation reset.')
+})
+
+for (const width of [821, 900]) test(`large text and nine shortcuts leave local controls reachable at ${width}px`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 })
+  await workspace(page)
+  await page.evaluate(() => { document.documentElement.style.fontSize = '20px' })
+  await navigation(page)
+  for (const name of views) await add(page, name, 'top bar')
+  await page.locator('#menu-toggle').click()
+  for (const view of ['Current', 'Archive', 'Analytics']) {
+    await page.locator('#top-nav').getByRole('button', { name: view, exact: true }).click()
+    await expect.poll(() => page.locator('.view:not([hidden]) .view-header').evaluate((header) => {
+      const global = header.querySelector('#app-bar-global')!
+      return [...header.querySelectorAll<HTMLElement>('button, input, select')].filter((control) => {
+        if (global.contains(control) || control.matches(':disabled')) return false
+        const box = control.getBoundingClientRect()
+        if (!box.width || !box.height || getComputedStyle(control).visibility === 'hidden') return false
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+        return !hit || !control.contains(hit)
+      }).map((control) => control.getAttribute('aria-label') || control.textContent?.trim() || control.tagName)
+    })).toEqual([])
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1)
+    await page.screenshot({ path: info.outputPath(`navigation-${width}-${view.toLowerCase()}.png`) })
+  }
+})

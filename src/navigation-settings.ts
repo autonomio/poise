@@ -16,7 +16,7 @@ export function navigationSection(): HTMLElement {
       <select class="st-select st-navigation-add" data-add="${surface}" aria-label="Add view to ${surface === 'menu' ? 'menu' : 'top bar'}"></select>
     </div>`).join('')}
     <div class="st-row"><button type="button" class="st-clear" data-reset>Reset navigation</button></div>
-    <p class="st-help" role="status" aria-live="polite" hidden></p>`
+    <p class="st-help st-navigation-status" role="status" aria-live="polite" aria-atomic="true"></p>`
   const status = section.querySelector<HTMLElement>('[role="status"]')!
   function sync(): void {
     const focusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -51,12 +51,10 @@ export function navigationSection(): HTMLElement {
       saveNavigation(preferences)
       status.classList.remove('st-help-error')
       status.textContent = message
-      status.hidden = !message
     } catch (error) {
       sync()
       status.classList.add('st-help-error')
       status.textContent = `Navigation was not saved: ${error instanceof Error ? error.message : String(error)}`
-      status.hidden = false
     }
   }
   section.addEventListener('change', (event) => {

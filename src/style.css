@@ -411,15 +411,15 @@ body {
 body.is-scrolled .view-header { border-bottom-color: var(--border); }
 
 /* Right-hand half: the global controls. margin-left:auto pins it to the
-   end of the row whatever the local half's width, and it never shrinks —
-   navigation stays reachable before the local controls give up space. */
+   end of the row. Both halves can shrink; the navigation scrolls before
+   its shortcuts can cover the local controls. */
 #app-bar-global {
   margin-left: auto;
   display: flex;
   align-items: center;
   min-height: 32px;             /* share the local half's first-row height */
   gap: var(--sp-2);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
   position: relative;           /* anchors #menu-popover */
@@ -1379,6 +1379,8 @@ tr:hover .review-btn { opacity: 1; }
 .st-navigation-move:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .st-navigation-move:disabled { opacity: .25; cursor: default; }
 .st-navigation-add { margin-top: var(--sp-2); }
+#menu-surface .st-tab[data-tab="navigation"] .st-navigation-status { display: block; margin: 0; }
+#menu-surface .st-tab[data-tab="navigation"] .st-navigation-status:not(:empty) { margin-top: var(--sp-2); }
 
 /* Burger toggle — top right, aligned to the view-header's filter row. */
 #menu-toggle {
