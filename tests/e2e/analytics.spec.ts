@@ -316,6 +316,7 @@ test('keyboard traversal keeps the moved header visible and Tab rolls back witho
     await handle.press('Space')
     await handle.press('End')
     await handle.press('End')
+    await handle.press('ArrowRight')
     await handle.press('End')
     await expect.poll(() => handle.evaluate(button => {
       const box = button.getBoundingClientRect()
@@ -380,12 +381,17 @@ test('reopening reserves the saved quota slot with loading content until fresh u
   await openAnalytics(page)
   const board = page.locator('.analytics-board')
   await expect(board.locator('.github-quota-usage')).toHaveCount(2)
+  await page.addStyleTag({ content: '.github-quota-usage { min-height: 40rem; }' })
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')))
+  await expect.poll(() => board.locator('[data-group="quota"]').first().evaluate(card => card.getBoundingClientRect().height)).toBeGreaterThan(700)
   const handle = board.getByRole('button', { name: 'Move GitHub API · Live · octocat', exact: true })
   await handle.focus()
   await handle.press('Space')
   await handle.press('Home')
   await handle.press('Space')
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+  await expect(board.locator('[data-motion-running]')).toHaveCount(0)
+  const heights = await board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => card.getBoundingClientRect().height))
   const order = await board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))
   await leaveAnalytics(page)
   hold = true
@@ -394,6 +400,7 @@ test('reopening reserves the saved quota slot with loading content until fresh u
     await expect(board.locator('.github-quota-loading')).toHaveCount(2)
     await expect(board.locator('.github-quota-usage, .github-quota-risk, .github-quota-checked')).toHaveCount(0)
     await expect(board.locator('.github-quota-identity h3')).toHaveText(['octocat', 'octo-agent'])
+    await expect.poll(() => board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => card.getBoundingClientRect().height))).toEqual(heights)
     await expect.poll(() => board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))).toEqual(order)
     await expect(value(page, 'Pull requests merged')).toHaveText('4')
     quota.accounts[0].buckets[0].used = 1234

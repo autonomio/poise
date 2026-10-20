@@ -32,7 +32,7 @@ function dragHandle(label: string): string {
 function reserveQuotaRead(): void {
   const template = document.createElement('template')
   template.innerHTML = quotaMarkup
-  const heights = new Map([...viewEl.querySelectorAll<HTMLElement>('[data-group="quota"]')].map(card => [card.dataset.id, card.offsetHeight]))
+  const heights = new Map([...viewEl.querySelectorAll<HTMLElement>('[data-group="quota"]')].map(card => [card.dataset.id, card.offsetHeight || parseFloat(card.style.height) || 0]))
   for (const card of template.content.children) {
     const header = card.querySelector('.github-quota-card-header')!
     header.querySelector('.github-quota-checked')?.remove()
