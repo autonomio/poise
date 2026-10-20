@@ -1754,6 +1754,38 @@ for (const failure of ['HTTP', 'account'] as const) {
   })
 }
 
+test('opens immediately from a prepared scope without fetching again or redating its pace', async ({ page }) => {
+  const state = await workspace(page)
+  await page.goto('/')
+  await expect.poll(() => state.reads.length).toBe(2)
+  await page.waitForLoadState('networkidle')
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let readsAfterPreparation = 0
+  await page.route('**/api/analytics?**', async route => {
+    readsAfterPreparation++
+    await held
+    await route.fallback()
+  })
+  try {
+    await openAnalytics(page)
+    const panel = page.locator('#view-analytics')
+    await expect(value(page, 'Pull requests merged')).toHaveText('4', { timeout: 500 })
+    await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeHidden()
+    expect(readsAfterPreparation).toBe(0)
+    const timestamp = await value(page, 'Pull requests merged').getAttribute('data-help')
+    await leaveAnalytics(page)
+    await openAnalytics(page)
+    await expect(value(page, 'Pull requests merged')).toHaveText('4', { timeout: 500 })
+    expect(await value(page, 'Pull requests merged').getAttribute('data-help')).toBe(timestamp)
+    expect(readsAfterPreparation).toBe(0)
+    await panel.getByLabel('Organization filter').selectOption('beta')
+    await expect(panel.getByRole('status', { name: 'Loading analytics' })).toBeVisible()
+    await expect(panel.locator('.analytics-tile')).toHaveCount(0)
+    await expect.poll(() => readsAfterPreparation).toBe(2)
+  } finally { release() }
+})
+
 test('renders day cards before admitting year history and skips history after leaving a pending day', async ({ page }) => {
   await workspace(page)
   let release!: () => void
