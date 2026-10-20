@@ -285,6 +285,79 @@ test('vertical header keys move wide cards between visual rows', async ({ page }
   await expect(handle).toBeFocused()
 })
 
+test('keyboard traversal keeps the moved header visible and Tab rolls back without blocking live reads', async ({ page }) => {
+  const state = await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const board = page.locator('.analytics-board')
+  const handle = page.getByRole('button', { name: 'Move Pull requests opened', exact: true })
+  for (const reduced of [false, true]) {
+    await page.emulateMedia({ reducedMotion: reduced ? 'reduce' : 'no-preference' })
+    await handle.focus()
+    await handle.press('Space')
+    await handle.press('Home')
+    await handle.press('Space')
+    await handle.press('Space')
+    await handle.press('End')
+    await handle.press('Space')
+    await expect(handle).toBeFocused()
+    await expect.poll(() => handle.evaluate(button => {
+      const box = button.getBoundingClientRect()
+      const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bar-h')) || 0
+      return box.top >= bar && box.bottom <= innerHeight
+    })).toBe(true)
+    const saved = await page.evaluate(() => localStorage.getItem('poise-analytics-card-order'))
+    await handle.press('Space')
+    await handle.press('Home')
+    await handle.press('Tab')
+    await expect(handle).toHaveAttribute('aria-pressed', 'false')
+    await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+    await expect(page.locator('.analytics-drop-slot')).toBeHidden()
+    expect(await page.evaluate(() => localStorage.getItem('poise-analytics-card-order'))).toBe(saved)
+    state.baselineHours = reduced ? 90 : 81
+    await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
+    await expect(mergeTrend(page)).toContainText(`7-day median: ${reduced ? 20 : 18}h`)
+  }
+})
+
+test('reopening reserves the saved quota slot with loading content until fresh usage arrives', async ({ page }) => {
+  await workspace(page)
+  let hold = false, release!: () => void, reads = 0
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  const quota = quotaReport()
+  await page.route('**/api/github-quota', async route => {
+    reads++
+    if (hold) await waiting
+    await route.fulfill({ json: quota })
+  })
+  await page.goto('/')
+  await openAnalytics(page)
+  const board = page.locator('.analytics-board')
+  await expect(board.locator('.github-quota-usage')).toHaveCount(2)
+  const handle = board.getByRole('button', { name: 'Move GitHub API · Live · octocat', exact: true })
+  await handle.focus()
+  await handle.press('Space')
+  await handle.press('Home')
+  await handle.press('Space')
+  await expect(board.locator('.analytics-card-held')).toHaveCount(0)
+  const order = await board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))
+  await leaveAnalytics(page)
+  hold = true
+  try {
+    await openAnalytics(page)
+    await expect(board.locator('.github-quota-loading')).toHaveCount(2)
+    await expect(board.locator('.github-quota-usage, .github-quota-risk, .github-quota-checked')).toHaveCount(0)
+    await expect(board.locator('.github-quota-identity h3')).toHaveText(['octocat', 'octo-agent'])
+    await expect.poll(() => board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))).toEqual(order)
+    await expect(value(page, 'Pull requests merged')).toHaveText('4')
+    quota.accounts[0].buckets[0].used = 1234
+    quota.accounts[0].buckets[0].remaining = 3766
+  } finally { hold = false; release() }
+  await expect(board.locator('.github-quota-usage').first()).toContainText('1,234 / 5,000 used')
+  await expect(board.locator('.github-quota-loading')).toHaveCount(0)
+  expect(reads).toBe(2)
+})
+
 test('paints history readouts above neighboring cards and retains their period through quota polling', async ({ page }) => {
   await workspace(page)
   let quotaReads = 0

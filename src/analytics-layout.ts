@@ -1,5 +1,5 @@
 import { patchContent } from './dom-patch'
-import { cancelMotion, finishMotion, spring } from './motion'
+import { cancelMotion, finishMotion, scroll, spring } from './motion'
 
 const STORAGE_KEY = 'poise-analytics-card-order'
 const GAP = 12
@@ -85,6 +85,22 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
   const draw = (card: Card) => { card.element.style.transform = `translate3d(${card.x}px, ${card.y}px, 0)` }
   const positions = (ids: string[]) => cardPositions(ids.map(id => cards.get(id)!), width)
 
+  function keepHeaderVisible(card: Card): void {
+    const handle = card.element.querySelector('button')
+    if (!handle || !boxes.has(card.id)) return
+    const owner = document.documentElement
+    const top = (parseFloat(getComputedStyle(owner).getPropertyValue('--app-bar-h')) || 100) + 12
+    const destination = () => {
+      const box = boxes.get(card.id)
+      if (!box) return owner.scrollTop
+      const y = owner.scrollTop + board.getBoundingClientRect().top + box.y + handle.offsetTop
+      return y - top - Math.max(0, (innerHeight - top - 12 - handle.offsetHeight) / 2)
+    }
+    const box = boxes.get(card.id)!
+    const y = board.getBoundingClientRect().top + box.y + handle.offsetTop
+    if (y < top || y + handle.offsetHeight > innerHeight - 12) scroll(owner, destination, handle)
+  }
+
   function arrange(immediate = false): void {
     boxes = positions(order)
     board.style.height = `${Math.max(0, ...[...boxes.values()].map(box => box.y + box.height))}px`
@@ -148,11 +164,12 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     onPatch?.()
   }
 
-  function finish(cancel = false): void {
+  function finish(cancel = false, immediate = false): void {
     if (!move) return
     const previous = move, active = previous.active
     if (cancel) order = [...previous.original]
     move = null; cancelAnimationFrame(scrollFrame)
+    if (cancel && previous.pointer === null) cancelMotion(document.documentElement, 'scroll')
     placeholder.hidden = true
     const handle = previous.card.element.querySelector('button')
     handle?.setAttribute('aria-pressed', 'false')
@@ -160,7 +177,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     const focused = document.activeElement
     for (const id of order) board.append(cards.get(id)!.element)
     if (focused instanceof HTMLElement && focused.isConnected) focused.focus({ preventScroll: true })
-    arrange()
+    arrange(immediate)
     if (active) {
       let failure: string | null = null
       if (!cancel) {
@@ -173,7 +190,9 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
       }
       announce(failure ?? (cancel ? 'Card move cancelled.' : `${previous.card.element.dataset.label} placed, position ${order.indexOf(previous.card.id) + 1} of ${order.length}.`))
     }
-    if (pending !== null) { const markup = pending; pending = null; patch(markup, true) }
+    if (pending !== null) { const markup = pending; pending = null; patch(markup, !immediate) }
+    const current = cards.get(previous.card.id)
+    if (previous.pointer === null && current && document.hasFocus() && document.activeElement === current.element.querySelector('button')) keepHeaderVisible(current)
   }
 
   function begin(): void {
@@ -185,12 +204,14 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     placeholder.hidden = false
     announce(`Picked up ${move.card.element.dataset.label}. Arrow keys move, Space drops, Escape cancels.`)
     arrange()
+    if (move.pointer === null) keepHeaderVisible(move.card)
   }
 
   function moveTo(index: number): void {
     if (!move || index === order.indexOf(move.card.id)) return
     order.splice(order.indexOf(move.card.id), 1); order.splice(index, 0, move.card.id)
     arrange()
+    if (move.pointer === null) keepHeaderVisible(move.card)
   }
 
   function track(): void {
@@ -252,6 +273,9 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
       moveTo(Math.max(0, Math.min(order.length - 1, next)))
       announce(`${move.card.element.dataset.label}, position ${order.indexOf(move.card.id) + 1} of ${order.length}.`)
     }
+  })
+  board.addEventListener('focusout', event => {
+    if (move?.pointer === null && event.target === move.card.element.querySelector('button')) finish(true, true)
   })
   window.addEventListener('scroll', track, { passive: true })
   window.addEventListener('blur', () => finish(true))
