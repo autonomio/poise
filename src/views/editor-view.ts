@@ -4894,9 +4894,9 @@ export async function initEditorView() {
   }
   // The editor owns unsaved text, selection and undo history. A return only
   // refreshes its picker; reopening the same file would replace that state.
+  articleReviews?.resume()
+  googleDocuments?.resume()
   if (currentSlug) {
-    articleReviews?.resume()
-    googleDocuments?.resume()
     void fetchDocs()
     requestAnimationFrame(() => { if (!viewEl.hidden) renderAnnotationOverlay() })
     return

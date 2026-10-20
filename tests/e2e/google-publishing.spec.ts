@@ -3,16 +3,20 @@ import { workspace } from './fixtures/workspace'
 const VERSION = 'a'.repeat(64), REMOTE = 'b'.repeat(64), TEXT = '# Draft\n\nThe local paragraph.\n'
 const accounts = { configured: true, clientId: 'poise.apps.googleusercontent.com', origin: 'http://127.0.0.1:5566', accounts: [{ id: 'one', email: 'one@example.test', connected: true }, { id: 'two', email: 'two@example.test', connected: true }] }
 const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, replies: [{ author: 'Second reviewer', body: 'Please also check the example.' }], start: 9, end: 29 }] }
-async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string } = {}) {
+async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string, emptyFirstLoad?: boolean } = {}) {
   await workspace(page)
   let content = TEXT
   const remoteText = options.remoteText ?? '# Draft\n\nThe Google paragraph.\n'
+  let docListReads = 0
   const actions: Array<{ path: string, body: Record<string, unknown> }> = []
   await page.route('**/api/google/accounts', route => route.fulfill({ json: accounts }))
   await page.route('**/api/editor/**', async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method()
-    if (method === 'POST' || method === 'PUT') actions.push({ path, body: route.request().postDataJSON() as Record<string, unknown> })
-    if (path === '/api/editor/docs') return route.fulfill({ json: { docs: [{ slug: 'google-draft', title: 'Draft', updated_at: '2026-10-20T08:00:00Z', size: content.length }] } })
+    if (method === 'POST' || method === 'PUT') actions.push({ path, body: route.request().postData() ? route.request().postDataJSON() as Record<string, unknown> : {} })
+    if (path === '/api/editor/docs') {
+      if (options.emptyFirstLoad && method === 'POST') return route.fulfill({ status: 503, json: { error: 'Fixture draft creation unavailable.' } })
+      return route.fulfill({ json: { docs: options.emptyFirstLoad && docListReads++ === 0 ? [] : [{ slug: 'google-draft', title: 'Draft', updated_at: '2026-10-20T08:00:00Z', size: content.length }] } })
+    }
     if (path === '/api/editor/doc/google-draft') return route.fulfill({ json: { slug: 'google-draft', content, version: VERSION } })
     if (path.endsWith('/chat-session')) return route.fulfill({ json: { session_id: 'editor-google-draft-1792487000000' } })
     if (path.endsWith('/annotations')) return route.fulfill({ json: { annotations: [], version: VERSION } })
@@ -25,9 +29,22 @@ async function setup(page: Page, options: { initialSyncFailure?: boolean, remote
     return route.fulfill({ json: {} })
   })
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
-  await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
+  if (options.emptyFirstLoad) await expect.poll(() => actions.some(action => action.path === '/api/editor/docs')).toBe(true)
+  else await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
   return actions
 }
+test('returning to an empty Editor resumes Google synchronization for a subsequently loaded draft', async ({ page }) => {
+  await page.clock.install()
+  const actions = await setup(page, { emptyFirstLoad: true })
+  await page.getByRole('button', { name: 'Current', exact: true }).click()
+  await page.getByRole('button', { name: 'Editor', exact: true }).click()
+  await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
+  const syncCount = () => actions.filter(action => action.path.endsWith('/google/sync')).length
+  await expect.poll(syncCount).toBeGreaterThan(0)
+  const initial = syncCount()
+  await page.clock.fastForward(61_000)
+  await expect.poll(syncCount).toBeGreaterThan(initial)
+})
 test('publishes the open document through the selected Google account', async ({ page }) => {
   const actions = await setup(page)
   await page.getByRole('button', { name: 'Publish', exact: true }).click()
