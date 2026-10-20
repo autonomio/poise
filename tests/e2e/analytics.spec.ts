@@ -88,7 +88,11 @@ test('retains the held card through live reads, restores cancelled pointer moves
   await expect.poll(order).toEqual(original)
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
   await expect(first).toHaveCSS('touch-action', 'none')
+  await first.focus()
+  await first.press('Space')
   await page.setViewportSize({ width: 500, height: 900 })
+  await expect(first).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.analytics-drop-slot')).toBeHidden()
   await page.evaluate(() => {
     document.documentElement.style.setProperty('--typo-size', '24px')
     document.documentElement.style.setProperty('--typo-lh', '1.8')

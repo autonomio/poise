@@ -233,6 +233,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
     cancelAnimationFrame(resizeFrame)
     resizeFrame = requestAnimationFrame(() => { if (board.clientWidth) { finish(true); measure(); arrange(true) } })
   }
+  window.addEventListener('resize', () => { finish(true); refit() })
   new MutationObserver(() => {
     const next = typography()
     if (next !== lastTypography) { lastTypography = next; refit() }
