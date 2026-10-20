@@ -581,6 +581,8 @@ test('view departure batches presentation reads before completing rows', async (
   await runtime(page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
+  // Inspector round trips must not count intervening animation frames.
+  await cdp.send('Emulation.setVirtualTimePolicy', { policy: 'pause' })
   await page.evaluate(() => {
     const root = document.createElement('div'); root.id = 'finish-batch'; root.style.cssText = 'position:fixed;top:0;left:0;width:240px'
     root.innerHTML = '<div style="height:4px">Row</div>'.repeat(80); document.body.append(root)
