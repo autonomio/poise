@@ -562,6 +562,14 @@ test('native touch scrolls content, drags through the gutter and taps close with
     await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(destination.x + 20, destination.y + 3) })
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(rows(page, 'menu')).toHaveText(['Logging', 'Analytics'])
+    const originTap = (await shortcut(page, 'Logging', 'menu').boundingBox())!
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(originTap.x + 20, originTap.y + 15) })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await expect(status(page)).toContainText('Click in either area to place')
+    const targetTap = (await shortcut(page, 'Current', 'top bar').boundingBox())!
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(targetTap.x + 20, targetTap.y + 3) })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await expect(page.locator('#top-nav .nav-item').first()).toHaveText('Logging')
   } finally { await client.detach() }
 })
 
@@ -575,9 +583,9 @@ test('native touch and stationary edge scrolling stay inside a short settings bo
   try {
     await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
     const viewport = (await settingsBody(page).boundingBox())!
-    const menu = (await page.locator('[data-list="menu"]').boundingBox())!
-    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(menu.x + menu.width / 2, viewport.y + viewport.height - 20) })
-    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(menu.x + menu.width / 2, viewport.y + 20) })
+    const swipeX = viewport.x + viewport.width - 8 // Panel padding stays pannable beside stacked lists.
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(swipeX, viewport.y + viewport.height - 20) })
+    for (let step = 1; step <= 6; step++) await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(swipeX, viewport.y + viewport.height - 20 - step * (viewport.height - 40) / 6) })
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect.poll(() => settingsBody(page).evaluate(element => element.scrollTop)).toBeGreaterThan(30)
     await settingsBody(page).evaluate(element => { element.scrollTop = 0 })
@@ -681,4 +689,27 @@ test('external removal before the pickup threshold clears the pending pointer', 
   await expect(page.locator('.st-navigation-ghost, .st-navigation-gap')).toHaveCount(0)
   await expect(page.locator('html')).toHaveAttribute('data-navigation-events', '0')
   expect(errors).toEqual([])
+})
+
+for (const failure of ['corrupt', 'unreadable'] as const) test(`${failure} preferences surface a notice and recover through Restore defaults`, async ({ page }) => {
+  await workspace(page, 'current', undefined, { preserveOnReload: true })
+  if (failure === 'corrupt') await page.evaluate(() => localStorage.setItem('poise-navigation', '{'))
+  else await page.addInitScript(() => {
+    const original = Storage.prototype.getItem
+    Storage.prototype.getItem = function (key) {
+      if (key === 'poise-navigation' && !document.documentElement.hasAttribute('data-navigation-read-recovered')) throw new Error('Navigation storage is unavailable')
+      return original.call(this, key)
+    }
+  })
+  await page.reload()
+  await page.locator('#notification-bell').click()
+  await expect(page.locator('#notification-rail')).toContainText('Navigation preferences could not be read')
+  await page.locator('#notification-bell').click()
+  await navigation(page)
+  await page.evaluate(() => document.documentElement.setAttribute('data-navigation-read-recovered', ''))
+  await page.getByRole('button', { name: 'Restore defaults', exact: true }).click()
+  await expect(rows(page, 'menu')).toHaveText(['Analytics', 'Logging'])
+  await expect(page.locator('#top-nav .nav-item')).toHaveText(views.slice(0, 7))
+  expect(JSON.parse((await saved(page))!).menuOrder.slice(0, 2)).toEqual(['analytics', 'logging'])
+  await expect(page.locator('#notification-rail')).not.toContainText('Navigation preferences could not be read')
 })

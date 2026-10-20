@@ -236,7 +236,7 @@ export function navigationSection(): HTMLElement {
   section.addEventListener('lostpointercapture', event => { if (event.target === section) pointerCancelled(event) })
   document.addEventListener('pointercancel', pointerCancelled)
   document.addEventListener('click', event => {
-    if (pickup?.mode === 'click' && !section.contains(event.target as Node)) cancel(false)
+    if (pickup?.mode === 'click' && !event.composedPath().includes(section)) cancel(false)
   })
   section.addEventListener('click', event => {
     if (suppressClick && event.detail !== 0) { event.preventDefault(); return }
