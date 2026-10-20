@@ -133,13 +133,13 @@ test('applies and clears a deferred live read even when saving the card order fa
   await handle.press('Space')
   await expect(page.locator('#analytics-layout-status')).toContainText('Analytics layout could not be saved')
   await expect(mergeTrend(page)).toContainText('7-day median: 18h')
-  state.baselineHours = 108
+  state.baselineHours = 90
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
-  await expect(mergeTrend(page)).toContainText('7-day median: 24h')
+  await expect(mergeTrend(page)).toContainText('7-day median: 20h')
   await handle.focus()
   await handle.press('Space')
   await handle.press('Escape')
-  await expect(mergeTrend(page)).toContainText('7-day median: 24h')
+  await expect(mergeTrend(page)).toContainText('7-day median: 20h')
 })
 
 function report(merged: number, hours = 27): AnalyticsReport {
