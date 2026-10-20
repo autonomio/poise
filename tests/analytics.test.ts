@@ -589,13 +589,16 @@ describe('reading what Current shows', () => {
         readDetails(query)
         samples[name].push(performance.now() - start)
       }
-      for (let pair = 0; pair < 7; pair++) {
+      for (let pair = 0; pair < 8; pair++) {
         if (pair % 2 === 0) { measure('eager', eager); measure('single', single) }
         else { measure('single', single); measure('eager', eager) }
       }
-      const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
+      const median = (values: number[]) => {
+        const sorted = [...values].sort((a, b) => a - b)
+        return (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+      }
       const eagerMs = median(samples.eager), singleMs = median(samples.single)
-      console.info(`Analytics 64 MiB merged details, paired medians: repeated ${eagerMs.toFixed(1)} ms; single ${singleMs.toFixed(1)} ms; samples ${JSON.stringify(samples)}`)
+      process.stdout.write(`${JSON.stringify({ analyticsPerformance: { payloadMiB: 64, pairedSamples: 8, legacyMedianMs: eagerMs, singleMedianMs: singleMs, samples } })}\n`)
       expect(await readAnalytics(WEEK, 'alpha')).toEqual(computeAnalytics({ window: WEEK, issues: [], prs: rows, behaviors: [], agent: 'robot' }))
 
       // Count actual large-input extraction calls through SQLite's function
@@ -609,9 +612,11 @@ describe('reading what Current shows', () => {
         })
         expect(readDetails(single)).toEqual(expectedDetails)
         expect(largeExtractions).toBe(rows.length)
+        const singleExtractions = largeExtractions
         largeExtractions = 0
         expect(readDetails(eager)).toEqual(expectedDetails)
         expect(largeExtractions).toBeGreaterThan(rows.length)
+        process.stdout.write(`${JSON.stringify({ analyticsExtractionWork: { rows: rows.length, single: singleExtractions, legacy: largeExtractions } })}\n`)
       } finally { native.close() }
       expect(singleMs).toBeLessThan(eagerMs)
     } finally { db.close() }
