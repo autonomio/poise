@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import type { Socket } from 'node:net'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { startHarness, APEX, workspaceHost, type Harness, type Reply } from '../gateway/tests/harness'
 import { readServiceConfig } from '../server/service/config'
@@ -11,6 +12,7 @@ let h: Harness, workspace: Server, root: string
 let database: typeof import('../server/db')
 const saved = new Map<string, string | undefined>()
 const actualFetch = globalThis.fetch
+const physicalPeers = new WeakMap<Socket, string>()
 let brokerAuthorizations: string[]
 let verified: Array<{ identity: boolean; headerRemoved: boolean }>
 let providerSubject = 'google-one', providerError: 'none' | 'partial' | 'unverified' = 'none'
@@ -34,13 +36,15 @@ beforeEach(async () => {
       const service = readServiceConfig({ POISE_MODE: 'service', POISE_WORKSPACE_HANDLE: handle, POISE_WORKSPACE_OWNER: owner.login, POISE_PUBLIC_ORIGIN: `https://${workspaceHost(handle)}`, POISE_GATEWAY_PUBLIC_KEY: h.keys.publicKeyBase64 })!
       // The test transport is loopback; model the gateway's Docker-network peer so
       // the production service guard runs instead of the local maintenance exemption.
-      const actualPeer = req.socket.remoteAddress!
+      const actualPeer = physicalPeers.get(req.socket) ?? req.socket.remoteAddress!
+      physicalPeers.set(req.socket, actualPeer)
       Object.defineProperty(req.socket, 'remoteAddress', { value: '172.23.0.2' })
       try {
         guard.enforceApiRequest(req, { service })
         const delegated = identity.verifiedRequestIdentity(req)!
         expect(delegated.peer).toBe('172.23.0.2')
         expect(delegated.gatewayPort).toBe(h.port)
+        expect(actualPeer.replace(/^::ffff:/, '')).toBe('127.0.0.1')
         // Translate only the simulated Docker address back to the real fixture
         // peer after proving capture; actual broker HTTP and Host routing run.
         delegated.peer = actualPeer
