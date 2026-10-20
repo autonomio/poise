@@ -425,3 +425,30 @@ test('Snippets paints its library while GitHub settings are pending', async ({ p
     await expect(page.locator('#snippets-tbody')).toContainText('Available snippet', { timeout: 2000 })
   } finally { settings.release() }
 })
+
+
+test('returning to Editor retries the remembered file while its original library read is pending', async ({ page }) => {
+  await setup(page, 'editor', 'remembered')
+  await editorDocuments(page)
+  const first = deferred(), library = deferred()
+  let reads = 0
+  await page.route('**/api/editor/docs', async route => {
+    await library.promise
+    await route.fulfill({ json: { docs: [summary('remembered')] } })
+  })
+  await page.route('**/api/editor/doc/remembered', async route => {
+    if (++reads === 1) await first.promise
+    await route.fallback()
+  })
+  try {
+    await page.goto('/')
+    await expect.poll(() => reads).toBe(1)
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    const received = page.waitForResponse(response => new URL(response.url()).pathname === '/api/editor/doc/remembered')
+    first.release()
+    await (await received).finished()
+    await page.getByRole('button', { name: 'Editor', exact: true }).click()
+    await expect(page.locator('#editor-doc')).toContainText('Available writing', { timeout: 2000 })
+    expect(reads).toBe(2)
+  } finally { first.release(); library.release() }
+})

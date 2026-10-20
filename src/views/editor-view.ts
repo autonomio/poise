@@ -2362,7 +2362,7 @@ async function newDoc() {
     const data = await res.json()
     const slug = String(data.slug || '')
     if (!slug) return
-    await fetchDocs()
+    void fetchDocs()
     await loadDoc(slug)
   } catch (err) {
     console.error('[editor] newDoc failed:', err)
@@ -4938,6 +4938,10 @@ async function openInitialDocument(): Promise<void> {
 }
 
 export function stopEditorRefresh() {
+  if (!currentSlug) {
+    loadRequestId++
+    editorInitialization = null
+  }
   articleReviews?.stop()
   googleDocuments?.stop()
   clearSaveTimer()
