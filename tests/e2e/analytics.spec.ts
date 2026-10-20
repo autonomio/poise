@@ -217,9 +217,21 @@ test('fits all work types and retains interleaved account positions through fail
   await expect(board.locator('.github-quota-account')).toHaveCount(0)
   await expect(plot).toBeFocused()
   expect(await retained!.evaluate(element => element.closest<HTMLElement>('[data-id]')!.dataset.id)).toBe('metric:productivity:Lines changed')
+  const moved = board.getByRole('button', { name: 'Move Lines changed', exact: true })
+  await moved.focus()
+  await moved.press('Space')
+  await moved.press('ArrowRight')
+  await moved.press('Space')
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('poise-analytics-card-order')!)) as string[]
+  expect(stored.filter(id => id.startsWith('quota:'))).toHaveLength(2)
   quotaFails = false
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await expect(board.locator('.github-quota-account')).toHaveCount(2)
+  await expect.poll(order).toEqual(stored.filter(id => id !== 'obsolete'))
+  await moved.focus()
+  await moved.press('Space')
+  await moved.press('ArrowLeft')
+  await moved.press('Space')
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
   const before = await board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => ({ id: card.getAttribute('data-id'), y: card.getBoundingClientRect().y })))
   hold = true
@@ -230,6 +242,9 @@ test('fits all work types and retains interleaved account positions through fail
     await expect.poll(() => board.locator('[data-group="quota"]').evaluateAll((cards, previous) => cards.every((card, index) => card.getAttribute('data-id') === previous[index].id && Math.abs(card.getBoundingClientRect().y - previous[index].y) < 1), before)).toBe(true)
   } finally { hold = false; release() }
   await expect(board.locator('.analytics-value')).toHaveCount(16)
+  await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
+  await page.reload()
+  await expect(board.locator('.analytics-panel')).toHaveCount(18)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
   await page.evaluate(() => localStorage.setItem('poise-analytics-card-order', '{bad json'))
   await page.reload()
