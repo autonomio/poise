@@ -2,7 +2,6 @@ import { effectiveTimezone } from './config'
 import { releaseLine } from './release'
 import type { SettingsSection } from './settings'
 import { cancelMotion, motionValue, reveal, spring } from './motion'
-
 import { getNavigation, NAVIGATION_CHANGED, NAVIGATION_KEY, VIEW_ITEMS, type ViewName } from './navigation'
 
 const VIEW_KEY = 'poise-view'

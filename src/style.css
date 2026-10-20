@@ -420,6 +420,8 @@ body.is-scrolled .view-header { border-bottom-color: var(--border); }
   min-height: 32px;             /* share the local half's first-row height */
   gap: var(--sp-2);
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
   position: relative;           /* anchors #menu-popover */
 }
 
@@ -1329,6 +1331,8 @@ tr:hover .review-btn { opacity: 1; }
 /* In normal flow inside #app-bar-global — no fixed positioning and no
    z-index, so it can never be painted over the view's own controls. */
 #top-nav {
+  overflow-x: auto;
+  scrollbar-width: none;
   display: flex;
   align-items: center;
   height: 32px;
