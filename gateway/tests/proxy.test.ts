@@ -253,6 +253,25 @@ describe('proxy', () => {
     expect(events(h.logs, 'proxy.failed')).toHaveLength(0)
   })
 
+  it('keeps a request awaiting response headers open beyond the idle pool timeout', async () => {
+    const req = http.request({ host: '127.0.0.1', port: h.port, method: 'POST', path: '/api/editor', headers: { host: ALICE, cookie }, agent: false })
+    const response = new Promise<http.IncomingMessage>((resolve, reject) => {
+      req.on('response', resolve)
+      req.on('error', reject)
+    })
+    // The workspace's echo waits for the upload to end before answering.
+    // This covers the active socket before headers, as well as after them.
+    req.write('before')
+    await delay(4_200)
+    req.end('after')
+    const answer = await response
+    const body = collect(answer)
+    await body.ended
+    expect(answer.statusCode).toBe(200)
+    expect(JSON.parse(body.text())).toMatchObject({ body: 'beforeafter' })
+    expect(h.workspace.requests.filter(request => request.url === '/api/editor')).toHaveLength(1)
+  })
+
   it('answers 503 and starts the workspace when it stops listening', async () => {
     expect((await h.request({ host: ALICE, path: '/api/state', headers: { cookie } })).status).toBe(200)
     h.workspace.reachable = false
