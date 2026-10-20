@@ -572,12 +572,13 @@ export function initAnalyticsView(): void {
   scheduleMidnightRead()
   const snapshot = preparedAnalytics(dayOffset, dayAnchor)
   if (snapshot) {
+    const reopening = shown?.report === snapshot.report && shown.baseline === snapshot.baseline
     const keepHistory = history.data && historyScope === analyticsSnapshotScope(dayOffset, dayAnchor) && Date.now() - historyReadAt <= getRefreshRateMs()
     if (!keepHistory) { history = { data: null, error: '' }; cursors.clear() }
     showSnapshot(snapshot)
     viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
     if (!keepHistory || history.data?.errors.length) void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
-    if (snapshot.report.errors.length || snapshot.baseline.errors.length) void readAnalytics(true)
+    if (reopening && (snapshot.report.errors.length || snapshot.baseline.errors.length)) void readAnalytics(true)
   }
   else void readAnalytics()
   void readQuota()
