@@ -649,9 +649,10 @@ test.describe('on a release build', () => {
     const version = 'e'.repeat(64)
     let content = 'original'
     state.editor = async (path, method, route) => {
-      if (path === '/api/editor/docs') { await route.fulfill({ json: { docs: [{ slug: 'notes', title: 'Notes', updated_at: NOW, size: content.length }] } }); return }
+      if (path === '/api/editor/docs') { await route.fulfill({ json: { docs: [{ slug: 'notes', title: 'Notes', updated_at: NOW, size: content.length }, { slug: 'other', title: 'Other', updated_at: NOW, size: 5 }] } }); return }
       if (path === '/api/editor/doc/notes/annotations') { await route.fulfill({ json: { annotations: [], version } }); return }
       if (path === '/api/editor/doc/notes' && method === 'GET') { await route.fulfill({ json: { slug: 'notes', content, version } }); return }
+      if (path === '/api/editor/doc/other' && method === 'GET') { await route.fulfill({ json: { slug: 'other', content: 'other', version } }); return }
       if (path === '/api/editor/doc/notes' && method === 'PUT') {
         content = route.request().postDataJSON().content
         await route.fulfill({ json: { version, title: 'Notes', updated_at: NOW, size: content.length } }); return
@@ -674,8 +675,6 @@ test.describe('on a release build', () => {
     await doc.press('ControlOrMeta+z')
     await expect(doc).toHaveText('original first')
     await expect(page.locator('#editor-meta')).toContainText('saved')
-    // The update must preserve the hidden Editor too.
-    await page.locator('.nav-item[data-view="chat"]').click()
     if (refresh === 'storage-full') {
       await page.evaluate(() => {
         const original = Storage.prototype.setItem
@@ -686,6 +685,14 @@ test.describe('on a release build', () => {
         Object.assign(window, { restoreHistoryStorage: () => { Storage.prototype.setItem = original } })
       })
     }
+    if (refresh === 'storage-full') {
+      await page.locator('.editor-doc-trigger').click()
+      await page.locator('.editor-doc-item[data-slug="other"]').click()
+      await expect(page.locator('#editor-meta')).toContainText('Undo history could not be preserved')
+      await expect(doc).toHaveText('original first')
+    }
+    // The update must preserve the hidden Editor too.
+    await page.locator('.nav-item[data-view="chat"]').click()
     const banner = page.locator('.self-update-banner')
     await expect(banner).toBeVisible()
     if (refresh !== 'automatic') await banner.locator('.self-update-refresh').click()

@@ -2286,7 +2286,7 @@ async function loadDoc(slug: string) {
     // in flight. Drain once more so keystrokes made during that request
     // cannot be stranded when currentSlug changes below.
     if (!(await flushBeforeLeavingDocument('switch documents')) || requestId !== loadRequestId) return
-    persistEditorHistory()
+    if (!persistEditorHistory()) return
     currentSlug = nextSlug
     articleReviews?.clear()
     documentVersions.set(currentSlug, data.version)
