@@ -125,11 +125,14 @@ export function navigationSection(): HTMLElement {
   function begin(view: ViewName, source: NavigationSurface | null, mode: Pickup['mode'], x = 0, y = 0, pointer: number | null = null): void {
     adding = null; showChoices()
     const preferences = getNavigation()
+    if (source && !preferences[view][source]) { pending = null; sync(); announce('Navigation changed. Move cancelled.'); return }
     pickup = { view, source, target: source, index: source ? navigationViews(preferences, source).findIndex(item => item.key === view) : 0, preferences, mode, pointer, x, y }
     section.classList.add('st-navigation-held')
     intro.textContent = mode === 'click' ? 'Click to place. Escape cancels.' : 'Drag to reorder or move between areas.'
-    if (mode === 'keyboard') { controller.hidden = false; controller.focus({ preventScroll: true }) }
-    else {
+    controller.hidden = false
+    controller.setAttribute('aria-label', `Moving ${viewLabel(view)}. Escape cancels.`)
+    controller.focus({ preventScroll: true })
+    if (mode !== 'keyboard') {
       ghost.innerHTML = `${GRIP}<span>${viewLabel(view)}</span>`
       document.body.append(ghost)
       positionGhost()
@@ -230,7 +233,7 @@ export function navigationSection(): HTMLElement {
     if (pending?.pointer === id) pending = null
     if (pickup?.pointer === id) cancel()
   }
-  section.addEventListener('lostpointercapture', pointerCancelled)
+  section.addEventListener('lostpointercapture', event => { if (event.target === section) pointerCancelled(event) })
   document.addEventListener('pointercancel', pointerCancelled)
   document.addEventListener('click', event => {
     if (pickup?.mode === 'click' && !section.contains(event.target as Node)) cancel(false)
@@ -261,6 +264,7 @@ export function navigationSection(): HTMLElement {
   section.addEventListener('keydown', event => {
     if (event.key === 'Escape' && pickup) { event.preventDefault(); event.stopPropagation(); cancel(); return }
     if (event.key === 'Tab' && pickup) { cancel(); return }
+    if (pickup?.mode === 'keyboard' && event.target !== controller) { cancel(false); return }
     if (pickup?.mode === 'keyboard') {
       if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', ' ', 'Enter'].includes(event.key)) return
       event.preventDefault()
@@ -284,7 +288,7 @@ export function navigationSection(): HTMLElement {
       begin(handle.dataset.pickup as ViewName, handle.dataset.source as NavigationSurface, 'keyboard')
     }
   })
-  const external = () => { if (pickup) cancel(true, 'Navigation changed in another tab. Move cancelled.'); sync() }
+  const external = () => { pending = null; if (pickup) cancel(true, 'Navigation changed in another tab. Move cancelled.'); sync() }
   window.addEventListener(NAVIGATION_CHANGED, external)
   window.addEventListener('storage', event => { if (event.key === NAVIGATION_KEY || event.key === null) external() })
   window.addEventListener('poise:settings-closed', () => cancel(false))
