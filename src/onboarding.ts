@@ -11,7 +11,7 @@ import {
   setRefreshRate, setTheme, type Organization, type RefreshRate, type Theme,
 } from './config'
 import { fetchAccounts } from './views/connected-accounts'
-import { ACCOUNT_LOGINS, type AccountId, type ConnectedAccount } from '../server/accounts/types'
+import { ACCOUNT_LOGINS, hasRecordedSignIn, UNREPORTED_SIGN_IN, type AccountId, type ConnectedAccount } from '../server/accounts/types'
 import { fetchDevices } from './gateway-client'
 import { gatewayAccount } from './service-settings'
 import { poiseLinkSection, type PoiseLinkSection } from './views/poise-link'
@@ -50,7 +50,6 @@ interface StepView {
 
 interface StepContext {
   owner: string
-  logins(): Logins
   /** Re-evaluates the footer after the step's state changed. */
   update(): void
   status(text: string, tone?: 'info' | 'ok' | 'error'): void
@@ -111,10 +110,10 @@ export async function loadOnboarding(): Promise<OnboardingInfo | null> {
 
 /** A provider counts as signed in when its CLI says so or, for the CLIs that
  *  cannot say, when its login finished in a terminal here. */
-function signedIn(accounts: ConnectedAccount[], logins: Logins): Set<AccountId> {
+function signedIn(accounts: ConnectedAccount[]): Set<AccountId> {
   const result = new Set<AccountId>()
   for (const account of accounts) {
-    if (account.signedIn === true || (account.signedIn === null && account.installed && logins[account.id])) result.add(account.id)
+    if (account.signedIn === true || hasRecordedSignIn(account)) result.add(account.id)
   }
   return result
 }
@@ -582,11 +581,11 @@ function timeStep(ctx: StepContext): StepView {
   }
 }
 
-function accountState(account: ConnectedAccount, logins: Logins): { text: string, tone: 'on' | 'off' | 'unknown' } {
+function accountState(account: ConnectedAccount): { text: string, tone: 'on' | 'off' | 'unknown' } {
   if (!account.installed) return { text: 'Not installed in this workspace', tone: 'unknown' }
   if (account.signedIn === true) return { text: account.identity ? `Signed in as ${account.identity}` : 'Signed in', tone: 'on' }
   if (account.signedIn === false) return { text: account.detail ?? 'Not signed in', tone: 'off' }
-  if (logins[account.id]) return { text: 'Signed in here', tone: 'on' }
+  if (hasRecordedSignIn(account)) return { text: 'Signed in here', tone: 'on' }
   return { text: 'Not signed in yet', tone: 'off' }
 }
 
@@ -601,13 +600,12 @@ function aiStep(ctx: StepContext): StepView {
 
   const render = () => {
     if (!accounts) return
-    const logins = ctx.logins()
     list.innerHTML = PROVIDERS.map((id) => accounts!.find((account) => account.id === id)).filter((account): account is ConnectedAccount => !!account).map((account) => {
-      const { text, tone } = accountState(account, logins)
+      const { text, tone } = accountState(account)
       const label = tone === 'on' ? 'Reconnect' : 'Connect'
       // A CLI that cannot report its sign-in counts as signed in when the person says so.
-      const marked = !!logins[account.id]
-      const mark = account.installed && account.signedIn === null
+      const marked = hasRecordedSignIn(account)
+      const mark = account.installed && UNREPORTED_SIGN_IN.includes(account.id) && account.signedIn === null
         ? `<button type="button" class="st-clear ob-ai-mark" data-mark="${account.id}" data-signed-in="${!marked}" aria-label="${escapeHtml(NAMES[account.id])}: ${marked ? 'not signed in' : 'I have signed in'}">${marked ? 'Not signed in' : 'I\'ve signed in'}</button>`
         : ''
       return `
@@ -660,7 +658,7 @@ function aiStep(ctx: StepContext): StepView {
     element: view,
     ready: () => true,
     leave: async () => {
-      if (accounts && signedIn(accounts, ctx.logins()).size === 0) {
+      if (accounts && signedIn(accounts).size === 0) {
         ctx.status('Poise\'s agents need at least one AI account. You can sign in later in Settings → Accounts.', 'info')
       }
       return true
@@ -720,7 +718,7 @@ function modelsStep(ctx: StepContext): StepView {
       if (!res.ok || !data.catalog || !Array.isArray(data.places)) throw new Error(data.error || `HTTP ${res.status}`)
       if (disposed) return
       answer = data
-      const usable = signedIn(accounts, ctx.logins()) as Set<string>
+      const usable = signedIn(accounts) as Set<string>
       const providers = [...new Set(data.catalog.models.map((model) => model.provider))]
       chips.innerHTML = providers.map((provider) => `
         <span class="ob-chip${usable.has(provider) ? ' ob-chip-on' : ''}">${usable.has(provider) ? CHECK : ''}${escapeHtml(NAMES[provider as AccountId] ?? provider)}</span>`).join('')
@@ -866,7 +864,7 @@ function finishStep(ctx: StepContext): StepView {
     view.querySelector(`[data-row="${key}"]`)?.replaceWith(element('', summaryRow(key, label, value, done)).firstElementChild!)
   }
   void ctx.accounts(false).then((accounts) => {
-    const names = PROVIDERS.filter((id) => signedIn(accounts, ctx.logins()).has(id)).map((id) => NAMES[id])
+    const names = PROVIDERS.filter((id) => signedIn(accounts).has(id)).map((id) => NAMES[id])
     fill('ai', 'AI accounts', names.length ? names.join(', ') : 'None signed in yet', names.length > 0)
   }).catch(() => fill('ai', 'AI accounts', 'Unknown', false))
   void fetchDevices().then((devices) => {
@@ -968,7 +966,6 @@ class Onboarding {
   private context(): StepContext {
     return {
       owner: this.info.owner,
-      logins: () => this.info.logins,
       update: () => this.footer(),
       status: (text, tone = 'info') => this.status(text, tone),
       terminal: (preset, slot, onEnd) => this.openTerminal(preset, slot, onEnd),
