@@ -11,7 +11,9 @@ const shortcut = (page: Page, name: string, surface: 'menu' | 'top bar') => page
 const views = ['Current', 'Swarm', 'Chat', 'Archive', 'Behaviors', 'Snippets', 'Editor', 'Analytics', 'Logging']
 async function add(page: Page, name: string, surface: 'menu' | 'top bar'): Promise<void> {
   if (await shortcut(page, name, surface).count()) return
-  await page.getByRole('combobox', { name: `Add view to ${surface}`, exact: true }).selectOption({ label: name })
+  const picker = page.getByRole('combobox', { name: `Add view to ${surface}`, exact: true })
+  await picker.focus()
+  await picker.selectOption({ label: name })
 }
 
 
