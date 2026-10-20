@@ -1808,6 +1808,8 @@ test('clears an earlier day failure when a healthy prepared snapshot reopens imm
   await page.waitForLoadState('networkidle')
   await openAnalytics(page)
   await expect(value(page, 'Pull requests merged')).toHaveText('4', { timeout: 500 })
+  // Opening the menu closes the floating rail; its hidden markup is lazy.
+  await page.locator('.nr-bell').click()
   await expect(failure).toHaveCount(0)
   expect(state.reads).toHaveLength(6)
 })
