@@ -258,7 +258,7 @@ describe('progress reports observations without inventing model activity', () =>
     const row = running({ events: [{ at: new Date().toISOString(), message: '<img src=x onerror=alert(1)>' }] })
     expect(helpers.hasDetail(row)).toBe(true)
     expect(helpers.progressDetail(row)).not.toContain('<img')
-    expect(helpers.progressDetail(row)).toContain('<img')
+    expect(helpers.progressDetail(row)).toContain('&lt;img')
   })
 
   it('reports observation failure and overdue deadlines without claiming a failed review', () => {
