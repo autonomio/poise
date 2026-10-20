@@ -77,7 +77,7 @@ class TestModelCatalog(TestCase):
     def test_muse_ordinary_selectors_cannot_enter_catalog_or_model(self) -> None:
         for selector in ("muse-spark-1.3", "muse-spark-1.3-contributor-paid", "contributor"):
             with self.subTest(selector=selector):
-                self._reject(self._catalog().replace('selector = "muse-spark-1.3-contributor"', f'selector = "{selector.rstrip()}"'), "contributor")
+                self._reject(self._catalog().replace('selector = "muse-spark-1.3-contributor"', f'selector = "{selector}"'), "contributor")
                 with self.assertRaisesRegex(ModelCatalogError, "contributor"):
                     Model("muse-test-max", "muse", selector, "max")
 

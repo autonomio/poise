@@ -66,7 +66,7 @@ describe('Muse adapter', () => {
   it('rejects a switch to the ordinary model even when Muse lists it', async () => {
     const { adapter } = setup()
     await adapter.start(MODEL)
-    await expect(adapter.setModel('muse-spark-1.3', 'low')).rejects.toThrow(/contributor/)
+    await expect(adapter.setModel!('muse-spark-1.3', 'low')).rejects.toThrow(/contributor/)
     const turn = await adapter.prompt('turn-1', prompt('echo-input still contributor'), new AbortController().signal)
     expect(turn.stopReason).toBe('end_turn')
   })

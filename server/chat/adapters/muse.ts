@@ -91,9 +91,8 @@ import type { ChatEvent, ContentBlock, PermissionOption, PermissionOptionKind, P
 import { StdioRpc } from '../rpc'
 import { AdapterError } from './types'
 import type { Adapter, AdapterHost, AdapterStartOptions, AdapterStartResult, TurnResult } from './types'
-import pkg from '../../../package.json'
-
 import { assertMuseContributor } from '../../models'
+import pkg from '../../../package.json'
 
 const AGENT = 'muse' as const
 const LABEL = 'Muse'
