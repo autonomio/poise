@@ -28,7 +28,7 @@ from .db import (
     utc_now,
 )
 from .extract import extract_associations
-from .github_api import ITEM_GRAPH_BATCH_SIZE, GitHubClient, GitHubOrgReader, parse_graphql_datetime
+from .github_api import ITEM_GRAPH_BATCH_SIZE, GitHubClient, GitHubOrgReader, GitHubRateLimitError, parse_graphql_datetime
 
 
 FULL_BUILD_COMPLETE_KEY = "full_build_complete"
@@ -402,7 +402,7 @@ def sync_once(
                 or any(not isinstance(value, str) or value not in progress["repos"] for value in progress["remaining"])
             ):
                 raise RuntimeError("invalid reconciliation progress")
-            current = {str(repo["id"]): repo["full_name"] for repo in repos}
+            current = {str(repo["id"]): json.dumps([repo["full_name"], bool(repo.get("has_issues"))]) for repo in repos}
             remaining = set(progress["remaining"]) & current.keys()
             remaining.update(key for key, name in current.items() if progress["repos"].get(key) != name)
             progress["repos"] = current
@@ -453,26 +453,34 @@ def sync_once(
                         repo["full_name"], issue["number"], issue["item_kind"], issue["updated_at"],
                     ]) for issue in issues
                 }
-                changed_ids = {
-                    int(issue["id"]) for issue in items_requiring_full_refresh(
-                        conn, repo_id, repo["full_name"], issues
+                stored_versions = {
+                    int(row["item_id"]): json.dumps([
+                        row["repo_full_name"], row["number"], row["item_type"], row["updated_at"],
+                    ]) for row in conn.execute(
+                        "SELECT item_id, repo_full_name, number, item_type, updated_at FROM items WHERE repo_id = ?",
+                        (repo_id,),
                     )
                 }
-                issues = [issue for issue in issues if int(issue["id"]) in changed_ids or
+                issues = [issue for issue in issues if stored_versions.get(int(issue["id"])) != versions[int(issue["id"])] or
                           get_state(conn, checkpoint_scope, str(issue["id"])) != versions[int(issue["id"])]]
             else:
                 issues = changed[repo["full_name"]]
             outstanding = len(issues)
-            for expanded in iter_expanded(reader, repo, issues, workers):
-                item_id = store_expanded(conn, expanded, users)
-                if full_enumeration:
-                    with conn:
-                        set_state(conn, checkpoint_scope, str(item_id), versions[item_id])
-                outstanding -= 1
-                if reconcile_sleep:
-                    time.sleep(reconcile_sleep)
-                if deadline is not None and outstanding and time.monotonic() >= deadline:
-                    return False
+            expansions = iter_expanded(reader, repo, issues, workers)
+            try:
+                for expanded in expansions:
+                    item_id = store_expanded(conn, expanded, users)
+                    if full_enumeration:
+                        with conn:
+                            set_state(conn, checkpoint_scope, str(item_id), versions[item_id])
+                    outstanding -= 1
+                    if reconcile_sleep:
+                        time.sleep(reconcile_sleep)
+                    if deadline is not None and outstanding and time.monotonic() >= deadline:
+                        return False
+            finally:
+                # Closing explicitly propagates errors from workers still in flight.
+                expansions.close()
             if full_enumeration:
                 with conn:
                     mark_full_build_completed(conn, repo_id)
@@ -663,6 +671,13 @@ def iter_expanded(
                 # cancel queued pagination and wait for already-running calls.
                 for future in futures:
                     future.cancel()
+                errors = [error for future in futures if not future.cancelled()
+                          and (error := future.exception()) is not None]
+                for error in errors:
+                    if isinstance(error, GitHubRateLimitError):
+                        raise error
+                if errors:
+                    raise errors[0]
 
 
 def validate_repo_filter(

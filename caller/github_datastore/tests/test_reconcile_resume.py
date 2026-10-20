@@ -4,11 +4,13 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from threading import Event
 from unittest.mock import patch
 
 from github_datastore.db import connect, get_state, set_state
 from github_datastore.cli import main
-from github_datastore.store import RECONCILE_PROGRESS_KEY, sync_once
+from github_datastore.github_api import GitHubRateLimitError
+from github_datastore.store import RECONCILE_PROGRESS_KEY, store_expanded, sync_once
 from tests.test_store import BatchReader, base_expanded, initialize_sync_state, repo_row
 
 
@@ -40,7 +42,7 @@ class ResumeReader(BatchReader):
         result = base_expanded(str(item["id"]), [])
         result["repo"] = repo
         result["issue"].update(id=item["id"], node_id=f'I_{item["id"]}',
-                               number=item["number"], updated_at=item["updated_at"])
+                               number=item["number"], updated_at=self.versions.get(item["id"], item["updated_at"]))
         return result
 
 
@@ -152,3 +154,69 @@ class ReconcileResumeTest(unittest.TestCase):
             main(args)
         self.assertEqual(json.loads(output.getvalue()), {"reconcile_complete": True})
         self.assertEqual(self.reader.expanded, [100, 101, 102])
+
+    def test_issues_setting_change_revisits_a_repository_completed_in_an_earlier_chunk(self) -> None:
+        self.reader.repos[0]["has_issues"] = False
+        self.reader.repos.append(dict(repo_row(), id=20, node_id="R_20", name="Second", full_name="Vaquum/Second"))
+        self.reader.items = []
+        with patch.object(self.reader, "list_repo_pull_requests", return_value=[]):
+            self.assertFalse(self.chunk())
+        self.reader.repos[0]["has_issues"] = True
+        stub = {"id": 100, "number": 100, "item_kind": "issue", "updated_at": "2026-01-02T00:00:00Z"}
+        with patch.object(self.reader, "list_repo_issues", side_effect=lambda name: [stub] if name == "Vaquum/Test" else []):
+            self.assertTrue(sync_once(self.path, workers=1, reconcile=True))
+        conn = connect(self.path)
+        try:
+            self.assertEqual([tuple(row) for row in conn.execute("SELECT item_id, repo_full_name FROM items")], [(100, "Vaquum/Test")])
+        finally:
+            conn.close()
+
+    def test_newer_concurrent_delta_does_not_abort_reconciliation_as_a_backward_timestamp(self) -> None:
+        self.reader.items = [100]
+        original = self.reader.list_repo_issues
+
+        def enumerate_then_delta(name: str) -> list[dict]:
+            stubs = original(name)
+            self.reader.versions[100] = "2026-01-03T00:00:00Z"
+            latest = self.reader.expand_issue_or_pr(repo_row(), stubs[0])
+            conn = connect(self.path)
+            try:
+                store_expanded(conn, latest)
+            finally:
+                conn.close()
+            return stubs
+
+        with patch.object(self.reader, "list_repo_issues", side_effect=enumerate_then_delta):
+            self.assertTrue(sync_once(self.path, workers=1, reconcile=True))
+        conn = connect(self.path)
+        try:
+            self.assertEqual(conn.execute("SELECT updated_at FROM items WHERE item_id = 100").fetchone()[0], "2026-01-03T00:00:00Z")
+        finally:
+            conn.close()
+
+    def test_budget_yield_propagates_quota_failure_from_another_inflight_worker(self) -> None:
+        self.reader.items = [100, 101]
+        quota_started, release_quota = Event(), Event()
+        original = self.reader.expand_issue_or_pr
+
+        def expand(repo: dict, item: dict) -> dict:
+            if item["id"] == 101:
+                quota_started.set()
+                if not release_quota.wait(2):
+                    raise AssertionError("budget did not release quota worker")
+                raise GitHubRateLimitError("quota exhausted", 2_000_000_000)
+            if not quota_started.wait(2):
+                raise AssertionError("quota worker did not start")
+            return original(repo, item)
+
+        def clock() -> float:
+            if quota_started.is_set():
+                release_quota.set()
+                return 2
+            return 0
+
+        with patch.object(self.reader, "expand_issue_or_pr", side_effect=expand), patch("github_datastore.store.time.monotonic", side_effect=clock):
+            with self.assertRaises(GitHubRateLimitError) as caught:
+                sync_once(self.path, workers=2, reconcile=True, reconcile_max_seconds=1)
+        self.assertEqual(caught.exception.reset_at, 2_000_000_000)
+        self.assertIsNone(self.state("last_reconcile_at"))
