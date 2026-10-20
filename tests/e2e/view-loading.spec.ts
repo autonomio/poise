@@ -380,12 +380,16 @@ test('Editor populates an already-open selector on first discovery and reports a
     library.release()
     await expect(page.locator('#editor-doc-menu')).toContainText('Could not load documents')
     expect(writes).toBe(0)
+    await expect(await feedback(page)).toContainText('Editor documents unavailable')
     await page.locator('.editor-doc-trigger').click()
     fail = false
     await page.locator('.editor-doc-trigger').click()
     await expect(page.locator('.editor-doc-item')).toHaveCount(1)
     await page.locator('.editor-doc-item').click()
     await expect(page.locator('#editor-doc')).toContainText('Available writing')
+    const recovered = await feedback(page)
+    await expect(recovered.locator('.nr-card').filter({ hasText: 'Editor documents unavailable' })).toHaveCount(0)
+    await expect(recovered.locator('.nr-card').filter({ hasText: 'Could not load documents' })).toHaveCount(0)
   } finally { library.release() }
 })
 
@@ -451,4 +455,70 @@ test('returning to Editor retries the remembered file while its original library
     await expect(page.locator('#editor-doc')).toContainText('Available writing', { timeout: 2000 })
     expect(reads).toBe(2)
   } finally { first.release(); library.release() }
+})
+
+
+test('creating a document supersedes a pre-creation library response without waiting for it', async ({ page }) => {
+  await setup(page, 'editor', 'remembered')
+  await editorDocuments(page)
+  const old = deferred()
+  let reads = 0
+  await page.route('**/api/editor/docs', async route => {
+    if (route.request().method() === 'POST') return route.fulfill({ json: { slug: 'created' } })
+    if (++reads === 1) {
+      await old.promise
+      return route.fulfill({ json: { docs: [summary('remembered')] } })
+    }
+    await route.fulfill({ json: { docs: [summary('created'), summary('remembered')] } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#editor-doc')).toContainText('Note remembered')
+    await page.getByRole('button', { name: 'New', exact: true }).click()
+    await expect(page.locator('#editor-doc')).toContainText('Note created')
+    await page.locator('.editor-doc-trigger').click()
+    await expect(page.locator('.editor-doc-item[data-slug="created"]')).toHaveCount(1)
+    const received = page.waitForResponse(response => new URL(response.url()).pathname === '/api/editor/docs' && response.request().method() === 'GET')
+    old.release()
+    await (await received).finished()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page.locator('.editor-doc-item[data-slug="created"]')).toHaveCount(1)
+    await page.locator('.editor-doc-trigger').click()
+    const dialogOpened = page.waitForEvent('dialog')
+    const clicking = page.getByRole('button', { name: 'Delete', exact: true }).click()
+    const dialog = await dialogOpened
+    expect(dialog.message()).toContain('Note created')
+    await dialog.dismiss(); await clicking
+  } finally { old.release() }
+})
+
+test('Editor binds reviews and Google publications before annotations and resumes both on return', async ({ page }) => {
+  await setup(page, 'editor', 'remembered')
+  await editorDocuments(page)
+  const annotations = deferred()
+  let reviewReads = 0, googleReads = 0
+  await page.route('**/api/editor/docs', route => route.fulfill({ json: { docs: [summary('remembered')] } }))
+  await page.route('**/annotations', async route => { await annotations.promise; await route.fallback() })
+  await page.route('**/reviews**', route => {
+    reviewReads++
+    return route.fulfill({ json: { reviews: [], checkedAt: null, active: false, stale: false, problems: [] } })
+  })
+  await page.route('**/google/sync', route => {
+    googleReads++
+    return route.fulfill({ json: { publications: [], version: 'e'.repeat(64) } })
+  })
+  try {
+    await page.goto('/')
+    await expect(page.locator('#editor-doc')).toContainText('Available writing')
+    await expect.poll(() => reviewReads).toBeGreaterThan(0)
+    await expect.poll(() => googleReads).toBeGreaterThan(0)
+    await page.getByRole('button', { name: 'Archive', exact: true }).click()
+    const received = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/annotations'))
+    annotations.release()
+    await (await received).finished()
+    const previousReviews = reviewReads, previousGoogle = googleReads
+    await page.getByRole('button', { name: 'Editor', exact: true }).click()
+    await expect.poll(() => reviewReads).toBeGreaterThan(previousReviews)
+    await expect.poll(() => googleReads).toBeGreaterThan(previousGoogle)
+  } finally { annotations.release() }
 })

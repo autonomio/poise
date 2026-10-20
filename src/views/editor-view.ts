@@ -2139,6 +2139,7 @@ function setTriggerTitle() {
 }
 
 let docsRead: Promise<boolean> | null = null
+let docsGeneration = 0
 let docsLoaded = false
 let docsError = false
 
@@ -2213,22 +2214,24 @@ function onMenuKeydown(e: KeyboardEvent) {
   }
 }
 
-function fetchDocs(): Promise<boolean> {
-  if (docsRead) return docsRead
+function fetchDocs({ fresh = false }: { fresh?: boolean } = {}): Promise<boolean> {
+  if (docsRead && !fresh) return docsRead
+  const generation = ++docsGeneration
   docsError = false
-  const pending = readDocs().finally(() => {
+  const pending = readDocs(generation).finally(() => {
     if (docsRead === pending) docsRead = null
-    if (menuEl && !menuEl.hidden) renderDocMenu()
+    if (generation === docsGeneration && menuEl && !menuEl.hidden) renderDocMenu()
   })
   docsRead = pending
   return pending
 }
 
-async function readDocs(): Promise<boolean> {
+async function readDocs(generation: number): Promise<boolean> {
   try {
     const res = await fetch('/api/editor/docs')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
+    if (generation !== docsGeneration) return false
     if (!Array.isArray(data.docs)) throw new Error('Malformed document list')
     docs = data.docs as DocSummary[]
     docsLoaded = true
@@ -2236,10 +2239,10 @@ async function readDocs(): Promise<boolean> {
     if (currentSlug) setTriggerTitle()
     return true
   } catch (err) {
+    if (generation !== docsGeneration) return false
     console.error('[editor] fetchDocs failed:', err)
     docsError = true
     viewFeedback('editor-documents', 'Editor documents unavailable', (err as Error).message, 'read_failed')
-    setMeta('Could not load documents')
     return false
   }
 }
@@ -2340,13 +2343,13 @@ async function loadDoc(slug: string) {
       const line = docEl.children[Math.min(restored.line, docEl.children.length - 1)] as HTMLElement | undefined
       if (line) setCursorOffsetInLine(line, Math.min(restored.offset, (line.textContent || '').length))
     }
-    // Annotations live alongside the doc — load and render in parallel
-    // with the markdown so the underlines appear when the doc does.
+    // Each side panel binds to the document before any independent read can
+    // yield; leaving during annotation loading must still permit resume.
+    void articleReviews?.load(currentSlug)
+    googleDocuments?.load(currentSlug)
     await fetchAnnotations(currentSlug)
     if (requestId !== loadRequestId || viewEl.hidden) return
     renderAnnotationOverlay()
-    void articleReviews?.load(currentSlug)
-    googleDocuments?.load(currentSlug)
   } catch (err) {
     console.error('[editor] loadDoc failed:', err)
     if (requestId === loadRequestId) setMeta('Could not load document')
@@ -2362,7 +2365,7 @@ async function newDoc() {
     const data = await res.json()
     const slug = String(data.slug || '')
     if (!slug) return
-    void fetchDocs()
+    void fetchDocs({ fresh: true })
     await loadDoc(slug)
   } catch (err) {
     console.error('[editor] newDoc failed:', err)
@@ -2446,6 +2449,7 @@ async function deleteCurrent() {
     resetEditorHistory()
   }
   docs = docs.filter((x) => x.slug !== d.slug)
+  void fetchDocs({ fresh: true })
   try { localStorage.removeItem(LAST_OPEN_KEY) } catch { /* ignore */ }
   try {
     if (docs.length) {
