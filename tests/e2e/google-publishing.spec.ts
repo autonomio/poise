@@ -3,9 +3,10 @@ import { workspace } from './fixtures/workspace'
 const VERSION = 'a'.repeat(64), REMOTE = 'b'.repeat(64), TEXT = '# Draft\n\nThe local paragraph.\n'
 const accounts = { configured: true, clientId: 'poise.apps.googleusercontent.com', origin: 'http://127.0.0.1:5566', accounts: [{ id: 'one', email: 'one@example.test', connected: true }, { id: 'two', email: 'two@example.test', connected: true }] }
 const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, replies: [{ author: 'Second reviewer', body: 'Please also check the example.' }], start: 9, end: 29 }] }
-async function setup(page: Page, options: { initialSyncFailure?: boolean } = {}) {
+async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string } = {}) {
   await workspace(page)
   let content = TEXT
+  const remoteText = options.remoteText ?? '# Draft\n\nThe Google paragraph.\n'
   const actions: Array<{ path: string, body: Record<string, unknown> }> = []
   await page.route('**/api/google/accounts', route => route.fulfill({ json: accounts }))
   await page.route('**/api/editor/**', async route => {
@@ -19,8 +20,8 @@ async function setup(page: Page, options: { initialSyncFailure?: boolean } = {})
     if (path.endsWith('/publishing')) return route.fulfill({ json: { title: 'Draft', slug: 'draft', today: '2026-10-20', publications: [] } })
     if (path.endsWith('/google/sync') && options.initialSyncFailure) return route.fulfill({ status: 503, json: { error: 'Google synchronization is unavailable.' } })
     if (path.endsWith('/google') || path.endsWith('/google/sync') || path.endsWith('/google/publish')) return route.fulfill({ json: { version: VERSION, publications: [publication] } })
-    if (path.endsWith('/google/review')) return route.fulfill({ json: { localText: content, remoteText: '# Draft\n\nThe Google paragraph.\n', localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one', comments: publication.comments } })
-    if (path.endsWith('/google/import')) { content = '# Draft\n\nThe Google paragraph.\n'; return route.fulfill({ json: { ok: true, content, version: VERSION } }) }
+    if (path.endsWith('/google/review')) return route.fulfill({ json: { localText: content, remoteText, localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one', comments: publication.comments } })
+    if (path.endsWith('/google/import')) { content = remoteText; return route.fulfill({ json: { ok: true, content, version: VERSION } }) }
     return route.fulfill({ json: {} })
   })
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
@@ -37,7 +38,7 @@ test('publishes the open document through the selected Google account', async ({
   expect(actions.find(action => action.path.endsWith('/google/publish'))?.body).toEqual({ accountId: 'two', localVersion: VERSION })
 })
 test('shows native comments, reviews incoming changes and imports only after explicit acceptance', async ({ page }) => {
-  const actions = await setup(page)
+  const actions = await setup(page, { remoteText: '# Draft\n\nThe Google paragraph. Additional imported words.\n' })
   const google = page.locator('.google-documents')
   await google.locator('summary').click()
   await expect(google).toContainText('Please clarify.')
@@ -52,6 +53,7 @@ test('shows native comments, reviews incoming changes and imports only after exp
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await expect(page.locator('#editor-doc')).toContainText('The Google paragraph.')
+  await expect(page.locator('#editor-meta')).toHaveText('8 words · saved')
   expect(actions.find(action => action.path.endsWith('/google/import'))?.body).toEqual({ accountId: 'one', localVersion: VERSION, remoteSha: REMOTE, fileId: 'file-one', connectionVersion: 'connection-one' })
   expect(actions.some(action => action.path.endsWith('/google/publish'))).toBe(false)
 })

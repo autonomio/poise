@@ -60,11 +60,22 @@ downloads. The adapter checks v2 metadata before and after downloading and
 refuses a changed ETag. Updates use the same validator in a conditional v2
 media PUT; the read checks do not substitute for that atomic write condition.
 
-Before release, repeat the concurrency proof with native comment changes and
-verify newer text/comments unchanged. Actual OAuth through the service gateway
-and independent files for two real identities remain unproved. These are
-release blockers tracked in [#258](https://github.com/autonomio/poise/issues/258).
-Missing, weak or unusable validators refuse mutation.
+The native-comment concurrency proof also passed: after capturing an anchored
+comment, a newer reply was posted in Google Docs. The old conditional upload
+was rejected and the exact newer raw file, anchor and reply survived. Poise
+displayed the thread and reply. An uncommented paragraph was then edited in
+Poise and published to the same file; reopening Google Docs verified the new
+text and retained native discussion.
+
+A direct Google edit appeared as Updates available without changing the local
+draft. Explicit review/import brought that edit into Poise and retained an
+exact copy of the prior local text in Google history. Provider metadata was
+absent from the imported draft.
+
+Actual OAuth through the service gateway and independent files for two real
+identities remain unproved. These are release blockers tracked in
+[#258](https://github.com/autonomio/poise/issues/258). Missing, weak or unusable
+validators refuse mutation.
 
 Google documents the underlying file-format capability in
 [View and edit Markdown files in Google Docs](https://support.google.com/docs/answer/18289341?hl=en).

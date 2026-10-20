@@ -4870,7 +4870,7 @@ export async function initEditorView() {
         // A successful import invalidates the old editor version before any further save.
         if (currentSlug !== slug) return
         documentVersions.set(slug, version)
-        loadIntoEditor(content); resetEditorHistory()
+        loadIntoEditor(content); resetEditorHistory(); setMetaForCurrent()
         googleDocuments?.load(slug)
       },
       freeze: frozen => {

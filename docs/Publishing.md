@@ -269,8 +269,8 @@ another Google account or website.
 Publishing refuses unseen Google text edits and sends a strong Drive v2 ETag
 write precondition. Downloads verify matching metadata ETags before and after
 reading. Missing, weak or unusable ETags refuse publication. Live stale text
-writes were rejected; native-comment concurrency remains a release proof
-obligation (see the proof below).
+and native-comment writes were rejected with newer bytes preserved (see the
+proof below for the remaining release obligations).
 A file ID is reserved and recorded before its first write so a lost create
 response cannot cause duplicate documents. Local bindings live in
 `<slug>.google.json` beside the draft. Deleting a draft removes its bindings;
