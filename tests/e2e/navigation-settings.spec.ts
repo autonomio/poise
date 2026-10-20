@@ -464,9 +464,9 @@ for (const cause of ['blur', 'beforeprint', 'resize', 'typography', 'fonts', 'vi
   await beginDrag(page, shortcut(page, 'Logging', 'menu'))
   await before(page, shortcut(page, 'Current', 'top bar'))
   if (cause === 'back' || cause === 'section') {
-    await page.getByRole('button', { name: 'Back to menu' }).click()
+    await page.getByRole('button', { name: 'Back to menu' }).press('Enter')
     if (cause === 'section') await page.locator('#menu-popover').getByRole('button', { name: 'General', exact: true }).click()
-  } else if (cause === 'close') await page.locator('#menu-toggle').click()
+  } else if (cause === 'close') await page.locator('#menu-toggle').press('Enter')
   else if (cause === 'resize') await page.setViewportSize({ width: 1000, height: 700 })
   else await page.evaluate(cause => {
     if (cause === 'typography') document.documentElement.style.setProperty('--typo-size', '18px')
@@ -544,7 +544,9 @@ test('native touch scrolls content, drags through the gutter and taps close with
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(page.locator('#top-nav .nav-item').first()).toHaveText('Logging')
     const removeButton = page.getByRole('button', { name: 'Remove Logging from top bar', exact: true })
-    await removeButton.tap()
+    const close = (await removeButton.boundingBox())!
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(close.x + close.width / 2, close.y + close.height / 2) })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await expect(shortcut(page, 'Logging', 'top bar')).toHaveCount(0)
     await expect(page.locator('.st-navigation-ghost')).toHaveCount(0)
   } finally { await client.detach() }
