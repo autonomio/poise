@@ -73,7 +73,9 @@ test('retains the held card through live reads, restores cancelled pointer moves
   const order = () => board.locator(':scope > [data-id]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')))
   const original = await order()
   const a = (await first.boundingBox())!, b = (await second.boundingBox())!
-  await first.evaluate(button => button.addEventListener('pointerdown', event => button.setAttribute('data-test-pointer', String(event.pointerId)), { once: true }))
+  await first.evaluate(button => {
+    if (button instanceof HTMLElement) button.addEventListener('pointerdown', event => button.setAttribute('data-test-pointer', String(event.pointerId)), { once: true })
+  })
   await page.mouse.move(a.x + 60, a.y + 20)
   await page.mouse.down()
   await page.mouse.move(b.x + 60, b.y + 20, { steps: 12 })
@@ -91,7 +93,7 @@ test('retains the held card through live reads, restores cancelled pointer moves
     document.documentElement.style.setProperty('--typo-size', '24px')
     document.documentElement.style.setProperty('--typo-lh', '1.8')
   })
-  await expect.poll(() => board.locator('.analytics-panel').evaluateAll(cards => cards.every(card => card.scrollHeight <= card.clientHeight + 2 && card.scrollWidth <= card.clientWidth + 1)))).toBe(true)
+  await expect.poll(() => board.locator('.analytics-panel').evaluateAll(cards => cards.every(card => card.scrollHeight <= card.clientHeight + 2 && card.scrollWidth <= card.clientWidth + 1))).toBe(true)
   for (const family of ['tall', 'short']) await expect.poll(() => board.locator(`[data-size="${family}"]`).evaluateAll(cards => new Set(cards.map(card => card.getBoundingClientRect().height)).size)).toBe(1)
 })
 
