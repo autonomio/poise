@@ -85,6 +85,8 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement) {
       const family = card.element.dataset.size!
       heights.set(family, Math.max(heights.get(family) ?? 0, card.element.scrollHeight, card.element.offsetHeight))
     }
+    const clearance = 5 * parseFloat(getComputedStyle(document.documentElement).fontSize)
+    heights.set('tall', Math.max(heights.get('tall') ?? 0, (heights.get('short') ?? 0) + clearance))
     for (const card of cards.values()) {
       card.height = heights.get(card.element.dataset.size!)!
       card.element.style.height = `${card.height}px`

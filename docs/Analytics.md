@@ -45,8 +45,10 @@ Cards pack in document order over twenty width units, with a 12px gap and no
 dense backfill. Mixed rows advance by their tallest card; shorter cards retain
 their own height. The minimum heights are 22rem and 17rem. At every content,
 font or width change each family grows to its largest member's measured content
-height. Work type uses two columns of category rows; all twelve types remain
-visible and focusable. There is no internal card scrolling or content clipping.
+height, with the taller family retaining at least 5rem clearance above the shorter
+family. Work type uses two columns of category rows, reducing to one below a
+640px board width; all twelve types remain visible and focusable. There is no
+internal card scrolling or content clipping.
 
 | Board width | Productivity / review | Work type / API account | Per-PR |
 | --- | --- | --- | --- |

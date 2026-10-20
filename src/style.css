@@ -1119,6 +1119,7 @@ tr:hover .review-btn { opacity: 1; }
 @media (pointer: coarse) { .analytics-drag-handle { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .analytics-drag-handle { transition: none; } }
 @container analytics (max-width: 639px) {
+  .analytics-work-types { grid-template-columns: minmax(0, 1fr); }
   [data-group="productivity"] .analytics-value { font-size: 1.5rem; }
   .analytics-arrow { font-size: 1.125rem; }
 }
