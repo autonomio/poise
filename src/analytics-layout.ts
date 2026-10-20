@@ -15,6 +15,11 @@ export function reconcileCardOrder(saved: string[], available: string[]): string
   return [...new Set([...saved.filter(id => known.has(id)), ...available])]
 }
 
+function retainMissingCards(previous: string[], current: string[]): string[] {
+  const visible = new Set(current), remaining = [...current]
+  return [...previous.map(id => visible.has(id) ? remaining.shift()! : id), ...remaining]
+}
+
 /** Row packing keeps semantic order, including when different card sizes meet. */
 export function cardPositions(cards: Pick<Card, 'id' | 'span' | 'height'>[], width: number): Map<string, Box> {
   const boxes = new Map<string, Box>()
@@ -72,6 +77,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     if (!Array.isArray(raw) || !raw.every(id => typeof id === 'string')) throw new Error('Expected a list of card IDs.')
     saved = [...new Set(raw)]
   } catch (error) { status.classList.remove('analytics-sr'); status.textContent = `Saved analytics layout could not be read: ${String(error)}` }
+  let remembered = [...saved]
   let cards = new Map<string, Card>(), order: string[] = [], width = 0
   let move: Move | null = null, pending: string | null = null, resizeFrame = 0, scrollFrame = 0
   const placeholder = document.createElement('div')
@@ -152,7 +158,7 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
     template.innerHTML = markup
     const nodes = new Map([...template.content.children].map(element => [element.getAttribute('data-id')!, element]))
     order = reconcileCardOrder(saved, [...nodes.keys()])
-    saved = [...saved, ...order.filter(id => !saved.includes(id))]
+    remembered = retainMissingCards(remembered, order)
     for (const id of order) template.content.append(nodes.get(id)!)
     patchContent(board, template.innerHTML)
     const next = new Map<string, Card>()
@@ -183,9 +189,8 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
       let failure: string | null = null
       if (!cancel) {
         // Missing account IDs remain saved, so temporary credential failures do not reset their place.
-        const visible = new Set(order)
-        const remaining = [...order]
-        saved = [...saved.map(id => visible.has(id) ? remaining.shift()! : id), ...remaining]
+        saved = retainMissingCards(remembered, order)
+        remembered = [...saved]
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)) }
         catch (error) { status.classList.remove('analytics-sr'); failure = `Analytics layout could not be saved: ${String(error)}` }
       }
@@ -209,9 +214,11 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
   }
 
   function moveTo(index: number): void {
-    if (!move || index === order.indexOf(move.card.id)) return
-    order.splice(order.indexOf(move.card.id), 1); order.splice(index, 0, move.card.id)
-    arrange()
+    if (!move) return
+    if (index !== order.indexOf(move.card.id)) {
+      order.splice(order.indexOf(move.card.id), 1); order.splice(index, 0, move.card.id)
+      arrange()
+    }
     if (move.pointer === null) keepHeaderVisible(move.card)
   }
 

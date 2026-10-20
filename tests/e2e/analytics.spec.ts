@@ -315,6 +315,13 @@ test('keyboard traversal keeps the moved header visible and Tab rolls back witho
     await handle.press('Space')
     await handle.press('Space')
     await handle.press('End')
+    await handle.press('End')
+    await handle.press('End')
+    await expect.poll(() => handle.evaluate(button => {
+      const box = button.getBoundingClientRect()
+      const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bar-h')) || 0
+      return box.top >= bar && box.bottom <= innerHeight
+    })).toBe(true)
     await handle.press('Space')
     await expect(handle).toBeFocused()
     await expect.poll(() => handle.evaluate(button => {
@@ -334,6 +341,29 @@ test('keyboard traversal keeps the moved header visible and Tab rolls back witho
     await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
     await expect(mergeTrend(page)).toContainText(`7-day median: ${reduced ? 20 : 18}h`)
   }
+})
+
+test('keeps the canonical unsaved order when quota arrives before daily reports', async ({ page }) => {
+  await workspace(page)
+  let release!: () => void
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/github-quota', route => route.fulfill({ json: quotaReport() }))
+  await page.route('**/api/analytics?**', async route => {
+    await waiting
+    await route.fulfill({ json: report(12) })
+  })
+  await page.goto('/')
+  try {
+    await openAnalytics(page)
+    await expect(page.locator('.analytics-panel[data-group="quota"]')).toHaveCount(2)
+    await expect(page.locator('.analytics-panel[data-group="productivity"]')).toHaveCount(0)
+  } finally { release() }
+  const cards = page.locator('.analytics-board > [data-id]')
+  await expect(cards).toHaveCount(18)
+  await expect(cards.first()).toHaveAttribute('data-group', 'productivity')
+  await expect(cards.nth(15)).toHaveAttribute('data-group', 'per-merged-pr')
+  await expect(cards.nth(16)).toHaveAttribute('data-group', 'quota')
+  expect(await page.evaluate(() => localStorage.getItem('poise-analytics-card-order'))).toBeNull()
 })
 
 test('reopening reserves the saved quota slot with loading content until fresh usage arrives', async ({ page }) => {
