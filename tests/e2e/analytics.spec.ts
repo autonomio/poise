@@ -1789,6 +1789,29 @@ test('opens immediately from a prepared scope without fetching again or redating
   } finally { release() }
 })
 
+test('clears an earlier day failure when a healthy prepared snapshot reopens immediately', async ({ page }) => {
+  const state = await workspace(page)
+  await installRefreshClock(page)
+  await page.goto('/')
+  await pauseRefreshClock(page)
+  await openAnalytics(page)
+  await page.waitForLoadState('networkidle')
+  state.fail = true
+  await refreshAnalytics(page)
+  await page.locator('.nr-bell').click()
+  const failure = page.locator('.nr-rail .nr-card').filter({ hasText: 'acme: datastore offline' })
+  await expect(failure).toHaveCount(1)
+  await leaveAnalytics(page)
+  state.fail = false
+  await refreshAnalytics(page)
+  await expect.poll(() => state.reads.length).toBe(6)
+  await page.waitForLoadState('networkidle')
+  await openAnalytics(page)
+  await expect(value(page, 'Pull requests merged')).toHaveText('4', { timeout: 500 })
+  await expect(failure).toHaveCount(0)
+  expect(state.reads).toHaveLength(6)
+})
+
 test('renders day cards before admitting year history and skips history after leaving a pending day', async ({ page }) => {
   await workspace(page)
   let release!: () => void

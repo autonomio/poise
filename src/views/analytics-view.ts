@@ -576,6 +576,7 @@ export function initAnalyticsView(): void {
     const keepHistory = history.data && historyScope === analyticsSnapshotScope(dayOffset, dayAnchor) && Date.now() - historyReadAt <= getRefreshRateMs()
     if (!keepHistory) { history = { data: null, error: '' }; cursors.clear() }
     showSnapshot(snapshot)
+    noticeFeed.reportReadErrors('analytics-day', [...accountFailures(snapshot.report), ...accountFailures(snapshot.baseline)])
     viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
     if (!keepHistory || history.data?.errors.length) void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
     if (reopening && (snapshot.report.errors.length || snapshot.baseline.errors.length)) void readAnalytics(true)
