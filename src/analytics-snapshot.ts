@@ -22,7 +22,7 @@ export function hasNewAccountFailure(report: AnalyticsReport, previous: Analytic
   return report.errors.some(error => !error.stale && !missing.has(error.org.toLowerCase()))
 }
 
-function scope(offset: number, anchor: Date): string {
+export function analyticsSnapshotScope(offset: number, anchor: Date): string {
   const day = analyticsDay(offset, anchor)
   const settings = getSettings()
   return JSON.stringify([day.since, day.until, getSelectedOrganization(), settings.me, settings.agentAccount, effectiveTimezone(), settings.organizations ?? settings.org])
@@ -30,13 +30,13 @@ function scope(offset: number, anchor: Date): string {
 
 /** Only an exact scope within the configured refresh interval can paint immediately. */
 export function preparedAnalytics(offset: number, anchor: Date): AnalyticsSnapshot | null {
-  if (prepared?.key !== scope(offset, anchor) || !prepared.snapshot) return null
+  if (prepared?.key !== analyticsSnapshotScope(offset, anchor) || !prepared.snapshot) return null
   return Date.now() - prepared.snapshot.capturedAt <= getRefreshRateMs() ? prepared.snapshot : null
 }
 
 /** Share an in-flight preparation; refresh completed snapshots rather than redate them. */
 export function readAnalyticsSnapshot(offset: number, anchor: Date, signal?: AbortSignal): Promise<AnalyticsSnapshot> {
-  const key = scope(offset, anchor)
+  const key = analyticsSnapshotScope(offset, anchor)
   if (prepared?.key === key && prepared.pending && !prepared.controller.signal.aborted) return prepared.pending
   prepared?.controller.abort()
   const entry: Prepared = { key, controller: new AbortController(), snapshot: prepared?.key === key ? prepared.snapshot : null, pending: null }

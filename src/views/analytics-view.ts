@@ -3,10 +3,10 @@ import { analyticsLayout } from '../analytics-layout'
 // Day, history and live quota retain independent read ownership on one card board.
 import { analyticsGroups, formatCount, formatRate, type AnalyticsGroup, type AnalyticsReport, type AnalyticsTile } from '../analytics-format'
 import { analyticsDay, analyticsDayProgress, analyticsHistoryBounds } from '../analytics-day'
-import { hasNewAccountFailure, preparedAnalytics, readAnalyticsSnapshot, type AnalyticsSnapshot } from '../analytics-snapshot'
+import { analyticsSnapshotScope, hasNewAccountFailure, preparedAnalytics, readAnalyticsSnapshot, type AnalyticsSnapshot } from '../analytics-snapshot'
 import { HISTORY_BASELINE, historyChart, histogram, historySeries, periodLabel, type AnalyticsHistory, type HistorySeries } from '../analytics-history'
 import { mountOrganizationFilter, organizationUrl } from '../organizations'
-import { effectiveTimezone, settingsReady } from '../config'
+import { effectiveTimezone, getRefreshRateMs, settingsReady } from '../config'
 import { noticeFeed, type ReadFailure } from '../notices'
 import { GITHUB_QUOTA_REFRESH_MS, quotaRiskTone, quotaHours, type GithubQuotaReport, type GithubQuotaBucket } from '../github-quota'
 
@@ -66,6 +66,8 @@ let quotaTimer: ReturnType<typeof setInterval> | undefined
 // its own: until then each headline tile holds its chart's place.
 let shown: { report: AnalyticsReport, baseline: AnalyticsReport, progress: number | undefined, snapshotTime: string | undefined } | null = null
 let history: { data: AnalyticsHistory | null, error: string } = { data: null, error: '' }
+let historyScope = ''
+let historyReadAt = 0
 // The period a chart's cursor rests on, by tile, while hovered or focused.
 const cursors = new Map<string, number>()
 let hoverTimer: ReturnType<typeof setTimeout> | undefined
@@ -382,6 +384,7 @@ function onPlotKey(event: KeyboardEvent): void {
 
 async function readHistory(bounds: string[]): Promise<void> {
   const generation = ++historyGeneration
+  const scope = analyticsSnapshotScope(dayOffset, dayAnchor)
   historyRead?.abort()
   const controller = new AbortController()
   historyRead = controller
@@ -395,6 +398,8 @@ async function readHistory(bounds: string[]): Promise<void> {
     if (!res.ok || !Array.isArray(data?.periods)) throw new Error(data?.error || `The past year could not be read (HTTP ${res.status})`)
     if (generation !== historyGeneration) return
     history = { data: data as AnalyticsHistory, error: '' }
+    historyScope = scope
+    historyReadAt = Date.now()
     noticeFeed.reportReadErrors('analytics-history', accountFailures(data))
   } catch (error) {
     if (generation !== historyGeneration) return
@@ -563,9 +568,11 @@ export function initAnalyticsView(): void {
   scheduleMidnightRead()
   const snapshot = preparedAnalytics(dayOffset, dayAnchor)
   if (snapshot) {
+    const keepHistory = history.data && historyScope === analyticsSnapshotScope(dayOffset, dayAnchor) && Date.now() - historyReadAt <= getRefreshRateMs()
+    if (!keepHistory) { history = { data: null, error: '' }; cursors.clear() }
     showSnapshot(snapshot)
     viewEl.querySelector<HTMLElement>('.analytics-loader')!.hidden = true
-    void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
+    if (!keepHistory) void readHistory(analyticsHistoryBounds(dayOffset, dayAnchor))
   }
   else void readAnalytics()
   void readQuota()
