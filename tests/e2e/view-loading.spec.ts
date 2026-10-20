@@ -381,7 +381,7 @@ test('Editor populates an already-open selector on first discovery and reports a
     await expect(page.locator('#editor-doc-menu')).toContainText('Could not load documents')
     expect(writes).toBe(0)
     await expect(await feedback(page)).toContainText('Editor documents unavailable')
-    await page.locator('.editor-doc-trigger').click()
+    await page.keyboard.press('Escape')
     fail = false
     await page.locator('.editor-doc-trigger').click()
     await expect(page.locator('.editor-doc-item')).toHaveCount(1)
@@ -438,7 +438,7 @@ test('returning to Editor retries the remembered file while its original library
   let reads = 0
   await page.route('**/api/editor/docs', async route => {
     await library.promise
-    await route.fulfill({ json: { docs: [summary('remembered')] } })
+    await route.fulfill({ json: { docs: [summary('other'), summary('remembered')] } })
   })
   await page.route('**/api/editor/doc/remembered', async route => {
     if (++reads === 1) await first.promise
@@ -452,7 +452,7 @@ test('returning to Editor retries the remembered file while its original library
     first.release()
     await (await received).finished()
     await page.getByRole('button', { name: 'Editor', exact: true }).click()
-    await expect(page.locator('#editor-doc')).toContainText('Available writing', { timeout: 2000 })
+    await expect(page.locator('#editor-doc')).toContainText('Note remembered', { timeout: 2000 })
     expect(reads).toBe(2)
   } finally { first.release(); library.release() }
 })
