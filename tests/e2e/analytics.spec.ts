@@ -91,6 +91,7 @@ test('retains the held card through live reads, restores cancelled pointer moves
   await expect(first).toHaveAttribute('aria-pressed', 'true')
   expect(await retained!.evaluate(button => button.isConnected)).toBe(true)
   await first.dispatchEvent('pointercancel', { pointerId })
+  expect(await first.evaluate((button, id) => button.hasPointerCapture(id), pointerId)).toBe(false)
   await page.mouse.up()
   await expect.poll(order).toEqual(original)
   await expect(board.locator('.analytics-card-held')).toHaveCount(0)
@@ -220,13 +221,13 @@ test('fits all work types and retains interleaved account positions through fail
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await expect(board.locator('.github-quota-account')).toHaveCount(2)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
-  const before = (await board.locator('[data-id="quota:octocat"]').boundingBox())!.y
+  const before = await board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => ({ id: card.getAttribute('data-id'), y: card.getBoundingClientRect().y })))
   hold = true
   try {
     await page.getByRole('button', { name: 'Previous day', exact: true }).click()
     await expect(board).toHaveAttribute('aria-busy', 'true')
     await expect(board.locator('.analytics-value')).toHaveCount(0)
-    await expect.poll(async () => Math.abs((await board.locator('[data-id="quota:octocat"]').boundingBox())!.y - before)).toBeLessThan(1)
+    await expect.poll(() => board.locator('[data-group="quota"]').evaluateAll((cards, previous) => cards.every((card, index) => card.getAttribute('data-id') === previous[index].id && Math.abs(card.getBoundingClientRect().y - previous[index].y) < 1), before)).toBe(true)
   } finally { hold = false; release() }
   await expect(board.locator('.analytics-value')).toHaveCount(16)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
