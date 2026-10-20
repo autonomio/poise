@@ -639,6 +639,9 @@ function closeTriggersPanel(force = false): Promise<boolean> {
   const draft = [...triggersDraft].sort()
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((value, index) => value === b[index])
   const changes: SettingFields = {}
+  let rejectedAuthors = ''
+  const saveStatus = (text: string, cls: 'info' | 'error' = 'info') =>
+    setTriggersStatus([rejectedAuthors, text].filter(Boolean).join(' '), rejectedAuthors ? 'error' : cls)
   if (meta.hasSkips) {
     if (!same(draft, [...triggersLoaded.skipRepos].sort())) changes.skipRepos = draft
     const setting = triggersPanelEl.querySelector<HTMLSelectElement>('.bt-ceiling-select')!.value as BehaviorSetting
@@ -653,37 +656,39 @@ function closeTriggersPanel(force = false): Promise<boolean> {
         setTriggersStatus(`Not a GitHub username: ${invalid.join(', ')}`, 'error')
         return Promise.resolve(false)
       }
-      setTriggersStatus(`The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`, 'error')
+      rejectedAuthors = `The trusted authors were not saved — not a GitHub username: ${invalid.join(', ')}`
       delete changes.authors
     }
   }
   if (Object.keys(changes).length === 0) {
+    saveStatus('')
     finishClosingTriggersPanel()
     return Promise.resolve(true)
   }
   if (stateUnknown()) {
     if (!force) {
-      setTriggersStatus(`Not saved — the current ${meta.hasSkips ? 'setting' : 'repositories'} could not be read from the server.`, 'error')
+      saveStatus(`Not saved — the current ${meta.hasSkips ? 'setting' : 'repositories'} could not be read from the server.`, 'error')
       return Promise.resolve(false)
     }
-    setTriggersStatus(meta.hasSkips
+    saveStatus(meta.hasSkips
       ? `The ${meta.label} setting was not saved: the current one could not be read from the server.`
       : 'The Review New Issues repositories were not saved: the current ones could not be read from the server.', 'error')
     finishClosingTriggersPanel()
     return Promise.resolve(true)
   }
-  setTriggersStatus('Saving…')
+  saveStatus('')
+  viewDiagnostic('behavior-triggers', 'Saving…')
   triggersSaving = setSettingFields(key, changes).then(() => {
-    setTriggersStatus('')
+    saveStatus('')
     finishClosingTriggersPanel()
     return true
   }, (err: unknown) => {
     if (force) {
-      setTriggersStatus(`Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`, 'error')
+      saveStatus(`Could not save the ${meta.hasSkips ? `${meta.label} setting` : 'Review New Issues triggers'}: ${(err as Error).message}`, 'error')
       finishClosingTriggersPanel()
       return true
     }
-    setTriggersStatus(`Not saved: ${(err as Error).message}`, 'error')
+    saveStatus(`Not saved: ${(err as Error).message}`, 'error')
     return false
   }).finally(() => { triggersSaving = null })
   return triggersSaving

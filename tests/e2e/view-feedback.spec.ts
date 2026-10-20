@@ -102,3 +102,46 @@ test('annotation conflicts belong to Needs you while the local annotation is ret
   await expect(rail.getByRole('region', { name: 'Needs you', exact: true })).toContainText('Annotation conflict')
   await expect(input).toHaveValue('Keep my annotation')
 })
+
+test('a partial trigger save retains rejected-author feedback after leaving Behaviors', async ({ page }) => {
+  await workspace(page)
+  const state = Object.fromEntries(BEHAVIORS.map(({ key }) => [key,
+    { owner: 'review-bot', enabled: false, setting: 'p2', reviewers: 1, scratchpad: '', repos: [] as string[], skipRepos: [], authors: [] as string[], lastTriggered: null },
+  ]))
+  await page.route('**/api/behaviors', route => route.fulfill({ json: state }))
+  await page.route('**/api/repos', route => route.fulfill({ json: { repos: ['acme/project'] } }))
+  const writes: Array<{ repos?: string[], authors?: string[] }> = []
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/behaviors/review-new-issues', async route => {
+    const body = route.request().postDataJSON()
+    writes.push(body)
+    if (writes.length === 1) await held
+    Object.assign(state['review-new-issues'], body)
+    await route.fulfill({ json: { ok: true, ...state['review-new-issues'] } })
+  })
+  await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
+  const opener = page.locator('tr[data-behavior="review-new-issues"] .behavior-triggers-btn')
+  await opener.click()
+  const dialog = page.getByRole('dialog', { name: /Review New Issues/ })
+  await dialog.getByRole('checkbox', { name: 'project', exact: true }).check()
+  await dialog.getByLabel('Trusted authors').fill('invalid!')
+  try {
+    await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+    await expect.poll(() => writes).toEqual([{ repos: ['acme/project'] }])
+    const notice = await feedback(page, 'Behavior settings need attention')
+    await expect(notice).toContainText('trusted authors were not saved')
+    await expect(notice).toHaveCount(1)
+    release()
+    await expect(dialog).toBeHidden()
+    await expect(notice).toContainText('not a GitHub username: invalid!')
+    await page.locator('#notification-bell').click()
+    await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
+    await opener.click()
+    await dialog.getByLabel('Trusted authors').fill('octocat')
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect.poll(() => writes.length).toBe(2)
+    await expect(dialog).toBeHidden()
+    await expect(await feedback(page)).not.toContainText('Behavior settings need attention')
+  } finally { release() }
+})
