@@ -587,6 +587,7 @@ function accountState(account: ConnectedAccount): { text: string, tone: 'on' | '
   if (account.signedIn === true) return { text: account.identity ? `Signed in as ${account.identity}` : 'Signed in', tone: 'on' }
   if (account.signedIn === false) return { text: account.detail ?? 'Not signed in', tone: 'off' }
   if (hasRecordedSignIn(account)) return { text: 'Signed in here', tone: 'on' }
+  if (account.version === null || !UNREPORTED_SIGN_IN.includes(account.id)) return { text: account.detail ?? 'Sign-in not reported', tone: 'unknown' }
   return { text: 'Not signed in yet', tone: 'off' }
 }
 
@@ -607,7 +608,7 @@ function aiStep(ctx: StepContext): StepView {
       // A CLI that cannot report its sign-in counts as signed in when the person says so.
       // Withdrawal applies to retained history even when a probe is currently failing.
       const marked = !!ctx.logins()[account.id]
-      const mark = account.installed && UNREPORTED_SIGN_IN.includes(account.id) && account.signedIn === null
+      const mark = account.installed && UNREPORTED_SIGN_IN.includes(account.id) && account.signedIn === null && (account.version !== null || marked)
         ? `<button type="button" class="st-clear ob-ai-mark" data-mark="${account.id}" data-signed-in="${!marked}" aria-label="${escapeHtml(NAMES[account.id])}: ${marked ? 'not signed in' : 'I have signed in'}">${marked ? 'Not signed in' : 'I\'ve signed in'}</button>`
         : ''
       return `
