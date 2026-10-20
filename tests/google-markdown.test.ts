@@ -41,6 +41,22 @@ describe('Google Markdown native comments', () => {
     const doc = readGoogleMarkdown('# Draft\n' + suffix.replace('status: ACTIVE', 'status: RESOLVED'))
     expect(doc.comments[0]).toMatchObject({ resolved: true, start: null, end: null })
   })
+  it.each([' ', '\t'])('keeps unanchored footer tokens private with trailing header whitespace %j', whitespace => {
+    const footer = suffix.replace('gdoc_comments:', `gdoc_comments:${whitespace}`)
+    const doc = readGoogleMarkdown('# Draft\n' + footer)
+    expect(doc.text).toBe('# Draft\n')
+    expect(doc.comments[0]).toMatchObject({ start: null, end: null })
+    expect(JSON.stringify({ text: doc.text, comments: doc.comments })).not.toContain('redacted-provider-token')
+    expect(updateGoogleMarkdown('# Draft\n' + footer, '# Updated\n')).toBe('# Updated\n' + footer)
+  })
+  it('rejects unsupported footer boundaries before exposing provider metadata', () => {
+    for (const header of ['  gdoc_comments:', 'gdoc_comments :']) {
+      const value = '# Draft\n' + suffix.replace('gdoc_comments:', header)
+      expect(() => readGoogleMarkdown(value)).toThrow('unsupported')
+      expect(() => updateGoogleMarkdown('', value)).toThrow('reserved')
+    }
+    expect(() => readGoogleMarkdown('gdoc_comments:\n  token: private')).toThrow('unsupported')
+  })
   it('preserves Unicode offsets', () => {
     const value = raw.replace('# Draft', '# 🦉 Draft')
     const updated = updateGoogleMarkdown(value, readGoogleMarkdown(value).text.replace('# 🦉 Draft', '# 🦉 Longer draft'))

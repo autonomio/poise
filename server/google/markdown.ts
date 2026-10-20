@@ -24,7 +24,7 @@ const invalid = () => new HttpError(422, 'Google comment metadata is unsupported
 
 /** Keep the provider-owned metadata opaque. Only text and safe comment fields leave the server. */
 export function readGoogleMarkdown(raw: string): GoogleMarkdown {
-  const boundary = /\r?\n---\r?\ngdoc_comments:\r?\n/.exec(raw)
+  const boundary = /\r?\n---\r?\ngdoc_comments:[ \t]*\r?\n/.exec(raw)
   const suffix = boundary ? raw.slice(boundary.index) : ''
   const body = boundary ? raw.slice(0, boundary.index) : raw
   const markers: Marker[] = []
@@ -35,7 +35,7 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
     last = match.index! + match[0].length
   }
   text += body.slice(last)
-  if (/gdoc_comment_(?:begin|end):/.test(text) || (!suffix && markers.length)) throw invalid()
+  if (/gdoc_comment_(?:begin|end):|gdoc_comments[ \t]*:/.test(text) || (!suffix && markers.length)) throw invalid()
   if (!suffix) return { text, comments: [], markers, suffix }
   const ending = /\r?\n---\s*$/.exec(suffix)
   if (!ending) throw invalid()
@@ -79,7 +79,7 @@ export function readGoogleMarkdown(raw: string): GoogleMarkdown {
 
 /** Re-anchor only exact, unambiguous passages; never silently detach reviewer feedback. */
 export function updateGoogleMarkdown(raw: string, next: string): string {
-  if (/gdoc_comment_(?:begin|end):|\ngdoc_comments:/.test(next)) throw new HttpError(422, 'The Poise draft contains reserved Google comment metadata.')
+  if (/gdoc_comment_(?:begin|end):|gdoc_comments[ \t]*:/.test(next)) throw new HttpError(422, 'The Poise draft contains reserved Google comment metadata.')
   const doc = readGoogleMarkdown(raw)
   if (doc.text === next) return raw
   const ranges = new Map<string, { start: number, end: number }>()
