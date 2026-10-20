@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BehaviorLedgerObserver } from '../server/behavior-ledger'
@@ -46,8 +46,52 @@ describe('bounded behavior ledger transport', () => {
     const reply = await observer.read({ operation: 'health' })
     expect(reply.status).toBe(200)
     expect(reply.body.health.dropped).toBe(1)
-    expect(reply.body.health.pending).toBe(0)
+    expect(reply.body.health.pending).toBe(1)
     expect(reply.body.health.status).toBe('incomplete')
+    expect((await observer.read({ operation: 'health' })).body.health).toMatchObject({
+      pending: 0, dropped: 1, status: 'incomplete',
+    })
+  })
+
+  it('serves queued reads between captures while preserving capture, read and close order', async () => {
+    const observer = await fixture(`
+      import { appendFileSync, existsSync, watch } from 'node:fs';
+      const order=new URL('./order',import.meta.url);
+      port.postMessage({ready:true,health,pending:[]});
+      port.on('message',request=>{
+        const label=request.operation==='capture'?request.observation.nativeId
+          :request.operation==='read'?request.request.operation:request.operation;
+        appendFileSync(order,label+'\\n');
+        const reply=()=>{
+          if(request.operation==='capture') health.instances++;
+          port.postMessage({id:request.id,status:200,body:{version:1,health},pending:[]});
+        };
+        if(label!=='second') { reply(); return; }
+        const release=new URL('./release',import.meta.url);
+        let released=false;
+        const watcher=watch(new URL('.',import.meta.url),()=>check());
+        function check() {
+          if(released||!existsSync(release)) return;
+          released=true; watcher.close(); reply();
+        }
+        check();
+      });`)
+    const directory = directories.at(-1)!
+    for (const nativeId of ['first', 'second', 'third']) observer.capture({ ...admission, nativeId })
+    const first = observer.read({ operation: 'list' })
+    const second = observer.read({ operation: 'health' })
+    try {
+      expect(await first).toMatchObject({ status: 200, body: { health: { status: 'incomplete', instances: 1, pending: 2 } } })
+      const stopping = observer.stop()
+      observer.capture({ ...admission, nativeId: 'late' })
+      expect(await observer.read({ operation: 'list' })).toMatchObject({ status: 503, body: { health: { status: 'stopped' } } })
+      await writeFile(join(directory, 'release'), '')
+      expect(await second).toMatchObject({ status: 200, body: { health: { instances: 2, pending: 1 } } })
+      await stopping
+      expect((await readFile(join(directory, 'order'), 'utf8')).trim().split('\n')).toEqual([
+        'first', 'list', 'second', 'health', 'third', 'close',
+      ])
+    } finally { await writeFile(join(directory, 'release'), '') }
   })
 
   it('bounds read admission and recovers after a queued health-read deadline', async () => {
