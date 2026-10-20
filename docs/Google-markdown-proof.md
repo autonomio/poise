@@ -72,8 +72,14 @@ draft. Explicit review/import brought that edit into Poise and retained an
 exact copy of the prior local text in Google history. Provider metadata was
 absent from the imported draft.
 
-Actual OAuth through the service gateway and independent files for two real
-identities remain unproved. These are release blockers tracked in
+Two real identities connected through Settings and published the same local
+draft to distinct private files. Publishing a subsequent edit through the
+second account changed only its file; the first remained byte-for-byte
+unchanged. Reading either file with the other account returned 404. Both
+publication bindings retained their original file IDs.
+
+Actual OAuth through the service gateway remains unproved. This is a release
+blocker tracked in
 [#258](https://github.com/autonomio/poise/issues/258). Missing, weak or unusable
 validators refuse mutation.
 
