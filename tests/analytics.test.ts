@@ -584,10 +584,15 @@ describe('reading what Current shows', () => {
       expect(readDetails(eager)).toEqual(expectedDetails)
       expect(readDetails(single)).toEqual(expectedDetails)
       const samples = { eager: [] as number[], single: [] as number[] }
+      const cpuSamples = { eager: [] as number[], single: [] as number[] }
       const measure = (name: keyof typeof samples, query: typeof eager) => {
+        const startCpu = process.cpuUsage()
         const start = performance.now()
         readDetails(query)
-        samples[name].push(performance.now() - start)
+        const elapsed = performance.now() - start
+        const cpu = process.cpuUsage(startCpu)
+        samples[name].push(elapsed)
+        cpuSamples[name].push((cpu.user + cpu.system) / 1000)
       }
       for (let pair = 0; pair < 8; pair++) {
         if (pair % 2 === 0) { measure('eager', eager); measure('single', single) }
@@ -598,7 +603,8 @@ describe('reading what Current shows', () => {
         return (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
       }
       const eagerMs = median(samples.eager), singleMs = median(samples.single)
-      process.stdout.write(`${JSON.stringify({ analyticsPerformance: { payloadMiB: 64, pairedSamples: 8, legacyMedianMs: eagerMs, singleMedianMs: singleMs, samples } })}\n`)
+      const eagerCpuMs = median(cpuSamples.eager), singleCpuMs = median(cpuSamples.single)
+      process.stdout.write(`${JSON.stringify({ analyticsPerformance: { payloadMiB: 64, pairedSamples: 8, legacyMedianMs: eagerMs, singleMedianMs: singleMs, samples, legacyCpuMedianMs: eagerCpuMs, singleCpuMedianMs: singleCpuMs, cpuSamples } })}\n`)
       expect(await readAnalytics(WEEK, 'alpha')).toEqual(computeAnalytics({ window: WEEK, issues: [], prs: rows, behaviors: [], agent: 'robot' }))
 
       // Count actual large-input extraction calls through SQLite's function
@@ -618,7 +624,8 @@ describe('reading what Current shows', () => {
         expect(largeExtractions).toBeGreaterThan(rows.length)
         process.stdout.write(`${JSON.stringify({ analyticsExtractionWork: { rows: rows.length, single: singleExtractions, legacy: largeExtractions } })}\n`)
       } finally { native.close() }
-      expect(singleMs).toBeLessThan(eagerMs)
+      // Scheduling delay is not query work; keep elapsed samples as diagnostics.
+      expect(singleCpuMs).toBeLessThan(eagerCpuMs)
     } finally { db.close() }
   })
 
