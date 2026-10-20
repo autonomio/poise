@@ -3,7 +3,7 @@
 // key-protected drain/readiness/resume, the drain gate on API mutations,
 // and the build identity on /api/health. Nothing here touches a real
 // controller root, release or production server.
-import { createServer, request as httpRequest, type Server } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { mkdtemp, mkdir, rm, writeFile, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -132,7 +132,7 @@ describe('self-update routes', () => {
   let bridge: FakeBridge
   const envKeys = ['POISE_DB', 'POISE_EDITOR_DIR', 'POISE_CHAT_ATTACHMENTS_DIR', 'POISE_LOCK_DIR', 'AGENT_INTERFACE_ROOT', 'POISE_ESPANSO_MATCH_DIR']
 
-  async function start(withBridge: FakeBridge | null) {
+  async function start(withBridge: FakeBridge | null, onHandled?: (url: string | undefined) => void) {
     const dir = await mkdtemp(join(root, 'srv-'))
     process.env.POISE_DB = join(dir, 'cache.db')
     process.env.POISE_EDITOR_DIR = join(dir, 'editor')
@@ -143,7 +143,9 @@ describe('self-update routes', () => {
     vi.resetModules()
     cache = await import('../server/cache-plugin')
     const middleware = cache.createPoiseMiddleware({ claudeAuth: createAuthenticatedClaudeAuth(), selfUpdateBridge: withBridge })
-    server = createServer((req, res) => { void middleware(req, res, () => { res.statusCode = 404; res.end() }) })
+    server = createServer((req, res) => {
+      void Promise.resolve(middleware(req, res, () => { res.statusCode = 404; res.end() })).finally(() => onHandled?.(req.url))
+    })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const address = server.address() as { port: number }
     base = `http://127.0.0.1:${address.port}`
@@ -269,8 +271,12 @@ describe('self-update routes', () => {
 
   it('keeps counting a mutation whose client disconnected until its handler has finished', async () => {
     bridge = fakeBridge()
-    await start(bridge)
+    let finishHandler!: () => void
+    const handled = new Promise<void>((resolve) => { finishHandler = resolve })
+    await start(bridge, (url) => { if (url === '/api/self-update/revert') finishHandler() })
     const key = { 'x-poise-release-key': bridge.key! }
+    const readiness = async () => (await (await fetch(`${base}/api/self-update/readiness`, { headers: key })).json() as { busy: number })
+    await expect.poll(async () => (await readiness()).busy, { timeout: 5_000 }).toBe(0)
     const storage = await import('../server/chat/storage')
     const runtime = cache.getChatRuntime()
     const mine = randomUUID()
@@ -281,20 +287,39 @@ describe('self-update routes', () => {
     // sends its whole request and goes away before the handler ends.
     let releaseHold!: () => void
     bridge.hold = new Promise<void>((resolve) => { releaseHold = resolve })
+    let response: ServerResponse | undefined
+    let closeResponse!: () => void
+    const disconnected = new Promise<void>((resolve) => { closeResponse = resolve })
+    const observeRequest = (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url === '/api/self-update/revert') {
+        response = res
+        res.once('close', closeResponse)
+      }
+    }
+    server.on('request', observeRequest)
     const gone = httpRequest(`${base}/api/self-update/revert`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
     gone.on('error', () => undefined)
-    gone.end(JSON.stringify({ sessionId: mine, changeId: visible.id, expectedReleaseId: 'rel-2' }))
-    await new Promise((r) => setTimeout(r, 100))
-    expect(bridge.calls.filter((c) => c.op === 'status')).toHaveLength(1) // the handler is inside the controller call
-    gone.destroy()
-    await new Promise((r) => setTimeout(r, 100))
-    const during = await (await fetch(`${base}/api/self-update/readiness`, { headers: key })).json() as any
-    expect(during.busy).toBe(1) // still counted although the response can never be delivered
-    releaseHold()
-    await new Promise((r) => setTimeout(r, 100))
-    expect(bridge.calls.filter((c) => c.op === 'rollback')).toHaveLength(1) // the write happened after the disconnect
-    const after = await (await fetch(`${base}/api/self-update/readiness`, { headers: key })).json() as any
-    expect(after.busy).toBe(0)
+    try {
+      gone.end(JSON.stringify({ sessionId: mine, changeId: visible.id, expectedReleaseId: 'rel-2' }))
+      await expect.poll(() => bridge.calls.filter((c) => c.op === 'status'), { timeout: 5_000 }).toHaveLength(1)
+      expect(bridge.calls.filter((c) => c.op === 'status')).toHaveLength(1) // the handler is inside the controller call
+      gone.destroy()
+      await disconnected
+      expect(response?.writableFinished).toBe(false)
+      expect(bridge.calls.filter((c) => c.op === 'rollback')).toHaveLength(0)
+      const during = await readiness()
+      expect(during.busy).toBe(1) // still counted although the response can never be delivered
+      releaseHold()
+      await handled
+      expect(bridge.calls.filter((c) => c.op === 'rollback')).toHaveLength(1) // the write happened after the disconnect
+      const after = await readiness()
+      expect(after.busy).toBe(0)
+    } finally {
+      releaseHold()
+      gone.destroy()
+      server.off('request', observeRequest)
+      if (response) await handled
+    }
   }, 20_000)
 
   it('pauses and resumes process-owned background admission with the drain and counts admitted operations', async () => {
