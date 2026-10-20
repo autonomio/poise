@@ -78,7 +78,7 @@ describe('prepared Analytics snapshots', () => {
   })
 
   it('retries an aborted read without sharing its rejected promise', async () => {
-    vi.mocked(fetch).mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+    vi.mocked(fetch).mockImplementation((_input, init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
     }))
     const { readAnalyticsSnapshot } = await import('../src/analytics-snapshot')
