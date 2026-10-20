@@ -233,13 +233,14 @@ test('fits all work types and retains interleaved account positions through fail
   await moved.press('ArrowLeft')
   await moved.press('Space')
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
-  const before = await board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => ({ id: card.getAttribute('data-id'), y: card.getBoundingClientRect().y })))
+  await expect(board.locator('[data-motion-running]')).toHaveCount(0)
+  const before = await board.locator('[data-group="quota"]').evaluateAll(cards => cards.map(card => ({ id: card.getAttribute('data-id'), y: card.getBoundingClientRect().y - card.parentElement!.getBoundingClientRect().y })))
   hold = true
   try {
     await page.getByRole('button', { name: 'Previous day', exact: true }).click()
     await expect(board).toHaveAttribute('aria-busy', 'true')
     await expect(board.locator('.analytics-value')).toHaveCount(0)
-    await expect.poll(() => board.locator('[data-group="quota"]').evaluateAll((cards, previous) => cards.every((card, index) => card.getAttribute('data-id') === previous[index].id && Math.abs(card.getBoundingClientRect().y - previous[index].y) < 1), before)).toBe(true)
+    await expect.poll(() => board.locator('[data-group="quota"]').evaluateAll((cards, previous) => cards.every((card, index) => card.getAttribute('data-id') === previous[index].id && Math.abs(card.getBoundingClientRect().y - card.parentElement!.getBoundingClientRect().y - previous[index].y) < 1), before)).toBe(true)
   } finally { hold = false; release() }
   await expect(board.locator('.analytics-value')).toHaveCount(16)
   await expect.poll(async () => (await order()).slice(0, 4)).toEqual(prefix)
