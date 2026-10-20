@@ -108,6 +108,7 @@ test('a failed complete-history read keeps recent calls, reports incompleteness 
   await expect(page.locator(rows)).toHaveCount(1)
   await expect(page.locator(rows)).toContainText('#60')
   await expect(page.locator('#swarm-stale')).toHaveCount(0)
+  await expect((await feedback(page)).locator('.nr-card').filter({ hasText: 'Swarm is not updating' })).toHaveCount(0)
 })
 
 test('returning to Swarm paints history received while hidden before its new refresh', async ({ page }) => {
@@ -204,6 +205,7 @@ test('an empty-history refresh failure remains visible on re-entry while another
     await expect.poll(() => completeReads).toBe(2)
     await expect(page.locator('#swarm-empty')).toHaveCount(0)
     refresh.release()
+    await expect((await feedback(page)).locator('.nr-card').filter({ hasText: 'Swarm is not updating' })).toHaveCount(0)
     await expect(page.locator('#swarm-empty')).toHaveCount(0)
   } finally { refresh.release() }
 })

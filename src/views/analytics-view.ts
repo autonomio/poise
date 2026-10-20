@@ -261,7 +261,7 @@ function groupMarkup(group: AnalyticsGroup): string {
             <dt class="analytics-label">${dragHandle(tile.label)}</dt>
             <dd class="analytics-summary ${tile.trend?.direction ?? 'neutral'}${tile.trend?.onPace ? ' on-pace' : ''}">
               <div class="analytics-value-row"><span class="analytics-value" data-help="${escapeHtml([measurementHelp[tile.label], tile.note].filter(Boolean).join(' '))}" tabindex="0">${escapeHtml(tile.value)}</span>${tile.valueLabel ? `<span class="analytics-work-label">${escapeHtml(tile.valueLabel)}</span>` : ''}${tile.trend ? `<span class="analytics-arrow" role="img" aria-label="${escapeHtml(tile.trend.description)}" data-help="${escapeHtml(tile.trend.caption)}" tabindex="0">${escapeHtml(tile.trend.text.slice(0, 1))}</span>` : ''}</div>
-              ${tile.workTypes ? '' : `<div class="analytics-trend">${tile.trend ? `<span class="analytics-delta" data-help="${escapeHtml(tile.trend.description)}" tabindex="0">${escapeHtml(tile.trend.text.slice(2))}</span>` : ''}<span class="analytics-note">${tile.comparison ? escapeHtml(tile.comparison) : ''}</span></div>`}
+              ${tile.workTypes ? '' : `<div class="analytics-trend">${tile.trend ? `<span class="analytics-delta" data-help="${escapeHtml(tile.trend.description)}" tabindex="0">${escapeHtml(tile.trend.text.slice(2))}</span>` : ''}<span class="analytics-note">${tile.comparison && tile.comparison !== 'No agent account in Settings' ? escapeHtml(tile.comparison.replace(' · No baseline', '')) : ''}</span></div>`}
             </dd>
             ${tile.workTypes ? workTypeMarkup(tile) : historyMarkup(tile, series, group.id === 'work-review')}
           </dl></article>`).join('')}`

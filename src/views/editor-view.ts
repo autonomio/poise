@@ -242,9 +242,7 @@ const documentSaveQueue = createSerializedSaveQueue(
   persistDocumentSnapshot,
   (error) => {
     console.error('[editor] save failed:', error)
-    {
-      setMeta((error as Error)?.message?.includes('changed since') ? 'Conflict — reload' : 'Save failed')
-    }
+    setMeta((error as Error)?.message?.includes('changed since') ? 'Conflict — reload' : 'Save failed')
   },
 )
 
