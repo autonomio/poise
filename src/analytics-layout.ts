@@ -48,6 +48,23 @@ export function cardInsertion(cards: Pick<Card, 'id' | 'span' | 'height'>[], wid
   return costs[best] + 24 < costs[current] ? best : current
 }
 
+export function cardRowInsertion(cards: Pick<Card, 'id' | 'span' | 'height'>[], width: number, id: string, direction: -1 | 1): number {
+  const current = cards.findIndex(card => card.id === id), held = cards[current]
+  if (!held) throw new Error(`Analytics card ${id} is unavailable.`)
+  const origin = cardPositions(cards, width).get(id)!, rest = cards.filter(card => card.id !== id)
+  let best = current, distance = Infinity, alignment = Infinity
+  for (let index = 0; index <= rest.length; index++) {
+    const candidate = [...rest]; candidate.splice(index, 0, held)
+    const box = cardPositions(candidate, width).get(id)!
+    const dy = (box.y - origin.y) * direction
+    const dx = Math.abs(box.x + box.width / 2 - origin.x - origin.width / 2)
+    if (dy > .5 && (dy < distance - .5 || Math.abs(dy - distance) < .5 && dx < alignment)) {
+      best = index; distance = dy; alignment = dx
+    }
+  }
+  return best
+}
+
 export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch?: () => void) {
   let saved: string[] = []
   try {
@@ -228,8 +245,10 @@ export function analyticsLayout(board: HTMLElement, status: HTMLElement, onPatch
       begin()
     } else if (move?.pointer === null && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
       event.preventDefault()
-      const index = order.indexOf(move.card.id), step = Math.max(1, Math.floor(20 / move.card.span))
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1 : index + (event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' ? -step : step)
+      const index = order.indexOf(move.card.id)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1
+        : event.key === 'ArrowUp' || event.key === 'ArrowDown' ? cardRowInsertion(order.map(id => cards.get(id)!), width, move.card.id, event.key === 'ArrowUp' ? -1 : 1)
+          : index + (event.key === 'ArrowLeft' ? -1 : 1)
       moveTo(Math.max(0, Math.min(order.length - 1, next)))
       announce(`${move.card.element.dataset.label}, position ${order.indexOf(move.card.id) + 1} of ${order.length}.`)
     }

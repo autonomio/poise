@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardInsertion, cardPositions, reconcileCardOrder } from '../src/analytics-layout'
+import { cardInsertion, cardPositions, cardRowInsertion, reconcileCardOrder } from '../src/analytics-layout'
 
 describe('analytics card order', () => {
   it('retains saved identities, removes duplicates and missing cards, and appends new cards', () => {
@@ -32,5 +32,17 @@ describe('analytics card order', () => {
     expect(cardInsertion(cards, 988, 744, 20, 8)).toBe(3)
     expect(cardInsertion(cards, 988, 994, 20, 8)).toBe(4)
     expect(cardInsertion(cards, 988, 0, 384, 8)).toBe(4)
+  })
+  it('moves a wide card to a different visual row rather than stepping by its own span', () => {
+    const cards = [
+      ...Array.from({ length: 8 }, (_, i) => ({ id: String(i), span: 5, height: 352 })),
+      { id: 'work', span: 10, height: 272 }, { id: 'rounds', span: 5, height: 272 }, { id: 'share', span: 5, height: 272 },
+      ...Array.from({ length: 5 }, (_, i) => ({ id: `per-pr-${i}`, span: 4, height: 272 })),
+    ]
+    const before = cardPositions(cards, 988).get('work')!
+    const index = cardRowInsertion(cards, 988, 'work', 1)
+    const next = cards.filter(card => card.id !== 'work'); next.splice(index, 0, cards[8])
+    expect(cardPositions(next, 988).get('work')!.y).toBeGreaterThan(before.y)
+    expect(cardRowInsertion(cards, 988, '0', -1)).toBe(0)
   })
 })

@@ -264,6 +264,27 @@ test('places a wide account card at both boundaries sharing a wrapped destinatio
   }
 })
 
+test('vertical header keys move wide cards between visual rows', async ({ page }) => {
+  await workspace(page)
+  await page.goto('/')
+  await openAnalytics(page)
+  const handle = page.getByRole('button', { name: 'Move Work type', exact: true })
+  await handle.scrollIntoViewIfNeeded()
+  await handle.focus()
+  const top = () => handle.evaluate(button => button.getBoundingClientRect().top + scrollY)
+  const before = await top()
+  await handle.press('Space')
+  await handle.press('ArrowDown')
+  await handle.press('Space')
+  await expect.poll(top).toBeGreaterThan(before + 1)
+  const below = await top()
+  await handle.press('Space')
+  await handle.press('ArrowUp')
+  await handle.press('Space')
+  await expect.poll(top).toBeLessThan(below - 1)
+  await expect(handle).toBeFocused()
+})
+
 test('paints history readouts above neighboring cards and retains their period through quota polling', async ({ page }) => {
   await workspace(page)
   let quotaReads = 0
