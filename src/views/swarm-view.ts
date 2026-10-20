@@ -209,6 +209,15 @@ function escapeHtml(s: string): string {
 }
 
 
+function quarantineDescription(row: QuarantinedLog): string {
+  const target = row.repo || row.prId
+    ? `Reported target: ${row.repo || 'unknown repository'}${row.prId ? `#${row.prId}` : ''}`
+    : row.sessionId ? `Reported session: ${row.sessionId}` : 'Target unknown'
+  return [target, `Call: ${row.id || 'unknown'}`, row.correlationId ? `Correlation: ${row.correlationId}` : '',
+    row.behavior ? `Behavior: ${row.behavior}` : '', row.sessionId ? `Session: ${row.sessionId}` : '',
+    `Log index: ${row.index}`, row.error].filter(Boolean).join(' · ')
+}
+
 // Status is a coloured icon and the status in a word. The status and outcome
 // used to be two uppercase pills ("FAILED PREFLIGHT", "COMPLETED CHANGES") that
 // never fit the column and were cut to "FAILED PREFLI…" on every row. A plain
@@ -1198,7 +1207,7 @@ function renderStaleBanner(): void {
     ? `${lastLoadError}. Last successful read: ${age}. ${partial}` : '', 'read_failed')
   viewFeedback('swarm-records', 'Unreadable Swarm records', quarantined.length
     ? `${quarantined.length} unreadable worker log row(s) isolated. Other runs continue updating.\n`
-      + quarantined.map(row => `${row.repo ?? row.sessionId ?? 'Unknown target'}${row.prId ? `#${row.prId}` : ''} · Call: ${row.id ?? 'unknown'} · Correlation: ${row.correlationId ?? 'unknown'} · Behavior: ${row.behavior ?? 'unknown'} · Log index: ${row.index} · ${row.error}`).join('\n')
+      + quarantined.map(quarantineDescription).join('\n')
     : '', 'read_failed')
 }
 

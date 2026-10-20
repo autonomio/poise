@@ -655,7 +655,7 @@ test('keeps healthy Swarm rows live while identifying unreadable records', async
   await expect(diagnostics).toContainText('Call: ' + 'b'.repeat(32))
   await expect(diagnostics).toContainText('Correlation: claim-2')
   await expect(diagnostics).toContainText('invalid terminal outcome')
-  await expect(diagnostics).toContainText('Unknown target')
+  await expect(diagnostics).toContainText('Target unknown')
   await expect(diagnostics).toContainText('log row is not an object')
   await expect(diagnostics.locator('.agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
   logs[0].status = 'failed'
@@ -669,7 +669,7 @@ test('shows conflicting identity diagnostics when no validated Swarm row remains
   const id = 'c'.repeat(32)
   let unreadable = true
   await page.route(/\/api\/agent-logs(?:\?.*)?$/, (route) => route.fulfill({ json: unreadable
-    ? { logs: [], quarantined: [{ index: 1, error: 'incomplete terminal outcome', id,
+    ? { logs: [], quarantined: [{ index: 1, error: 'incomplete terminal outcome <script>bad</script>', id,
         repo: 'elsewhere/repo', prId: '1', correlationId: 'claim-1', behavior: 'pr_review', sessionId: null }] }
     : { logs: [{ id, model: 'astra', behavior: 'pr_review', repo: 'o/r', pr_id: '1',
         status: 'completed', outcome: 'clean', started_at: new Date().toISOString(),
@@ -683,7 +683,8 @@ test('shows conflicting identity diagnostics when no validated Swarm row remains
   await expect(page.locator('#swarm-empty')).toHaveCount(0)
   await expect(diagnostics).toContainText('elsewhere/repo#1')
   await expect(diagnostics).toContainText('Call: ' + id)
-  await expect(diagnostics).toContainText('incomplete terminal outcome')
+  await expect(diagnostics).toContainText('incomplete terminal outcome <script>bad</script>')
+  await expect(diagnostics.locator('script, img')).toHaveCount(0)
   await expect(diagnostics.locator('.agent-status-icon, .started-cell, .elapsed-cell')).toHaveCount(0)
   unreadable = false
   await page.evaluate(() => window.dispatchEvent(new Event('poise:refresh-tick')))
