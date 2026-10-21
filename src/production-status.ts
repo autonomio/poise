@@ -33,11 +33,10 @@ function short(commit: string | null): string {
   return commit ? commit.slice(0, 7) : '?'
 }
 
-function minutesAgo(iso: string, now: number, timeZone: string): string {
+// Reached only for a check younger than UPDATER_SILENT_AFTER_MS, so always minutes.
+function minutesAgo(iso: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - Date.parse(iso)) / 60_000))
-  if (minutes === 0) return 'just now'
-  if (minutes < 60) return `${minutes} min ago`
-  return shortTime(iso, timeZone, now)
+  return minutes === 0 ? 'just now' : `${minutes} min ago`
 }
 
 // One line, in words: what production is running, what `main` is at, and
@@ -58,5 +57,5 @@ export function productionSummary(update: ProductionUpdate, now: number, timeZon
     return { text: `${deployed}${main}${behind}; updater failing${since}: ${update.error || 'no error recorded'}`, level: 'error' }
   }
   const main = update.remoteCommit ? ` · main ${short(update.remoteCommit)}` : ''
-  return { text: `${deployed}${main} — up to date, checked ${minutesAgo(update.checkedAt, now, timeZone)}.`, level: 'info' }
+  return { text: `${deployed}${main} — up to date, checked ${minutesAgo(update.checkedAt, now)}.`, level: 'info' }
 }
