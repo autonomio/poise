@@ -25,17 +25,17 @@ const FRESH_MS = 24 * 60 * 60_000
 const RETRY_MS = 10 * 60_000
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
-/** Shown before anything is searched. Names that are not in the mirror are skipped. */
+/** Shown before anything is searched; each checked against the live registry
+ *  (October 2026). Names that are not in the mirror are skipped. */
 export const FEATURED = [
   'io.github.github/github-mcp-server',
   'com.notion/mcp',
   'app.linear/linear',
-  'io.sentry/sentry-mcp',
-  'com.microsoft/playwright-mcp',
+  'io.github.microsoft/playwright-mcp',
   'io.github.upstash/context7',
   'com.stripe/mcp',
   'com.atlassian/atlassian-mcp-server',
-  'com.cloudflare.mcp/docs',
+  'com.cloudflare.mcp/mcp',
   'com.figma.mcp/mcp',
   'com.supabase/mcp',
   'ai.exa/exa',
