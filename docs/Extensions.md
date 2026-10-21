@@ -82,7 +82,9 @@ with PKCE. The provider returns the browser to `/extensions/oauth` on this
 Poise, which finishes the exchange and opens Extensions on the server (it is a
 page, not an API route, because the API refuses cross-site navigations). The
 return is accepted once, within ten minutes, only for a flow Poise started,
-and only from an HTTPS origin or HTTP on localhost. Poise renews the access
+and only from an HTTPS origin or HTTP on localhost. Signing in again starts a
+new authorization, and chats keep the current sign-in until it completes.
+Poise renews the access
 token before it expires; a refused renewal marks the server as needing a
 sign-in again. Providers that do not support dynamic client registration
 cannot sign in this way; use a token or headers if they offer one.

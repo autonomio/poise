@@ -25,7 +25,9 @@ const json = <T>(id: string, slot: string): T | undefined => {
 
 class StoredProvider implements OAuthClientProvider {
   authorizationUrl: URL | null = null
-  constructor(private readonly id: string, private readonly redirect: string, private flow?: Flow) {}
+  /** `fresh`: start a new authorization even with tokens stored, which stay in
+   *  use until the new sign-in completes. */
+  constructor(private readonly id: string, private readonly redirect: string, private flow?: Flow, private readonly fresh = false) {}
 
   get redirectUrl(): string { return this.redirect }
   get clientMetadata(): OAuthClientMetadata {
@@ -41,7 +43,7 @@ class StoredProvider implements OAuthClientProvider {
     return info && (!Array.isArray(info.redirect_uris) || info.redirect_uris.includes(this.redirect)) ? info : undefined
   }
   saveClientInformation(info: OAuthClientInformationMixed): void { writeSecret(this.id, 'oauth:client', JSON.stringify(info)) }
-  tokens(): OAuthTokens | undefined { return json<Stored>(this.id, 'oauth:tokens')?.tokens }
+  tokens(): OAuthTokens | undefined { return this.fresh ? undefined : json<Stored>(this.id, 'oauth:tokens')?.tokens }
   saveTokens(tokens: OAuthTokens): void {
     writeSecret(this.id, 'oauth:tokens', JSON.stringify({ tokens, obtainedAt: Date.now(), redirectUrl: this.redirect } satisfies Stored))
   }
@@ -88,10 +90,10 @@ function reason(error: unknown): string {
 export async function startSignIn(id: string, origin: unknown): Promise<{ authorizationUrl: string }> {
   const url = serverUrl(id)
   const flow: Flow = { state: randomBytes(24).toString('base64url'), redirectUrl: returnUrl(origin), createdAt: Date.now() }
-  // Signing in again is a new authorization (perhaps another account), never a quiet refresh.
-  eraseSecret(id, 'oauth:tokens')
   writeSecret(id, 'oauth:flow', JSON.stringify(flow))
-  const provider = new StoredProvider(id, flow.redirectUrl, flow)
+  // Signing in again is a new authorization (perhaps another account), never a
+  // quiet refresh; the current sign-in keeps working until it completes.
+  const provider = new StoredProvider(id, flow.redirectUrl, flow, true)
   let result: Awaited<ReturnType<typeof auth>>
   try {
     result = await auth(provider, { serverUrl: url })

@@ -110,6 +110,19 @@ describe('OAuth sign-in for a remote server', () => {
     expect(serverView(id).signedIn).toBe(false)
   })
 
+  it('keeps a working sign-in until a new one completes', async () => {
+    const id = addServer(validateSpec({ name: 'acme', title: 'Acme', source: 'custom', transport: 'http', url: `${base}/mcp`, auth: 'oauth' }), {}, everywhere).id
+    const first = await startSignIn(id, ORIGIN)
+    const back = new URL((await fetch(first.authorizationUrl, { redirect: 'manual' })).headers.get('location')!)
+    await finishSignIn({ code: back.searchParams.get('code'), state: back.searchParams.get('state') })
+    const working = await accessToken(id)
+    const again = await startSignIn(id, ORIGIN)
+    expect(serverView(id).signedIn).toBe(true)
+    expect(await accessToken(id)).toBe(working)
+    await expect(finishSignIn({ state: new URL(again.authorizationUrl).searchParams.get('state'), error: 'access_denied' })).rejects.toThrow(/not completed/)
+    expect(await accessToken(id)).toBe(working)
+  })
+
   it('accepts a returning sign-in once, only for a flow it started, from an origin it can return to', async () => {
     const id = addServer(validateSpec({ name: 'acme', title: 'Acme', source: 'custom', transport: 'http', url: `${base}/mcp`, auth: 'oauth' }), {}, everywhere).id
     await expect(startSignIn(id, 'http://evil.example.test')).rejects.toThrow(/HTTPS origin, or HTTP on localhost/)
