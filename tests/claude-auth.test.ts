@@ -526,6 +526,22 @@ describe('Claude subscription authentication monitor', () => {
     expect(quota.snapshot().status).toBe('reauth_required')
   })
 
+  it('keeps a reactive downgrade when a healthy poll lands after it', async () => {
+    const run = validRun()
+    const clock = new FakeClock()
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    await monitor.check({ forceLive: true })
+    let resolveStatus!: (value: { stdout: string, stderr: string }) => void
+    run.mockImplementationOnce(() => new Promise<{ stdout: string, stderr: string }>((resolve) => { resolveStatus = resolve }))
+    const pending = monitor.check()
+    monitor.observeProcessFailure(new Error('401 authentication_error: OAuth token expired'))
+    resolveStatus({ stdout: VALID_STATUS, stderr: '' })
+    await pending
+
+    expect(monitor.snapshot().status).toBe('reauth_required')
+    expect(run).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps the sign-in identity on quota exhaustion and recovers when the canary succeeds', async () => {
     const run = validRun()
     const clock = new FakeClock()

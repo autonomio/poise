@@ -365,6 +365,9 @@ export class ClaudeAuthMonitor {
       this.liveFailureCount = 0
       this.checkedAtMs = this.clock.now()
       this.nextLiveAttemptAtMs = this.clock.now() + CLAUDE_AUTH_RETRY_MAX_MS
+      // Invalidate in-flight polls: their local evidence predates this
+      // failure and must not overwrite it.
+      this.stateGeneration += 1
       return
     }
     if (isQuotaExhaustion(resultOrError)) {
@@ -373,6 +376,7 @@ export class ClaudeAuthMonitor {
       this.liveFailureCount = 0
       this.checkedAtMs = this.clock.now()
       this.nextLiveAttemptAtMs = this.clock.now() + CLAUDE_AUTH_RETRY_BASE_MS
+      this.stateGeneration += 1
     }
   }
 
