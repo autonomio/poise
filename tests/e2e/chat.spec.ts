@@ -224,10 +224,95 @@ test('streams text, sticks to the bottom only when there, and never runs agent H
   sock.push('s1', { type: 'text.delta', turnId: 't1', messageId: 'm1', delta: '\n\nlate line' })
   await expect(msg).toContainText('late line')
   expect(await scroll.evaluate((el) => el.scrollTop)).toBe(0)
-  // Copy button per message.
+  // Copy button per message: an icon, with its state in its label.
   await page.locator('.chat-item-text').hover()
   await page.locator('.chat-copy-btn').click()
-  await expect(page.locator('.chat-copy-btn')).toContainText('Copied')
+  await expect(page.locator('.chat-copy-btn')).toHaveAttribute('aria-label', 'Copied')
+})
+
+test('ends each finished turn in one meta row: its recorded end time, how it stopped, what it took, then its last message\'s copy icon', async ({ page, browserName }) => {
+  await page.clock.setFixedTime(new Date('2026-10-21T17:00:00Z'))
+  if (browserName === 'chromium') await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  const go = { text: 'go', attachments: [], mentions: [] }
+  const at = (seq: number, time: string, event: ChatEvent): ChatEnvelope => ({ seq, sessionId: 's1', at: time, event })
+  const state = makeState([session({ lastSeq: 11 })], { s1: [
+    at(1, '2026-10-20T14:04:40.000Z', { type: 'turn.started', turnId: 't1', prompt: go }),
+    at(2, '2026-10-20T14:05:02.000Z', { type: 'text.delta', turnId: 't1', messageId: 'a1', delta: 'Nothing is waiting for you.' }),
+    at(3, '2026-10-20T14:05:12.000Z', { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn', durationMs: 31_500, usage: { totalTokens: 18_432 } }),
+    at(4, '2026-10-21T16:19:56.000Z', { type: 'turn.started', turnId: 't2', prompt: go }),
+    at(5, '2026-10-21T16:20:00.000Z', { type: 'turn.finished', turnId: 't2', stopReason: 'cancelled', durationMs: 4_200 }),
+    at(6, '2026-10-21T16:37:30.000Z', { type: 'turn.started', turnId: 't3', prompt: go }),
+    at(7, '2026-10-21T16:37:34.000Z', { type: 'text.delta', turnId: 't3', messageId: 'b1', delta: 'Checking the pull request.' }),
+    at(8, '2026-10-21T16:37:36.000Z', { type: 'tool.started', turnId: 't3', id: 'x1', kind: 'execute', title: 'gh pr view 347' }),
+    at(9, '2026-10-21T16:37:52.000Z', { type: 'tool.finished', turnId: 't3', id: 'x1', status: 'completed', durationMs: 16_000 }),
+    at(10, '2026-10-21T16:38:05.000Z', { type: 'text.delta', turnId: 't3', messageId: 'b2', delta: 'Not yet: CI is still running.' }),
+    at(11, '2026-10-21T16:38:12.000Z', { type: 'turn.finished', turnId: 't3', stopReason: 'end_turn', durationMs: 42_800, usage: { totalTokens: 9_214 } }),
+  ] })
+  state.settings.timezone = 'Europe/Helsinki'
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await sock.subscribed('s1')
+  sock.seq = 11
+  const turns = page.locator('.chat-turn')
+  const row = (n: number) => turns.nth(n).locator('.chat-turn-footer')
+  const time = (n: number) => row(n).locator('time.chat-turn-time')
+  const shown = (n: number) => time(n).locator('[aria-hidden="true"]')
+  // What the row shows, part by part: the time's visible text, and a button by its label.
+  const parts = (n: number) => row(n).evaluate((el) => [...el.children].map((child) =>
+    child.matches('time') ? child.querySelector('[aria-hidden="true"]')!.textContent
+      : child.matches('button') ? `button: ${child.getAttribute('aria-label')}` : child.textContent))
+  await expect(turns).toHaveCount(3)
+  await expect.poll(() => parts(2)).toEqual(['19:38', '·', '43s', '·', '9,214 tokens', 'button: Copy message'])
+  await expect(time(2)).toHaveAttribute('datetime', '2026-10-21T16:38:12.000Z')
+  await expect(time(2)).toHaveAttribute('data-help', 'Finished Wednesday 21 October 2026 at 19:38:12 EEST')
+  await expect(time(2)).toMatchAriaSnapshot('- time: Finished Wednesday 21 October 2026 at 19:38:12 EEST')
+  await expect.poll(() => parts(1)).toEqual(['19:20', '·', 'Stopped', '·', '4.2s'])
+  await expect(time(1)).toHaveAttribute('data-help', 'Ended Wednesday 21 October 2026 at 19:20:00 EEST')
+  await expect(shown(0)).toHaveText('20 Oct 17:05')
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme)
+    await expect(time(2)).toHaveCSS('color', 'rgb(142, 149, 158)')
+    const [timeSize, durationSize] = await row(2).evaluate((el) => [getComputedStyle(el.children[0]).fontSize, getComputedStyle(el.children[2]).fontSize])
+    expect(timeSize).toBe(durationSize)
+  }
+  // The last message's copy lives at the end of the row and shows while that message is hovered.
+  const messages = turns.nth(2).locator('.chat-item-text')
+  await expect(messages.last().locator('.chat-copy-btn')).toHaveCount(0)
+  const copy = row(2).locator('.chat-copy-btn')
+  await page.mouse.move(1, 1)
+  await expect(copy).toHaveCSS('opacity', '0')
+  await messages.last().hover()
+  await expect(copy).toHaveCSS('opacity', '1')
+  await copy.click()
+  await expect(copy).toHaveAttribute('aria-label', 'Copied')
+  if (browserName === 'chromium') expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Not yet: CI is still running.')
+  await expect(copy).toHaveAttribute('aria-label', 'Copy message')
+  // Earlier messages keep their own copy icon, with no visible text.
+  await expect(messages.first().locator('.chat-copy-btn')).toHaveCount(1)
+  await expect(messages.first().locator('.chat-copy-btn')).toHaveText('')
+  // Hiding activity leaves the time and the copy icon.
+  await page.locator('.chat-h-activity').click()
+  await expect.poll(() => parts(2)).toEqual(['19:38', 'button: Copy message'])
+  await page.locator('.chat-h-activity').click()
+  // A turn that finishes live shows its recorded time, not the time it was drawn.
+  const push = (time: string, event: ChatEvent) => sock.ws!.send(JSON.stringify({ kind: 'event', envelope: { seq: ++sock.seq, sessionId: 's1', at: time, event } }))
+  push('2026-10-21T16:58:40.000Z', { type: 'turn.started', turnId: 't4', prompt: go })
+  push('2026-10-21T16:58:50.000Z', { type: 'text.delta', turnId: 't4', messageId: 'c1', delta: 'Done.' })
+  push('2026-10-21T16:59:00.000Z', { type: 'turn.finished', turnId: 't4', stopReason: 'end_turn', durationMs: 20_000 })
+  await expect(shown(3)).toHaveText('19:59')
+  // After midnight in Helsinki, today's turn gains its date without a new event.
+  await page.clock.setFixedTime(new Date('2026-10-21T21:00:05Z'))
+  await expect(shown(2)).toHaveText('21 Oct 19:38', { timeout: 2_000 })
+  // Saving another time zone relabels the times in it.
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
+  await page.locator('[data-settings="general"]').click()
+  await page.locator('#st-timezone').selectOption('Europe/London')
+  await page.locator('.st-save').click()
+  await expect(page.locator('.st-status')).toHaveText('Saved.')
+  await page.keyboard.press('Escape')
+  await expect(shown(2)).toHaveText('17:38', { timeout: 2_000 })
+  await expect(time(2)).toHaveAttribute('data-help', 'Finished Wednesday 21 October 2026 at 17:38:12 BST')
 })
 
 test('answers a permission with the keyboard and a question with its options', async ({ page }) => {
