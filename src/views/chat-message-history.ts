@@ -118,7 +118,7 @@ export function createMessageHistory(input: HTMLTextAreaElement, handlers: Histo
     key(event: KeyboardEvent, canOpen: boolean): boolean {
       if (event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
       if (el.hidden) {
-        if (event.key !== 'ArrowUp' || !canOpen) return false
+        if (event.key !== 'ArrowUp' || !canOpen || !el.isConnected) return false
         event.preventDefault()
         el.hidden = false
         input.setAttribute('aria-controls', list.id)

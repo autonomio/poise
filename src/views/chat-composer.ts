@@ -72,7 +72,7 @@ export interface Composer {
   destroy(): void
   history: ReturnType<typeof createMessageHistory>
   models: ReturnType<typeof createCommandModels>
-  setCommands(agentCommands: CommandOption[], own: { model?: boolean, modes: boolean, fork: boolean, poise?: boolean }): void
+  setCommands(agentCommands: CommandOption[], own: { model?: boolean, modes: boolean, fork: boolean, poise?: boolean, create?: boolean }): void
   setState(state: ComposerState): void
   setSwitches(switches: ChatSwitch[]): void
   getDraft(): ComposerDraft
@@ -106,6 +106,8 @@ const OWN_COMMANDS: CommandOption[] = [
   { name: 'compact', description: 'Compact model context; keep chat history' },
   { name: 'reset', description: 'Clear chat history and start fresh' },
   { name: 'review', description: 'Critically review the latest reply', hint: '[focus]' },
+  { name: 'content', description: 'Author an article from a topic', hint: '<topic>' },
+  { name: 'consensus', description: 'Debate a topic across models', hint: '<topic>' },
   { name: 'mode', description: 'Switch mode', hint: '<mode>' },
   { name: 'fork', description: 'Fork this session' },
   { name: 'queue', description: 'Queue a message after the current or next task', hint: '<message>' },
@@ -492,6 +494,18 @@ export function createComposer(handlers: ComposerHandlers, options?: { idPrefix?
     draft.text = commandDraftText(draft)
     const chain = parseChatCommandChain(draft.text)
     if (state.disabled && !(state.resume && ((chain.context === 'reset' && !chain.queue) || chain.create))) return
+    // /content and /consensus run as commands, never as prompts, steers or
+    // queued messages — also while a turn runs. A /model prefix still
+    // applies, and the chip stays for the next message.
+    const submittedCommand = chain.content !== undefined ? 'content' : chain.consensus !== undefined ? 'consensus' : null
+    if (submittedCommand) {
+      if (chain.queue) { showNote(`Run /${submittedCommand} now instead of queueing it.`); return }
+      const topic = (submittedCommand === 'content' ? chain.content! : chain.consensus!).trim()
+      if (!topic) { showNote(`Give /${submittedCommand} a topic.`); return }
+      if (chain.model) handlers.onCommand('model', chain.model)
+      handlers.onCommand(submittedCommand, topic)
+      return
+    }
     if (chain.missingModel) { updateModels(); return }
     if (!chain.text && !chain.review && !chain.model && !chain.context && !chain.switches?.length && !chain.create && !attachments.length) return
     if (state.running && chain.model && !chain.text && !chain.switches?.length && !chain.review && !chain.context && !attachments.length) {
@@ -523,7 +537,7 @@ export function createComposer(handlers: ComposerHandlers, options?: { idPrefix?
     e.preventDefault()
     const chain = parseChatCommandChain(commandDraftText(rawDraft()))
     if (state.disabled && !(state.resume && ((chain.context === 'reset' && !chain.queue) || chain.create))) return
-    if (state.running && !chain.create && !chain.switches?.length && !chain.context && !chain.queue && !chain.review && !chain.model && !chain.missingModel && !(state.maintaining && (chain.text || attachments.length))) handlers.onStop()
+    if (state.running && !chain.create && !chain.switches?.length && !chain.context && !chain.queue && !chain.review && !chain.model && !chain.missingModel && chain.content === undefined && chain.consensus === undefined && !(state.maintaining && (chain.text || attachments.length))) handlers.onStop()
     else submit()
   })
   input.addEventListener('input', () => {
@@ -673,7 +687,7 @@ export function createComposer(handlers: ComposerHandlers, options?: { idPrefix?
     el, destroy, history, models,
     setCommands(list, own) {
       agentCommands = list
-      ownCommands = OWN_COMMANDS.filter((c) => c.name === 'create' || c.name === 'queue' || c.name === 'review' || c.name === 'compact' || c.name === 'reset' || (c.name === 'model' && own.model !== false) || (c.name === 'mode' && own.modes) || (c.name === 'fork' && own.fork) || (c.name === 'poise' && own.poise !== false))
+      ownCommands = OWN_COMMANDS.filter((c) => (c.name === 'create' && own.create !== false) || c.name === 'queue' || c.name === 'review' || c.name === 'compact' || c.name === 'reset' || c.name === 'content' || c.name === 'consensus' || (c.name === 'model' && own.model !== false) || (c.name === 'mode' && own.modes) || (c.name === 'fork' && own.fork) || (c.name === 'poise' && own.poise !== false))
     },
     setSwitches(switches) {
       switchNames = new Set(switches.map(item => item.name))

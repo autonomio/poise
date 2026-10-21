@@ -17,6 +17,7 @@ import type {
   MessageQueue,
   ChatCommand,
   ChatEnvelope,
+  ChatSubject,
   ClientFrame,
   NewSessionRequest,
   ServerFrame,
@@ -26,6 +27,7 @@ import type {
   AutoMergeAck,
   SafeModeAck,
   SwitchboardState,
+  LegacyConversation,
 } from '../server/chat/protocol'
 import type { SelfChange, SelfUpdateStatus } from './self-update-types'
 import { parseMessageQueue } from './chat-queue'
@@ -148,6 +150,8 @@ export class ChatClient {
   private subscriptions = new Map<string, number>()
   /** Holders per session; the frame goes out only when the last one leaves. */
   private holders = new Map<string, number>()
+  /** Subject creations in flight, so a tab sends one at a time. */
+  private creations = new Map<string, Promise<SessionRecord>>()
   private serverStartedAt: string | null = null
   private serverInstance: string | null = null
   private handshakeReady = false
@@ -484,8 +488,40 @@ export class ChatClient {
     return jsonFetch('/api/chat/sessions')
   }
 
-  createSession(req: NewSessionRequest): Promise<{ session: SessionRecord }> {
-    return post('/api/chat/sessions', req)
+  /** One creation per subject in flight in a tab at a time; a second
+   *  caller adopts the first call's session with `existing: true`. */
+  createSession(req: NewSessionRequest): Promise<{ session: SessionRecord, existing?: boolean }> {
+    if (!req.subject) return post('/api/chat/sessions', req)
+    const key = `${req.subject.surface}:${req.subject.key}`
+    const flying = this.creations.get(key)
+    if (flying) return flying.then((session) => ({ session, existing: true }))
+    const task = post<{ session: SessionRecord, existing?: boolean }>('/api/chat/sessions', req)
+    const tracked = task.then((answer) => answer.session)
+    tracked.catch(() => undefined)
+    this.creations.set(key, tracked)
+    return task.finally(() => { if (this.creations.get(key) === tracked) this.creations.delete(key) })
+  }
+
+  /** The subject's session, or null when its first message has not been sent. */
+  async sessionForSubject(subject: ChatSubject): Promise<SessionRecord | null> {
+    const answer = await jsonFetch<{ session: SessionRecord | null }>(`/api/chat/sessions?subject=${encodeURIComponent(`${subject.surface}:${subject.key}`)}`)
+    return answer.session
+  }
+
+  /** The subject's earlier legacy conversation, if it has turns. */
+  async legacyConversation(subject: ChatSubject): Promise<LegacyConversation | null> {
+    const answer = await jsonFetch<{ conversation: LegacyConversation | null }>(`/api/chat/legacy?subject=${encodeURIComponent(`${subject.surface}:${subject.key}`)}`)
+    return answer.conversation
+  }
+
+  /** Run `/content` for a session. The article lands in the transcript's card. */
+  runContent(sessionId: string, topic: string): Promise<unknown> {
+    return post('/api/chat-content', { topic, chatSession: sessionId })
+  }
+
+  /** Run `/consensus` for a session. The synthesis lands in the transcript's card. */
+  runConsensus(sessionId: string, topic: string): Promise<{ id: string, synthesis: string, rounds: unknown[] }> {
+    return post('/api/debate', { topic, chatSession: sessionId })
   }
 
   filePreview(sessionId: string, reference: string): Promise<import('./chat-file-reference').ChatFilePreview> {

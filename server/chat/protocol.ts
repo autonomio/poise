@@ -214,6 +214,10 @@ export type SubjectSurface = 'current'
  *  instance. The key is opaque after validation and compared exactly. */
 export interface ChatSubject { surface: SubjectSurface, key: string, label: string, url?: string }
 
+/** A subject's earlier legacy conversation: prompts quoted as the call log
+ *  returns them, newest kept first when the import bound bites. */
+export interface LegacyConversation { turns: Array<{ prompt: string, reply: string, at: string, status: string }>, omitted: number }
+
 export interface SessionContext {
   /** `poise-change`: the exact `/poise` request (`body`) and the session it
    *  was typed in (`fromSession`); the server composes the first prompt.

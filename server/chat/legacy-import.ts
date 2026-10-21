@@ -3,9 +3,9 @@
 // comes from listChatHistory and each kept reply body from fetchAgentResponse.
 import { listChatHistory } from '../chat'
 import { fetchAgentResponse } from '../agent'
-import type { ChatSubject } from './protocol'
+import type { ChatSubject, LegacyConversation } from './protocol'
 
-export interface LegacyConversation { turns: Array<{ prompt: string, reply: string, at: string, status: string }>, omitted: number }
+export type { LegacyConversation }
 
 /** At most 256 KiB of text and 50 reply reads per import. */
 const IMPORT_MAX_BYTES = 256 * 1024
