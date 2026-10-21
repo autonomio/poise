@@ -196,7 +196,7 @@ function reportTimezone(): void {
   notices.reportLocalNotices('settings-timezone', unknown ? [{
     key: 'settings-timezone', kind: 'action_needed', target: { settings: 'general' },
     title: 'Choose a time zone in Settings',
-    body: `The saved time zone “${unknown}” is not one this browser knows, so times use this browser's zone, ${effectiveTimezone()}, until you choose one in Settings → General.`,
+    body: `The saved time zone “${unknown}” is not one this browser knows, so times use ${effectiveTimezone()} until you choose one in Settings → General.`,
   }] : [])
 }
 window.addEventListener('poise:synced', reportTimezone)

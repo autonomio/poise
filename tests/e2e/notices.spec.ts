@@ -89,7 +89,11 @@ async function workspace(page: Page, notices: Notice[], options: { enabled?: boo
     if (pathname === '/api/settings') {
       if (request.method() === 'POST') {
         const body = request.postDataJSON() as { notifications?: { enabled: boolean }, timezone?: string }
-        if (typeof body.timezone === 'string') state.timezone = body.timezone
+        if (typeof body.timezone === 'string') {
+          // As the server refuses a zone its Intl does not know (server/settings.ts).
+          if (body.timezone && !knownZone(body.timezone)) return route.fulfill({ status: 400, json: { error: `timezone must be a time zone the Poise server knows, such as Europe/Helsinki; "${body.timezone}" is not one` } })
+          state.timezone = body.timezone
+        }
         if (body.notifications) {
           state.enabled = body.notifications.enabled
           state.sent.push(`notifications ${state.enabled ? 'on' : 'off'}`)
@@ -114,6 +118,7 @@ async function workspace(page: Page, notices: Notice[], options: { enabled?: boo
 
 const bell = (page: Page) => page.locator('#notification-bell')
 const rail = (page: Page) => page.getByRole('complementary', { name: 'Notifications' })
+const knownZone = (name: string) => { try { new Intl.DateTimeFormat('en-US', { timeZone: name }); return true } catch { return false } }
 const card = (page: Page, id: string) => page.locator(`#notification-rail .nr-card[data-id="${id}"]`)
 const reread = (page: Page) => page.evaluate(() => window.dispatchEvent(new Event('focus')))
 
@@ -535,16 +540,27 @@ test.describe('in a browser on UTC', () => {
     const notice = rail(page).locator('.nr-card', { hasText: 'Choose a time zone in Settings' })
     await expect(notice).toHaveCount(1)
     await notice.locator('.nr-card-head').click()
-    await expect(notice).toContainText('The saved time zone “Mars/Olympus” is not one this browser knows, so times use this browser\'s zone, UTC, until you choose one in Settings → General.')
+    await expect(notice).toContainText('The saved time zone “Mars/Olympus” is not one this browser knows, so times use UTC until you choose one in Settings → General.')
     // Times keep rendering meanwhile, in the browser's zone.
     await expand(page, HELD.id)
     await expect(card(page, HELD.id).locator('.nr-history time')).toHaveText('10:02')
     await notice.getByRole('button', { name: 'Open Settings' }).click()
     const settings = page.locator('#settings-panel')
-    await expect(settings.locator('#st-timezone')).toBeVisible()
-    await settings.locator('#st-timezone').selectOption('Europe/Helsinki')
+    const zone = settings.locator('#st-timezone')
+    await expect(zone).toHaveValue('Mars/Olympus')
+    // Saving it as it is is refused, in words that name it.
+    await settings.locator('.st-save').click()
+    await expect(settings.locator('.st-status')).toHaveText('timezone must be a time zone the Poise server knows, such as Europe/Helsinki; "Mars/Olympus" is not one')
+    await zone.selectOption('Europe/Helsinki')
     await settings.locator('.st-save').click()
     await expect(settings.locator('.st-status')).toHaveText('Saved.')
+    await expect(rail(page).locator('.nr-card', { hasText: 'Choose a time zone in Settings' })).toHaveCount(0)
+    // Open put the notice away until the next load. A zone this browser knows
+    // is what clears it, so it stays gone after a reload, and times follow it.
+    await page.reload()
+    await openRail(page)
+    await expand(page, HELD.id)
+    await expect(card(page, HELD.id).locator('.nr-history time')).toHaveText('13:02')
     await expect(rail(page).locator('.nr-card', { hasText: 'Choose a time zone in Settings' })).toHaveCount(0)
   })
 })
