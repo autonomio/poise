@@ -12,7 +12,7 @@ import { releaseBackgroundPaused, trackReleaseBackground } from '../release-back
 import { POISE_ROOT } from './local-workspace'
 import { MANAGER_SNIPPET_DEFAULT } from './manager-default'
 import { ensureSnippetSwitch, readSwitch } from '../snippet-library'
-import { MANAGER_SWITCH, SWITCH_LIMITS } from '../../src/chat-switches'
+import { MANAGER_SWITCH, SWITCH_LIMITS, type ChatSwitch } from '../../src/chat-switches'
 import { executeCommandOnce } from './command-receipts'
 import type { ChatEnvelope, SessionRecord } from './protocol'
 import type { ChatRuntime } from './runtime'
@@ -192,7 +192,7 @@ export class ChatControl {
    *  for every turn, so an edit applies from the next turn. */
   private async managerCharter(): Promise<string> {
     await ensureSnippetSwitch(MANAGER_SWITCH, MANAGER_SNIPPET_DEFAULT)
-    let charter
+    let charter: ChatSwitch | null
     try {
       charter = readSwitch(MANAGER_SWITCH)
     } catch (error) {
