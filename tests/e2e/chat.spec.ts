@@ -252,7 +252,7 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
     at(11, '2026-10-21T16:37:34.000Z', { type: 'text.delta', turnId: 't5', messageId: 'b1', delta: 'Checking the pull request.' }),
     at(12, '2026-10-21T16:37:36.000Z', { type: 'tool.started', turnId: 't5', id: 'x1', kind: 'execute', title: 'gh pr view 347' }),
     at(13, '2026-10-21T16:37:52.000Z', { type: 'tool.finished', turnId: 't5', id: 'x1', status: 'completed', durationMs: 16_000 }),
-    at(14, '2026-10-21T16:38:05.000Z', { type: 'text.delta', turnId: 't5', messageId: 'b2', delta: 'Not yet: CI is still running.' }),
+    at(14, '2026-10-21T16:38:05.000Z', { type: 'text.delta', turnId: 't5', messageId: 'b2', delta: 'Not yet: **CI** is still running.' }),
     at(15, '2026-10-21T16:38:12.000Z', { type: 'turn.finished', turnId: 't5', stopReason: 'end_turn', durationMs: 42_800, usage: { totalTokens: 9_214 } }),
   ] })
   state.settings.timezone = 'Europe/Helsinki'
@@ -282,7 +282,7 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect.poll(() => parts(2)).toEqual(['19:25', '·', 'Error: Agent exited', '·', '1.5s'])
   await expect(time(2)).toHaveAttribute('data-help', 'Failed Wednesday 21 October 2026 at 19:25:00 EEST')
   await expect.poll(() => parts(3)).toEqual(['19:30', '·', 'Interrupted'])
-  await expect(time(3)).toHaveAttribute('data-help', 'Interrupted Wednesday 21 October 2026 at 19:30:00 EEST')
+  await expect(time(3)).toHaveAttribute('data-help', 'Recorded as interrupted Wednesday 21 October 2026 at 19:30:00 EEST')
   // The keyboard reaches the full time too: focus opens the same tooltip as hover.
   await time(4).focus()
   await expect(page.locator('#poise-icon-tooltip')).toHaveText('Finished Wednesday 21 October 2026 at 19:38:12 EEST')
@@ -307,9 +307,15 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect(copy).toHaveCSS('opacity', '0')
   await row(4).hover()
   await expect(copy).toHaveCSS('opacity', '1')
+  // Moving from the message down to the row never leaves both, so the icon stays on the way.
+  await messages.last().hover()
+  const [message, footer] = [(await messages.last().boundingBox())!, (await row(4).boundingBox())!]
+  await page.mouse.move(message.x + 20, (message.y + message.height + footer.y) / 2)
+  await expect(copy).toHaveCSS('opacity', '1')
   await copy.click()
   await expect(copy).toHaveAttribute('aria-label', 'Copied')
-  if (browserName === 'chromium') expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Not yet: CI is still running.')
+  // Copy takes the message's Markdown source.
+  if (browserName === 'chromium') expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Not yet: **CI** is still running.')
   await expect(copy).toHaveAttribute('aria-label', 'Copy message')
   // Earlier messages keep their own copy icon, with no visible text.
   await expect(messages.first().locator('.chat-copy-btn')).toHaveCount(1)
@@ -327,6 +333,7 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   push('2026-10-21T16:59:00.000Z', { type: 'turn.finished', turnId: 't6', stopReason: 'end_turn', durationMs: 20_000 })
   await expect(shown(5)).toHaveText('19:59')
   await expect(turns.nth(5).locator('.chat-item-text .chat-copy-btn')).toHaveCount(0)
+  await expect(turns.nth(5).locator('.chat-item-text .chat-msg')).toHaveCSS('padding-bottom', '0px')
   await expect(row(5).locator('.chat-copy-btn')).toHaveCount(1)
   // After midnight in Helsinki, every turn that ended yesterday gains its date without a new event.
   await page.clock.setFixedTime(new Date('2026-10-21T21:00:05Z'))
@@ -343,6 +350,8 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await page.keyboard.press('Escape')
   await expect(shown(4)).toHaveText('17:38', { timeout: 2_000 })
   await expect(time(4)).toHaveAttribute('data-help', 'Finished Wednesday 21 October 2026 at 17:38:12 BST')
+  await expect(shown(1)).toHaveText('17:20')
+  await expect(shown(0)).toHaveText('20 Oct 15:05')
 })
 
 test('answers a permission with the keyboard and a question with its options', async ({ page }) => {
