@@ -8,7 +8,7 @@ type Parts = Record<string, string>
 
 const OPTIONS = {
   time: { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short' },
-  long: { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
+  full: { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short' },
   day: { year: 'numeric', month: '2-digit', day: '2-digit' },
 } satisfies Record<string, Intl.DateTimeFormatOptions>
 
@@ -57,10 +57,8 @@ export function listTime(at: string | number, timeZone: string, now: number): st
 
 /** "Wednesday 21 October 2026 at 19:38:12 EEST". */
 export function fullTime(at: string | number, timeZone: string): string {
-  const date = new Date(at)
-  const time = parts(date, timeZone, 'time')
-  const long = parts(date, timeZone, 'long')
-  return `${long.weekday} ${long.day} ${long.month} ${long.year} at ${time.hour}:${time.minute}:${time.second} ${time.timeZoneName}`
+  const full = parts(new Date(at), timeZone, 'full')
+  return `${full.weekday} ${full.day} ${full.month} ${full.year} at ${full.hour}:${full.minute}:${full.second} ${full.timeZoneName}`
 }
 
 /** The calendar day `now` falls on in `timeZone`, with the zone: a time's
