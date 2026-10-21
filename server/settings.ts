@@ -8,6 +8,18 @@ import { type Catalog, type ModelSettings, isModelPlace, validateModelSettings }
 // back empty with no indication why.
 const GITHUB_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 
+// A zone Intl does not know throws in every view that formats a time, so it is
+// refused here rather than stored. Constructing a formatter is the test:
+// supportedValuesOf('timeZone') leaves out UTC and the aliases Intl accepts.
+function knownTimeZone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: name })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface Settings {
   org: string
   // Your GitHub account: Current and Archive are scoped to it, and reads done
@@ -156,6 +168,9 @@ export function setSettings(partial: Partial<Settings>, catalog?: Catalog): Sett
     const trimmed = v.trim()
     if (ACCOUNT_KEYS.has(k) && trimmed && !GITHUB_NAME.test(trimmed)) {
       throw new Error(`${k} must be a GitHub name: letters, digits and single hyphens`)
+    }
+    if (k === 'timezone' && trimmed && !knownTimeZone(trimmed)) {
+      throw new Error(`timezone must be a time zone this computer knows, such as Europe/Helsinki; "${trimmed}" is not one`)
     }
     next[k] = trimmed
   }

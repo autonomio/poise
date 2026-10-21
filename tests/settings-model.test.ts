@@ -47,6 +47,16 @@ describe('what the settings model accepts', () => {
     setSettings({ org: 'Vaquum' })
     expect(setSettings({ org: undefined, me: 'mikkokotila' }).org).toBe('Vaquum')
   })
+
+  it('refuses a time zone Intl does not know, and stores nothing of that save', () => {
+    expect(() => setSettings({ me: 'octocat', timezone: 'Mars/Olympus' })).toThrow(/timezone must be a time zone this computer knows.*"Mars\/Olympus"/)
+    expect(getSettings()).toMatchObject({ me: '', timezone: '' })
+  })
+
+  it('stores the zones Intl knows as given, UTC and aliases included, and clears with an empty one', () => {
+    for (const zone of ['Europe/Helsinki', 'UTC', 'Etc/UTC', 'Asia/Calcutta']) expect(setSettings({ timezone: zone }).timezone).toBe(zone)
+    expect(setSettings({ timezone: '' }).timezone).toBe('')
+  })
 })
 
 // The write loop applied key by key, so a value rejected halfway through left

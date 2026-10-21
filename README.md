@@ -130,7 +130,10 @@ npm run dev
 Open <http://localhost:5555>. Configure your GitHub account, your agent
 account, timezone, refresh interval, and theme in Settings. Add GitHub
 organizations and personal accounts there, using the organization name or
-personal username (for example, `octocat`).
+personal username (for example, `octocat`). Settings refuses a time zone this
+computer does not know. A saved one the browser does not know, from older data
+or a direct API write, raises a notice naming it, and times use the browser's
+own zone until you choose another.
 
 ### Your GitHub account and your agent account
 
