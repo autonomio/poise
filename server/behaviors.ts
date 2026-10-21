@@ -2150,6 +2150,11 @@ async function tickReviewNewPrs(): Promise<void> {
             if (claimId) releaseOwnedClaim('review-new-prs', target, claimId)
             releasePrOperationOwned(operationId)
           }
+          // A throw after the atomic claim but before the push below must
+          // release the claim, not just the operation lease. Cleared
+          // wherever the claim transfers (claimed push, explicit release)
+          // or is intentionally retained (terminal changes-skip).
+          let ownedClaimId: string | null = null
           try {
             if (behaviorAborted()) { releasePhase2Leases(); return }
             if (!isEnabled('review-new-prs')) { releaseLeases(null); continue }
@@ -2174,6 +2179,7 @@ async function tickReviewNewPrs(): Promise<void> {
             // across all concurrent runtimes. Losers skip silently.
             const claimId = claimSeenOwnedAs('review-new-prs', target, operationId)
             if (!claimId) { releaseLeases(null); continue }
+            ownedClaimId = claimId
             trackClaim('review-new-prs', target, claimId)
             // Guard against double-firing with approve-prs: if the agent account
             // has an outstanding CHANGES_REQUESTED on this PR, the follow-up
@@ -2183,6 +2189,7 @@ async function tickReviewNewPrs(): Promise<void> {
             // caught on the next tick.
             if (bundle.changes?.hasChangeRequest) {
               completeOwnedClaim('review-new-prs', target, claimId)
+              ownedClaimId = null
               releasePrOperationOwned(operationId)
               if (!behaviorAborted()) clearBehaviorFailure('review-new-prs', checkTarget)
               console.log(`[behaviors] review-new-prs skipped for ${pr.repo}#${pr.number} — outstanding CHANGES_REQUESTED, approve-prs owns it`)
@@ -2199,14 +2206,19 @@ async function tickReviewNewPrs(): Promise<void> {
               // Fresh, not the bundle's advisory copy: the panel may have
               // changed while this target was prepared.
               [...admittedSlots],
-            )) { releaseLeases(claimId); continue }
+            )) { ownedClaimId = null; releaseLeases(claimId); continue }
             claimed.push({ prepared: bundle, claimId, setting })
+            ownedClaimId = null
           } catch (err) {
-            if (behaviorAborted()) { releasePhase2Leases(); return }
+            if (behaviorAborted()) {
+              if (ownedClaimId) releaseOwnedClaim('review-new-prs', target, ownedClaimId)
+              releasePhase2Leases()
+              return
+            }
             console.error(`[behaviors] review-new-prs step failed for ${pr.repo}#${pr.number} (${slot}):`, err)
             if (err instanceof BehaviorLogFeedError) failure ??= err
             else recordBehaviorFailure('review-new-prs', 'operation', err, checkTarget)
-            releaseLeases(null)
+            releaseLeases(ownedClaimId)
           }
         }
       })
