@@ -506,6 +506,26 @@ describe('Claude subscription authentication monitor', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
+  it('never lets a late quota error clear a confirmed sign-in requirement', async () => {
+    const run = validRun()
+    const clock = new FakeClock()
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    await monitor.check({ forceLive: true })
+    monitor.observeProcessFailure(new Error('401 authentication_error: OAuth token expired'))
+    expect(monitor.snapshot().status).toBe('reauth_required')
+
+    monitor.observeProcessFailure(new Error('429 usage limit reached'))
+
+    expect(monitor.snapshot()).toMatchObject({ status: 'reauth_required', authMethod: null, subscriptionType: null })
+    // The asymmetry holds the other way: a dead credential always surfaces.
+    const quota = new ClaudeAuthMonitor({ runFile: validRun(), canaryModel: async () => 'haiku', clock: new FakeClock() })
+    await quota.check({ forceLive: true })
+    quota.observeProcessFailure(new Error('429 usage limit reached'))
+    expect(quota.snapshot().status).toBe('quota_exhausted')
+    quota.observeProcessFailure(new Error('401 authentication_error: OAuth token expired'))
+    expect(quota.snapshot().status).toBe('reauth_required')
+  })
+
   it('keeps the sign-in identity on quota exhaustion and recovers when the canary succeeds', async () => {
     const run = validRun()
     const clock = new FakeClock()

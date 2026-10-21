@@ -352,7 +352,9 @@ export class ClaudeAuthMonitor {
    *  on a Claude model, a dead launch. Callers guarantee Claude attribution
    *  (the auth/quota patterns alone cannot tell providers apart); anything
    *  that matches neither pattern is ignored. Only ever downgrades — the
-   *  scheduled checks own every upgrade back — and never disturbs a login. */
+   *  scheduled checks own every upgrade back — and never disturbs a login.
+   *  A confirmed dead credential outranks quota: a late quota error from an
+   *  already-running process cannot prove the current credential works. */
   observeProcessFailure(resultOrError: unknown): void {
     if (this.stopped || this.loginInProgress) return
     if (isDefinitiveAuthFailure(resultOrError)) {
@@ -366,7 +368,7 @@ export class ClaudeAuthMonitor {
       return
     }
     if (isQuotaExhaustion(resultOrError)) {
-      if (this.status === 'quota_exhausted') return
+      if (this.status === 'quota_exhausted' || this.status === 'reauth_required') return
       this.status = 'quota_exhausted'
       this.liveFailureCount = 0
       this.checkedAtMs = this.clock.now()
