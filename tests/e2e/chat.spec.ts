@@ -354,6 +354,25 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect(shown(0)).toHaveText('20 Oct 15:05')
 })
 
+test.describe('in an en-US browser', () => {
+  test.use({ locale: 'en-US' })
+
+  test("dates the session list on Poise's clock in Settings' time zone", async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-10-21T17:00:00Z'))
+    const state = makeState([
+      session({ id: 'today', title: 'Today', createdAt: '2026-10-21T16:38:00.000Z' }),
+      session({ id: 'yesterday', title: 'Yesterday', createdAt: '2026-10-20T14:05:00.000Z' }),
+    ])
+    state.settings.timezone = 'Europe/Helsinki'
+    await installRoutes(page, state)
+    await installSocket(page)
+    await page.goto('/')
+    // Not the browser's "7:38 PM" or "Oct 20": the time today, the date alone before.
+    await expect(page.locator('.chat-session-item[data-id="today"] .chat-session-date')).toHaveText('19:38')
+    await expect(page.locator('.chat-session-item[data-id="yesterday"] .chat-session-date')).toHaveText('20 Oct')
+  })
+})
+
 test('answers a permission with the keyboard and a question with its options', async ({ page }) => {
   const state = makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'go', attachments: [], mentions: [] } })] })
   await installRoutes(page, state)

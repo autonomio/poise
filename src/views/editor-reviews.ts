@@ -1,4 +1,6 @@
 import { patchContent } from '../dom-patch'
+import { shortTime } from '../clock'
+import { effectiveTimezone } from '../config'
 import { reveal, watchPanel } from '../motion'
 import { locateReview, REVIEW_INTERVAL_MS, type ArticleReview, type ArticleReviews } from '../publishing-review'
 
@@ -187,7 +189,7 @@ export class EditorReviews {
     this.list.hidden = !this.data.checkedAt && !this.data.reviews.length && !this.data.problems.length && !this.error
     patchContent(this.list, `<details><summary>Review comments${count ? ` · ${count} unresolved` : ''}</summary>
       <div class="editor-review-status"><button type="button" data-action="refresh"${this.busy ? ' disabled' : ''}>Refresh reviews</button>
-      <span>${this.data.checkedAt ? `${this.data.stale ? 'Cached' : 'Checked'} ${escape(new Date(this.data.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` : 'Not synchronized'}</span></div>
+      <span>${this.data.checkedAt ? `${this.data.stale ? 'Cached' : 'Checked'} ${escape(shortTime(this.data.checkedAt, effectiveTimezone(), Date.now()))}` : 'Not synchronized'}</span></div>
       ${[...this.data.problems, ...(this.error ? [this.error] : [])].map((problem) => `<p role="alert">${escape(problem)}</p>`).join('')}
       ${!this.data.reviews.length ? '<p>No review comments yet.</p>' : ''}
       ${this.data.reviews.map((review) => `<button type="button" class="editor-review-item" data-key="${escape(review.id)}" data-review="${escape(review.id)}">

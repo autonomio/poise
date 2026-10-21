@@ -16,6 +16,7 @@ import { MODEL_CHECK_TIMEOUT_MS, modelRefreshSummary, type ModelRefreshReport } 
 
 import { getSettings as getCachedSettings, setLocalSettings, loadSettings, settingsLoadOk, getRefreshRate, setRefreshRate, getTheme, setTheme, getOrganizations, setOrganizations, settingsReady, effectiveTimezone, type Organization } from './config'
 import { productionSummary, type ProductionUpdate } from './production-status'
+import { shortTime } from './clock'
 import { ACCOUNT_IDS, ACCOUNT_LOGINS, CONNECTED_ACCOUNTS_PATH, type ConnectedAccount } from '../server/accounts/types'
 import { isTerminalPreset, type TerminalPreset } from '../server/terminal/protocol'
 import { googleAccountsSection } from './views/google-accounts'
@@ -234,9 +235,7 @@ function renderOrganizations(): void {
   organizationsRendered = rendered
   patchInformation(list, organizations.map((org, index) => {
     const paused = waiting[index]
-    const resetTime = paused ? new Date(org.retryAt!).toLocaleTimeString([], {
-      timeZone: effectiveTimezone(), hour: '2-digit', minute: '2-digit', second: '2-digit',
-    }) : ''
+    const resetTime = paused ? shortTime(org.retryAt!, effectiveTimezone(), Date.now()) : ''
     const state = paused ? 'Waiting for GitHub' : org.status === 'ready' ? org.error ? 'Sync failed' : 'Ready' : org.status === 'error' ? 'Activation failed' : 'Activating…'
     return `
     <div class="st-organization" data-org="${escapeHtml(org.login)}">
@@ -317,7 +316,7 @@ async function addOrganization(retry?: string): Promise<void> {
 
 function renderProduction(update: ProductionUpdate) {
   if (!productionEl) return
-  const summary = productionSummary(update)
+  const summary = productionSummary(update, Date.now(), effectiveTimezone())
   const group = productionEl.closest<HTMLElement>('.st-production-group')
   if (!summary) {
     if (group) group.hidden = true
@@ -549,7 +548,7 @@ function renderCatalogStatus(data: ModelsResponse) {
   const failed = report && modelRefreshSummary(report).level === 'error'
   const checkedAt = report?.completed_at || report?.checked_at
   const when = checkedAt ? new Date(checkedAt) : null
-  const checked = when && !Number.isNaN(when.getTime()) ? `Checked ${when.toLocaleDateString()}` : 'Checked'
+  const checked = when && !Number.isNaN(when.getTime()) ? `Checked ${shortTime(when.getTime(), effectiveTimezone(), Date.now())}` : 'Checked'
   catalogStatusEl.textContent = failed
     ? modelRefreshSummary(report).text
     : `${data.catalog.models.length} models · ${report ? checked : 'Not checked yet'}`
