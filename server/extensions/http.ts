@@ -17,9 +17,12 @@ export interface ExtensionsApiOptions {
 }
 
 const SERVER = /^\/api\/extensions\/servers\/([0-9a-f-]{36})(\/enabled|\/check|\/events|\/sign-in|\/sign-out)?$/
+// Columns of the grid: the most recently used workspaces, plus every one with a switch of its own.
+const RECENT_WORKSPACES = 12
 
 function workspaces(recent: string[]): Workspace[] {
-  const ids = [...recent, LOCAL_WORKSPACE]
+  const ids = [...new Set(recent.filter(isWorkspace))].slice(0, RECENT_WORKSPACES)
+  ids.push(LOCAL_WORKSPACE)
   for (const server of storedServers()) ids.push(...Object.keys(server.enabled.workspaces))
   return [...new Set(ids.filter(isWorkspace))].map((id) => ({ id, label: workspaceLabel(id) }))
 }
@@ -59,10 +62,10 @@ function taken(name: string): boolean {
 }
 
 /** An edit keeps what the person cannot change: a directory server's
- *  command or endpoint comes from the registry, its sign-in from detection. */
+ *  command or endpoint comes from the registry. */
 function edited(id: string, input: ServerSpec): ServerSpec {
   const current = storedServer(id).spec
-  if (current.source === 'custom') return { ...input, source: 'custom', ...(input.transport !== 'stdio' && current.auth === 'oauth' && input.url === current.url ? { auth: 'oauth' } : {}) }
+  if (current.source === 'custom') return { ...input, source: 'custom' }
   const values = (fields: ServerSpec['env'], next: ServerSpec['env']) => (fields ?? []).map((field) => field.secret ? field : { ...field, value: next?.find((candidate) => candidate.name === field.name)?.value ?? field.value })
   return { ...current, name: input.name, title: input.title, ...(current.env ? { env: values(current.env, input.env) } : {}), ...(current.headers ? { headers: values(current.headers, input.headers) } : {}) }
 }

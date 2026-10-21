@@ -232,8 +232,12 @@ describe('the directory', () => {
     // The first page's three attempts fail; nothing is lost and the error is kept.
     await expect(syncDirectory({ force: true })).rejects.toThrow(/did not answer after 3 attempts/)
     expect(directoryStatus()).toMatchObject({ count: 0, error: expect.stringContaining('500') })
-    requests = []
+    // Opening the view right after a failure does not hammer the registry again.
     await syncDirectory()
+    expect(requests.length).toBe(3)
+    requests = []
+    await syncDirectory({ force: true })
+    expect(requests[0]).toBe('?limit=100&version=latest')
     expect(directoryStatus()).toMatchObject({ count: 10 })
     expect(directoryStatus().error).toBeUndefined()
   })
@@ -288,6 +292,22 @@ describe('/api/extensions', () => {
     expect(JSON.stringify(list.body)).not.toContain('api-secret-value-1')
     expect(list.body.workspaces).toEqual([{ id: 'acme/app', label: 'acme/app' }, { id: 'acme/web', label: 'acme/web' }, { id: 'local', label: 'Poise · local' }])
     expect((await call('/api/extensions/servers', 'POST', { ...custom, secrets: {} })).body.error).toMatch(/already exists|Enter a value/)
+  })
+
+  it('lets an OAuth server move to a token', async () => {
+    const id = (await call('/api/extensions/servers', 'POST', { spec: { name: 'ops', source: 'custom', transport: 'http', url: 'https://ops.example.test/mcp', auth: 'oauth' } })).body.id as string
+    const edited = await call(`/api/extensions/servers/${id}`, 'PUT', { spec: { name: 'ops', source: 'custom', transport: 'http', url: 'https://ops.example.test/mcp', auth: 'none', headers: [{ name: 'Authorization', secret: true }] }, secrets: { 'header:Authorization': 'Bearer ops-token-123' } })
+    expect(edited.body).toMatchObject({ auth: 'none', headers: [{ name: 'Authorization', secret: true, set: true }] })
+  })
+
+  it('shows the twelve most recently used workspaces, and any with a switch of its own', async () => {
+    const many = createExtensionsApi({ recentWorkspaces: () => Array.from({ length: 20 }, (_, n) => `acme/repo-${n}`), check: () => undefined })
+    const created = addServer(local('probe'), { 'env:TOKEN': 'secret-value-1' }, { default: false, workspaces: { 'acme/repo-19': true } })
+    const res = { statusCode: 0, headers: {} as Record<string, string>, body: '', setHeader(name: string, value: string) { this.headers[name] = value }, end(text: string) { this.body = text } }
+    await many({ method: 'GET', url: '/api/extensions' } as any, res as any, '/api/extensions')
+    const ids = (JSON.parse(res.body).workspaces as Array<{ id: string }>).map((workspace) => workspace.id)
+    expect(ids).toEqual([...Array.from({ length: 12 }, (_, n) => `acme/repo-${n}`), 'local', 'acme/repo-19'])
+    deleteServer(created.id)
   })
 
   it('edits, switches, removes, and answers for a server that is gone', async () => {

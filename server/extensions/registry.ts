@@ -21,6 +21,8 @@ const PAGE = 100
 const PAGE_TIMEOUT_MS = 90_000
 const ATTEMPTS = 3
 const FRESH_MS = 24 * 60 * 60_000
+// After a failed crawl, opening the view does not try again for a while; Refresh does.
+const RETRY_MS = 10 * 60_000
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
 /** Shown before anything is searched. Names that are not in the mirror are skipped. */
@@ -39,7 +41,7 @@ export const FEATURED = [
   'ai.exa/exa',
 ]
 
-interface SyncState { generation: number, cursor: string | null, startedAt?: string, completedAt?: string, error?: string }
+interface SyncState { generation: number, cursor: string | null, startedAt?: string, completedAt?: string, error?: string, failedAt?: string }
 
 export function registryUrl(): string {
   return (process.env.POISE_MCP_REGISTRY_URL || 'https://registry.modelcontextprotocol.io').replace(/\/+$/, '')
@@ -71,7 +73,8 @@ export function syncDirectory(options: { force?: boolean } = {}): Promise<void> 
   if (running) return running
   const state = syncState()
   const fresh = state.completedAt && !state.cursor && Date.now() - Date.parse(state.completedAt) < FRESH_MS
-  if (fresh && !options.force) return Promise.resolve()
+  const resting = state.failedAt && Date.now() - Date.parse(state.failedAt) < RETRY_MS
+  if ((fresh || resting) && !options.force) return Promise.resolve()
   running = crawl(state).finally(() => { running = null })
   return running
 }
@@ -96,7 +99,7 @@ async function fetchPage(cursor: string | null): Promise<{ servers: unknown[], n
 async function crawl(previous: SyncState): Promise<void> {
   // A crawl that stopped part-way resumes with its own generation.
   const state: SyncState = previous.cursor
-    ? { ...previous, error: undefined }
+    ? { ...previous, error: undefined, failedAt: undefined }
     : { generation: previous.generation + 1, cursor: null, startedAt: new Date().toISOString(), ...(previous.completedAt ? { completedAt: previous.completedAt } : {}) }
   setMeta(SYNC_KEY, JSON.stringify(state))
   const upsert = db.prepare('INSERT INTO extension_directory (name, entry, generation) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET entry = excluded.entry, generation = excluded.generation')
@@ -117,7 +120,7 @@ async function crawl(previous: SyncState): Promise<void> {
     entries = null
     setMeta(SYNC_KEY, JSON.stringify({ generation: state.generation, cursor: null, startedAt: state.startedAt, completedAt: new Date().toISOString() } satisfies SyncState))
   } catch (error) {
-    setMeta(SYNC_KEY, JSON.stringify({ ...state, error: error instanceof Error ? error.message : String(error) } satisfies SyncState))
+    setMeta(SYNC_KEY, JSON.stringify({ ...state, error: error instanceof Error ? error.message : String(error), failedAt: new Date().toISOString() } satisfies SyncState))
     throw error
   }
 }

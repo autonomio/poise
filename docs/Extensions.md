@@ -7,8 +7,10 @@ to the top bar under Settings → Navigation).
 ## Installed
 
 A grid of servers by workspace. A workspace is the repository a chat works in;
-chats without one share **Poise · local**. Each cell switches a server on or
-off for that workspace's chats. **New workspaces** is the switch for
+chats without one share **Poise · local**. The columns are the twelve most
+recently used workspaces, Poise · local, and any workspace a server has a
+switch of its own for. Each cell switches a server on or off for that
+workspace's chats. **New workspaces** is the switch for
 workspaces chats have not used yet: changing it leaves the workspaces already
 shown as they were.
 
@@ -30,7 +32,9 @@ The directory is Poise's own copy of the official
 search takes tens of seconds and single pages often take most of a minute, so
 Poise crawls it in the background (when the view opens and the copy is a day
 old, or on **Refresh**), resumes from the page that failed after an error, and
-keeps the last complete catalog until a new crawl finishes. Search covers the
+keeps the last complete catalog until a new crawl finishes. After a failed
+crawl, opening the view waits ten minutes before trying again; Refresh tries
+at once. Search covers the
 title, the registry name and the description. A few well-known servers come
 first when nothing is searched.
 
