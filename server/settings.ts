@@ -11,6 +11,8 @@ const GITHUB_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 // A zone Intl does not know throws in every view that formats a time, so it is
 // refused here rather than stored. Constructing a formatter is the test:
 // supportedValuesOf('timeZone') leaves out UTC and the aliases Intl accepts.
+// It is this server's Intl; a browser whose ICU differs reports a saved zone
+// it does not know itself (src/config.ts).
 function knownTimeZone(name: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: name })
@@ -170,7 +172,9 @@ export function setSettings(partial: Partial<Settings>, catalog?: Catalog): Sett
       throw new Error(`${k} must be a GitHub name: letters, digits and single hyphens`)
     }
     if (k === 'timezone' && trimmed && !knownTimeZone(trimmed)) {
-      throw new Error(`timezone must be a time zone this computer knows, such as Europe/Helsinki; "${trimmed}" is not one`)
+      // Named, but cut short: a request body may hold a megabyte.
+      const named = trimmed.length > 100 ? `${trimmed.slice(0, 100)}…` : trimmed
+      throw new Error(`timezone must be a time zone the Poise server knows, such as Europe/Helsinki; "${named}" is not one`)
     }
     next[k] = trimmed
   }
