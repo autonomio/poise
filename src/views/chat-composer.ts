@@ -69,6 +69,7 @@ export interface ComposerHandlers {
 
 export interface Composer {
   el: HTMLElement
+  destroy(): void
   history: ReturnType<typeof createMessageHistory>
   models: ReturnType<typeof createCommandModels>
   setCommands(agentCommands: CommandOption[], own: { model?: boolean, modes: boolean, fork: boolean, poise?: boolean }): void
@@ -111,7 +112,8 @@ const OWN_COMMANDS: CommandOption[] = [
   { name: 'poise', description: 'Implement and release a Poise change', hint: '<request>' },
 ]
 
-export function createComposer(handlers: ComposerHandlers): Composer {
+export function createComposer(handlers: ComposerHandlers, options?: { idPrefix?: string }): Composer {
+  const prefix = options?.idPrefix || ''
   const el = document.createElement('form')
   el.className = 'chat-composer chat-v-composer'
   el.innerHTML = `
@@ -125,11 +127,11 @@ export function createComposer(handlers: ComposerHandlers): Composer {
       <div class="chat-controls">
         <button class="chat-attach" type="button" aria-label="Attach file" title="Attach file">${ICON_PLUS}</button>
         <div class="chat-model-control" hidden>
-          <button type="button" class="chat-default-model" aria-haspopup="listbox" aria-expanded="false" aria-controls="chat-console-models" title="Choose model and effort">
+          <button type="button" class="chat-default-model" aria-haspopup="listbox" aria-expanded="false" aria-controls="${prefix}chat-console-models" title="Choose model and effort">
             <span class="chat-model-label"></span>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="m3 4.5 3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <div id="chat-console-models" class="chat-model-menu" role="listbox" aria-label="Console model" tabindex="-1" hidden></div>
+          <div id="${prefix}chat-console-models" class="chat-model-menu" role="listbox" aria-label="Console model" tabindex="-1" hidden></div>
         </div>
         <span class="chat-steer-hint" hidden>steering</span>
         <span class="chat-controls-spacer"></span>
@@ -152,7 +154,7 @@ export function createComposer(handlers: ComposerHandlers): Composer {
   const modelPicker = attachModelPicker(el.querySelector<HTMLElement>('.chat-model-control')!, {
     onJev: handlers.onJev, jevAvailable: handlers.jevAvailable,
     loadModels: handlers.loadModels, onSelect: identity => { selectedModel = undefined; renderSelectedModel(); handlers.onModelSelect(identity); changed() },
-  })
+  }, options)
   const popover = el.querySelector<HTMLElement>('.chat-popover')!
   watchPanel(popover, () => !popover.hidden)
 
@@ -178,7 +180,7 @@ export function createComposer(handlers: ComposerHandlers): Composer {
       el.dispatchEvent(new Event('chat:composer-change', { bubbles: true }))
     },
     changed: () => el.dispatchEvent(new Event('chat:composer-change', { bubbles: true })),
-  })
+  }, options)
 
   const commandChips = el.querySelector<HTMLElement>('.chat-command-chips')!
   function changed(): void { el.dispatchEvent(new Event('chat:composer-change', { bubbles: true })) }
@@ -206,7 +208,7 @@ export function createComposer(handlers: ComposerHandlers): Composer {
       renderSelectedModel(); applyState(); autoResize(); closePopover(); changed()
       input.setSelectionRange(input.value.length, input.value.length)
     },
-  })
+  }, options)
   function updateModels(): boolean {
     const location = canChainMode() && !state.disabled && !uploading ? modelCompletion(input.value) : null
     if (!location) { models.close(); return false }
@@ -656,8 +658,19 @@ export function createComposer(handlers: ComposerHandlers): Composer {
     autoResize()
   }
 
+  function destroy(): void {
+    history.destroy()
+    models.destroy()
+    modelPicker.destroy()
+    widthObserver.disconnect()
+    if (steerTimer) clearTimeout(steerTimer)
+    if (noteTimer) clearTimeout(noteTimer)
+    if (mentionTimer) clearTimeout(mentionTimer)
+    el.remove()
+  }
+
   return {
-    el, history, models,
+    el, destroy, history, models,
     setCommands(list, own) {
       agentCommands = list
       ownCommands = OWN_COMMANDS.filter((c) => c.name === 'create' || c.name === 'queue' || c.name === 'review' || c.name === 'compact' || c.name === 'reset' || (c.name === 'model' && own.model !== false) || (c.name === 'mode' && own.modes) || (c.name === 'fork' && own.fork) || (c.name === 'poise' && own.poise !== false))

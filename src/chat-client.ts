@@ -146,6 +146,8 @@ export class ChatClient {
   private pending = new Map<string, Pending>()
   /** Sessions the view wants live events for, with the last seq seen. */
   private subscriptions = new Map<string, number>()
+  /** Holders per session; the frame goes out only when the last one leaves. */
+  private holders = new Map<string, number>()
   private serverStartedAt: string | null = null
   private serverInstance: string | null = null
   private handshakeReady = false
@@ -431,8 +433,10 @@ export class ChatClient {
   }
 
   /** Start receiving events for a session from `afterSeq` (exclusive). Events
-   *  already delivered for the session are never repeated. */
+   *  already delivered for the session are never repeated. Each call holds
+   *  the subscription until its matching `unsubscribe`. */
   subscribe(sessionId: string, afterSeq: number): void {
+    this.holders.set(sessionId, (this.holders.get(sessionId) ?? 0) + 1)
     const current = this.subscriptions.get(sessionId)
     if (current !== undefined && current >= afterSeq) return
     this.subscriptions.set(sessionId, afterSeq)
@@ -442,6 +446,12 @@ export class ChatClient {
   }
 
   unsubscribe(sessionId: string): void {
+    const held = (this.holders.get(sessionId) ?? 0) - 1
+    if (held > 0) {
+      this.holders.set(sessionId, held)
+      return
+    }
+    this.holders.delete(sessionId)
     if (!this.subscriptions.delete(sessionId)) return
     this.bufferedEvents.delete(sessionId)
     this.sendFrame({ id: requestId(), command: { type: 'unsubscribe', sessionId } })
@@ -451,6 +461,7 @@ export class ChatClient {
   resetSubscriptions(): void {
     this.subscriptions.clear()
     this.bufferedEvents.clear()
+    this.holders.clear()
   }
 
   // ── REST ───────────────────────────────────────────────────────────────

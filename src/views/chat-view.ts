@@ -1992,7 +1992,7 @@ function render(): void {
   const distance = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
   const wasAtBottom = distance <= STICK_TO_BOTTOM_PX
   if (e) {
-    transcript.render(e.model, { showActivity, showReasoning, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId })
+    transcript.render(e.model, { showActivity, showReasoning, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id })
   } else {
     transcript.clear()
   }

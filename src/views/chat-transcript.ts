@@ -426,6 +426,8 @@ export interface RenderContext {
   interruptedTurnId?: string
   /** Whether the session is running a turn right now (drives the dots). */
   running: boolean
+  /** The rendered session; question drafts are kept per session. */
+  sessionId?: string
 }
 
 const ICONS: Record<ToolKind, string> = {
@@ -525,21 +527,52 @@ export interface TranscriptView {
   tick(): void
   /** Text of a rendered message, for the copy button. */
   textFor(key: string): string
+  destroy(): void
 }
+
+type DraftRow = [string, Array<{ name: string, type: string, value: string, checked: boolean }>]
 
 export function createTranscriptView(container: HTMLElement, handlers: TranscriptHandlers): TranscriptView {
   const nodes = new Map<string, { el: HTMLElement, rev: number }>()
   const ui = new Map<string, UiState>()
   const disclosures = new Set<string>()
   const questionDraftKey = 'poise-chat-question-drafts'
+  /** Saved drafts by session; two transcripts never clobber each other. */
+  const draftStore = new Map<string, DraftRow[]>()
+  /** The session whose drafts `ui` currently holds, if any render has run. */
+  let draftSession: string | null = null
+  function validDraftRow(row: unknown): row is DraftRow {
+    return Array.isArray(row) && typeof row[0] === 'string' && Array.isArray(row[1])
+      && (row[1] as unknown[]).every((answer: any) => answer && typeof answer.name === 'string' && typeof answer.type === 'string'
+        && typeof answer.value === 'string' && typeof answer.checked === 'boolean')
+  }
   try {
     const saved = JSON.parse(sessionStorage.getItem(questionDraftKey) || '[]')
-    if (Array.isArray(saved)) for (const row of saved) {
-      if (Array.isArray(row) && typeof row[0] === 'string' && Array.isArray(row[1])
-        && row[1].every((answer: any) => answer && typeof answer.name === 'string' && typeof answer.type === 'string'
-          && typeof answer.value === 'string' && typeof answer.checked === 'boolean')) ui.set(row[0], { answers: row[1] })
+    if (Array.isArray(saved)) {
+      const rows = (saved as unknown[]).filter(validDraftRow)
+      if (rows.length) draftStore.set('', rows)
+    } else if (saved && typeof saved === 'object') {
+      for (const [session, rows] of Object.entries(saved as Record<string, unknown>)) {
+        if (typeof session !== 'string' || !Array.isArray(rows)) continue
+        const valid = (rows as unknown[]).filter(validDraftRow)
+        if (valid.length) draftStore.set(session, valid)
+      }
     }
   } catch { /* malformed or unavailable draft storage does not affect rendering */ }
+  function stashDrafts(): void {
+    if (draftSession === null) return
+    const drafts = [...ui].filter(([, state]) => state.answers?.some(answer => answer.type === 'text' ? !!answer.value : answer.checked))
+      .map(([key, state]) => [key, state.answers!] as DraftRow)
+    if (drafts.length) draftStore.set(draftSession, drafts)
+    else draftStore.delete(draftSession)
+  }
+  function swapDrafts(session: string): void {
+    if (session === draftSession) return
+    if (draftSession !== null) stashDrafts()
+    for (const state of ui.values()) delete state.answers
+    for (const [key, answers] of draftStore.get(session) || []) ui.set(key, { ...ui.get(key), answers })
+    draftSession = session
+  }
   const texts = new Map<string, string>()
   let lastCtxKey = ''
   let renderedDay = ''
@@ -879,6 +912,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
   }
 
   function render(model: TranscriptModel, ctx: RenderContext): void {
+    swapDrafts(ctx.sessionId || '')
     const focused = focusedPending(model)
     const clock: Clock = { zone: effectiveTimezone(), now: Date.now() }
     // A new day or time zone relabels every turn's time.
@@ -933,9 +967,16 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
 
   function persistQuestionDrafts(): void {
     for (const [key, node] of nodes) rememberQuestion(node.el, key)
-    const drafts = [...ui].filter(([, state]) => state.answers?.some(answer => answer.type === 'text' ? !!answer.value : answer.checked))
-      .map(([key, state]) => [key, state.answers])
-    try { sessionStorage.setItem(questionDraftKey, JSON.stringify(drafts)) } catch { /* in-page state is still retained */ }
+    stashDrafts()
+    // Merge with the other transcript's sessions: read, set ours, write.
+    let merged: Record<string, DraftRow[]> = {}
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(questionDraftKey) || '{}')
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) merged = saved as Record<string, DraftRow[]>
+    } catch { /* keep ours alone */ }
+    for (const [session, rows] of draftStore) merged[session] = rows
+    if (draftSession !== null && !draftStore.has(draftSession)) delete merged[draftSession]
+    try { sessionStorage.setItem(questionDraftKey, JSON.stringify(merged)) } catch { /* in-page state is still retained */ }
   }
   window.addEventListener('beforeunload', persistQuestionDrafts)
   window.addEventListener('pagehide', persistQuestionDrafts)
@@ -1025,7 +1066,13 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     return answers
   }
 
-  return { render, clear, tick, textFor: (key) => texts.get(key) || '' }
+  function destroy(): void {
+    persistQuestionDrafts()
+    window.removeEventListener('beforeunload', persistQuestionDrafts)
+    window.removeEventListener('pagehide', persistQuestionDrafts)
+  }
+
+  return { render, clear, tick, textFor: (key) => texts.get(key) || '', destroy }
 }
 
 /** Pick the nth option of a question card from the keyboard (first unanswered question). */
