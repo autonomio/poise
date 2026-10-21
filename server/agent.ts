@@ -218,14 +218,60 @@ export function scopedAgentLogs(snapshot: AgentLogSnapshot, identity?: AgentLogI
   return snapshot.entries
 }
 
+// One in-flight `--logs` is shared by every overlapping reader: the dump
+// holds the whole Caller log (thousands of rows), and a behavior tick plus
+// open browser views used to spawn a dozen of them at the same minute
+// boundary, convoying on Caller's database until each hit its 30 s timeout.
+// Sharing is staleness-free: every waiter still gets freshly spawned data.
+interface AgentLogFlight {
+  controller: AbortController
+  waiters: number
+  settled: boolean
+  promise: Promise<AgentLogSnapshot>
+}
+
+let agentLogFlight: AgentLogFlight | null = null
+
 export async function fetchAgentLogSnapshot(
   options: { signal?: AbortSignal } = {},
 ): Promise<AgentLogSnapshot> {
+  // A caller that is already gone never joins work it cannot use.
+  options.signal?.throwIfAborted()
+  const current = agentLogFlight ?? startAgentLogFlight()
+  current.waiters += 1
+  try {
+    const signal = options.signal
+    if (!signal) return await current.promise
+    return await new Promise<AgentLogSnapshot>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+      current.promise.then(
+        (snapshot) => { signal.removeEventListener('abort', onAbort); resolve(snapshot) },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error) },
+      )
+    })
+  } finally {
+    current.waiters -= 1
+    // The child dies with its last waiter, as a directly linked signal did.
+    if (current.waiters === 0 && !current.settled) current.controller.abort()
+  }
+}
+
+function startAgentLogFlight(): AgentLogFlight {
+  const controller = new AbortController()
+  const current: AgentLogFlight = { controller, waiters: 0, settled: false, promise: readAgentLogSnapshot(controller.signal) }
+  agentLogFlight = current
+  const settle = () => { current.settled = true; if (agentLogFlight === current) agentLogFlight = null }
+  current.promise.then(settle, settle)
+  return current
+}
+
+async function readAgentLogSnapshot(signal: AbortSignal): Promise<AgentLogSnapshot> {
   const { stdout } = await runFile(CLI, ['--logs'], {
     cwd: agentCwd(),
     timeoutMs: 30_000,
     maxOutputBytes: 32 * 1024 * 1024,
-    signal: options.signal,
+    signal,
   })
   const trimmed = stdout.trim()
   if (!trimmed) throw new Error('agent-interface --logs returned empty output')
