@@ -23,15 +23,28 @@ const ENDED: Record<StopReason, string> = {
   interrupted: 'Interrupted',
 }
 
+const OPTIONS = {
+  ended: { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short' },
+  long: { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
+  day: { year: 'numeric', month: '2-digit', day: '2-digit' },
+} satisfies Record<string, Intl.DateTimeFormatOptions>
+
+// Every turn's row is redrawn on each context change, and building a
+// formatter costs far more than using one, so each is built once per zone.
+const formats = new Map<string, Intl.DateTimeFormat>()
+
 // Assembled from parts: a combined en-GB pattern adds commas ("21 Oct, 00:30").
-function parts(date: Date, timeZone: string, options: Intl.DateTimeFormatOptions): Record<string, string> {
-  return Object.fromEntries(new Intl.DateTimeFormat('en-GB', { ...options, timeZone }).formatToParts(date).map((part) => [part.type, part.value]))
+function parts(date: Date, timeZone: string, kind: keyof typeof OPTIONS): Record<string, string> {
+  const key = `${kind} ${timeZone}`
+  let format = formats.get(key)
+  if (!format) formats.set(key, format = new Intl.DateTimeFormat('en-GB', { ...OPTIONS[kind], timeZone }))
+  return Object.fromEntries(format.formatToParts(date).map((part) => [part.type, part.value]))
 }
 
 /** The calendar day `now` falls on in `timeZone`, with the zone: a turn's
  *  label can change only when this does. */
 export function clockDay(timeZone: string, now: number): string {
-  const day = parts(new Date(now), timeZone, { year: 'numeric', month: '2-digit', day: '2-digit' })
+  const day = parts(new Date(now), timeZone, 'day')
   return `${timeZone} ${day.year}-${day.month}-${day.day}`
 }
 
@@ -40,9 +53,9 @@ export function clockDay(timeZone: string, now: number): string {
  *  RangeError: neither has a right answer to show. */
 export function turnTime(at: string, stopReason: StopReason, timeZone: string, now: number): TurnTime {
   const date = new Date(at)
-  const ended = parts(date, timeZone, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short' })
-  const today = parts(new Date(now), timeZone, { day: 'numeric', month: 'short', year: 'numeric' })
-  const long = parts(date, timeZone, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const ended = parts(date, timeZone, 'ended')
+  const today = parts(new Date(now), timeZone, 'ended')
+  const long = parts(date, timeZone, 'long')
   const time = `${ended.hour}:${ended.minute}`
   const thisYear = ended.year === today.year
   const text = thisYear && ended.month === today.month && ended.day === today.day ? time
