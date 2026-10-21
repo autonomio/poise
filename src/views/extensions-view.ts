@@ -22,6 +22,8 @@ interface Row { name: string, value: string, secret: boolean, set: boolean }
 interface Form {
   mode: 'add' | 'edit'
   id?: string
+  /** The stored name an edit keeps: agents' tool names, and unique (an import may have made it `docs-2`). */
+  name: string
   source: 'custom' | 'directory'
   kind: 'remote' | 'local' | 'json'
   title: string
@@ -72,7 +74,7 @@ let form = blankForm()
 
 function blankForm(): Form {
   return {
-    mode: 'add', source: 'custom', kind: 'remote', title: '', url: '', transport: 'http', auth: 'none', token: '', tokenSet: false,
+    mode: 'add', name: '', source: 'custom', kind: 'remote', title: '', url: '', transport: 'http', auth: 'none', token: '', tokenSet: false,
     headers: [{ name: '', value: '', secret: true, set: false }], command: '', args: [''], env: [{ name: '', value: '', secret: false, set: false }],
     on: new Set(data?.workspaces.map((workspace) => workspace.id) ?? []), newWorkspaces: true, json: '', imported: null, importError: '', error: '', busy: false,
   }
@@ -291,7 +293,7 @@ function customHtml(): string {
         <p class="st-help st-help-info">The server runs in each chat’s checkout. Locked values are secrets: stored write-only and kept out of logs and transcripts.</p></div>`
   const form_ = `<div class="ext-form">
       <div class="tp-section"><label class="tp-label" for="ext-title">Name</label><input id="ext-title" class="st-input" data-form="title" value="${esc(f.title)}" placeholder="${f.kind === 'remote' ? 'Ops tools' : 'Orders database'}" autocomplete="off" spellcheck="false">
-        <p class="st-help st-help-info">Agents see its tools as <code>mcp__${esc(nameFrom(f.title || 'name'))}__…</code>.</p></div>
+        <p class="st-help st-help-info">Agents see its tools as <code>mcp__${esc(agentName(f))}__…</code>.</p></div>
       ${fields}
       ${f.mode === 'add' ? `<div class="tp-group-label">Use it in</div>${workspacePicker(f.on, f.newWorkspaces, 'form')}` : ''}
       ${f.error ? `<p class="st-help st-help-error">${esc(f.error)}</p>` : ''}
@@ -445,18 +447,23 @@ function formRequest(): { spec: Record<string, unknown>, secrets: Record<string,
     return { name, secret: true }
   })
   const title = f.title.trim()
-  const base = { name: nameFrom(title), title, source: f.source }
+  const base = { name: agentName(f), title, source: f.source }
   if (f.kind === 'local') return { spec: { ...base, transport: 'stdio', command: f.command.trim(), args: f.args.filter((arg) => arg.trim()), env: rows(f.env, 'env'), auth: 'none' }, secrets }
   const headers = f.auth === 'token' ? [{ name: 'Authorization', secret: true }] : f.auth === 'headers' ? rows(f.headers, 'header') : []
   if (f.auth === 'token' && f.token) secrets['header:Authorization'] = `Bearer ${f.token.trim()}`
   return { spec: { ...base, transport: f.transport, url: f.url.trim(), headers, auth: f.auth === 'oauth' ? 'oauth' : 'none' }, secrets }
 }
 
+/** What agents call the server: kept on edit, derived from the title when adding. */
+function agentName(f: Form): string {
+  return f.mode === 'edit' && f.name ? f.name : nameFrom(f.title.trim() || 'name')
+}
+
 function editForm(server: ServerView): Form {
   const onlyToken = (server.headers ?? []).length === 1 && server.headers![0].name.toLowerCase() === 'authorization' && server.headers![0].secret
   const row = (field: { name: string, value?: string, secret: boolean, set?: boolean }): Row => ({ name: field.name, value: field.value ?? '', secret: field.secret, set: !!field.set })
   return {
-    ...blankForm(), mode: 'edit', id: server.id, source: server.source, kind: server.transport === 'stdio' ? 'local' : 'remote', title: server.title,
+    ...blankForm(), mode: 'edit', id: server.id, name: server.name, source: server.source, kind: server.transport === 'stdio' ? 'local' : 'remote', title: server.title,
     url: server.url ?? '', transport: server.transport === 'sse' ? 'sse' : 'http',
     auth: server.auth === 'oauth' ? 'oauth' : onlyToken ? 'token' : (server.headers ?? []).length ? 'headers' : 'none',
     tokenSet: onlyToken && !!server.headers![0].set,
@@ -617,7 +624,7 @@ function onInput(event: Event): void {
   const preview = view.querySelector('.ext-preview')
   if (preview) preview.outerHTML = previewHtml(previewServers())
   const hint = view.querySelector<HTMLElement>('#ext-title + .st-help code')
-  if (hint) hint.textContent = `mcp__${nameFrom(form.title || 'name')}__…`
+  if (hint) hint.textContent = `mcp__${agentName(form)}__…`
 }
 
 function onChange(event: Event): void {

@@ -144,5 +144,20 @@ test('imports a pasted configuration, storing what looks like a key as a secret'
   await page.getByRole('button', { name: 'Import 1 server' }).click()
   await expect(page.locator('.ext-matrix tbody tr', { hasText: 'fixture' }).locator('.ext-state')).toHaveText('Connected · 2 tools', { timeout: 30_000 })
   expect(await page.content()).not.toContain('sk-e2e-imported-1234')
+
+  // The same block again becomes fixture-2; editing it keeps that name.
+  await page.getByRole('tab', { name: 'Custom server' }).click()
+  await page.getByRole('button', { name: 'Paste JSON' }).click()
+  await page.locator('#ext-json').fill(JSON.stringify({ mcpServers: { fixture: { command: process.execPath, args: [fixture] } } }))
+  await page.getByRole('button', { name: 'Read configuration' }).click()
+  await page.getByRole('button', { name: 'Import 1 server' }).click()
+  await expect(page.locator('.ext-matrix tbody tr', { hasText: 'fixture' })).toHaveCount(2)
+  const second = ((await (await page.request.get('/api/extensions')).json()).servers as Array<{ id: string, name: string }>).find((server) => server.name === 'fixture-2')!
+  await page.locator(`.ext-matrix tr[data-id="${second.id}"] .ext-col-server`).click()
+  await page.locator('#extensions-panel').getByRole('button', { name: 'Edit' }).click()
+  await expect(page.locator('.ext-form .st-help code').first()).toHaveText('mcp__fixture-2__…')
+  await page.locator('.ext-form [data-save]').click()
+  await expect(page.locator('.ext-notice')).toHaveText('fixture saved. Chats pick it up from their next turn.')
+  expect(((await (await page.request.get('/api/extensions')).json()).servers as Array<{ name: string }>).map((server) => server.name).sort()).toEqual(['fixture', 'fixture-2'])
   await removeAll(page)
 })

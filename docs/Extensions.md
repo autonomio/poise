@@ -70,7 +70,7 @@ Beside the form, **What chats receive** shows exactly what each agent gets for
 the server being edited, with secrets shown as `‹secret›`.
 
 A directory server's command or endpoint comes from the registry: editing it
-changes its name, its values and its secrets.
+changes its display name, its values and its secrets.
 
 ## OAuth sign-in
 
@@ -108,7 +108,10 @@ the agent cannot take its transport, or the agent could not connect to it.
 The server's Activity records each delivery.
 
 Agents name tools `mcp__<name>__<tool>` (Codex and Grok show
-`<name>: <tool>`). A custom server's name comes from the name you give it.
+`<name>: <tool>`). A server's name comes from the name you give it when you
+add it; a directory or imported server takes `-2`, `-3` and so on when another
+server has it already. Editing keeps it, so the tools agents know keep their
+names.
 
 ## Secrets
 
