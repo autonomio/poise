@@ -28,6 +28,21 @@ describe("Poise's clock", () => {
     expect(shortTime(Date.parse(TODAY), ZONE, NOW)).toBe('19:38')
   })
 
+  // en-GB's own month name: en-US would write "Sep 5".
+  it('writes September as en-GB does', () => {
+    const at = '2026-09-04T21:30:00.000Z'
+    expect([shortTime(at, ZONE, NOW), logTime(at, ZONE, NOW), listTime(at, ZONE, NOW)]).toEqual(['5 Sept 00:30', '5 Sept 00:30:00', '5 Sept'])
+  })
+
+  it('writes midnight as 00, never 24', () => {
+    const at = '2026-10-21T00:00:00.000Z'
+    expect([shortTime(at, 'UTC', NOW), logTime(at, 'UTC', NOW), fullTime(at, 'UTC')]).toEqual(['00:00', '00:00:00', 'Wednesday 21 October 2026 at 00:00:00 UTC'])
+  })
+
+  it('dates a time on a later day, as a retry after midnight', () => {
+    expect(shortTime('2026-10-22T05:00:00.000Z', ZONE, NOW)).toBe('22 Oct 08:00')
+  })
+
   it('writes the whole moment out in words', () => {
     expect(fullTime(TODAY, ZONE)).toBe('Wednesday 21 October 2026 at 19:38:12 EEST')
   })
@@ -48,5 +63,12 @@ describe("Poise's clock", () => {
       expect(() => read(TODAY, 'Mars/Olympus')).toThrow(RangeError)
     }
     expect(() => clockDay('Mars/Olympus', NOW)).toThrow(RangeError)
+  })
+
+  it('throws for a now that is not a time', () => {
+    expect(() => shortTime(TODAY, ZONE, NaN)).toThrow(RangeError)
+    expect(() => logTime(TODAY, ZONE, NaN)).toThrow(RangeError)
+    expect(() => listTime(TODAY, ZONE, NaN)).toThrow(RangeError)
+    expect(() => clockDay(ZONE, NaN)).toThrow(RangeError)
   })
 })
