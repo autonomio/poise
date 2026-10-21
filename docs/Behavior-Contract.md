@@ -96,6 +96,8 @@ worker. A clean review becomes approval-eligible on the next scheduler scan.
 After a dismissal and a head change, a completed change-request review by the
 configured reviewer can admit a fresh head-pinned approval evaluation through
 the same activity and ownership guards. Dismissal never counts as approval.
+The recovery retains the admitted reviewer through preparation and preserves
+same-head/model failure holds across request and head dedupe keys.
 Provider account blocks (`review_provider_blocked`) use the same hold, preventing
 an exhausted balance or local account latch from launching identical workers.
 Codex input overflow is staged within the existing total review budget, with

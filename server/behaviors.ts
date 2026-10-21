@@ -2559,11 +2559,37 @@ async function checkChangesAddressed(repo: string, number: number, reviewer: str
   }
 }
 
+async function dismissedApprovalHeld(pr: DatastorePr, head: string, model: string): Promise<boolean> {
+  const failed = failedBehaviorLaunches('approve-prs').filter((claim) =>
+    claim.launchRepo === pr.repo && claim.launchPr === pr.number && claim.launchExpectedHead === head)
+  if (!failed.length) return false
+  const snapshot = await readBehaviorLogSnapshot()
+  return failed.some((claim) => {
+    const call = snapshot.entries.find((row) => row.id === claim.launchCallId)
+    if (claim.launchQuarantine || !call || !unambiguousAgentCall(snapshot, call)
+      || logQuarantine(snapshot, claimLogIdentity(claim), true)
+      || claim.launchBehavior !== 'pr_approve' || claim.launchSource !== 'poise:approve-prs'
+      || !FAILED_AGENT_STATUSES.has(call.status.toLowerCase())
+      || call.behavior !== claim.launchBehavior || call.repo !== claim.launchRepo
+      || String(call.pr_id) !== String(claim.launchPr)
+      || call.actor?.toLowerCase() !== claim.launchActor.toLowerCase()
+      || call.source !== claim.launchSource || call.correlation_id !== claim.launchCorrelationId
+      || call.expected_head !== head || !Number.isFinite(Date.parse(claim.launchRequestedAt))
+      || !Number.isFinite(Date.parse(agentCallStartedAt(call)))
+      || Date.parse(agentCallStartedAt(call)) < Date.parse(claim.launchRequestedAt)
+      || call.action !== 'not_started' || call.outcome !== 'preflight_failed'
+      || call.head_sha !== null || call.review_id != null || call.receipts != null || call.review_comments != null) return true
+    return boundedReviewFailure(call) && call.model === model
+      || !behaviorRetryDue('approve-prs', claim.target)
+  })
+}
+
 async function fireApprove(
   pr: DatastorePr,
   claimTarget: string,
   claimId: string,
   expectedHead: string,
+  admittedReviewer?: string,
 ): Promise<boolean> {
   return withNoticeDiagnosticIdentity({ correlationId: claimId, behavior: 'approve-prs', repository: pr.repo, target: `${pr.repo}#${pr.number}`, account: agentAccount() || null }, async () => {
   if (!isEnabled('approve-prs')) return false
@@ -2573,6 +2599,8 @@ async function fireApprove(
   const { model, recovery, catalog } = await waitForBehavior(reviewChoice('pr_approve'))
   const claude = needsClaude(catalog, model)
   const actor = configuredReviewer()
+  if (admittedReviewer && (actor.toLowerCase() !== admittedReviewer.toLowerCase()
+    || await dismissedApprovalHeld(pr, expectedHead, model))) return false
   if (claude) await waitForBehavior(claudeAuth.requireReady({ liveWithinMs: BEHAVIOR_AUTH_FRESHNESS_MS }))
   const modelCliEnv = await prepareBehaviorModelClis(catalog, [model, recovery], claimId)
   await mkdir(join(GH_INTERFACE_CWD_ROOT, owner, repo), { recursive: true })
@@ -2593,6 +2621,7 @@ async function fireApprove(
   const pwd = await localCheckoutPath(owner, repo, pr.number, expectedHead)
   if (!isEnabled('approve-prs') || behaviorAborted() || !stillEligible('approve-prs', pr)) return false
   if ((await reviewChoice('pr_approve')).model !== model) return false
+  if (admittedReviewer && configuredReviewer().toLowerCase() !== admittedReviewer.toLowerCase()) return false
   const source = 'poise:approve-prs'
   const args = [
     '--pr-approve',
@@ -2697,6 +2726,7 @@ async function tickApprovePrs(): Promise<void> {
         let seenTarget = ''
         let firedReason = ''
         let expectedHead = ''
+        let admittedReviewer: string | undefined
         if (check.hasChangeRequest) {
           if (check.responseCount < 1 || check.latestRequestAt === null) {
             checked = true
@@ -2740,6 +2770,7 @@ async function tickApprovePrs(): Promise<void> {
             checked = true
             return
           }
+          if (!cleanReview) admittedReviewer = reviewer
           const reapprovalOwnsEveryUnresolvedConversation =
             activity.reviewerLatestState === 'APPROVED'
             && activity.reviewerLatestCommit !== null
@@ -2780,7 +2811,7 @@ async function tickApprovePrs(): Promise<void> {
         if (!claimId) return
         trackClaim('approve-prs', seenTarget, claimId)
         try {
-          const accepted = await fireApprove(pr, seenTarget, claimId, expectedHead)
+          const accepted = await fireApprove(pr, seenTarget, claimId, expectedHead, admittedReviewer)
           if (!accepted) {
             releaseOwnedClaim('approve-prs', seenTarget, claimId)
             return
