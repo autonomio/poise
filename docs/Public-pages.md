@@ -52,7 +52,18 @@ The standard bundled Caddy already forwards these routes to the gateway. With
 an external proxy that adds its own login, allow **GET and HEAD on exactly `/`,
 `/privacy` and `/terms` on the apex** through to the same gateway without that
 extra login. Do not exempt workspace hosts, arbitrary path prefixes or any
-additional methods. This serves the gateway's public content; it grants no
+additional methods. A Caddy named matcher can preserve the original URI, avoiding
+its normal path cleaning:
+
+```caddyfile
+@public {
+    method GET HEAD
+    expression `{orig_uri}.matches('^/(privacy|terms)?([?].*)?$')`
+}
+```
+
+Use that matcher only within your configured apex block and forward it to the
+same gateway before the extra login handler. This serves the gateway's public content; it grants no
 workspace access. Other proxy requirements remain in [Operating](Operating.md#behind-your-own-proxy).
 
 ## Google consent configuration

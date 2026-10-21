@@ -33,7 +33,7 @@ http://:8081 {
 	@public {
 		host {$POISE_DOMAIN}
 		method GET HEAD
-		path / /privacy /terms
+		expression `{orig_uri}.matches('^/(privacy|terms)?([?].*)?$')`
 	}
 	handle @public {
 		reverse_proxy {$POISE_PROXY_LISTEN}
