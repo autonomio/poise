@@ -591,8 +591,8 @@ run() {
   check_inside_only
   second_user
   check_tls
-  check_public_pages
   check_chat_socket
+  check_public_pages
   revoke_link
   backup_and_restore
   check_persisted_public_pages
