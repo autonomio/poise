@@ -93,7 +93,7 @@ describe('Claude subscription authentication monitor', () => {
   it('verifies Claude.ai with a live subscription canary and exposes only sanitized fields', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
 
     const snapshot = await monitor.check({ forceLive: true })
 
@@ -128,6 +128,8 @@ describe('Claude subscription authentication monitor', () => {
       '--print',
       '--model',
       'haiku',
+      '--effort',
+      'low',
       '--permission-mode',
       'dontAsk',
       '--tools',
@@ -151,7 +153,7 @@ describe('Claude subscription authentication monitor', () => {
       stdout: JSON.stringify(status),
       stderr: '',
     })
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     await expect(monitor.check({ forceLive: true })).resolves.toMatchObject({
       status: 'reauth_required',
@@ -168,7 +170,7 @@ describe('Claude subscription authentication monitor', () => {
     const run = vi.fn<ClaudeAuthRunFile>()
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockRejectedValueOnce(expired)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     await expect(monitor.check({ forceLive: true })).resolves.toMatchObject({
       status: 'reauth_required',
@@ -185,7 +187,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockResolvedValueOnce(status)
       .mockRejectedValueOnce(expired)
       .mockResolvedValue(status)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
 
     await monitor.check({ forceLive: true })
     for (let poll = 0; poll < 3; poll += 1) {
@@ -209,7 +211,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
 
     await expect(monitor.check({ forceLive: true })).resolves.toMatchObject({ status: 'degraded' })
     await expect(monitor.check()).resolves.toMatchObject({ status: 'degraded' })
@@ -232,7 +234,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
 
     await monitor.check({ forceLive: true })
     await monitor.check()
@@ -261,7 +263,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockRejectedValueOnce(new Error('temporary status failure'))
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockRejectedValueOnce(new Error('502 Bad Gateway'))
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     await expect(monitor.check()).resolves.toMatchObject({ status: 'reauth_required' })
     await expect(monitor.check()).resolves.toMatchObject({ status: 'reauth_required' })
@@ -274,7 +276,7 @@ describe('Claude subscription authentication monitor', () => {
 
   it('keeps local CLI failures unavailable without turning them into login prompts', async () => {
     const run = vi.fn<ClaudeAuthRunFile>().mockRejectedValue(new Error('spawn claude ENOENT'))
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     await expect(monitor.check({ forceLive: true })).resolves.toMatchObject({
       status: 'unavailable',
@@ -288,7 +290,7 @@ describe('Claude subscription authentication monitor', () => {
       stderr: '',
     })
     const run = vi.fn<ClaudeAuthRunFile>().mockRejectedValue(error)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     await expect(monitor.check()).resolves.toMatchObject({ status: 'reauth_required' })
   })
@@ -296,7 +298,7 @@ describe('Claude subscription authentication monitor', () => {
   it('never re-proves a healthy sign-in on a timer', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     expect(run).toHaveBeenCalledTimes(2)
 
@@ -311,7 +313,7 @@ describe('Claude subscription authentication monitor', () => {
   it('marks degraded when a forced canary returns 502', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     run.mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockRejectedValueOnce(new Error('502 Bad Gateway'))
@@ -323,7 +325,7 @@ describe('Claude subscription authentication monitor', () => {
   it('starts an unrefed sixty-second local-status poll and stops it', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
 
     monitor.start()
     await monitor.check({ forceLive: true })
@@ -343,7 +345,7 @@ describe('Claude subscription authentication monitor', () => {
     const run = vi.fn<ClaudeAuthRunFile>()
       .mockImplementationOnce(() => status.promise)
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     const first = monitor.check({ forceLive: true })
     const second = monitor.check({ forceLive: true })
@@ -367,7 +369,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockImplementationOnce(() => login.promise)
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     await monitor.check()
 
     expect(monitor.startLogin()).toMatchObject({ status: 'signing_in', loginInProgress: true })
@@ -387,7 +389,7 @@ describe('Claude subscription authentication monitor', () => {
 
   it('does not open a login flow while authentication is healthy', async () => {
     const run = validRun()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     await monitor.check({ forceLive: true })
 
     expect(monitor.startLogin()).toMatchObject({
@@ -404,7 +406,7 @@ describe('Claude subscription authentication monitor', () => {
       options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     }))
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     monitor.start()
 
     await monitor.stop()
@@ -428,7 +430,7 @@ describe('Claude subscription authentication monitor', () => {
         options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
       })
     })
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     await monitor.check()
     monitor.startLogin()
 
@@ -445,7 +447,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockResolvedValueOnce({ stdout: 'Login successful.', stderr: '' })
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
 
     void monitor.check({ forceLive: true })
     monitor.startLogin()
@@ -475,7 +477,7 @@ describe('Claude subscription authentication monitor', () => {
   ])('ignores unattributable noise %s without probing', async (_label, failure) => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     const verified = monitor.snapshot()
     run.mockClear()
@@ -495,7 +497,7 @@ describe('Claude subscription authentication monitor', () => {
   ])('closes the shared gate reactively on %s, without probing', async (_label, failure, status, code) => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     run.mockClear()
 
@@ -509,7 +511,7 @@ describe('Claude subscription authentication monitor', () => {
   it('never lets a late quota error clear a confirmed sign-in requirement', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     monitor.observeProcessFailure(new Error('401 authentication_error: OAuth token expired'))
     expect(monitor.snapshot().status).toBe('reauth_required')
@@ -518,7 +520,7 @@ describe('Claude subscription authentication monitor', () => {
 
     expect(monitor.snapshot()).toMatchObject({ status: 'reauth_required', authMethod: null, subscriptionType: null })
     // The asymmetry holds the other way: a dead credential always surfaces.
-    const quota = new ClaudeAuthMonitor({ runFile: validRun(), canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const quota = new ClaudeAuthMonitor({ runFile: validRun(), canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     await quota.check({ forceLive: true })
     quota.observeProcessFailure(new Error('429 usage limit reached'))
     expect(quota.snapshot().status).toBe('quota_exhausted')
@@ -529,7 +531,7 @@ describe('Claude subscription authentication monitor', () => {
   it('keeps a reactive downgrade when a healthy poll lands after it', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     let resolveStatus!: (value: { stdout: string, stderr: string }) => void
     run.mockImplementationOnce(() => new Promise<{ stdout: string, stderr: string }>((resolve) => { resolveStatus = resolve }))
@@ -545,7 +547,7 @@ describe('Claude subscription authentication monitor', () => {
   it('keeps the sign-in identity on quota exhaustion and recovers when the canary succeeds', async () => {
     const run = validRun()
     const clock = new FakeClock()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock })
     await monitor.check({ forceLive: true })
     monitor.observeProcessFailure(new Error('429 usage limit reached'))
 
@@ -560,7 +562,7 @@ describe('Claude subscription authentication monitor', () => {
       stdout: JSON.stringify({ loggedIn: false, authMethod: 'none' }),
       stderr: '',
     })
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     await monitor.check()
     run.mockClear()
 
@@ -577,7 +579,7 @@ describe('Claude subscription authentication monitor', () => {
 
   it('ignores late worker exits after stop', async () => {
     const run = validRun()
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     monitor.start()
     await monitor.check({ forceLive: true })
     await monitor.stop()
@@ -597,7 +599,7 @@ describe('Claude subscription authentication monitor', () => {
       .mockResolvedValueOnce(loggedOut)
       .mockResolvedValueOnce({ stdout: VALID_STATUS, stderr: '' })
       .mockResolvedValueOnce(OK)
-    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => 'haiku', clock: new FakeClock() })
+    const monitor = new ClaudeAuthMonitor({ runFile: run, canaryModel: async () => ({ selector: 'haiku', effort: 'low' }), clock: new FakeClock() })
     const heard: string[] = []
     const stop = monitor.onStatus((status) => heard.push(status))
 

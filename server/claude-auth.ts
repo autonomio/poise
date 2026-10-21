@@ -55,8 +55,8 @@ export interface ClaudeAuthClock {
 export interface ClaudeAuthMonitorOptions {
   runFile?: ClaudeAuthRunFile
   clock?: ClaudeAuthClock
-  /** Resolves the canary's Claude model selector; production reads the live catalog. */
-  canaryModel?: () => Promise<string>
+  /** Resolves the canary's Claude model row; production reads the live catalog. */
+  canaryModel?: () => Promise<{ selector: string, effort: string }>
 }
 
 export interface ClaudeAuthCheckOptions {
@@ -173,16 +173,16 @@ function isQuotaExhaustion(error: unknown): boolean {
     || /out of[^\n]{0,20}credits?/i.test(text)
 }
 
-async function defaultCanaryModel(): Promise<string> {
+async function defaultCanaryModel(): Promise<{ selector: string, effort: string }> {
   const model = canaryClaudeModel(await loadCatalog())
   if (!model) throw new Error('the model catalog names no Claude model for the sign-in check')
-  return model.selector
+  return { selector: model.selector, effort: model.effort }
 }
 
 export class ClaudeAuthMonitor {
   private readonly run: ClaudeAuthRunFile
   private readonly clock: ClaudeAuthClock
-  private readonly canaryModel: () => Promise<string>
+  private readonly canaryModel: () => Promise<{ selector: string, effort: string }>
   private currentStatus: ClaudeAuthStatus = 'checking'
   private readonly statusListeners = new Set<(status: ClaudeAuthStatus) => void>()
   private checkedAtMs: number | null = null
@@ -504,13 +504,15 @@ export class ClaudeAuthMonitor {
     }
 
     try {
-      const selector = await this.canaryModel()
+      const canary = await this.canaryModel()
       await this.run(
         CLAUDE_COMMAND,
         [
           '--print',
           '--model',
-          selector,
+          canary.selector,
+          '--effort',
+          canary.effort,
           '--permission-mode',
           'dontAsk',
           '--tools',
