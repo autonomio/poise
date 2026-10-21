@@ -3137,13 +3137,14 @@ test('CLI refresh: a completed Settings check updates the fresh console without 
   await page.route('**/api/models/refresh', async route => {
     const claude = state.agents!.agents[0] as { models: Array<{ identity: string, selector: string, effort: string }> }
     claude.models = claude.models.map(model => ({ ...model, identity: model.identity.replace('opus-5-', 'opus-5.5-'), selector: 'claude-opus-5-5' }))
-    await route.fulfill({ json: { changed: true, families: { claude: { status: 'ok' } }, cli_updates: { claude: { status: 'updated', before: '2.1.274', after: '2.1.280' } } } })
+    await route.fulfill({ json: { changed: true, completed_at: '2026-10-21T16:38:00.000Z', families: { claude: { status: 'ok' } }, cli_updates: { claude: { status: 'updated', before: '2.1.274', after: '2.1.280' } } } })
   })
   await page.goto('/'); await expect(page.locator('.chat-default-model')).toHaveText('Opus 5 · High')
   await openModelSettings(page)
   await page.getByRole('button', { name: 'Check now', exact: true }).click()
   await expect(page.locator('.st-status')).toContainText('Catalog updated.')
   await expect(page.locator('.st-catalog-status')).toHaveAttribute('data-help', /2\.1\.280/)
+  await expect(page.locator('.st-catalog-status')).toHaveAttribute('data-help', /Last checked (21 Oct (2026 )?)?16:38\. /)
   await expect(page.locator('.st-catalog-status')).not.toContainText('Invalid Date')
   await page.keyboard.press('Escape')
   await expect(page.locator('.chat-default-model')).toHaveText('Opus 5.5 · High')

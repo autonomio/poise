@@ -538,7 +538,7 @@ function renderCatalogStatus(data: ModelsResponse) {
   const report = data.refresh
   if (report) {
     const when = new Date(report.completed_at || report.checked_at || '')
-    const stamp = Number.isNaN(when.getTime()) ? '' : ` Last checked ${when.toLocaleString()}.`
+    const stamp = Number.isNaN(when.getTime()) ? '' : ` Last checked ${shortTime(when.getTime(), effectiveTimezone(), Date.now())}.`
     const summary = modelRefreshSummary(report)
     const versions = Object.entries(report.cli_updates || {}).filter(([, item]) => item.after).map(([name, item]) => `${name} ${item.after}`).join(', ')
     line += `${stamp} ${summary.text}${versions ? ` CLI versions: ${versions}.` : ''}`
@@ -907,7 +907,7 @@ function buildPanel(): HTMLElement {
         <div class="tp-group-label">Time</div>
 
         <div class="tp-section">
-          <label class="tp-label" for="st-timezone" ${helpAttributes("Sets the day and week boundaries in Current, Archive and Analytics, and the times in Chat.")}>Time zone</label>
+          <label class="tp-label" for="st-timezone" ${helpAttributes("Sets the day and week boundaries in Current, Archive and Analytics, and the zone Poise shows times in.")}>Time zone</label>
           <select id="st-timezone" class="st-select st-input-tz">${tzOptionsHtml}</select>
 
         </div>
