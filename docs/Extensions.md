@@ -75,7 +75,10 @@ changes its display name, its values and its secrets.
 ## OAuth sign-in
 
 A remote server that answers a check with an OAuth challenge is marked as
-needing a sign-in. **Sign in** runs the MCP SDK's client flow: Poise discovers
+needing a sign-in. A 401 is an OAuth challenge only when the server names an
+authorization server (its protected-resource metadata, or OAuth metadata at
+its own origin); otherwise the check fails asking for a token or headers.
+**Sign in** runs the MCP SDK's client flow: Poise discovers
 the authorization server from the server's protected-resource metadata,
 registers itself as a public client, and sends the browser to the provider
 with PKCE. The provider returns the browser to `/extensions/oauth` on this

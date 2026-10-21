@@ -123,6 +123,16 @@ describe('OAuth sign-in for a remote server', () => {
     expect(await accessToken(id)).toBe(working)
   })
 
+  it('asks for a token, not a sign-in, when a 401 comes without OAuth metadata', async () => {
+    const plain = createServer((_req, res) => { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"token required"}') })
+    await new Promise<void>((resolve) => plain.listen(0, '127.0.0.1', resolve))
+    try {
+      const id = addServer(validateSpec({ name: 'plain', title: 'Plain', source: 'custom', transport: 'http', url: `http://127.0.0.1:${(plain.address() as AddressInfo).port}/mcp` }), {}, everywhere).id
+      expect(await checkServer(id)).toMatchObject({ state: 'failed', error: 'The server needs credentials (401) and offers no OAuth sign-in. Add its token or headers under Edit.' })
+      expect(serverView(id).auth).toBe('none')
+    } finally { await new Promise((resolve) => plain.close(resolve)) }
+  })
+
   it('accepts a returning sign-in once, only for a flow it started, from an origin it can return to', async () => {
     const id = addServer(validateSpec({ name: 'acme', title: 'Acme', source: 'custom', transport: 'http', url: `${base}/mcp`, auth: 'oauth' }), {}, everywhere).id
     await expect(startSignIn(id, 'http://evil.example.test')).rejects.toThrow(/HTTPS origin, or HTTP on localhost/)

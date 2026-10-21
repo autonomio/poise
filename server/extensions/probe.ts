@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
+import { discoverOAuthServerInfo } from '@modelcontextprotocol/sdk/client/auth.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -23,6 +24,12 @@ const running = new Map<string, Promise<ServerStatus>>()
 
 function status401(error: unknown): boolean {
   return (error instanceof StreamableHTTPError || error instanceof SseError) && error.code === 401
+}
+
+/** Whether the server names an OAuth authorization server (RFC 9728, or the
+ *  MCP spec's fallback to its own origin): a 401 alone may want a static token. */
+async function offersOAuth(url: string): Promise<boolean> {
+  try { return !!(await discoverOAuthServerInfo(url)).authorizationServerMetadata } catch { return false }
 }
 
 async function listTools(server: ResolvedServer, cwd: string, stderr: string[], signal: AbortSignal): Promise<ToolInfo[]> {
@@ -85,7 +92,10 @@ async function run(id: string): Promise<ServerStatus> {
     if (status401(error)) {
       const authorized = Object.keys(server.headers ?? {}).some((name) => name.toLowerCase() === 'authorization')
       if (stored.spec.auth === 'oauth') { eraseSecret(id, 'oauth:tokens'); return done({ state: 'signin', checkedAt: checkedAt() }) }
-      if (!authorized && (stored.spec.headers ?? []).length === 0) { markOAuth(id); return done({ state: 'signin', checkedAt: checkedAt() }) }
+      if (!authorized && (stored.spec.headers ?? []).length === 0) {
+        if (await offersOAuth(server.url!)) { markOAuth(id); return done({ state: 'signin', checkedAt: checkedAt() }) }
+        return done({ state: 'failed', checkedAt: checkedAt(), error: 'The server needs credentials (401) and offers no OAuth sign-in. Add its token or headers under Edit.' })
+      }
       return done({ state: 'failed', checkedAt: checkedAt(), error: 'The server refused the credentials (401).' })
     }
     const tail = stderr.join('').trim().split('\n').slice(-3).join(' | ')
