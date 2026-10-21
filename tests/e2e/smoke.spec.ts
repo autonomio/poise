@@ -735,8 +735,8 @@ test('shows missing worker heartbeat, refreshes failures, and stops polling when
 })
 
 
-test.describe('in an en-US browser', () => {
-  test.use({ locale: 'en-US' })
+test.describe('in an en-US browser in New York', () => {
+  test.use({ locale: 'en-US', timezoneId: 'America/New_York' })
 
   test("writes a run's activity on Poise's 24-hour clock, with seconds", async ({ page }) => {
     await page.clock.setFixedTime(new Date('2026-10-21T17:00:05Z'))
@@ -751,7 +751,7 @@ test.describe('in an en-US browser', () => {
     await page.goto('/')
     await page.getByRole('button', { name: 'Swarm', exact: true }).click()
     await page.locator(`.agent-row[data-id="${id}"]`).getByRole('button', { name: 'Toggle detail' }).click()
-    // Settings' time zone here is UTC; the browser's language must not make it "4:59:58 PM".
+    // Settings' time zone here is UTC; the browser's language and zone must not make it "12:59:58 PM".
     const time = page.locator('.agent-progress-detail time')
     await expect(time).toHaveText('16:59:58')
     await expect(time).toHaveAttribute('datetime', at)

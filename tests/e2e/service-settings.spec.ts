@@ -199,18 +199,20 @@ test('Escape closes the top-right menu, and Settings opened from it', async ({ p
 
 test('gives the gateway\'s admins an Admin tab that manages people and workspaces', async ({ page }) => {
   const state = await setup(page, 'service', true)
+  // A later day than the sign-ins, so their times carry the date on Poise's clock.
+  await page.clock.setFixedTime(new Date('2026-10-21T12:00:00Z'))
   await page.goto('/?settings=admin')
   await expect(page.locator('#settings-panel')).toHaveClass(/open/)
   await expect(page.locator('#settings-panel')).toHaveAttribute('data-section', 'admin')
   const alice = page.locator('.ad-user[data-user="alice"]')
   await expect(alice).toContainText('Alice')
-  await expect(alice).toContainText('allow list')
+  await expect(alice).toContainText('allow list · last sign-in 8 Oct 06:00')
   await expect(alice).toContainText('000000000000 (outdated)')
   await expect(alice).toContainText('the last start timed out')
   // Disk use, as the gateway last measured it.
   await expect(alice).toContainText('61 GB on disk, over its 50 GB budget')
   await expect(page.locator('.ad-user[data-user="octocat"]')).toContainText('2.4 GB on disk')
-  await expect(page.locator('.ad-disk')).toContainText('Server disk: 20 GB free of 290 GB')
+  await expect(page.locator('.ad-disk')).toContainText('Server disk: 20 GB free of 290 GB, measured 9 Oct 07:00.')
   await expect(page.locator('.ad-disk')).toContainText('Less than a tenth is free.')
   for (const theme of ['light', 'dark']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme)

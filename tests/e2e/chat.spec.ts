@@ -354,8 +354,8 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect(shown(0)).toHaveText('20 Oct 15:05')
 })
 
-test.describe('in an en-US browser', () => {
-  test.use({ locale: 'en-US' })
+test.describe('in an en-US browser on UTC', () => {
+  test.use({ locale: 'en-US', timezoneId: 'UTC' })
 
   test("dates the session list on Poise's clock in Settings' time zone", async ({ page }) => {
     await page.clock.setFixedTime(new Date('2026-10-21T17:00:00Z'))
@@ -367,7 +367,7 @@ test.describe('in an en-US browser', () => {
     await installRoutes(page, state)
     await installSocket(page)
     await page.goto('/')
-    // Not the browser's "7:38 PM" or "Oct 20": the time today, the date alone before.
+    // Not the browser's "04:38 PM" or "Oct 20": Helsinki's time today, the date alone before.
     await expect(page.locator('.chat-session-item[data-id="today"] .chat-session-date')).toHaveText('19:38')
     await expect(page.locator('.chat-session-item[data-id="yesterday"] .chat-session-date')).toHaveText('20 Oct')
   })
