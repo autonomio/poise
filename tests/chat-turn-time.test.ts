@@ -20,6 +20,10 @@ describe("a turn's end time", () => {
     expect(turnTime('2025-12-31T21:05:00.000Z', 'end_turn', 'Europe/Helsinki', NOW)).toEqual({ text: '31 Dec 2025 23:05', label: 'Finished Wednesday 31 December 2025 at 23:05:00 EET' })
   })
 
+  it("uses en-GB month names, so September is 'Sept'", () => {
+    expect(turnTime('2026-09-03T21:30:00.000Z', 'end_turn', 'Europe/Helsinki', NOW).text).toBe('4 Sept 00:30')
+  })
+
   it('compares calendar days, so a time ahead of the clock is labelled the same way', () => {
     expect(turnTime('2026-10-21T19:00:00.000Z', 'end_turn', 'Europe/Helsinki', NOW).text).toBe('22:00')
     expect(turnTime('2026-10-22T09:00:00.000Z', 'end_turn', 'Europe/Helsinki', NOW).text).toBe('22 Oct 12:00')
@@ -37,7 +41,8 @@ describe("a turn's end time", () => {
     expect(label('max_tokens')).toBe('Hit the output limit Wednesday 21 October 2026 at 19:20:00 EEST')
     expect(label('refusal')).toBe('Refused Wednesday 21 October 2026 at 19:20:00 EEST')
     expect(label('error')).toBe('Failed Wednesday 21 October 2026 at 19:20:00 EEST')
-    expect(label('interrupted')).toBe('Interrupted Wednesday 21 October 2026 at 19:20:00 EEST')
+    // Restart recovery writes this end when Poise next starts, so the words claim only the record.
+    expect(label('interrupted')).toBe('Recorded as interrupted Wednesday 21 October 2026 at 19:20:00 EEST')
   })
 
   it("names the zone's calendar day, which changes at the zone's midnight", () => {

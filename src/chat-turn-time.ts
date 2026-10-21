@@ -1,7 +1,7 @@
 // When a Chat turn ended, as its meta row shows it: the time alone for a turn
-// that ended today, with the date for an earlier day and the year for an
-// earlier year, in the person's timezone. Kept free of runtime imports so it
-// can be tested under the node environment.
+// that ended today, with the date for another day and the year for another
+// year, in the person's timezone. Kept free of runtime imports so it can be
+// tested under the node environment.
 
 import type { StopReason } from '../server/chat/protocol'
 
@@ -13,14 +13,15 @@ export interface TurnTime {
 }
 
 // How each ending reads before its full time, in the words of the meta row's
-// stop label where that is a verb.
+// stop label where that is a verb. Restart recovery writes an interrupted
+// turn's end when Poise next starts, so that time is only when it was recorded.
 const ENDED: Record<StopReason, string> = {
   end_turn: 'Finished',
   cancelled: 'Stopped',
   max_tokens: 'Hit the output limit',
   refusal: 'Refused',
   error: 'Failed',
-  interrupted: 'Interrupted',
+  interrupted: 'Recorded as interrupted',
 }
 
 const OPTIONS = {

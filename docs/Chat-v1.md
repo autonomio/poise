@@ -80,8 +80,9 @@ earlier year, and follows midnight and time zone changes. Hovering or focusing
 it shows the full timestamp with how the turn ended, such as "Finished
 Wednesday 21 October 2026 at 19:38:12 EEST" or "Stopped …", which is also what
 a screen reader reads. A turn that Poise ended while restarting shows when
-Poise recorded that end. Prompts, tool cards and running turns carry no time,
-and neither does a turn interrupted without a recorded end.
+Poise recorded that end, as "Recorded as interrupted …". Prompts, tool cards
+and running turns carry no time, and neither does a turn interrupted without a
+recorded end.
 
 Local Markdown links open a read-only file preview inside Chat. The preview
 shows the current working copy, not a historical snapshot; line references

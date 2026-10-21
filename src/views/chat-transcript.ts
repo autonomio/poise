@@ -752,8 +752,8 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
   }
 
   // The visible time is short. The full one is what a screen reader reads and
-  // what the tooltip shows on hover or keyboard focus; ARIA prohibits naming
-  // the time role with aria-label.
+  // what the tooltip shows on hover or keyboard focus; the ARIA 1.3 draft
+  // prohibits naming the time role with aria-label.
   function timeHtml(f: NonNullable<TurnModel['finished']>, clock: Clock): string {
     const time = turnTime(f.at, f.stopReason, clock.zone, clock.now)
     return `<time class="chat-turn-time" datetime="${escapeHtml(f.at)}" tabindex="0" data-help="${escapeHtml(time.label)}">`
