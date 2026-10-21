@@ -64,9 +64,11 @@ export function loadPublicPages(dataDir: string): PublicPages | null {
 
 export function installPublicPages(dataDir: string, input: string): void {
   const value = parsePublicPages(input)
+  const serialized = JSON.stringify(value)
+  if (Buffer.byteLength(serialized) > PUBLIC_PAGES_LIMIT) invalid()
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
   const temp = join(dataDir, `.public-pages-${randomUUID()}.tmp`)
-  writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+  writeFileSync(temp, serialized, { flag: 'wx', mode: 0o600 })
   try { renameSync(temp, join(dataDir, PUBLIC_PAGES_FILE)) }
   catch (error) { unlinkSync(temp); throw error }
 }
@@ -77,7 +79,7 @@ function expand(value: string, p: PublicPages, origin: string): string {
 }
 
 function links(p: PublicPages) {
-  return html`<p><a href="/">${p.appName}</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:${p.contactEmail}">Contact</a></p>`
+  return html`<p><a href="/">${p.appName}</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:${encodeURIComponent(p.contactEmail)}">Contact</a></p>`
 }
 
 export function publicLandingPage(p: PublicPages, origin: string): string {

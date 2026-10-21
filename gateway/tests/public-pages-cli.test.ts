@@ -19,6 +19,7 @@ it('validates without publishing, installs only explicit content, and does not r
   const env = { ...inherited, POISE_DOMAIN: 'notes.example.org', POISE_GITHUB_CLIENT_ID: 'dummy', POISE_GITHUB_CLIENT_SECRET: 'dummy', POISE_ADMINS: 'root', POISE_RUNTIME_IMAGE: 'runtime:current', POISE_GATEWAY_CONTAINER: 'gateway', POISE_GATEWAY_DATA: dir }
   const validate = spawnSync(process.execPath, [cli, 'validate'], { input, encoding: 'utf8', env })
   expect(validate.status).toBe(0)
+  expect(validate.stdout).toContain('Public pages are valid.')
   expect(() => readFileSync(join(dir, 'public-pages.json'))).toThrow()
   const install = spawnSync(process.execPath, [cli, 'install'], { input, encoding: 'utf8', env })
   expect(install.status).toBe(0)

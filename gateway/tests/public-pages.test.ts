@@ -37,6 +37,29 @@ describe('operator public page content', () => {
     }
   })
 
+  it('keeps accepted near-limit compact input readable after installation', () => {
+    const d = dir()
+    const content = { ...DATA, privacy: Array.from({ length: 100 }, () => 'a'.repeat(1305)) }
+    const input = JSON.stringify(content)
+    expect(Buffer.byteLength(input)).toBeLessThanOrEqual(PUBLIC_PAGES_LIMIT)
+    expect(Buffer.byteLength(JSON.stringify(content, null, 2))).toBeGreaterThan(PUBLIC_PAGES_LIMIT)
+    installPublicPages(d, input)
+    expect(loadPublicPages(d)).toEqual(content)
+    expect(readFileSync(join(d, 'public-pages.json')).byteLength).toBeLessThanOrEqual(PUBLIC_PAGES_LIMIT)
+  })
+
+  it('encodes accepted contact addresses as a mailto recipient, not URI syntax', () => {
+    const contactEmail = 'help#team+support?subject=test%20@example.com'
+    const rendered = publicPolicyPage('privacy', parsePublicPages(JSON.stringify({ ...DATA, contactEmail })), 'https://writing.example.org')
+    expect(rendered).toContain(`href="mailto:${encodeURIComponent(contactEmail)}"`)
+    const href = /href="(mailto:[^"]+)"/.exec(rendered)?.[1]
+    expect(href).toBeDefined()
+    const uri = new URL(href!)
+    expect(uri.hash).toBe('')
+    expect(uri.search).toBe('')
+    expect(decodeURIComponent(uri.pathname)).toBe(contactEmail)
+  })
+
   it('refuses symlinks, invalid UTF-8 and files beyond the bounded read', () => {
     const d = dir(), target = join(d, 'private.json'), file = join(d, 'public-pages.json')
     writeFileSync(target, JSON.stringify(DATA))

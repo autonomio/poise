@@ -14,9 +14,9 @@ require_docker
 require_env_file
 
 if [ "$action" = validate ]; then
-  compose exec --no-T gateway node dist/public-pages-cli.js validate <"$file"
+  compose exec -T gateway node dist/public-pages-cli.js validate <"$file"
 else
-  compose exec --no-T gateway node dist/public-pages-cli.js install <"$file"
+  compose exec -T gateway node dist/public-pages-cli.js install <"$file"
   compose restart gateway
   wait_for_gateway
   check_gateway_networks

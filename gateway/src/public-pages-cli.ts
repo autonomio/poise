@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { loadConfig } from './config.js'
@@ -23,6 +24,6 @@ async function main(): Promise<void> {
   process.stdout.write(`Installed operator-approved public pages. Restart the gateway to serve ${scheme}://${config.domain}/privacy and /terms.\n`)
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (process.argv[1] && pathToFileURL(realpathSync(resolve(process.argv[1]))).href === import.meta.url) {
   main().catch((error: unknown) => { process.stderr.write(`${error instanceof Error ? error.message : 'Public page setup failed.'}\n`); process.exitCode = 1 })
 }

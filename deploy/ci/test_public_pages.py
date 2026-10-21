@@ -36,6 +36,7 @@ with open(os.environ['PUBLIC_TEST_LOG'],'a') as f: f.write(json.dumps(a)+'\\n')
 if a[:1]==['version']: print('24.0.0')
 elif a[:2]==['compose','version']: print('Docker Compose version v2.30.0')
 elif a[:2]==['compose','exec']:
+ if len(a)<3 or a[2]!='-T': sys.exit('unsupported exec option')
  Path(os.environ['PUBLIC_TEST_INPUT']).write_text(sys.stdin.read())
  if os.environ.get('PUBLIC_TEST_FAIL'): sys.exit(1)
 elif a[:1]==['inspect']:
@@ -61,13 +62,13 @@ elif a[:1]==['inspect']:
         result, commands = self.command('validate')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.input.read_bytes(), self.file.read_bytes())
-        self.assertIn(['compose', 'exec', '--no-T', 'gateway', 'node', 'dist/public-pages-cli.js', 'validate'], commands)
+        self.assertIn(['compose', 'exec', '-T', 'gateway', 'node', 'dist/public-pages-cli.js', 'validate'], commands)
         self.assertFalse(any('restart' in c for c in commands))
 
     def test_explicit_publication_installs_then_restarts_the_same_gateway(self):
         result, commands = self.command('publish')
         self.assertEqual(result.returncode, 0, result.stderr)
-        install = ['compose', 'exec', '--no-T', 'gateway', 'node', 'dist/public-pages-cli.js', 'install']
+        install = ['compose', 'exec', '-T', 'gateway', 'node', 'dist/public-pages-cli.js', 'install']
         self.assertIn(install, commands)
         self.assertGreater(commands.index(['compose', 'restart', 'gateway']), commands.index(install))
         self.assertEqual(self.input.read_bytes(), self.file.read_bytes())

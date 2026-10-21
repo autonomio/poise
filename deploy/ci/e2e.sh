@@ -171,6 +171,29 @@ open_workspace() {
   expect 200 "the admin page, for alice" "$alice" "$apex/admin"
 }
 
+# Exercise the maintained publication command against real Compose, not a fake CLI.
+check_public_pages() {
+  local before
+  before=$(docker inspect --format '{{.Id}}' poise-ws-alice)
+  expect 404 "policy pages are absent before operator publication" "$nobody" "$apex/privacy"
+  "$deploy/public-pages.sh" validate "$deploy/public-pages.example.json"
+  expect 404 "validation does not publish" "$nobody" "$apex/privacy"
+  "$deploy/public-pages.sh" publish "$deploy/public-pages.example.json"
+  [ "$(docker inspect --format '{{.Id}}' poise-ws-alice)" = "$before" ] || fail "publishing recreated alice's workspace"
+  check_persisted_public_pages
+  expect 405 "public policies reject mutation" "$nobody" "$apex/privacy" --request POST
+  expect 200 "alice's workspace survives policy publication" "$alice" "http://alice.$domain/" "${navigate[@]}"
+}
+
+check_persisted_public_pages() {
+  local path
+  for path in / /privacy /terms; do
+    expect 200 "anonymous operator page $path" "$nobody" "$apex$path"
+    grep --quiet 'operator@example.com' "$work/body" || fail "missing operator content on $path"
+    expect 200 "anonymous HEAD $path" "$nobody" "$apex$path" --head
+  done
+}
+
 # The gateway's service endpoints and its certificate question stay inside.
 check_inside_only() {
   : >"$nobody"
@@ -550,11 +573,15 @@ run() {
   check_inside_only
   second_user
   check_tls
+  check_public_pages
   check_chat_socket
   revoke_link
   backup_and_restore
+  check_persisted_public_pages
   check_gateway_recreated
+  check_persisted_public_pages
   check_upgrade
+  check_persisted_public_pages
   check_proxy_mode
   echo "The deployment works end to end."
 }
