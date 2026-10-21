@@ -87,7 +87,7 @@ class TestProcessDiagnostic(TestCase):
         error = self.failure('fetch')
         self.assertEqual(error.diagnostic['stderr'], 'fatal: [redacted]\n[redacted header]')
         once = redact('kept' + MARKER + 'e [redacted credential]', self.env)
-        self.assertEqual(once, 'k[redacted][redacted]pt' + MARKER + '[redacted] [redacted credential]')
+        self.assertEqual(once, 'k[redacted]pt' + MARKER + '[redacted] [redacted credential]')
         self.assertEqual(redact(once, self.env), once)
 
     def test_signal_timeout_missing_binary_and_empty_stderr_are_distinct(self):
