@@ -12,9 +12,12 @@ import type { PoiseCommand } from './self-update-command'
 /** The one line Chat shows for an explicit /poise request sent where live self-update is off. */
 export const SERVICE_POISE_NOTE = `Live self-update is off in service mode, so this goes through a PR against ${POISE_REPOSITORY} and ships with the next deployed image.`
 
-/** An explicit /poise request framed as an ordinary turn whose deliverable is a PR against Poise. */
-export function servicePoiseTurnText(request: string): string {
-  return `${request.trim()}\n\nLive Poise self-update is off in service mode: deliver this as a pull request against ${POISE_REPOSITORY}.`
+/** An explicit /poise request framed as an ordinary turn whose deliverable is a PR against Poise.
+ *  A model choice travels as the `/model` prefix, exactly as an ordinary send carries it, so the
+ *  server runs the framed turn on the model the person chose. */
+export function servicePoiseTurnText(request: string, model?: string): string {
+  const body = `${request.trim()}\n\nLive Poise self-update is off in service mode: deliver this as a pull request against ${POISE_REPOSITORY}.`
+  return model ? `/model ${model} ${body}` : body
 }
 
 export type PoiseTurnPlan =
@@ -27,9 +30,9 @@ export type PoiseTurnPlan =
 
 /** Route one Poise send. Only service mode diverts from the change route:
  *  a natural-language match sends unchanged, an explicit command sends
- *  framed for the PR path. */
-export function planPoiseTurn(cmd: PoiseCommand, serviceMode: boolean): PoiseTurnPlan {
+ *  framed for the PR path, keeping the person's model choice. */
+export function planPoiseTurn(cmd: PoiseCommand, serviceMode: boolean, model?: string): PoiseTurnPlan {
   if (!serviceMode) return { kind: 'change' }
   if (cmd.form === 'natural') return { kind: 'ordinary' }
-  return { kind: 'service', text: servicePoiseTurnText(cmd.request), note: SERVICE_POISE_NOTE }
+  return { kind: 'service', text: servicePoiseTurnText(cmd.request, model), note: SERVICE_POISE_NOTE }
 }

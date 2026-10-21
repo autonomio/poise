@@ -307,6 +307,27 @@ test('in service mode /poise sends a PR-framed turn with the one-line note', asy
   await expect(card(page)).toHaveCount(0)
 })
 
+test('in service mode /poise from a fresh console keeps a typed /model choice', async ({ page }) => {
+  const state = makeState([])
+  state.workspace = { mode: 'service', owner: 'octocat' }
+  await installRoutes(page, state)
+  const sock = await installSocket(page)
+  sock.onPoiseChange = () => ({ ok: false, error: 'the live route must not be attempted in service mode' })
+  await page.goto('/')
+  await expect(page.locator('.chat-main')).toHaveClass(/chat-empty-session/)
+  await input(page).fill('/model opus-5-max /poise Rename the Swarm view')
+  await page.locator('.chat-send').click()
+  const framed = `/model opus-5-max ${servicePoiseTurnText('Rename the Swarm view')}`
+  await expect.poll(() => state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions').map((c) => c.body)).toEqual([
+    { agent: 'claude', model: 'opus-5-max', effort: 'max', title: framed.slice(0, 200), safeMode: false },
+  ])
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
+  expect(sock.framesOf('prompt')[0].command).toMatchObject({ type: 'prompt', sessionId: 'new-1', text: framed })
+  expect(sock.framesOf('poise.change')).toHaveLength(0)
+  await expect(page.locator('.chat-notice')).toHaveText(SERVICE_POISE_NOTE)
+  await expect(input(page)).toHaveValue('')
+})
+
 test('keeps the request in the composer, sends no prompt and opens nothing when the feature is not set up', async ({ page }) => {
   const state = makeState([session()])
   await installRoutes(page, state)

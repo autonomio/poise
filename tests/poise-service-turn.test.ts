@@ -34,6 +34,14 @@ describe('service-mode Poise turns', () => {
     expect(text).toContain(`pull request against ${POISE_REPOSITORY}`)
   })
 
+  it('keeps a model choice as the /model prefix of the framed turn', () => {
+    const text = servicePoiseTurnText('Rename the Swarm view', 'opus-5-max')
+    expect(text.startsWith('/model opus-5-max Rename the Swarm view\n\n')).toBe(true)
+    expect(text).toContain(`pull request against ${POISE_REPOSITORY}`)
+    const plan = planPoiseTurn({ request: 'Rename the Swarm view', form: 'slash' }, true, 'opus-5-max')
+    expect(plan).toEqual({ kind: 'service', text, note: SERVICE_POISE_NOTE })
+  })
+
   it('keeps the note to one line naming the PR path and the next deploy', () => {
     expect(SERVICE_POISE_NOTE.split('\n')).toHaveLength(1)
     expect(SERVICE_POISE_NOTE).toContain('service mode')

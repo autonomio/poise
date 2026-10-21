@@ -1016,9 +1016,11 @@ async function isServiceWorkspace(): Promise<boolean> {
 
 /** Send a Poise request where live self-update is off: a natural-language
  *  match goes as the ordinary turn it already is, an explicit command as an
- *  ordinary turn whose deliverable is a PR, with the one-line note. */
+ *  ordinary turn whose deliverable is a PR, with the one-line note. A picked
+ *  or typed model choice travels with the framed turn, as it does on the
+ *  live path. */
 async function sendServiceTurn(cmd: PoiseCommand, draft: ComposerDraft): Promise<void> {
-  const plan = planPoiseTurn(cmd, true)
+  const plan = planPoiseTurn(cmd, true, draft.model || parseChatCommandChain(draft.text).model)
   const turn = plan.kind === 'service' ? { ...draft, text: plan.text } : draft
   const sent = await sendOrdinaryTurn(turn, activeId)
   if (sent && plan.kind === 'service') { setNotice(plan.note, 'info'); queueRender() }
@@ -1083,8 +1085,10 @@ async function startPoiseChange(cmd: PoiseCommand, draft: ComposerDraft): Promis
     const code = err instanceof ChatCommandError ? err.code : err instanceof ChatHttpError ? err.code : undefined
     if (code === 'service_mode') {
       // The service check misreported and the server refused the live route:
-      // the message still goes as an ordinary turn, never unsent.
+      // the message still goes as an ordinary turn, never unsent — unless the
+      // session changed mid-flight, in which case the draft stays with its origin.
       if (changeId) releaseChangeId(pendingStore, changeId)
+      if (activeId !== source?.record.id) { keepDraft(source?.record.id ?? null, draft); return }
       await sendServiceTurn(cmd, draft)
       return
     }
