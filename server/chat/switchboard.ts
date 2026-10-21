@@ -179,19 +179,26 @@ export class Switchboard implements SwitchboardControl {
   private starting: Promise<void> | null = null
   private resuming: string | null = null
   private stopped = false
-  private session: string | null
+  private recorded: string | null | undefined
   private readonly now: () => number
   private readonly tickMs: number
 
   constructor(private readonly runtime: ChatRuntime, options: { now?: () => number, tickMs?: number } = {}) {
     this.now = options.now ?? Date.now
     this.tickMs = options.tickMs ?? 5_000
-    this.session = store.board(runtime.instance).session
     runtime.on('event', this.onEvent)
     runtime.on('deleted', this.onDeleted)
   }
 
   private get instance(): string { return this.runtime.instance }
+
+  /** The Switchboard chat, read from the store when first needed: like
+   *  ChatControl's, the constructor only subscribes. */
+  private get session(): string | null {
+    if (this.recorded === undefined) this.recorded = store.board(this.instance).session
+    return this.recorded
+  }
+  private set session(id: string | null) { this.recorded = id }
 
   /** Called after crash reconciliation, which finished any turn a restart cut. */
   start(): void {
