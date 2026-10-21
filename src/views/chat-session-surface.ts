@@ -246,7 +246,8 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   }
 
   function keepDraft(draft: ComposerDraft): void {
-    composer.setDraft(draft)
+    // The composer clears itself after onSend returns; restore once it has.
+    queueMicrotask(() => { if (!destroyed) composer.setDraft(draft) })
   }
 
   async function sendPrompt(draft: ComposerDraft): Promise<void> {

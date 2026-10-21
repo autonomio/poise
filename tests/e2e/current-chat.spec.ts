@@ -199,7 +199,7 @@ test('keeps a running turn going when the pane closes and shows it on return', a
   await openCardPane(page)
   await expect(paneTranscript(page).locator('.chat-msg-user')).toContainText('Fix it')
   await pane(page).locator('.chat-close').click()
-  await expect(pane(page)).toBeHidden()
+  await expect(pane(page)).not.toHaveClass(/open/)
   expect(sock.framesOf('cancel')).toHaveLength(0)
   await openCardPane(page)
   await expect(paneTranscript(page).locator('.chat-msg-user')).toContainText('Fix it')

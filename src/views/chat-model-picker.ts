@@ -28,7 +28,8 @@ export function attachModelPicker(container: HTMLElement, handlers: PickerHandle
 
   function position(): void {
     const anchor = trigger.getBoundingClientRect()
-    const bounds = container.closest('.chat-main')!.getBoundingClientRect()
+    const frame = container.closest('.chat-main') ?? container
+    const bounds = frame.getBoundingClientRect()
     const top = Math.max(bounds.top, 0) + 12
     const bottom = Math.min(bounds.bottom, window.innerHeight) - 12
     const above = Math.max(0, anchor.top - top - 8)
