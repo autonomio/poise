@@ -14,10 +14,10 @@ let storage: typeof import('../../server/chat/storage')
 let queues: typeof import('../../server/chat/message-queue')
 const runtimes: InstanceType<typeof Runtime>[] = []
 const pause = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms))
-// Every case drives real git and SQLite lifecycles, and a loaded machine can
-// stall one of their steps for seconds: each readiness wait gets 20 s and
-// each case 25 s, instead of vitest's global 10 s.
-vi.setConfig({ testTimeout: 25_000 })
+// Every case drives real git and SQLite lifecycles, and under suite load one
+// of their steps can stall past eight seconds: each readiness wait gets 20 s,
+// and each case and hook 25 s, instead of vitest's global 10 s.
+vi.setConfig({ testTimeout: 25_000, hookTimeout: 25_000 })
 async function until(check: () => boolean, ms = 20_000): Promise<void> {
   const end = Date.now() + ms
   while (!check()) { if (Date.now() > end) throw new Error('Queue condition did not settle'); await pause() }
@@ -750,5 +750,5 @@ it('CLI updates: a failed latest check is visible and does not discard the task'
 
 it('gives every case 25 s instead of the global 10 s', ({ task }) => {
   const cases = (tasks: RunnerTask[]): RunnerTestCase[] => tasks.flatMap(t => t.type === 'test' ? [t] : cases(t.tasks))
-  expect(cases(task.file.tasks).filter(t => t.timeout < 25_000).map(t => t.name)).toEqual([])
+  expect(cases(task.file.tasks).filter(t => t.timeout !== 25_000).map(t => t.fullTestName)).toEqual([])
 })

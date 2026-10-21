@@ -110,7 +110,9 @@ the attachment queue test waits separately for both turns, matching the existing
 FIFO and native-handoff tests. Both retain their original behavioral assertions.
 
 `tests/chat/message-queue-runtime.test.ts` drives the real Chat runtime against
-real git repositories, and most of its cases run several turns. A loaded
-machine can stall one git or SQLite step for seconds, so the file gives each
-readiness wait 20 seconds and each case 25 seconds instead of the global 10,
-and one of its cases fails if any case gets less.
+real git repositories, and most of its cases run several turns. Under suite
+load one git or SQLite step can stall past eight seconds, so the file gives
+each readiness wait 20 seconds and each case and hook 25 seconds
+(`vi.setConfig`), instead of the global 10 seconds in `vitest.config.ts`, which
+stays as it is. One of its cases fails, naming the case, if any case's timeout
+differs from 25 seconds.
