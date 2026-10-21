@@ -1,14 +1,16 @@
 import { buildSync } from 'esbuild'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-let dir: string, cli: string
+let dir: string, cli: string, probe: string
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'public-pages-cli-')); cli = join(dir, 'cli.mjs')
+  probe = join(dir, 'probe.mjs')
+  buildSync({ stdin: { contents: "import { loadPublicPages } from './public-pages.ts'; loadPublicPages(process.argv[2]);", resolveDir: fileURLToPath(new URL('../src/', import.meta.url)), sourcefile: 'probe.ts' }, outfile: probe, bundle: true, platform: 'node', format: 'esm', packages: 'external' })
   buildSync({ entryPoints: [fileURLToPath(new URL('../src/public-pages-cli.ts', import.meta.url))], outfile: cli, bundle: true, platform: 'node', format: 'esm', packages: 'external' })
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -29,4 +31,17 @@ it('validates without publishing, installs only explicit content, and does not r
   expect(refused.status).toBe(1)
   expect(refused.stderr).not.toContain('do-not-disclose')
   expect(JSON.parse(readFileSync(join(dir, 'public-pages.json'), 'utf8'))).toEqual(JSON.parse(input))
+})
+
+it('rejects FIFO and directory policy entries without blocking startup', () => {
+  for (const kind of ['fifo', 'directory']) {
+    const data = join(dir, kind), file = join(data, 'public-pages.json')
+    mkdirSync(data)
+    if (kind === 'fifo') expect(spawnSync('mkfifo', [file]).status).toBe(0)
+    else mkdirSync(file)
+    const result = spawnSync(process.execPath, [probe, data], { encoding: 'utf8', timeout: 3000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Invalid public-pages.json')
+  }
 })

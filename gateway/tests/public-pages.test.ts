@@ -49,7 +49,7 @@ describe('operator public page content', () => {
   })
 
   it('encodes accepted contact addresses as a mailto recipient, not URI syntax', () => {
-    const contactEmail = 'help#team+support?subject=test%20@example.com'
+    const contactEmail = 'help#team+support?subject=test%20&header=value@example.com'
     const rendered = publicPolicyPage('privacy', parsePublicPages(JSON.stringify({ ...DATA, contactEmail })), 'https://writing.example.org')
     expect(rendered).toContain(`href="mailto:${encodeURIComponent(contactEmail)}"`)
     const href = /href="(mailto:[^"]+)"/.exec(rendered)?.[1]
@@ -82,7 +82,7 @@ describe('operator public page content', () => {
       expect(rendered).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
       expect(rendered).not.toContain('<script>')
       expect(rendered).not.toContain('{{')
-      expect(rendered).not.toContain('poise.vaquum.fi')
+      expect(rendered).not.toContain(origin.includes('writing.acme.example') ? 'notes.other.example' : 'writing.acme.example')
     }
   })
 })
@@ -117,7 +117,7 @@ describe('public apex routes', () => {
       expect(head.headers['content-length']).toBe(get.headers['content-length'])
       expect((await h.request({ host, path, method: 'POST' })).status).toBe(405)
     }
-    for (const path of ['/privacy/', '/privacy.json', '/public-pages.json', '/%70rivacy']) expect((await h.request({ host, path })).status).toBe(404)
+    for (const path of ['/privacy/', '/privacy.json', '/public-pages.json', '/%70rivacy', '/x/../privacy', '/x/%2e%2e/privacy', '/%2e/privacy', '/./terms', '//other.invalid/privacy', 'http://other.invalid/privacy', '/x/..', '/x\\../privacy']) expect((await h.request({ host, path })).status).toBe(404)
     for (const otherHost of ['unrelated.example', 'gateway:8080']) expect((await h.request({ host: otherHost, path: '/privacy' })).status).toBe(404)
   })
 

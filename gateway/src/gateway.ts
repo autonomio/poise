@@ -110,6 +110,7 @@ async function handle(ctx: Context, req: IncomingMessage, res: ServerResponse): 
   const url = requestUrl(req)
   const host = classifyHost(req.headers.host, ctx.deps.config.domain)
   if (host.kind === 'apex') {
+    if (ctx.publicPages && ['/', '/privacy', '/terms'].includes(url.pathname) && (req.url ?? '/').split('?')[0] !== url.pathname) return answer(ctx, req, res, 404, 'There is nothing at this address.')
     if (!ctx.publicPages && (url.pathname === '/privacy' || url.pathname === '/terms')) return answer(ctx, req, res, 404, 'There is nothing at this address.')
     const route = APEX_ROUTES[url.pathname]
     if (!route) return answer(ctx, req, res, 404, 'There is nothing at this address.')

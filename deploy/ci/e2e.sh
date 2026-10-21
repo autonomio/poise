@@ -176,9 +176,14 @@ check_public_pages() {
   local before
   before=$(docker inspect --format '{{.Id}}' poise-ws-alice)
   expect 404 "policy pages are absent before operator publication" "$nobody" "$apex/privacy"
-  "$deploy/public-pages.sh" validate "$deploy/public-pages.example.json"
+  jq '.appName = "Reviewed CI deployment" | .description = "Reviewed deployment description at {{origin}}." | .privacy = ["Reviewed privacy content at {{origin}}."] | .terms = ["Reviewed service terms at {{domain}}."]' \
+    "$deploy/public-pages.example.json" >"$work/reviewed-public-pages.json"
+  "$deploy/public-pages.sh" validate "$work/reviewed-public-pages.json"
   expect 404 "validation does not publish" "$nobody" "$apex/privacy"
-  "$deploy/public-pages.sh" publish "$deploy/public-pages.example.json"
+  "$deploy/public-pages.sh" publish "$work/reviewed-public-pages.json"
+  compose exec -T gateway cat /data/public-pages.json >"$work/approved-public-pages.json"
+  echo '{"invalid":"replacement"}' >"$work/refused-public-pages.json"
+  refused "invalid policy replacement" "Invalid public-pages.json" "$deploy/public-pages.sh" publish "$work/refused-public-pages.json"
   [ "$(docker inspect --format '{{.Id}}' poise-ws-alice)" = "$before" ] || fail "publishing recreated alice's workspace"
   check_persisted_public_pages
   expect 405 "public policies reject mutation" "$nobody" "$apex/privacy" --request POST
@@ -187,6 +192,8 @@ check_public_pages() {
 
 check_persisted_public_pages() {
   local path
+  compose exec -T gateway cat /data/public-pages.json >"$work/current-public-pages.json"
+  cmp "$work/approved-public-pages.json" "$work/current-public-pages.json" || fail "approved policy bytes changed"
   for path in / /privacy /terms; do
     expect 200 "anonymous operator page $path" "$nobody" "$apex$path"
     grep --quiet 'mailto:operator%40example.com' "$work/body" || fail "missing operator content on $path"
@@ -501,7 +508,7 @@ check_gateway_recreated() {
 # server's existing proxy would be (deploy/ci/proxy.Caddyfile), serves alice's
 # workspace and gets certificates on demand. Then install.sh switches back.
 check_proxy_mode() {
-  local first=127.0.0.2:8080 listen=127.0.0.1:8080 published host
+  local first=127.0.0.2:8080 listen=127.0.0.1:8080 published host path
   sed -i '/^POISE_ACME_EMAIL=/d' "$deploy/.env"
   echo 'POISE_PROXY_LISTEN=0.0.0.0:8080' >>"$deploy/.env"
   refused "install.sh with POISE_PROXY_LISTEN on every address" "must be the one IP address and port" "$deploy/install.sh"
@@ -552,6 +559,17 @@ check_proxy_mode() {
     fi
     pass "the server's own proxy gets no certificate for $host"
   done
+  check_persisted_public_pages
+  for path in / /privacy /terms; do
+    expect 200 "exact apex public exception $path" "$nobody" "http://127.0.0.1:8081$path" --header "Host: $domain"
+    grep --quiet 'Reviewed' "$work/body" || fail "external proxy did not serve reviewed policy content"
+    expect 200 "exact apex public HEAD $path" "$nobody" "http://127.0.0.1:8081$path" --head --header "Host: $domain"
+  done
+  for path in /privacy/ /privacy.json /x/../privacy /%2e/privacy /admin /auth/login; do
+    expect 401 "external proxy retains login on $path" "$nobody" "http://127.0.0.1:8081$path" --path-as-is --header "Host: $domain"
+  done
+  expect 401 "external proxy policy exception excludes POST" "$nobody" "http://127.0.0.1:8081/privacy" --request POST --header "Host: $domain"
+  expect 401 "external proxy policy exception excludes workspace hosts" "$nobody" "http://127.0.0.1:8081/privacy" --header "Host: alice.$domain"
   docker rm --force poise-e2e-proxy >/dev/null
 
   sed -i '/^POISE_PROXY_LISTEN=/d' "$deploy/.env"

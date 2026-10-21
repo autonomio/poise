@@ -40,7 +40,9 @@ or credential data.
 ## Routes and proxies
 
 Only the configured apex exposes `/privacy` and `/terms`, with GET and HEAD.
-They accept no mutation and provide no directory or arbitrary file access.
+The raw request path must be canonical: dot segments, backslash aliases,
+network-path and absolute-form targets cannot select these public pages. Query
+strings do not change the selected page. They accept no mutation and provide no directory or arbitrary file access.
 The anonymous apex home page shows the operator's description, policy/contact
 links and the existing GitHub sign-in. Signed-in home behavior is unchanged.
 Workspace hosts and every authentication, device and admin route retain their
@@ -64,3 +66,12 @@ in your own Google Cloud project; page publication alone does not change them.
 Google's Testing status can impose seven-day grants. Follow the provider's actual
 production requirements rather than leaving Testing as an undisclosed finished
 configuration. See [Google connections](Google-connections.md).
+
+Before publishing in Google Cloud, follow [Google's brand-verification
+requirements](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification).
+Verify ownership of the authorized domain using the linked Google Search Console
+procedure, use the same app identity in the consent screen and public pages,
+and register your deployment's actual HTTPS homepage, privacy and terms links.
+Save Branding, then complete Audience's publishing flow and any applicable
+Verification Center steps. Verify the resulting production status separately;
+this command neither verifies a domain nor publishes a Google Cloud app.

@@ -45,7 +45,7 @@ export function parsePublicPages(input: string): PublicPages {
 
 export function loadPublicPages(dataDir: string): PublicPages | null {
   let fd: number
-  try { fd = openSync(join(dataDir, PUBLIC_PAGES_FILE), constants.O_RDONLY | constants.O_NOFOLLOW) }
+  try { fd = openSync(join(dataDir, PUBLIC_PAGES_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw new Error('Cannot open public-pages.json in POISE_GATEWAY_DATA.')
