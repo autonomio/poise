@@ -165,6 +165,10 @@ export interface SessionRecord {
   orphanNotice?: string
   /** Optional context handed over at creation (card, document, another session). */
   context?: SessionContext
+  /** The subject this session belongs to; at most one session per subject. */
+  subject?: ChatSubject
+  /** The legacy chat id whose earlier conversation was imported, if any. */
+  importedFrom?: string
   /** What the checkout looks like right now, refreshed on every status change. */
   workspace?: WorkspaceState
   /** The Editor document copy this session owns inside its checkout, when it
@@ -201,6 +205,14 @@ export interface WorkspaceState {
   lockedBy?: string
   checkedAt: string
 }
+
+/** Where a subject's chat starts. `current` is a Current card; later slices
+ *  add the Editor surfaces. */
+export type SubjectSurface = 'current'
+
+/** What a session belongs to: at most one session per subject in an
+ *  instance. The key is opaque after validation and compared exactly. */
+export interface ChatSubject { surface: SubjectSurface, key: string, label: string, url?: string }
 
 export interface SessionContext {
   /** `poise-change`: the exact `/poise` request (`body`) and the session it
@@ -320,6 +332,10 @@ export type ChatEvent =
   | { type: 'commands.updated', commands: CommandOption[] }
   | { type: 'mode.updated', mode: string, modes: ModeOption[] }
   | { type: 'model.updated', model: string, modelId: string, effort: string, efforts?: string[] }
+  | { type: 'history.imported', legacyId: string, turns: Array<{ prompt: string, reply: string, at: string, status: string }>, omitted: number }
+  | { type: 'content.started', topic: string, launchId: string, callId?: string }
+  | { type: 'consensus.started', id: string, topic: string }
+  | { type: 'consensus.finished', id: string, synthesis?: string, truncated?: boolean, error?: string }
   | { type: 'error', message: string, recoverable: boolean }
 
 export type ChatEventType = ChatEvent['type']
@@ -358,6 +374,10 @@ export interface NewSessionRequest {
   safeMode?: boolean
   /** Only POST /api/chat/sessions with a browser Origin passes it; never with repo, branch, checkout or context. */
   role?: 'manager'
+  /** Create (or adopt) the subject's session instead of a fresh one. */
+  subject?: ChatSubject
+  /** Skip reading the earlier conversation when creating for a subject. */
+  skipLegacy?: boolean
 }
 
 export type ChatCommand =
@@ -438,6 +458,8 @@ export type ChatErrorCode =
   /** `/poise` needs the separately installed self-update controller. */
   | 'self_update_unavailable'
   | 'manager_exists'
+  /** The subject's earlier conversation could not be read. */
+  | 'legacy_unreadable'
 
 // ── Switchboard: the observer pane (docs/Switchboard.md) ─────────────────
 
