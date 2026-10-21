@@ -76,10 +76,12 @@ is hovered. Every other agent message has its own copy icon under it, shown on
 hover. The time is the one the server recorded on the turn's `turn.finished`
 event, never when the page drew it. It uses a 24-hour clock in the time zone
 from Settings → General, adds the date for an earlier day and the year for an
-earlier year, and follows midnight and time zone changes. Hovering it shows the
-full timestamp, which is also what a screen reader reads. A turn that Poise
-ended while restarting shows when Poise recorded that end. A running turn, or
-one interrupted without a recorded end, shows no time.
+earlier year, and follows midnight and time zone changes. Hovering or focusing
+it shows the full timestamp with how the turn ended, such as "Finished
+Wednesday 21 October 2026 at 19:38:12 EEST" or "Stopped …", which is also what
+a screen reader reads. A turn that Poise ended while restarting shows when
+Poise recorded that end. Prompts, tool cards and running turns carry no time,
+and neither does a turn interrupted without a recorded end.
 
 Local Markdown links open a read-only file preview inside Chat. The preview
 shows the current working copy, not a historical snapshot; line references

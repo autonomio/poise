@@ -751,13 +751,13 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     return `<div class="chat-card chat-question${item.answered ? ' resolved' : ' pending'}${focused ? ' focused' : ''}" data-request="${escapeHtml(item.id)}">${qs}${actions}</div>`
   }
 
-  // The visible time is short; the full one is what a screen reader reads and
-  // the tooltip shows. ARIA prohibits naming the time role with aria-label.
+  // The visible time is short. The full one is what a screen reader reads and
+  // what the tooltip shows on hover or keyboard focus; ARIA prohibits naming
+  // the time role with aria-label.
   function timeHtml(f: NonNullable<TurnModel['finished']>, clock: Clock): string {
-    const time = turnTime(f.at, clock.zone, clock.now)
-    const label = `${f.stopReason === 'end_turn' ? 'Finished' : 'Ended'} ${time.when}`
-    return `<time class="chat-turn-time" datetime="${escapeHtml(f.at)}" data-help="${escapeHtml(label)}">`
-      + `<span aria-hidden="true">${escapeHtml(time.text)}</span><span class="chat-turn-time-label">${escapeHtml(label)}</span></time>`
+    const time = turnTime(f.at, f.stopReason, clock.zone, clock.now)
+    return `<time class="chat-turn-time" datetime="${escapeHtml(f.at)}" tabindex="0" data-help="${escapeHtml(time.label)}">`
+      + `<span aria-hidden="true">${escapeHtml(time.text)}</span><span class="chat-turn-time-label">${escapeHtml(time.label)}</span></time>`
   }
 
   // One meta row: when the turn ended, how it stopped, what it took, and the
