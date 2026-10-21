@@ -279,7 +279,11 @@ export class ChatRuntime extends EventEmitter {
   /** Delete this instance's sessions whose model the live catalog no longer
    *  names, so a retired or pre-constraint identity can never be resumed,
    *  forked, or copied into a `/poise` change. Sessions another live server
-   *  of this instance owns are left alone. When the catalog itself is
+   *  of this instance owns, and sessions whose workers survived recovery
+   *  unverified, are left alone: deleting their rows would orphan live
+   *  processes from every future recovery. Waiting work a surviving session
+   *  borrowed from a purged one keeps its attachment context, the same
+   *  transfer a manual delete performs. When the catalog itself is
    *  unavailable nothing is deleted: nothing can launch anyway, and the next
    *  start purges. */
   private async purgeRetiredModels(protectedSessions: ReadonlySet<string>): Promise<void> {
@@ -290,8 +294,12 @@ export class ChatRuntime extends EventEmitter {
       this.emit('log', `[chat] model purge skipped: the model catalog is unavailable (${error instanceof Error ? error.message : String(error)})`)
       return
     }
+    const liveWorkers = new Set(storage.listWorkers()
+      .filter(worker => storage.sessionInstance(worker.sessionId) === this.instance)
+      .map(worker => worker.sessionId))
     for (const record of storage.listSessions(this.instance)) {
-      if (protectedSessions.has(record.id) || catalogModel(catalog, record.model)) continue
+      if (protectedSessions.has(record.id) || liveWorkers.has(record.id) || catalogModel(catalog, record.model)) continue
+      await this.preserveBorrowedQueueContext(record.id)
       storage.deleteSession(record.id)
       this.emit('log', `[chat] deleted session ${record.id.slice(0, 8)} with retired model ${record.model}`)
     }
