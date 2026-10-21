@@ -219,8 +219,11 @@ export function secretValues(): string[] {
   for (const row of db.prepare('SELECT slot, value FROM extension_secrets').all() as Array<{ slot: string, value: string }>) {
     if (!row.slot.startsWith('oauth:')) { add(row.value); continue }
     try {
+      // Tokens are kept as { tokens, obtainedAt, … }; registrations and flows flat.
       const parsed = JSON.parse(row.value) as Record<string, unknown>
-      for (const key of ['access_token', 'refresh_token', 'id_token', 'client_secret', 'code_verifier']) add(parsed[key])
+      for (const record of [parsed, parsed.tokens as Record<string, unknown> | undefined]) {
+        for (const key of ['access_token', 'refresh_token', 'id_token', 'client_secret', 'verifier']) add(record?.[key])
+      }
     } catch { add(row.value) }
   }
   secretCache = [...values].sort((a, b) => b.length - a.length)
