@@ -268,14 +268,36 @@ export class ChatRuntime extends EventEmitter {
   async recover(): Promise<void> {
     this.recovering = true
     try {
-      await this.recoverState()
+      const protectedSessions = await this.recoverState()
+      await this.purgeRetiredModels(protectedSessions)
     } finally {
       this.recovering = false
     }
     for (const record of storage.listSessions(this.instance)) this.scheduleQueue(this.requireLive(record.id))
   }
 
-  private async recoverState(): Promise<void> {
+  /** Delete this instance's sessions whose model the live catalog no longer
+   *  names, so a retired or pre-constraint identity can never be resumed,
+   *  forked, or copied into a `/poise` change. Sessions another live server
+   *  of this instance owns are left alone. When the catalog itself is
+   *  unavailable nothing is deleted: nothing can launch anyway, and the next
+   *  start purges. */
+  private async purgeRetiredModels(protectedSessions: ReadonlySet<string>): Promise<void> {
+    let catalog: Catalog
+    try {
+      catalog = await this.catalog()
+    } catch (error) {
+      this.emit('log', `[chat] model purge skipped: the model catalog is unavailable (${error instanceof Error ? error.message : String(error)})`)
+      return
+    }
+    for (const record of storage.listSessions(this.instance)) {
+      if (protectedSessions.has(record.id) || catalogModel(catalog, record.model)) continue
+      storage.deleteSession(record.id)
+      this.emit('log', `[chat] deleted session ${record.id.slice(0, 8)} with retired model ${record.model}`)
+    }
+  }
+
+  private async recoverState(): Promise<Set<string>> {
     // Sessions whose lease another live server of this instance holds are
     // that server's: their workers, turns and Caller rows are left alone.
     const protectedSessions = new Set<string>()
@@ -379,6 +401,7 @@ export class ChatRuntime extends EventEmitter {
       }
     }
     await this.flushSelfUpdateOutbox()
+    return protectedSessions
   }
 
   /** Deliver every recorded change outcome the controller has not
@@ -945,6 +968,8 @@ export class ChatRuntime extends EventEmitter {
     return this.serialized(source, async () => {
       if (!source.record.capabilities.fork) throw new ChatError(409, `${AGENT_LABEL[source.record.agent]} sessions cannot be forked`, 'unsupported')
       if (source.turn) throw new ChatError(409, 'a turn is running; fork after it finishes', 'turn_in_progress')
+      // The fork inherits the source's model; it must still name a live catalog identity.
+      await this.resolveModel(source.record.model)
       if (!source.adapter?.alive) await this.startSession(source)
       const now = new Date().toISOString()
       const nativeId = source.record.agent === 'claude' ? source.record.nativeSessionId : await source.adapter!.fork()
@@ -1089,6 +1114,9 @@ export class ChatRuntime extends EventEmitter {
     if (Buffer.byteLength(request, 'utf8') > CHAT_LIMITS.promptBytes) throw new ChatError(413, `request exceeds ${CHAT_LIMITS.promptBytes} bytes`, 'invalid')
     const source = this.get(sourceId)
     if (!source) throw new ChatError(404, 'unknown session', 'unknown_session')
+    // The change session inherits the source's model; it must still name a
+    // live catalog identity before the controller prepares a workspace for it.
+    await this.resolveModel(source.model)
     const id = changeId.toLowerCase()
 
     // The same change id from the same session with the same request is

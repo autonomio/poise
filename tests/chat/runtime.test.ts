@@ -94,14 +94,14 @@ function fakeCaller(): CallerTurns & { starts: any[], finishes: any[] } {
 
 const runtimes: Array<import('../../server/chat/runtime').ChatRuntime> = []
 
-function makeRuntime(options: { agent?: AgentId, instance?: string, controls?: FakeControls, caller?: CallerTurns | null, leaseProbes?: import('../../server/chat/checkout-lock').CheckoutLeaseOptions, prepareCli?: import('../../server/chat/runtime').RuntimeOptions['prepareCli'] } = {}) {
+function makeRuntime(options: { agent?: AgentId, instance?: string, controls?: FakeControls, caller?: CallerTurns | null, leaseProbes?: import('../../server/chat/checkout-lock').CheckoutLeaseOptions, prepareCli?: import('../../server/chat/runtime').RuntimeOptions['prepareCli'], catalog?: () => Promise<any> } = {}) {
   const controls: FakeControls = options.controls ?? { hosts: [], adapters: [], startCount: 0 }
   const runtime = new runtimeModule.ChatRuntime({
     instance: options.instance ?? 'poise-test:db',
     instanceLabel: 'test',
     adapters: { [options.agent ?? 'grok']: (host: AdapterHost) => { const a = new FakeAdapter(host, controls); a.agent = options.agent ?? 'grok'; controls.hosts.push(host); controls.adapters.push(a); return a } },
     callerTurns: options.caller === undefined ? fakeCaller() : options.caller,
-    catalog: async () => CATALOG as any,
+    catalog: options.catalog ?? (async () => CATALOG as any),
     resolveCheckout: async () => repo,
     idleTimeoutMinutes: () => 0,
     requireClaudeReady: async () => {},
@@ -925,6 +925,42 @@ it.each(['close', 'resume'])('QC2: a failed worker stop retains its lease until 
     expect(successor.controls.startCount).toBe(1)
   } finally { refuseTermination = false; controls.startWait = undefined; release(); spy.mockRestore(); await runtime.stop() }
 }, 30_000)
+
+describe('retired model identities', () => {
+  it('refuses to fork a session whose model left the catalog, before starting anything', async () => {
+    const { runtime, events } = makeRuntime()
+    const session = await runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'main' } })
+    await waitFor(() => lastStatus(events, session.id) === 'idle')
+    const stored = storage.getSession(session.id)!
+    storage.saveSession({ ...stored, model: 'grok-4.0-retired' })
+    const revived = makeRuntime()
+    await expect(revived.runtime.fork(session.id)).rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('unknown model') })
+    expect(revived.controls.startCount).toBe(0)
+    expect(revived.runtime.list().some((record) => record.forkedFrom === session.id)).toBe(false)
+  })
+
+  it('deletes sessions with retired models on recovery and keeps the rest', async () => {
+    const maker = makeRuntime({ instance: 'poise-purge:db' })
+    const keep = await maker.runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'main' } })
+    const drop = await maker.runtime.create({ agent: 'grok', model: 'grok-4.6-high', repo: 'acme/repo', branch: { existing: 'main' } })
+    const stored = storage.getSession(drop.id)!
+    storage.saveSession({ ...stored, model: 'grok-4.0-retired' })
+    const revived = makeRuntime({ instance: 'poise-purge:db' })
+    await revived.runtime.recover()
+    expect(storage.getSession(drop.id)).toBeNull()
+    expect(storage.getSession(keep.id)).not.toBeNull()
+  })
+
+  it('purges nothing when the catalog itself is unavailable', async () => {
+    const maker = makeRuntime({ instance: 'poise-purge-skip:db' })
+    const session = await maker.runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'main' } })
+    const stored = storage.getSession(session.id)!
+    storage.saveSession({ ...stored, model: 'grok-4.0-retired' })
+    const revived = makeRuntime({ instance: 'poise-purge-skip:db', catalog: async () => { throw new Error('catalog down') } })
+    await revived.runtime.recover()
+    expect(storage.getSession(session.id)).not.toBeNull()
+  })
+})
 
 it.each([false, true])('QC2: an early steer waits for native prompt startup, or is preserved on Stop (stop=%s)', async stopping => {
   const { runtime, events } = makeRuntime()
