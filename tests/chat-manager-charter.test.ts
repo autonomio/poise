@@ -420,7 +420,9 @@ it('applies a /manager edit from the next turn and says it supersedes earlier re
   await runPrompt(manager.id, 'Next task')
   const input = prompts.get(manager.id)!.at(-1)!.text
   expect(input).toContain('[Manager charter — the /manager snippet, revision 2')
+  expect(input).toContain('Second revision')
   expect(input).toContain('It supersedes all earlier revisions.')
+  expect(input).toContain('a direct request from the person in this chat takes precedence, and it takes precedence over Memories where they conflict.')
 }, 30_000)
 
 it('fails Manager turns with a named error while /manager cannot be read or is too large', async () => {
