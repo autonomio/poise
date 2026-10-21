@@ -1,5 +1,5 @@
 import { scrollToActor } from '../motion'
-import { logTime } from '../clock'
+import { clockDay, logTime } from '../clock'
 import { effectiveTimezone } from '../config'
 import { patchContent, patchInformation } from '../dom-patch'
 import { jevApi, JevHttpError } from '../jev-client'
@@ -152,7 +152,8 @@ export function createJevWorkspace(parent: HTMLElement, sidebar: HTMLElement, ha
   }
   let resultsFingerprint = ''
   function renderRuns() {
-    const fingerprint = JSON.stringify({ runs, selectedRun })
+    // The day and zone too: a run's time gains its date after midnight.
+    const fingerprint = JSON.stringify({ runs, selectedRun, day: clockDay(effectiveTimezone(), Date.now()) })
     if (fingerprint === resultsFingerprint) return
     resultsFingerprint = fingerprint
     const panel = el.querySelector<HTMLElement>('.jev-run-view')!

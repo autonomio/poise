@@ -16,7 +16,7 @@ import { MODEL_CHECK_TIMEOUT_MS, modelRefreshSummary, type ModelRefreshReport } 
 
 import { getSettings as getCachedSettings, setLocalSettings, loadSettings, settingsLoadOk, getRefreshRate, setRefreshRate, getTheme, setTheme, getOrganizations, setOrganizations, settingsReady, effectiveTimezone, type Organization } from './config'
 import { productionSummary, type ProductionUpdate } from './production-status'
-import { shortTime } from './clock'
+import { clockDay, logTime, shortTime } from './clock'
 import { ACCOUNT_IDS, ACCOUNT_LOGINS, CONNECTED_ACCOUNTS_PATH, type ConnectedAccount } from '../server/accounts/types'
 import { isTerminalPreset, type TerminalPreset } from '../server/terminal/protocol'
 import { googleAccountsSection } from './views/google-accounts'
@@ -230,12 +230,14 @@ function renderOrganizations(): void {
   if (!list) return
   const organizations = getOrganizations()
   const waiting = organizations.map((org) => org.stage === 'rate-limited' && !!org.retryAt && Date.parse(org.retryAt) > Date.now())
-  const rendered = JSON.stringify([organizations, organizationAdding, waiting])
+  // The day and zone too, so a retry time follows a newly saved zone.
+  const rendered = JSON.stringify([organizations, organizationAdding, waiting, clockDay(effectiveTimezone(), Date.now())])
   if (organizationsRendered === rendered) return
   organizationsRendered = rendered
   patchInformation(list, organizations.map((org, index) => {
     const paused = waiting[index]
-    const resetTime = paused ? shortTime(org.retryAt!, effectiveTimezone(), Date.now()) : ''
+    // With its second: GitHub's reset is not on the minute.
+    const resetTime = paused ? logTime(org.retryAt!, effectiveTimezone(), Date.now()) : ''
     const state = paused ? 'Waiting for GitHub' : org.status === 'ready' ? org.error ? 'Sync failed' : 'Ready' : org.status === 'error' ? 'Activation failed' : 'Activating…'
     return `
     <div class="st-organization" data-org="${escapeHtml(org.login)}">
