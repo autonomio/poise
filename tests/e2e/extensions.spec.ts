@@ -103,10 +103,13 @@ test('adds a custom local server, checks it, keeps its secret out of the page, a
   const row = page.locator('.ext-matrix tbody tr', { hasText: 'Fixture tools' })
   await expect(row.locator('.ext-state')).toHaveText('Connected · 2 tools', { timeout: 30_000 })
   await expect(page.locator('#extensions-panel')).toContainText('Saved')
-  await expect(page.locator('#extensions-panel .ext-status .st-help-info')).toHaveText(/^Checked \d{2}:\d{2}$/)
+  // Stamped by the real server: today's time, or the date too once a run crosses midnight.
+  await expect(page.locator('#extensions-panel .ext-status .st-help-info')).toHaveText(/^Checked (\d{1,2} [A-Z][a-z]{2,3}( \d{4})? )?\d{2}:\d{2}$/)
   expect(await page.content()).not.toContain('e2e-secret-value-123')
   await page.locator('#extensions-panel').getByRole('tab', { name: 'Tools · 2' }).click()
   await expect(page.locator('#extensions-panel .ext-tools code')).toHaveText(['echo_token', 'ping'])
+  await page.locator('#extensions-panel').getByRole('tab', { name: 'Activity' }).click()
+  await expect(page.locator('#extensions-panel .ext-log time').first()).toHaveText(/^(\d{1,2} [A-Z][a-z]{2,3}( \d{4})? )?\d{2}:\d{2}:\d{2}$/)
 
   // The switch's slider is what a person clicks; its checkbox sits under it.
   await row.locator('label[title="Fixture tools in Poise · local"]').click()

@@ -62,5 +62,7 @@ describe('production summary in Settings', () => {
     expect(summary?.text).toBe('Deployed aaaaaaa — the updater has not run since 11:50; merges are not reaching production.')
     // On Poise's clock, in Settings' time zone, whatever the browser's language.
     expect(productionSummary(update({ checkedAt: minutesBefore(10) }), NOW, 'Europe/Helsinki')?.text).toContain('has not run since 14:50;')
+    // A record from another day says which day.
+    expect(productionSummary(update({ checkedAt: '2026-09-17T11:50:00.000Z' }), NOW, 'UTC')?.text).toContain('has not run since 17 Sept 11:50;')
   })
 })
