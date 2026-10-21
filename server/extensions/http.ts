@@ -12,6 +12,8 @@ import { LOCAL_WORKSPACE, isWorkspace, parseImport, validateSpec, workspaceLabel
 export interface ExtensionsApiOptions {
   /** Workspaces chats have used, most recent first. */
   recentWorkspaces: () => string[]
+  /** Starts a server's check in the background; tests replace it so nothing is launched. */
+  check?: (id: string) => void
 }
 
 const SERVER = /^\/api\/extensions\/servers\/([0-9a-f-]{36})(\/enabled|\/check|\/events|\/sign-in|\/sign-out)?$/
@@ -65,11 +67,12 @@ function edited(id: string, input: ServerSpec): ServerSpec {
   return { ...current, name: input.name, title: input.title, ...(current.env ? { env: values(current.env, input.env) } : {}), ...(current.headers ? { headers: values(current.headers, input.headers) } : {}) }
 }
 
-function check(id: string): void {
+function checkInBackground(id: string): void {
   void checkServer(id).catch((error) => addEvent(id, 'error', `Check failed: ${(error as Error).message}`))
 }
 
 export function createExtensionsApi(options: ExtensionsApiOptions) {
+  const check = options.check ?? checkInBackground
   return async function handleExtensionsApi(req: IncomingMessage, res: ServerResponse, url: string): Promise<boolean> {
     const path = url.split('?')[0]
     if (path !== '/api/extensions' && !path.startsWith('/api/extensions/')) return false

@@ -50,12 +50,15 @@ function syncState(): SyncState {
   return raw ? JSON.parse(raw) as SyncState : { generation: 0, cursor: null }
 }
 
-let entries: DirectoryEntry[] | null = null
+let entries: { stamp: string, list: DirectoryEntry[] } | null = null
 let running: Promise<void> | null = null
 
+/** The mirror, parsed once per change of its rows. */
 function all(): DirectoryEntry[] {
-  entries ??= (db.prepare('SELECT entry FROM extension_directory ORDER BY name').all() as Array<{ entry: string }>).map((row) => JSON.parse(row.entry) as DirectoryEntry)
-  return entries
+  const { n, g } = db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(generation), 0) AS g FROM extension_directory').get() as { n: number, g: number }
+  const stamp = `${n}:${g}`
+  if (entries?.stamp !== stamp) entries = { stamp, list: (db.prepare('SELECT entry FROM extension_directory ORDER BY name').all() as Array<{ entry: string }>).map((row) => JSON.parse(row.entry) as DirectoryEntry) }
+  return entries.list
 }
 
 export function directoryStatus(): DirectoryStatus {
@@ -197,9 +200,12 @@ function packageOption(raw: Record<string, unknown>, index: number): InstallOpti
   const launcher = registryType === 'npm' ? { command: 'npx', args: ['-y', ...runtime, version ? `${identifier}@${version}` : identifier, ...packaged] }
     : registryType === 'pypi' ? { command: 'uvx', args: [...runtime, version ? `${identifier}==${version}` : identifier, ...packaged] }
     : null
+  const secretArgument = inputs.some((input) => input.key.startsWith('arg:') && input.secret)
   const unsupported = transport !== 'stdio' ? 'This package runs its own HTTP server; add it as a custom server instead.'
     : !launcher ? `Poise does not run ${registryType} packages; add it as a custom server instead.`
     : !identifier ? 'The registry lists no package name.'
+    // Arguments are part of the visible definition and of a command line, never secret.
+    : secretArgument ? 'It takes a secret on its command line, which Poise does not store; add it as a custom server instead.'
     : undefined
   const label = (part: string | { input: string }) => typeof part === 'string' ? part : `<${inputs.find((candidate) => candidate.key === part.input)?.label ?? part.input}>`
   const summary = launcher ? [launcher.command, ...launcher.args.map(label)].join(' ') : `${registryType} ${identifier}`
