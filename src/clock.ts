@@ -33,8 +33,9 @@ function dated(at: string | number, timeZone: string, now: number): { time: Part
   return { time, date: time.month === today.month && time.day === today.day ? null : `${time.day} ${time.month}` }
 }
 
-// Every function here throws a RangeError for a value that is not a time, or a
-// time zone Intl does not know: neither has a right answer to show.
+// Every function here throws a RangeError for a string or number that is not a
+// time, such as 'not a time' or NaN, or for a time zone Intl does not know:
+// neither has a right answer to show.
 
 /** "19:38" on the day of `now`, "20 Oct 17:05" on another day and
  *  "31 Dec 2025 23:05" in another year. */

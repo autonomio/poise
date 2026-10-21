@@ -39,6 +39,12 @@ describe("Poise's clock", () => {
     expect([shortTime(at, 'UTC', NOW), logTime(at, 'UTC', NOW), fullTime(at, 'UTC')]).toEqual(['00:00', '00:00:00', 'Wednesday 21 October 2026 at 00:00:00 UTC'])
   })
 
+  // 22:30 UTC on the 20th is 01:30 on the 21st in Helsinki: today there.
+  it("decides today in the time zone's own calendar", () => {
+    const at = '2026-10-20T22:30:00.000Z'
+    expect([shortTime(at, ZONE, NOW), logTime(at, ZONE, NOW), listTime(at, ZONE, NOW)]).toEqual(['01:30', '01:30:00', '01:30'])
+  })
+
   it('dates a time on a later day, as a retry after midnight', () => {
     expect(shortTime('2026-10-22T05:00:00.000Z', ZONE, NOW)).toBe('22 Oct 08:00')
   })
