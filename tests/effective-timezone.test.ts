@@ -29,4 +29,25 @@ describe('the time zone times are shown in', () => {
     expect(effectiveTimezone()).toBe(browserZone)
     expect(unknownSavedTimezone()).toBeNull()
   })
+
+  it('is the saved one as saved when Intl knows it in another letter case', () => {
+    setLocalSettings({ org: '', me: '', timezone: 'europe/helsinki' })
+    expect(effectiveTimezone()).toBe('europe/helsinki')
+    expect(unknownSavedTimezone()).toBeNull()
+  })
+
+  it('names a saved zone with spaces around it, which Intl refuses, as saved', () => {
+    setLocalSettings({ org: '', me: '', timezone: ' Europe/Helsinki ' })
+    expect(effectiveTimezone()).toBe(browserZone)
+    expect(unknownSavedTimezone()).toBe(' Europe/Helsinki ')
+  })
+
+  // Whether Intl knows a name is remembered per name; the browser's own zone
+  // is read on every call.
+  it('answers each name the same way as the saved one changes back and forth', () => {
+    for (const zone of ['Mars/Olympus', 'Europe/Helsinki', 'Mars/Olympus', 'Europe/Helsinki']) {
+      setLocalSettings({ org: '', me: '', timezone: zone })
+      expect([effectiveTimezone(), unknownSavedTimezone()]).toEqual(zone === 'Mars/Olympus' ? [browserZone, 'Mars/Olympus'] : ['Europe/Helsinki', null])
+    }
+  })
 })
