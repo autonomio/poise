@@ -27,12 +27,11 @@ export function renderNewSessionDialog(
   container.innerHTML = `<form class="chat-dialog-body">
     <div class="chat-dialog-title">New session</div>
     ${context ? `<div class="chat-dialog-context"><span class="chat-pill">${escapeHtml(context.kind)}</span> ${escapeHtml(context.title)}</div>` : ''}
-    ${typeField}
     <div class="chat-dialog-row">
       <label class="chat-dialog-field">Model<select class="st-select chat-d-model" aria-label="Model">${options}${onJev ? '<optgroup label="Typed evaluations"><option value="jev-primitives">JEV · Primitive builder</option></optgroup>' : ''}</select></label>
       <label class="chat-dialog-field">Effort<select class="st-select chat-d-effort" aria-label="Effort"></select></label>
     </div>
-    <div class="st-help chat-dialog-model-state" role="status"></div>${fallback}
+    <div class="st-help chat-dialog-model-state" role="status"></div>${fallback}${typeField}
     <div class="st-help chat-dialog-location">Sessions and their files stay local to Poise.</div>
     <div class="st-help st-help-error chat-dialog-error" role="alert" hidden></div>
     <div class="st-row"><button type="submit" class="st-save chat-dialog-create">Create</button>
