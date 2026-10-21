@@ -655,6 +655,7 @@ describe('approval eligibility and review activity', () => {
   it.each([
     'stopped', 'review_provider_blocked', 'new-head', 'new-model', 'receipt', 'executed-head',
     'ambiguous-action', 'missing-call', 'wrong-source', 'retry-delay',
+    'head-receipt', 'head-executed-head', 'head-ambiguous-action', 'head-new-model',
   ] as const)('preserves a held approval across dismissal and key changes (%s)', async (variant) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
@@ -677,14 +678,22 @@ describe('approval eligibility and review activity', () => {
     await modules.behaviors.runEnabledBehaviorsOnce()
     expect(modules.database.getFailedBehaviorLaunch('approve-prs', prior.target)).not.toBeNull()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
-    if (['new-model', 'receipt', 'executed-head', 'ambiguous-action', 'missing-call', 'wrong-source', 'retry-delay'].includes(variant)) {
+    const occupiedHead = variant.startsWith('head-')
+    const heldTarget = occupiedHead ? `${pr.repo}#17@head=${HEAD_SHA}` : prior.target
+    if (occupiedHead) {
+      modules.database.db.prepare('UPDATE behavior_seen SET target = ? WHERE key = ? AND target = ?')
+        .run(heldTarget, 'approve-prs', prior.target)
+      modules.database.db.prepare('UPDATE behavior_dead_letters SET target = ? WHERE behavior = ? AND target = ?')
+        .run(heldTarget, 'approve-prs', prior.target)
+    }
+    if (occupiedHead || ['new-model', 'receipt', 'executed-head', 'ambiguous-action', 'missing-call', 'wrong-source', 'retry-delay'].includes(variant)) {
       modules.database.setMeta('models', JSON.stringify({ pr_approve: {
         default: model === 'gpt-6-astra-ultra' ? 'opus-5-xhigh' : 'gpt-6-astra-ultra', fallback: model,
       } }))
     }
-    if (variant === 'receipt') call.review_id = 91
-    if (variant === 'executed-head') call.head_sha = HEAD_SHA
-    if (variant === 'ambiguous-action') { call.action = null; call.outcome = null }
+    if (variant === 'receipt' || variant === 'head-receipt') call.review_id = 91
+    if (variant === 'executed-head' || variant === 'head-executed-head') call.head_sha = HEAD_SHA
+    if (variant === 'ambiguous-action' || variant === 'head-ambiguous-action') { call.action = null; call.outcome = null }
     if (variant === 'missing-call') fixture.agentLogs = []
     if (variant === 'wrong-source') call.source = 'another-system'
     if (variant === 'retry-delay') modules.database.setMeta(`behavior_approve_prs_failure:${prior.target}`, JSON.stringify({
@@ -700,10 +709,10 @@ describe('approval eligibility and review activity', () => {
     modules.behaviors.startBehaviorsRuntime()
     await modules.behaviors.runEnabledBehaviorsOnce()
 
-    const eligible = variant === 'new-head' || variant === 'new-model'
+    const eligible = variant === 'new-head' || variant === 'new-model' || variant === 'head-new-model'
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(eligible ? 2 : 1)
-    expect(modules.database.hasSeen('approve-prs', `${pr.repo}#17@head=${head}`)).toBe(eligible)
-    expect(modules.database.getFailedBehaviorLaunch('approve-prs', prior.target)).not.toBeNull()
+    expect(modules.database.hasSeen('approve-prs', `${pr.repo}#17@head=${head}`)).toBe(eligible || occupiedHead)
+    if (variant !== 'head-new-model') expect(modules.database.getFailedBehaviorLaunch('approve-prs', heldTarget)).not.toBeNull()
     expect(modules.database.listBehaviorDeadLetters()).toHaveLength(1)
   })
 })

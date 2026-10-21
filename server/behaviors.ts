@@ -2799,6 +2799,9 @@ async function tickApprovePrs(): Promise<void> {
         if (!behaviorRetryDue('approve-prs', seenTarget)) return
         let claimId = claimSeenOwnedAs('approve-prs', seenTarget, operationId)
         if (!claimId) {
+          if (admittedReviewer && await dismissedApprovalHeld(
+            pr, expectedHead, (await reviewChoice('pr_approve')).model,
+          )) return
           const recovered = await releaseFailedBehaviorIfNoAction(
             'approve-prs',
             pr.repo,
