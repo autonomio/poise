@@ -23,6 +23,7 @@ let base = ''
 const issued = new Map<string, { challenge: string, redirect: string, client: string }>()
 let tokenCount = 0
 let refuseRefresh = false
+let authorizePage = ''
 
 const body = (req: IncomingMessage) => new Promise<string>((resolve) => { let text = ''; req.on('data', (chunk) => { text += chunk }); req.on('end', () => resolve(text)) })
 
@@ -32,7 +33,7 @@ beforeAll(async () => {
     const json = (status: number, value: unknown, headers: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...headers }); res.end(JSON.stringify(value)) }
     if (url.pathname.startsWith('/.well-known/oauth-protected-resource')) return json(200, { resource: `${base}/mcp`, authorization_servers: [base] })
     if (url.pathname === '/.well-known/oauth-authorization-server') {
-      return json(200, { issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register`,
+      return json(200, { issuer: base, authorization_endpoint: authorizePage || `${base}/authorize`, token_endpoint: `${base}/token`, registration_endpoint: `${base}/register`,
         response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'] })
     }
     if (url.pathname === '/register') return json(201, { ...JSON.parse(await body(req)), client_id: 'poise-client-1' })
@@ -73,7 +74,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`
 })
 afterAll(async () => { await new Promise((resolve) => http.close(resolve)) })
-beforeEach(() => { db.exec('DELETE FROM extension_servers'); refuseRefresh = false })
+beforeEach(() => { db.exec('DELETE FROM extension_servers'); refuseRefresh = false; authorizePage = '' })
 
 function expireTokens(id: string): void {
   const stored = JSON.parse(readSecret(id, 'oauth:tokens')!)
@@ -120,6 +121,14 @@ describe('OAuth sign-in for a remote server', () => {
     await expect(finishSignIn(returned)).rejects.toThrow(/unknown or already finished/)
     const denied = await startSignIn(id, ORIGIN)
     await expect(finishSignIn({ state: new URL(denied.authorizationUrl).searchParams.get('state'), error: 'access_denied' })).rejects.toThrow(/not completed \(access_denied\)/)
+  })
+
+  it('never sends the browser to a sign-in page that is not a web page', async () => {
+    authorizePage = 'javascript:alert(document.domain)//'
+    const id = addServer(validateSpec({ name: 'acme', title: 'Acme', source: 'custom', transport: 'http', url: `${base}/mcp`, auth: 'oauth' }), {}, everywhere).id
+    // The SDK's metadata schema refuses it first; Poise's own check is the second guard.
+    await expect(startSignIn(id, ORIGIN)).rejects.toThrow(/sign-in could not start|not an HTTPS address/)
+    expect(readSecret(id, 'oauth:flow')).toBeNull()
   })
 })
 

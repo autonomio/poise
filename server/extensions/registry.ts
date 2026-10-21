@@ -130,6 +130,8 @@ async function crawl(previous: SyncState): Promise<void> {
 interface RawInput { name?: unknown, description?: unknown, isRequired?: unknown, isSecret?: unknown, value?: unknown, default?: unknown, choices?: unknown, variables?: unknown, type?: unknown, valueHint?: unknown }
 
 const str = (value: unknown): string | undefined => typeof value === 'string' && value ? value : undefined
+// Registry links become links in the page: anything but HTTPS (javascript:, data:) is dropped.
+const https = (value: unknown): string | undefined => { const text = str(value); return text && /^https:\/\//i.test(text) ? text : undefined }
 const placeholders = (template: string) => [...template.matchAll(/\{([A-Za-z0-9_.-]+)\}/g)].map((match) => match[1])
 
 function publisherOf(name: string): string {
@@ -237,9 +239,9 @@ export function directoryEntry(raw: unknown): DirectoryEntry | null {
     title: str(server.title) ?? name.split('/').pop()!,
     description: (str(server.description) ?? '').slice(0, 400),
     publisher: publisherOf(name),
-    ...(str(server.websiteUrl) ? { websiteUrl: str(server.websiteUrl) } : {}),
-    ...(str(repository?.url) ? { repositoryUrl: str(repository?.url) } : {}),
-    ...(icons.find((icon) => typeof icon.src === 'string' && icon.src.startsWith('https://')) ? { icon: icons.find((icon) => typeof icon.src === 'string' && icon.src.startsWith('https://'))!.src as string } : {}),
+    ...(https(server.websiteUrl) ? { websiteUrl: https(server.websiteUrl) } : {}),
+    ...(https(repository?.url) ? { repositoryUrl: https(repository?.url) } : {}),
+    ...(icons.map((icon) => https(icon.src)).find(Boolean) ? { icon: icons.map((icon) => https(icon.src)).find(Boolean) } : {}),
     options,
   }
 }

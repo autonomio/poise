@@ -2596,8 +2596,6 @@ export class ChatRuntime extends EventEmitter {
     storage.saveSession(session.record)
   }
 
-  /** Append to the mirror, then broadcast. Throws when the mirror cannot be
-   *  written; callers that run on the agent's behalf turn that into a stop. */
   /** Record what the native process runs with, and tell the chat once
    *  about every switched-on server it does not have. */
   private reportExtensions(session: LiveSession, set: { servers: ResolvedServer[], notices: string[], fingerprint: string }, skipped: readonly Skipped[], pending: boolean): void {
@@ -2611,6 +2609,8 @@ export class ChatRuntime extends EventEmitter {
     session.extensionNotices = shown
   }
 
+  /** Append to the mirror, then broadcast. Throws when the mirror cannot be
+   *  written; callers that run on the agent's behalf turn that into a stop. */
   private emit_(sessionId: string, event: ChatEvent): ChatEnvelope {
     if (event.type === 'session.created' || event.type === 'session.resumed' || event.type === 'session.updated') {
       event = { ...event, session: this.withLive(event.session) }

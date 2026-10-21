@@ -104,6 +104,14 @@ export async function startSignIn(id: string, origin: unknown): Promise<{ author
     eraseSecret(id, 'oauth:flow')
     throw new ExtensionError(409, 'Already signed in.')
   }
+  // The browser is sent here, and the address comes from the server's own
+  // metadata: anything but a web page (javascript:, data:) would run in Poise.
+  const page = provider.authorizationUrl
+  if (page.protocol !== 'https:' && !(page.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname))) {
+    eraseSecret(id, 'oauth:flow')
+    addEvent(id, 'error', `Sign-in refused: the server named ${page.protocol} as its sign-in page`)
+    throw new ExtensionError(502, `${storedServer(id).spec.title} named a sign-in page that is not an HTTPS address.`)
+  }
   addEvent(id, 'info', 'Sign-in started')
   return { authorizationUrl: provider.authorizationUrl.href }
 }

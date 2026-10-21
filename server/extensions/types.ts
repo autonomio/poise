@@ -194,8 +194,8 @@ export function validateSpec(input: unknown): ServerSpec {
       name: text(registry.name, 'The registry name', 256),
       version: text(registry.version, 'The registry version', 128),
       option: text(registry.option, 'The install option', 64),
-      ...(typeof registry.websiteUrl === 'string' ? { websiteUrl: registry.websiteUrl } : {}),
-      ...(typeof registry.repositoryUrl === 'string' ? { repositoryUrl: registry.repositoryUrl } : {}),
+      ...(typeof registry.websiteUrl === 'string' && /^https:\/\//i.test(registry.websiteUrl) ? { websiteUrl: registry.websiteUrl } : {}),
+      ...(typeof registry.repositoryUrl === 'string' && /^https:\/\//i.test(registry.repositoryUrl) ? { repositoryUrl: registry.repositoryUrl } : {}),
     }
   }
   return spec

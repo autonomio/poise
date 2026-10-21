@@ -201,6 +201,15 @@ describe('the directory', () => {
     expect(directoryEntry(SAMPLE.at(-1))).toBeNull()
   })
 
+  it('keeps only HTTPS links from the registry, which the page renders', () => {
+    const exa = raw('ai.exa/exa') as { server: Record<string, unknown> }
+    const hostile = { ...exa, server: { ...exa.server, websiteUrl: 'javascript:alert(document.cookie)', repository: { url: 'data:text/html,<script>alert(1)</script>' } } }
+    const entry = directoryEntry(hostile)!
+    expect(entry.websiteUrl).toBeUndefined()
+    expect(entry.repositoryUrl).toBeUndefined()
+    expect(directoryEntry({ ...exa, server: { ...exa.server, websiteUrl: 'https://exa.ai' } })!.websiteUrl).toBe('https://exa.ai')
+  })
+
   it('turns an option and the entered values into a definition and its secrets', () => {
     const header = installSpec(directoryEntry(raw('ai.avaloncompany/web-content-url-tools'))!, 'remote-0', { 'header:Authorization:apify_token': 'apify_api_123' }, 'web-tools')
     expect(header.spec).toMatchObject({ name: 'web-tools', source: 'directory', transport: 'http', headers: [{ name: 'Authorization', secret: true }], registry: { name: 'ai.avaloncompany/web-content-url-tools', option: 'remote-0' } })

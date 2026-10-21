@@ -518,6 +518,7 @@ async function install(p: Extract<Panel, { kind: 'entry' }>): Promise<void> {
 async function signIn(id: string): Promise<void> {
   try {
     const { authorizationUrl } = await api<{ authorizationUrl: string }>(`/api/extensions/servers/${id}/sign-in`, 'POST', { origin: location.origin })
+    if (!/^https?:$/.test(new URL(authorizationUrl).protocol)) throw new Error('The sign-in page is not a web address.')
     location.assign(authorizationUrl)
   } catch (error) {
     notice = { text: (error as Error).message, tone: 'error' }; render()
