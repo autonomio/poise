@@ -76,7 +76,7 @@ async function installRoutes(page: Page, state: ServerState): Promise<void> {
     const path = url.pathname
     const method = req.method()
     const body = method === 'POST' || method === 'PATCH' ? (req.postDataJSON?.() ?? null) : null
-    if (path.startsWith('/api/chat') || path === '/api/settings' || path === '/api/repos') state.calls.push({ method, path, body })
+    if (path.startsWith('/api/chat') || path === '/api/debate' || path === '/api/settings' || path === '/api/repos') state.calls.push({ method, path, body })
     if (path === '/api/chat' && state.forbidLegacyChat) {
       await route.fulfill({ status: 500, json: { error: 'legacy card chat is forbidden in this spec' } })
       return

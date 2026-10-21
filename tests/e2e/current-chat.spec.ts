@@ -32,7 +32,7 @@ const paneTranscript = (page: Page) => pane(page).locator('.chat-surface-transcr
 async function openCardPane(page: Page): Promise<void> {
   const card = page.locator('.card-live', { hasText: 'Broken logout' })
   await card.hover()
-  await card.getByRole('button', { name: 'Chat' }).click()
+  await card.getByRole('button', { name: 'Chat', exact: true }).click()
   await expect(pane(page)).toBeVisible()
 }
 
