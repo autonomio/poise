@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 import { mkdirSync, mkdtempSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { isolatedEnvironment } from './tests/fixtures/cli-isolation'
+import { isolatedEnvironment, secretVariables } from './tests/fixtures/cli-isolation'
 
 const port = Number(process.env.POISE_E2E_PORT ?? 5566)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -13,7 +13,11 @@ const e2eRoot = resolve('test-results/e2e')
 // The preview server runs with a home folder and agent-CLI configuration of
 // its own and with stand-ins for the agent CLIs: its Claude sign-in check, and
 // anything else it starts, never reaches the developer's CLIs or their logins.
+// Neither it nor what a test starts inherits the developer's secret-named
+// variables: Playwright gives the server and its workers this process's
+// environment.
 mkdirSync(e2eRoot, { recursive: true })
+for (const name of secretVariables(process.env)) delete process.env[name]
 const isolation = isolatedEnvironment(mkdtempSync(resolve(e2eRoot, 'isolation-')), process.env.PATH ?? '')
 
 export default defineConfig({

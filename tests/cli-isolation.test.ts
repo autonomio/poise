@@ -4,21 +4,40 @@
 // so now every test process runs with its own home folder and CLI
 // configuration and with stand-ins first on PATH, and a Connect terminal in a
 // test refuses, before anything starts, a preset whose CLI is not its fake.
+//
+// Nor does a test, or the end-to-end server, inherit the developer's
+// secret-named variables. A Claude Code session's
+// CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH=1 turned every "1" in a test's log
+// text into "[redacted]", so tests that passed in CI failed in the session.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { delimiter, join, sep } from 'node:path'
+import { delimiter, join, resolve, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
+import { environmentSecrets } from '../gateway/src/diagnostics/redaction.mjs'
 import { ACCOUNT_IDS } from '../server/accounts/types'
 import { TerminalSocketServer } from '../server/terminal/server'
 import type { TerminalPreset } from '../server/terminal/protocol'
 import { COMMANDS, STATUS, fakeCalls, resolveOnPath, script, writeFakeClis } from './fixtures/accounts/fake-clis'
 import { fakePresetCommand } from './fixtures/accounts/fake-presets'
 import { AGENT_CLI_NAMES, CLI_HOME_VARIABLES } from './fixtures/cli-isolation'
+
+// A parent environment like a Claude Code session's, which exports
+// CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH=1, in some sessions
+// USE_STAGING_OAUTH=0, and real tokens; with git configuration that carries
+// a credential, too.
+const PARENT_ENVIRONMENT = {
+  CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '1',
+  USE_STAGING_OAUTH: '0',
+  CLAUDE_CODE_MESSAGING_TOKEN: 'opaque-session-token',
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+  GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic b3BhcXVlLWNyZWRlbnRpYWw=',
+}
 
 describe('every test process', () => {
   it('has a home folder and agent-CLI configuration of its own', () => {
@@ -44,6 +63,28 @@ describe('every test process', () => {
       expect(run.stderr).toContain(`${name} is a stand-in`)
     }
   })
+
+  it('inherits no variable whose value diagnostics redact', () => {
+    expect(environmentSecrets()).toEqual([])
+    // git refuses a GIT_CONFIG_COUNT whose keys are missing.
+    const git = spawnSync('git', ['config', '--list'], { encoding: 'utf8' })
+    expect(git.status, git.stderr).toBe(0)
+  })
+
+  it('inherits none from a parent like a Claude Code session', () => {
+    // The test above, in vitest started from such a parent.
+    const report = join(tmpdir(), `poise-cli-isolation-${process.pid}.json`)
+    try {
+      const run = spawnSync(process.execPath, [resolve('node_modules/vitest/vitest.mjs'), 'run', 'tests/cli-isolation.test.ts',
+        '--testNamePattern', 'inherits no variable', '--reporter=json', `--outputFile=${report}`], { encoding: 'utf8', env: { ...process.env, ...PARENT_ENVIRONMENT } })
+      expect(existsSync(report), run.stderr).toBe(true)
+      const result = JSON.parse(readFileSync(report, 'utf8')) as { numPassedTests: number, numFailedTests: number, testResults: { assertionResults: { failureMessages: string[] }[] }[] }
+      const failures = result.testResults.flatMap((file) => file.assertionResults.flatMap((test) => test.failureMessages)).join('\n')
+      expect({ passed: result.numPassedTests, failed: result.numFailedTests }, failures).toEqual({ passed: 1, failed: 0 })
+    } finally {
+      rmSync(report, { force: true })
+    }
+  }, 30_000)
 })
 
 describe('a Connect terminal in a test', () => {
@@ -147,5 +188,24 @@ describe('a Connect terminal in a test', () => {
     expect(closed.output).toContain('ABCD-1234')
     expect(existsSync(ran)).toBe(false)
     expect((await fakeCalls(home)).map((call) => `${call.name} ${call.args.join(' ')}`)).toEqual(['codex login --device-auth'])
+  })
+})
+
+describe('the end-to-end server', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('inherits none from a parent like a Claude Code session either', async () => {
+    for (const [name, value] of Object.entries(PARENT_ENVIRONMENT)) vi.stubEnv(name, value)
+    const { webServer } = (await import('../playwright.config')).default
+    if (!webServer || Array.isArray(webServer)) throw new Error('playwright.config.ts starts one web server')
+    try {
+      // Playwright starts the server and its workers with the runner's
+      // environment, and the server's own variables on top.
+      const server = { ...process.env, ...webServer.env }
+      expect(environmentSecrets(server)).toEqual([])
+      expect(server.GIT_CONFIG_COUNT).toBeUndefined()
+    } finally {
+      rmSync(resolve(webServer.env!.HOME, '../..'), { recursive: true, force: true })
+    }
   })
 })
