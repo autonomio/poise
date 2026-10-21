@@ -4,7 +4,7 @@ export interface ChatSwitches { revision: number, switches: ChatSwitch[] }
 export const SWITCH_LIMITS = { nameChars: 64, contentBytes: 64 * 1024, totalBytes: 512 * 1024, count: 128 } as const
 // Accept every readable snippet; expanded prompts retain their own byte limit.
 const LIBRARY_LIMITS = { count: 65_536, contentBytes: 1024 * 1024, totalBytes: 16 * 1024 * 1024 }
-export const RESERVED_SWITCHES = new Set(['create', 'model', 'review', 'queue', 'compact', 'reset', 'mode', 'fork', 'poise', 'context', 'clear', 'help', 'always-approve', 'deep-research'])
+export const RESERVED_SWITCHES = new Set(['create', 'model', 'review', 'queue', 'compact', 'reset', 'mode', 'fork', 'poise', 'context', 'clear', 'help', 'always-approve', 'deep-research', 'content', 'consensus'])
 export function switchName(value: string): string {
   const name = value.replace(/^\//, '').toLowerCase()
   if (!/^[a-z][a-z0-9_-]{0,63}$/.test(name)) throw new Error('Use a switch name starting with a letter, followed by letters, numbers, hyphens or underscores (up to 64 characters).')
