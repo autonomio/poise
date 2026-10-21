@@ -525,6 +525,8 @@ test.describe('in a browser on UTC', () => {
   test.use({ timezoneId: 'UTC' })
 
   test('names a saved time zone this browser does not know until one it knows is chosen', async ({ page }) => {
+    // The same day as the history line, so it reads as a time alone.
+    await page.clock.setFixedTime(new Date('2026-10-09T12:00:00Z'))
     await workspace(page, [HELD], { timezone: 'Mars/Olympus', diagnostics: diagnostics({ deadLetters: [
       { id: 'today', behavior: 'review-new-prs', target: 'acme/api#9', error: 'The reviewer stopped before posting.', createdAt: '2026-10-09T10:02:00.000Z', attemptCount: 1, callId: HELD_CALL },
     ] }) })
