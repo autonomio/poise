@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { db } from '../server/db'
-import { createServer as addServer, listServers, readSecret, secretValues, serverView, writeSecret } from '../server/extensions/store'
+import { createServer as addServer, deleteServer, listServers, readSecret, secretValues, serverView, writeSecret } from '../server/extensions/store'
 import { checkServer } from '../server/extensions/probe'
 import { accessToken, finishSignIn, startSignIn } from '../server/extensions/oauth'
 import { extensionsFor } from '../server/extensions/delivery'
@@ -163,6 +163,14 @@ describe('checking a local server', () => {
     const status = await checkServer(id)
     expect(status).toMatchObject({ state: 'connected', toolCount: 2 })
     expect(status.tools!.map((tool) => tool.name)).toEqual(['echo_token', 'ping'])
+  }, 30_000)
+
+  it('finishes quietly when the server is removed while it runs', async () => {
+    const id = addServer(validateSpec({ name: 'fixture', source: 'custom', transport: 'stdio', command: process.execPath, args: [fixture] }), {}, everywhere).id
+    const check = checkServer(id)
+    deleteServer(id)
+    await expect(check).resolves.toMatchObject({ state: 'connected' })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM extension_events WHERE server_id = ?').get(id)).toEqual({ n: 0 })
   }, 30_000)
 
   it('reports why it failed, with its secrets scrubbed from the output', async () => {

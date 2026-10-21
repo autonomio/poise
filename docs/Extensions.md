@@ -23,7 +23,9 @@ where it is on), **Tools** (from the last check) and **Activity** (the last
 server runs once in a scratch folder with the same command and environment.
 
 Turning a server off, editing it or removing it applies from each chat's
-next turn. A turn already running keeps the tools it started with.
+next turn. A turn already running keeps the tools it started with. Removing a
+server also removes its secrets and Activity; a check or sign-in still running
+for it finishes without recording anything.
 
 ## Directory
 

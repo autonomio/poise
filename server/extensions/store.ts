@@ -241,10 +241,12 @@ export function redactSecrets(text: string): string {
   return result
 }
 
+/** Activity is removed with its server, so a check, sign-in or refresh that
+ *  outlives the removal has nothing left to record into. */
 export function addEvent(id: string, level: ServerEvent['level'], text: string): void {
   const clean = redact(text, secretValues()).slice(0, 2000)
   db.transaction(() => {
-    db.prepare('INSERT INTO extension_events (server_id, at, level, text) VALUES (?, ?, ?, ?)').run(id, new Date().toISOString(), level, clean)
+    db.prepare('INSERT INTO extension_events (server_id, at, level, text) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM extension_servers WHERE id = ?)').run(id, new Date().toISOString(), level, clean, id)
     db.prepare('DELETE FROM extension_events WHERE server_id = ? AND id NOT IN (SELECT id FROM extension_events WHERE server_id = ? ORDER BY id DESC LIMIT ?)').run(id, id, EVENTS_KEPT)
   })()
 }
