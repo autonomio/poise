@@ -121,7 +121,9 @@ function project(prepared: Plan): ChatSwitches {
     setMeta(INDEX_KEY, JSON.stringify(index))
     if (manager && previous.get(manager.snippet.trigger)!.revision !== managerBefore?.revision) {
       const created = !managerBefore || managerBefore.removed === true
-      diagnostic({ level: 'info', operation: 'chat.manager.charter.changed', message: 'The /manager snippet changed',
+      // Warning, not info: the diagnostics pipeline drops info and below, so
+      // only warning and above leave the audit record this revision needs.
+      diagnostic({ level: 'warning', operation: 'chat.manager.charter.changed', message: 'The /manager snippet changed',
         context: { revision: previous.get(manager.snippet.trigger)!.revision, bytes: Buffer.byteLength(manager.snippet.replace, 'utf8'), ...(created ? { created: true } : {}) } })
     }
   }
