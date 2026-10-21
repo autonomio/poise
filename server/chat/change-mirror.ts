@@ -32,7 +32,9 @@ async function inventory(checkout: string, ignored: boolean): Promise<string[]> 
     ? ['ls-files', '-z', '--others', '--ignored', '--exclude-standard']
     : ['ls-files', '-z', '--cached', '--others', '--exclude-standard']
   const result = await runFile('git', args, { cwd: checkout, timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 })
-  return [...new Set(result.stdout.split('\0').filter(Boolean))].filter(allowedName).sort()
+  // git collapses an untracked nested repository to a `dir/` entry. It is a
+  // directory the snapshot cannot revert, not a changed file, so skip it.
+  return [...new Set(result.stdout.split('\0').filter(Boolean))].filter(name => !name.endsWith('/') && allowedName(name)).sort()
 }
 
 /** Ignored file names are inventoried but their contents are not copied.

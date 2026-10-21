@@ -107,6 +107,43 @@ describe('turn-level checkout change mirror', () => {
     expect(warnings.join(' ')).toContain('incomplete checkout inventory')
   })
 
+  it('does not report a nested repository created during the turn as an unrevertable change', async () => {
+    const before = await captureCheckoutSnapshot(repo)
+    const nested = join(repo, 'nested')
+    await mkdir(nested)
+    const nestedGit = (...args: string[]) => execFileSync('git', args, { cwd: nested, encoding: 'utf8' })
+    nestedGit('init', '-q', '-b', 'main')
+    nestedGit('config', 'core.hooksPath', '/dev/null')
+    nestedGit('config', 'commit.gpgSign', 'false')
+    nestedGit('config', 'user.name', 'Fixture')
+    nestedGit('config', 'user.email', 'fixture@example.invalid')
+    await writeFile(join(nested, 'clone.txt'), 'nested work\n')
+    nestedGit('add', 'clone.txt'); nestedGit('commit', '-q', '-m', 'nested fixture')
+    const { changes, warnings } = compareCheckoutSnapshots(before, await after(before))
+    expect(warnings).toEqual([])
+    expect(changes).toEqual([])
+    const events: ChatEvent[] = []
+    await emitCheckoutChanges(repo, 'turn-id', before, event => events.push(event))
+    expect(events).toEqual([])
+  })
+
+  it('still reports a change that genuinely cannot be reverted alongside a nested repository', async () => {
+    await symlink(join(root, 'outside.txt'), join(repo, 'link.txt'))
+    const before = await captureCheckoutSnapshot(repo)
+    const nested = join(repo, 'nested')
+    await mkdir(nested)
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: nested })
+    await rm(join(repo, 'link.txt'))
+    await writeFile(join(repo, 'link.txt'), 'now a regular file')
+    const events: ChatEvent[] = []
+    await emitCheckoutChanges(repo, 'turn-id', before, event => events.push(event))
+    expect(events.map(event => event.type)).toEqual(['error'])
+    expect(events[0]).toMatchObject({ type: 'error' })
+    if (events[0].type !== 'error') throw new Error('expected an error event')
+    expect(events[0].message).toContain('link.txt')
+    expect(events[0].message).not.toContain('nested/')
+  })
+
   it('emits a labelled whole-turn card rather than pretending shell changes came from a native edit tool', async () => {
     const before = await captureCheckoutSnapshot(repo)
     execFileSync('sh', ['-c', 'printf "shell edit\n" > base.txt'], { cwd: repo })
