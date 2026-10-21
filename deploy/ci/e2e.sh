@@ -189,7 +189,7 @@ check_persisted_public_pages() {
   local path
   for path in / /privacy /terms; do
     expect 200 "anonymous operator page $path" "$nobody" "$apex$path"
-    grep --quiet 'operator@example.com' "$work/body" || fail "missing operator content on $path"
+    grep --quiet 'mailto:operator%40example.com' "$work/body" || fail "missing operator content on $path"
     expect 200 "anonymous HEAD $path" "$nobody" "$apex$path" --head
   done
 }
