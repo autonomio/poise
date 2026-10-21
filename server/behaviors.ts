@@ -759,6 +759,7 @@ function markLaunchIntent(
   actor: string,
   slot: ReviewerSlot = 'primary',
   plannedSlots: ReviewerSlot[] = ['primary'],
+  replacesFailedCallId?: string,
 ): boolean {
   const source = `poise:${behavior}` as const
   const startedAt = new Date().toISOString()
@@ -774,6 +775,7 @@ function markLaunchIntent(
     actor,
     source,
     correlationId: claimId,
+    replacesFailedCallId,
   })
   if (admitted) captureBehaviorAdmission({
     admissionKey: behavior === 'review-new-prs'
@@ -2590,6 +2592,7 @@ async function fireApprove(
   claimId: string,
   expectedHead: string,
   admittedReviewer?: string,
+  replacesFailedCallId?: string,
 ): Promise<boolean> {
   return withNoticeDiagnosticIdentity({ correlationId: claimId, behavior: 'approve-prs', repository: pr.repo, target: `${pr.repo}#${pr.number}`, account: agentAccount() || null }, async () => {
   if (!isEnabled('approve-prs')) return false
@@ -2622,6 +2625,9 @@ async function fireApprove(
   if (!isEnabled('approve-prs') || behaviorAborted() || !stillEligible('approve-prs', pr)) return false
   if ((await reviewChoice('pr_approve')).model !== model) return false
   if (admittedReviewer && configuredReviewer().toLowerCase() !== admittedReviewer.toLowerCase()) return false
+  if (replacesFailedCallId && !renewPrOperationOwned(claimId, BEHAVIOR_CLAIM_RENEWAL_MS)) {
+    throw new Error(`approval PR operation ownership was lost for ${pr.repo}#${pr.number}`)
+  }
   const source = 'poise:approve-prs'
   const args = [
     '--pr-approve',
@@ -2649,6 +2655,9 @@ async function fireApprove(
     claimId,
     expectedHead,
     actor,
+    'primary',
+    ['primary'],
+    replacesFailedCallId,
   )) return false
   if (!renewPrOperationOwned(claimId, BEHAVIOR_CLAIM_RENEWAL_MS)) {
     captureBehaviorOutcome({ nativeId: claimId, state: 'failed', activity: 'settled', stateSource: 'native',
@@ -2798,23 +2807,28 @@ async function tickApprovePrs(): Promise<void> {
         }
         if (!behaviorRetryDue('approve-prs', seenTarget)) return
         let claimId = claimSeenOwnedAs('approve-prs', seenTarget, operationId)
+        let replacesFailedCallId: string | undefined
         if (!claimId) {
-          if (admittedReviewer && await dismissedApprovalHeld(
-            pr, expectedHead, (await reviewChoice('pr_approve')).model,
-          )) return
-          const recovered = await releaseFailedBehaviorIfNoAction(
-            'approve-prs',
-            pr.repo,
-            pr.number,
-            seenTarget,
-          )
-          if (!recovered) return
-          claimId = claimSeenOwnedAs('approve-prs', seenTarget, operationId)
+          if (admittedReviewer) {
+            const held = getFailedBehaviorLaunch('approve-prs', seenTarget)
+            if (!held?.launchCallId || await dismissedApprovalHeld(
+              pr, expectedHead, (await reviewChoice('pr_approve')).model,
+            )) return
+            // Keep the held record until preparation admits a complete new intent.
+            replacesFailedCallId = held.launchCallId
+            claimId = operationId
+          } else {
+            const recovered = await releaseFailedBehaviorIfNoAction(
+              'approve-prs', pr.repo, pr.number, seenTarget,
+            )
+            if (!recovered) return
+            claimId = claimSeenOwnedAs('approve-prs', seenTarget, operationId)
+          }
         }
         if (!claimId) return
         trackClaim('approve-prs', seenTarget, claimId)
         try {
-          const accepted = await fireApprove(pr, seenTarget, claimId, expectedHead, admittedReviewer)
+          const accepted = await fireApprove(pr, seenTarget, claimId, expectedHead, admittedReviewer, replacesFailedCallId)
           if (!accepted) {
             releaseOwnedClaim('approve-prs', seenTarget, claimId)
             return

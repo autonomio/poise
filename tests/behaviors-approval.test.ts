@@ -656,6 +656,7 @@ describe('approval eligibility and review activity', () => {
     'stopped', 'review_provider_blocked', 'new-head', 'new-model', 'receipt', 'executed-head',
     'ambiguous-action', 'missing-call', 'wrong-source', 'retry-delay',
     'head-receipt', 'head-executed-head', 'head-ambiguous-action', 'head-new-model',
+    'head-model-rollback', 'head-reviewer-change', 'head-preparation-failure',
   ] as const)('preserves a held approval across dismissal and key changes (%s)', async (variant) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
@@ -702,8 +703,29 @@ describe('approval eligibility and review activity', () => {
     const head = variant === 'new-head' ? 'e'.repeat(40) : HEAD_SHA
     arrangeCli(false, false, { headSha: head, reviewerLatestState: 'DISMISSED',
       latestActivityAt: new Date().toISOString() }, { reviewer_latest_state: 'DISMISSED' })
+    const abortPreparation = ['head-model-rollback', 'head-reviewer-change', 'head-preparation-failure'].includes(variant)
+    let interrupted = false
+    if (abortPreparation) {
+      const original = mocks.runFile.getMockImplementation()!
+      mocks.runFile.mockImplementation(async (command: string, args: string[], options?: { cwd?: string }) => {
+        const result = await original(command, args, options)
+        if (args[0] === '--local-checkout-path' && !interrupted) {
+          interrupted = true
+          if (variant === 'head-reviewer-change') modules.database.setMeta('agentAccount', 'replacement-bot')
+          else if (variant === 'head-preparation-failure') throw new Error('checkout unavailable')
+          else modules.database.setMeta('models', JSON.stringify({ pr_approve: { default: model, fallback: model } }))
+        }
+        return result
+      })
+    }
 
     await modules.behaviors.runEnabledBehaviorsOnce()
+    if (abortPreparation) {
+      expect(interrupted).toBe(true)
+      expect(modules.database.getFailedBehaviorLaunch('approve-prs', heldTarget)?.launchCallId).toBe(call.id)
+      modules.database.setMeta('agentAccount', prior.actor)
+      modules.database.setMeta('models', JSON.stringify({ pr_approve: { default: model, fallback: model } }))
+    }
     await modules.behaviors.runEnabledBehaviorsOnce()
     modules = await restartModules()
     modules.behaviors.startBehaviorsRuntime()
