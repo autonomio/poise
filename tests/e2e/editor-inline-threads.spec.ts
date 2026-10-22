@@ -48,6 +48,7 @@ interface Harness {
 }
 
 async function editor(page: Page, stored: StoredAnnotation[] = [], content = TEXT): Promise<Harness> {
+  await workspace(page)
   const state = makeState([], {})
   state.models = modelsState()
   await installRoutes(page, state)
@@ -80,7 +81,6 @@ async function editor(page: Page, stored: StoredAnnotation[] = [], content = TEX
     }
     return route.fulfill({ json: {} })
   })
-  await workspace(page)
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
   await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
   return { state, sock, saves, annotationSaves }

@@ -33,6 +33,7 @@ interface Editor {
 }
 
 async function editor(page: Page, content = TEXT): Promise<Editor> {
+  await workspace(page)
   const state = makeState([], {})
   state.models = modelsState()
   await installRoutes(page, state)
@@ -62,7 +63,6 @@ async function editor(page: Page, content = TEXT): Promise<Editor> {
     }
     return route.fulfill({ json: {} })
   })
-  await workspace(page)
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
   await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
   return { state, sock, saves, holdSaves, failSaves }
