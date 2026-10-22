@@ -27,8 +27,11 @@ pretence that one vendor's session migrated to another. Each Current card has
 one Chat session of its own, opened from the card in the side pane or from
 Open in Chat in the Chat view; the pane shows the card's earlier conversation
 until the first message creates the session. `/content` and `/consensus` run
-as Chat composer commands with transcript cards. The legacy chat pane remains
-for Editor annotations until #370 retires it. Antigravity models remain visible
+as Chat composer commands with transcript cards. Every Editor chat — the
+document's own chat, passage threads on annotations, review threads — runs as
+a Chat session too: the document chat in the side pane, passage threads inline
+at their annotation, each importing its subject's earlier conversation on
+creation. Antigravity models remain visible
 in the catalogue, but native Chat launches need a permission/question channel
 its current CLI does not offer.
 pi, image input, worktrees and parallel turns on the same checkout are outside v1.

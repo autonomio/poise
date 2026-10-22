@@ -445,7 +445,7 @@ assertion may only resume, and anything else is refused with 403):
   issue review may run, so it should cut only a hung call) have passed.
   - New Chat turns include queued messages, and launches include the
     browser's (`/api/pr-review`, `/api/agent-replay`, `/api/chat-content`,
-    `/api/debate`, `/api/chat`, `/api/models/refresh`). Refused work answers
+    `/api/debate`, `/api/models/refresh`). Refused work answers
     503 with code `draining`; work already running continues.
   - The workspace lets a drain lapse `POISE_DRAIN_TIMEOUT` seconds (default
     5400) plus five minutes after the last drain call, so a gateway that
