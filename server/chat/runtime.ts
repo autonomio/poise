@@ -995,9 +995,15 @@ export class ChatRuntime extends EventEmitter {
       // An observer reading untrusted transcripts gets no MCP servers.
       const extensions = this.options.extensions && !isSwitchboardChat(record) ? await this.options.extensions.resolve(record) : null
       signal.throwIfAborted()
+      // Each registration reports its own adapter instance: closing over the
+      // reassigned `adapter` below would attribute a late exit of the stopped
+      // process to the fresh adapter and tear down the restarted session.
+      const attach = (next: Adapter) => {
+        session.adapter = next
+        next.onExit((code, signal) => this.onAdapterExit(session, next, code, signal))
+      }
       let adapter = this.adapters[record.agent](this.hostFor(session))
-      session.adapter = adapter
-      adapter.onExit((code, signal) => this.onAdapterExit(session, adapter, code, signal))
+      attach(adapter)
       let startOptions = {
         modelId: record.modelId,
         effort: record.effort,
@@ -1017,8 +1023,7 @@ export class ChatRuntime extends EventEmitter {
         signal.throwIfAborted()
         this.clearStaleMuseSession(session)
         adapter = this.adapters[record.agent](this.hostFor(session))
-        session.adapter = adapter
-        adapter.onExit((code, signal) => this.onAdapterExit(session, adapter, code, signal))
+        attach(adapter)
         startOptions = {
           modelId: record.modelId,
           effort: record.effort,

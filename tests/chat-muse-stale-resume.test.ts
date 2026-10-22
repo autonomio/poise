@@ -61,7 +61,9 @@ class FakeMuse implements Adapter {
   async setSafeMode() { return 'current_turn' as const }
   async fork() { return `native-${randomUUID().slice(0, 8)}` }
   async close() { this.closed += 1; this.alive = false }
-  onExit() {}
+  onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void) { this.exitListeners.push(listener) }
+  emitExit(code: number | null, signal: NodeJS.Signals | null) { for (const listener of this.exitListeners) listener(code, signal) }
+  private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = []
 }
 
 function git(...args: string[]) {
@@ -286,6 +288,26 @@ it('leaves any other Muse resume error to behave as before', async () => {
   expect(finished.error).toContain('session store unavailable')
   expect(controls.starts).toHaveLength(2)
   expect(restartNotes(events, id)).toHaveLength(0)
+}, 60_000)
+
+it('ignores a late exit from the stopped poisoned process after a resume recovery', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse()
+  await firstTurn(events, id, 'first task')
+
+  controls.failResumeWith = STALE_ERROR
+  controls.adapters[0].alive = false
+  await runtime.prompt(id, { text: 'second task', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+  await until(() => runtime.get(id)?.status === 'idle')
+
+  // The failed resume attempt's process exits late, after the fresh adapter
+  // took over: it must not be reported as the fresh adapter's exit.
+  controls.adapters[1].emitExit(1, null)
+  await pause(50)
+  expect(runtime.get(id)?.status).toBe('idle')
+  expect(ofType(events, id, 'status.changed').at(-1)).toMatchObject({ status: 'idle' })
 }, 60_000)
 
 it('leaves any other Muse turn error to behave as before', async () => {
