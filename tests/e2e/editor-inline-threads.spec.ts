@@ -285,15 +285,14 @@ test('moves a passage chat to the side pane and back with its draft', async ({ p
 
 test('keeps history and live replies when moving a passage chat while its history request is pending', async ({ page }) => {
   await page.addInitScript(() => {
-    const NativeWebSocket = window.WebSocket
-    window.WebSocket = class extends NativeWebSocket {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols)
-        this.addEventListener('message', (event) => {
-          const frame = JSON.parse(String(event.data)) as { kind: string, envelope?: { seq: number } }
-          if (frame.kind === 'event') Reflect.set(window, 'lastChatSequence', frame.envelope?.seq)
-        })
+    const parse = JSON.parse
+    JSON.parse = (text, reviver) => {
+      const frame: unknown = parse(text, reviver)
+      if (frame && typeof frame === 'object' && 'kind' in frame && frame.kind === 'event' && 'envelope' in frame) {
+        const envelope = frame.envelope
+        if (envelope && typeof envelope === 'object' && 'seq' in envelope) Reflect.set(window, 'lastChatSequence', envelope.seq)
       }
+      return frame
     }
   })
   const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])

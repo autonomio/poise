@@ -330,6 +330,7 @@ test('uses a suggested reply from a review moved to the side pane', async ({ pag
 })
 
 test('keeps a side-pane suggestion bound to its review after another review opens inline', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 })
   const second: ArticleReview = { ...review(), id: 'thread-2', site: 'Second site', anchor: { quote: 'A final thought.', before: '', after: '', unique: true } }
   const { calls, state, sock } = await editorWithReviews(page, [review(), second])
   await page.locator('.editor-review-mark[data-review="thread-1"]').first().click()
