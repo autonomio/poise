@@ -274,11 +274,11 @@ test('sends the highlighted text as a quote with the next message and clears the
   sock.autoAck = true
   // A command keeps the head of the prompt so the runtime parses it; the
   // quote follows.
-  await paneInput(page).fill('/model opus-5-max')
+  await paneInput(page).fill('/review be kind')
   await paneInput(page).press('Enter')
   await expect.poll(() => sock.framesOf('prompt').length).toBe(3)
   const text = (sock.framesOf('prompt')[2].command as { text: string }).text
-  expect(text.startsWith('/model opus-5-max')).toBe(true)
+  expect(text.startsWith('/review be kind')).toBe(true)
   expect(text).toContain('> A final thought.')
 })
 
