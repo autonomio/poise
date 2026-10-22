@@ -2796,6 +2796,7 @@ async function fireApprove(
   // launch below runs under the lifecycle signal so an expired sweep deadline
   // does not discard it. Only shutdown or disable discards prepared work.
   return underLifecycleSignal(async () => {
+  try {
   const currentHead = await currentHeadSha(pr.repo, pr.number, actor)
   // The head-SHA lookup above is a subprocess with a 30s timeout, so the user
   // has a real window to turn the behaviour off while it is out. Nothing
@@ -2860,6 +2861,15 @@ async function fireApprove(
   }
   markClaimLaunched(claimId)
   return true
+  } catch (err) {
+    // The sweep deadline may expire while a launch is in flight; tickApprovePrs
+    // reads that as an abort and would drop a genuine failure silently, so log
+    // and record it here, as review-new-prs phase 3 does.
+    if (behaviorAborted()) return false
+    console.error(`[behaviors] approve-prs check/fire failed for ${pr.repo}#${pr.number}:`, err)
+    recordBehaviorFailure('approve-prs', 'operation', err, `${pr.repo}#${pr.number}:check`)
+    return false
+  }
   })
   })
 }

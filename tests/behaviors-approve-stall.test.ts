@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mocks, pr, loadModules, arrangeCli, fixture } from './behaviors-runtime-fixture'
+import { mocks, pr, NEXT_HEAD_SHA, loadModules, arrangeCli, fixture } from './behaviors-runtime-fixture'
 
 // Provider maintenance is unrelated to this regression: preparation resolves
 // immediately so the sweep's own deadline handling is what the tests observe.
@@ -123,6 +123,50 @@ describe('approve-prs under load', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
     expect(mocks.spawnDetached.mock.calls[1]?.[1]).toContain('#17')
+  })
+
+  it('records a launch failure instead of dropping it when the sweep deadline already expired', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    vi.setSystemTime(new Date('2026-10-21T12:00:00.000Z'))
+    const { database: db, behaviors: runtime } = await startApproving([pr, secondPr])
+    const original = mocks.runFile.getMockImplementation()!
+    let slowEntered = false
+    let fireEntered = false
+    mocks.runFile.mockImplementation(async (command: string, args: string[], options: unknown) => {
+      if (command === 'github-interface' && args[0] === '--requested-changes-addressed' && String(args[1]) === '#17') {
+        slowEntered = true
+        const signal = (options as { signal?: AbortSignal } | undefined)?.signal
+        if (signal?.aborted) throw signal.reason
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      }
+      if (command === 'github-interface' && args[0] === '--head-sha' && String(args[1]) === '#18') {
+        fireEntered = true
+        // The head lookup answers after the sweep deadline with a new head: a
+        // genuine launch failure, not an abort.
+        await new Promise<void>((resolve) => setTimeout(resolve, 57_000))
+        return {
+          stdout: JSON.stringify({ action: 'head_sha', repository: secondPr.repo, pull_number: 18, head_sha: NEXT_HEAD_SHA }),
+          stderr: '',
+        }
+      }
+      return original(command, args, options)
+    })
+
+    const run = runtime.runEnabledBehaviorsOnce()
+    const pump = () => new Promise<void>((resolve) => setImmediate(resolve))
+    for (let i = 0; i < 1000 && !(slowEntered && fireEntered); i++) await pump()
+    expect(slowEntered && fireEntered).toBe(true)
+    for (let i = 0; i < 20; i++) await pump()
+    await vi.advanceTimersByTimeAsync(59_000)
+    await run
+
+    expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    const stored = JSON.parse(db.getMeta(`behavior_approve_prs_failure:${secondPr.repo}#18:check`)!)
+    expect(stored.error).toMatch(/head changed/)
+    expect(stored.consecutiveFailures).toBe(1)
+    expect(stored.nextRetryAtMs - stored.lastFailureAtMs).toBe(60_000)
   })
 
   it('keeps retrying the sweep within minutes after repeated sweep timeouts', async () => {
