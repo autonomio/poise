@@ -376,7 +376,7 @@ class VerifyTest(LibTest):
 
 
 class RestoreProofTest(LibTest):
-    def restore(self, succeeds):
+    def restore(self, succeeds, unclearable_proof=False):
         directory = os.path.join(self.work.name, 'operator')
         os.mkdir(directory)
         with open(os.path.join(directory, 'lib.sh'), 'w') as file:
@@ -401,7 +401,11 @@ class RestoreProofTest(LibTest):
             with open(os.path.join(self.bin, 'sha256sum'), 'w') as file:
                 file.write(f'#!/bin/sh\nexec {shlex.quote(shutil.which("shasum"))} -a 256 "$@"\n')
             os.chmod(os.path.join(self.bin, 'sha256sum'), 0o755)
-        with open(self.state + '.proof', 'w') as file:
+        proof = self.state + '.proof'
+        if unclearable_proof:
+            os.mkdir(proof)
+            proof = os.path.join(proof, 'pending')
+        with open(proof, 'w') as file:
             file.write('bob ')
         with open(self.state, 'w') as file:
             json.dump({'image_id': IMAGE_ID, 'containers': [], 'health': {},
@@ -423,6 +427,17 @@ class RestoreProofTest(LibTest):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         with open(self.state + '.proof') as file:
             self.assertEqual(file.read(), 'bob ')
+
+    def test_unclearable_proof_rolls_back_restored_volumes_and_retains_proof(self):
+        result = self.restore(True, unclearable_proof=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('cannot clear the completed workspace proof', result.stderr)
+        with open(os.path.join(self.state + '.proof', 'pending')) as file:
+            self.assertEqual(file.read(), 'bob ')
+        with open(self.state) as file:
+            state = json.load(file)
+        self.assertEqual(state['volumes'], [])
+        self.assertTrue(any(call.startswith('volume rm ') for call in state['calls']))
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'pending ages read ISO times with GNU date, as on the Linux server')
