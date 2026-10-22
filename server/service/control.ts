@@ -56,7 +56,7 @@ export const DRAINING_ERROR = 'Poise is installing an update; try again after it
 export const DRAIN_GRACE_SECONDS = 300
 
 // Browser routes that start a Caller call or the model check.
-const LAUNCH_ROUTES = new Set(['/api/pr-review', '/api/agent-replay', '/api/chat-content', '/api/debate', '/api/chat', '/api/models/refresh'])
+const LAUNCH_ROUTES = new Set(['/api/pr-review', '/api/agent-replay', '/api/chat-content', '/api/debate', '/api/models/refresh'])
 
 export interface DrainTimer {
   setTimeout(callback: () => void, delayMs: number): unknown

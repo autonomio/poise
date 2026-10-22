@@ -3747,19 +3747,18 @@ tr:hover .stop-btn { opacity: 1; }
    the conversation stays readable on narrower viewports.
    ───────────────────────────────────────────────────────────────────────── */
 
-#chat-panel,
 #chat-side-pane {
   position: fixed;
   /* Below the control bar, like the other fixed panels. The bar is a
      full-width opaque band at z-index 130, so a panel starting at y=0 has
      its own header — including .chat-close, which is the ONLY way to close
-     this pane (there is no Escape handler in chat-pane.ts) — painted over
-     and click-swallowed. Both lines are load-bearing: offsetting the top
-     without shortening the height pushes the composer off the bottom. */
+     this pane — painted over and click-swallowed. Both lines are
+     load-bearing: offsetting the top without shortening the height pushes
+     the composer off the bottom. */
   top: var(--app-bar-h, 96px);
   left: 0;
   /* Width is draggable — the handle on the trailing edge writes --chat-w, and
-     chat-pane.ts persists it. 25vw is only the starting point. */
+     chat-side-pane.ts persists it. 25vw is only the starting point. */
   width: var(--chat-w, 25vw);
   min-width: 360px;
   max-width: 90vw;
@@ -3775,12 +3774,10 @@ tr:hover .stop-btn { opacity: 1; }
   overflow: hidden;
 }
 
-#chat-panel.open,
 #chat-side-pane.open { transform: translateX(0); }
 
 /* A card's Chat session beside Current: header extras, the surface column,
-// the Earlier conversation block and the command cards. The pane frame
-// above is shared with the legacy pane until #370. */
+// the Earlier conversation block and the command cards. */
 .chat-pane-state {
   font-size: 0.75rem;
   color: var(--text-tertiary);
@@ -4193,10 +4190,8 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
   text-overflow: ellipsis;
 }
 
-/* Edit cards — rendered when the chat-pane is opened with
-   parseEdits: true (currently: the editor's toolbar chat) and the
-   agent reply parses cleanly into a StructuredReply with edits.
-   Inert in this slice — no accept/decline, no hover-to-doc coupling.
+/* Edit cards — rendered when an agent reply parses cleanly into a
+   StructuredReply with edits.
    The card sits below the agent's `chat` prose, indented a touch so
    it reads as "attached to" that turn rather than free-floating.
    Visual idiom: subtle tinted rows for old/new, with a leading -/+
@@ -4746,9 +4741,8 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
 }
 .editor-bar-right { gap: var(--sp-3); }
 
-/* + and × icon buttons — same ghost rhythm as the chat-pane / card
-   icons so the editor's chrome reads in the same vocabulary as the
-   rest of the app. */
+/* + and × icon buttons — same ghost rhythm as the card icons so the
+   editor's chrome reads in the same vocabulary as the rest of the app. */
 .editor-bar-btn {
   width: 26px;
   height: 26px;

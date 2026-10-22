@@ -19,7 +19,6 @@ import { initChatView, stopChatRefresh, openChatSession, openChatForSubject, cha
 import { initBehaviorsView, stopBehaviorsRefresh } from './views/behaviors-view'
 import { initSnippetsView } from './views/snippets-view'
 import { initEditorView, stopEditorRefresh } from './views/editor-view'
-import { toggle as toggleChat, close as closeChatPane } from './views/chat-pane'
 import { chatSidePane } from './views/chat-side-pane'
 import { inlineThreadSessionInView } from './views/editor-inline-thread'
 import { loadSettings, startRefreshTicker, applyTheme, getTheme, effectiveTimezone, unknownSavedTimezone } from './config'
@@ -111,12 +110,8 @@ function showView(v: ViewSlug) {
   // Chat keeps its socket (a running turn keeps being mirrored) but stops
   // the per-second tick and parks the composer draft.
   if (v !== 'chat') stopChatRefresh()
-  // The chat pane is bound to whatever card or document opened it, so it does
-  // not belong to the next view. It had no leave-cleanup at all: it stayed
-  // open over whatever came next, kept polling for the rest of the session,
-  // and its composer stayed in the tab order — so a message could be sent
-  // into a conversation the person had navigated away from.
-  closeChatPane()
+  // The side pane is bound to whatever card or document opened it, so it
+  // does not belong to the next view.
   chatSidePane.close()
 
   // Initialize the target first so content exists before the animation starts
@@ -282,34 +277,6 @@ window.addEventListener('poise:synced', () => {
 })
 
 // Card chat icon → toggle the chat pane bound to that card's session.
-// Clicking the same card's icon again closes the pane; switching to a
-// different card swaps the conversation in place. Hosts that want
-// JSON-edit-card rendering (currently: the editor's toolbar chat)
-// pass parseEdits=true in the event detail and may also supply hover
-// / accept / decline callbacks so the host can react to user gestures
-// on cards (highlight in surface, apply to surface, etc.); everyone
-// else leaves them unset and gets plain prose rendering.
-window.addEventListener('poise:open-chat', (ev) => {
-  const detail = (ev as CustomEvent<{
-    session: string,
-    label: string,
-    draft?: string,
-    parseEdits?: boolean,
-    onEditHover?: (edit: any) => void,
-    onEditLeave?: () => void,
-    onEditAccept?: (edit: any, key: string) => 'applied' | 'conflict',
-    onEditDecline?: (edit: any, key: string) => void,
-  }>).detail
-  if (!detail) return
-  toggleChat(detail.session, detail.label, detail.draft, {
-    parseEdits: detail.parseEdits,
-    onEditHover: detail.onEditHover,
-    onEditLeave: detail.onEditLeave,
-    onEditAccept: detail.onEditAccept,
-    onEditDecline: detail.onEditDecline,
-  })
-})
-
 // Chat handoffs. `{ id }` opens an existing session (Swarm's Target column);
 // `{ subject, prefill?, draft? }` opens a subject's Chat session, or its
 // composer with the prefill when it has no session yet.

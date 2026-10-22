@@ -311,6 +311,11 @@ async function installSocket(page: Page, state?: ServerState): Promise<Socket> {
         s.lastSeq = sock.seq + 1
         sock.push(s.id, { type: 'session.updated', session: { ...s } })
         sock.ack(frame, true, '', undefined, { session: { ...s }, applies: 'current_turn' })
+      } else if (sock.autoAck && frame.command.type === 'edit.decide') {
+        const cmd = frame.command
+        if (cmd.type !== 'edit.decide') throw new Error('Unexpected edit command')
+        sock.push(cmd.sessionId, { type: 'edit.decided', turnId: cmd.turnId, messageId: cmd.messageId, index: cmd.index, decision: cmd.decision })
+        sock.ack(frame)
       } else if (sock.autoAck) sock.ack(frame)
       else sock.held.push(frame)
     })

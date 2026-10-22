@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
+import { installRoutes, installSocket, makeState } from './fixtures/chat'
 const VERSION = 'a'.repeat(64), REMOTE = 'b'.repeat(64), TEXT = '# Draft\n\nThe local paragraph.\n'
+const GOOGLE_PROPOSAL = JSON.stringify({
+  chat: 'One small edit.',
+  edits: [{ description: 'an unwanted pending agent edit', old: 'The local paragraph.', new: 'An unwanted pending agent edit.' }],
+})
 const accounts = { configured: true, clientId: 'poise.apps.googleusercontent.com', origin: 'http://127.0.0.1:5566', accounts: [{ id: 'one', email: 'one@example.test', connected: true }, { id: 'two', email: 'two@example.test', connected: true }] }
 const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, replies: [{ author: 'Second reviewer', body: 'Please also check the example.' }], start: 9, end: 29 }] }
 async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string, emptyFirstLoad?: boolean } = {}) {
@@ -18,7 +23,6 @@ async function setup(page: Page, options: { initialSyncFailure?: boolean, remote
       return route.fulfill({ json: { docs: options.emptyFirstLoad && docListReads++ === 0 ? [] : [{ slug: 'google-draft', title: 'Draft', updated_at: '2026-10-20T08:00:00Z', size: content.length }] } })
     }
     if (path === '/api/editor/doc/google-draft') { if (method === 'PUT') content = (route.request().postDataJSON() as { content: string }).content; return route.fulfill({ json: { slug: 'google-draft', content, version: VERSION } }) }
-    if (path.endsWith('/chat-session')) return route.fulfill({ json: { session_id: 'editor-google-draft-1792487000000' } })
     if (path.endsWith('/annotations')) return route.fulfill({ json: { annotations: [], version: VERSION } })
     if (path.endsWith('/reviews') || path.endsWith('/reviews/sync')) return route.fulfill({ json: { reviews: [], checkedAt: null, active: false, stale: false, problems: [] } })
     if (path.endsWith('/publishing')) return route.fulfill({ json: { title: 'Draft', slug: 'draft', today: '2026-10-20', publications: [] } })
@@ -166,15 +170,25 @@ test('OAuth return opens Accounts and displays the result without depending on w
   expect(await page.evaluate(() => sessionStorage.getItem('poise-google-login-secret'))).toBeNull()
 })
 test('import freezes typing and agent edits before draining pending annotation saves', async ({ page }) => {
-  await page.clock.install()
   const actions = await setup(page), google = page.locator('.google-documents')
-  await page.evaluate(() => window.addEventListener('poise:open-chat', event => {
-    const detail = (event as CustomEvent<{ onEditAccept: (edit: { old: string, new: string }) => string }>).detail
-    Reflect.set(window, 'googleAcceptProbe', detail.onEditAccept)
-    event.stopImmediatePropagation()
-  }, { capture: true }))
+  // The document chat holds one pending agent edit while the import runs.
+  const state = makeState([], {})
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
   await page.locator('.editor-chat-btn').click()
-  await page.getByRole('button', { name: 'Close chat', exact: true }).click()
+  await expect(page.locator('#chat-side-pane')).toBeVisible()
+  const paneInput = page.locator('#chat-side-pane .chat-input')
+  await paneInput.fill('Tighten this up')
+  await paneInput.press('Enter')
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
+  const id = (sock.framesOf('prompt')[0].command as { sessionId: string }).sessionId
+  await sock.subscribed(id)
+  sock.push(id, { type: 'turn.started', turnId: 't1', prompt: { text: 'Tighten this up', attachments: [], mentions: [] } })
+  sock.push(id, { type: 'text.delta', turnId: 't1', messageId: 'reply-1', delta: GOOGLE_PROPOSAL })
+  sock.push(id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+  const card = page.locator('#chat-side-pane .chat-edit-card').first()
+  await expect(card).toBeVisible()
+  await page.clock.install()
   await page.clock.fastForward(1000)
   await google.locator('summary').click()
   await google.getByRole('button', { name: 'Review Google changes', exact: true }).click()
@@ -195,11 +209,8 @@ test('import freezes typing and agent edits before draining pending annotation s
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await pending
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
-  const applied = await page.evaluate(() => {
-    const accept = Reflect.get(window, 'googleAcceptProbe') as (edit: { old: string, new: string }) => string
-    return accept({ old: 'The local paragraph.', new: 'An unwanted pending agent edit.' })
-  })
-  expect(applied).toBe('conflict')
+  await card.getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect(card.locator('.chat-edit-card-badge-conflict')).toHaveText('Conflict — text not found')
   await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')
   release()
   await expect(page.locator('#editor-doc')).toContainText('The Google paragraph.')
