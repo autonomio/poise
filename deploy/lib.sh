@@ -245,7 +245,7 @@ wait_for_gateway() {
 # commit before it reports what is still pending instead of success.
 verify_timeout_seconds=600
 verify_poll_seconds=10
-workspace_proof_file=$deploy/.workspace-proof
+workspace_proof_file=$deploy/.env.workspace-proof
 
 # Keep an unfinished deploy's obligations across process failure and retry.
 # The checkout survives operator deploys; backups intentionally contain only

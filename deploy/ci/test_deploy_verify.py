@@ -440,6 +440,34 @@ class RestoreProofTest(LibTest):
         self.assertTrue(any(call.startswith('volume rm ') for call in state['calls']))
 
 
+class RollbackProofTest(LibTest):
+    def test_pending_proof_keeps_an_older_checkout_clean_for_an_exact_sha_rollback(self):
+        checkout = os.path.join(self.work.name, 'rollback')
+        directory = os.path.join(checkout, 'deploy')
+        os.makedirs(directory)
+        library = os.path.join(directory, 'lib.sh')
+        shutil.copyfile(LIB, library)
+        # This ignore rule predates deployment verification. Rolling back
+        # must not turn its retained private proof into an untracked source edit.
+        with open(os.path.join(checkout, '.gitignore'), 'w') as file:
+            file.write('.env\n.env.*\n!.env.example\n')
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(('POISE_', 'COMPOSE_', 'GIT_'))}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                   GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                   GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid',
+                   PATH=f'{self.bin}{os.pathsep}{env["PATH"]}', FAKE_DOCKER_STATE=self.state)
+        for args in [('init', '--quiet'), ('add', '.'), ('commit', '--quiet', '-m', 'chore: fixture rollback target')]:
+            subprocess.run(['git', '-C', checkout, *args], env=env, check=True, capture_output=True)
+        target = subprocess.check_output(['git', '-C', checkout, 'rev-parse', 'HEAD'], env=env, text=True).strip()
+        with open(self.state, 'w') as file:
+            json.dump({'containers': [f'bob {OLD_IMAGE_ID} true /poise-ws-bob'], 'calls': []}, file)
+        result = subprocess.run(['bash', '-c', '. "$0"; workspace_handles >/dev/null; source_sha', library],
+                                capture_output=True, text=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, target, result.stderr)
+
+
 @unittest.skipUnless(sys.platform.startswith('linux'), 'pending ages read ISO times with GNU date, as on the Linux server')
 class VerifyAgeTest(LibTest):
     def test_reports_how_long_the_switch_has_been_pending(self):
