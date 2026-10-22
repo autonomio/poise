@@ -1916,6 +1916,7 @@ async function refreshTimersPane(): Promise<void> {
     })
   } catch (error) {
     if (timersOpenFor !== id) return
+    timersJson = ''
     timersPaneEl.innerHTML = `<div class="chat-timers"><div class="st-help st-help-error" role="alert">Timers could not be loaded — ${escapeHtml((error as Error).message)}</div></div>`
   }
 }

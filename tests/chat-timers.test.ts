@@ -727,6 +727,95 @@ describe('durable timers that wake chats', () => {
     expect(timerNotes(m.id).at(-1)).toMatchObject({ change: 'cancelled' })
   }, 120_000)
 
+  it.each(['once', 'every'] as const)('retains an open %s timer turn beyond the admitted-row window', async (kind) => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const created = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Long turn', message: 'Ping',
+      ...(kind === 'once' ? { delayMinutes: 10 } : { everyMinutes: 10 }) })).timer as { id: string }
+    clock += 10 * 60_000
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    const turnId = starts(p.id).at(-1)!.turnId
+    clock += 8 * 86_400_000
+    expect(store.retainTimers(instance, clock).rows).toBe(0)
+    expect(store.timerForTurn(instance, turnId)?.id).toBe(created.id)
+    finishes.get(p.id)!({ stopReason: kind === 'once' ? 'end_turn' : 'error', ...(kind === 'every' ? { error: 'Long turn failed' } : {}) })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, created.id)).toMatchObject(kind === 'once' ? { state: 'done', reason: 'completed' } : { state: 'active', failures: 1 })
+    if (kind === 'every') expect(store.retainTimers(instance, clock).rows).toBe(1)
+  }, 60_000)
+
+  it('lets ordinary messages and another timer pass an older firing in backoff', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const count = () => (prompts.get(p.id) ?? []).length
+    const backedOff = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Backoff', message: 'Retry', everyMinutes: 30 })).timer as { id: string }
+    clock += 30 * 60_000
+    await control.tick()
+    await until(() => count() === 1)
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'error', error: 'boom' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
+    const notBefore = store.timerById(instance, backedOff.id)!.notBefore
+    const other = await heartbeat(m, p, { label: 'Other', delayMinutes: 31 })
+    clock += 30 * 60_000
+    store.fireTimer(instance, backedOff.id, clock)
+    expect(store.timerPendingRow(instance, backedOff.id)).toBeDefined()
+    store.message(instance, p.id, m.id, 'Ordinary after backoff', `backoff:${randomUUID()}`)
+    clock += 60_000
+    await control.tick()
+    await until(() => count() === 2)
+    expect(prompts.get(p.id)![1].text).toContain('Ordinary after backoff')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
+    await control.tick()
+    await until(() => count() === 3)
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: other.id })
+    expect(store.timerPendingRow(instance, backedOff.id)).toBeDefined()
+    expect(store.timerById(instance, backedOff.id)!.notBefore).toBe(notBefore)
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 120_000)
+
+  it.each(['chat', 'all', 'stop'] as const)('accounts missed held occurrences at the actual %s hold release', async (hold) => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const every = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Every', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
+    const once = await heartbeat(m, p)
+    if (hold === 'all') control.setAllHeld(true)
+    else if (hold === 'chat') control.setHold(p.id, true)
+    else {
+      runtime.prompt(p.id, { text: 'Work', attachments: [], mentions: [] })
+      await until(() => prompts.has(p.id))
+      await runtime.cancel(p.id, { kind: 'person' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      prompts.delete(p.id)
+    }
+    clock += 9 * 60_000
+    await control.tick()
+    clock += 22 * 60_000
+    // No held tick observes either due occurrence before Resume.
+    if (hold === 'all') control.setAllHeld(false)
+    else if (hold === 'chat') control.setHold(p.id, false)
+    else {
+      runtime.prompt(p.id, { text: 'Resume my work', attachments: [], mentions: [] })
+      await until(() => prompts.has(p.id))
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      prompts.delete(p.id)
+    }
+    expect(store.timerById(instance, once.id)).toMatchObject({ state: 'expired', reason: 'skipped_while_held', skipped: 1 })
+    expect(store.timerById(instance, every.id)).toMatchObject({ skipped: 1, nextAt: new Date(clock + 29 * 60_000).toISOString() })
+    // A due occurrence after release remains deliverable even if no tick ran
+    // between Resume and this next phase point.
+    clock += 30 * 60_000
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: every.id, missed: 0 })
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 120_000)
+
   it('retains ended timers for 30 days and admitted rows for 7, in bounded batches', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const live = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Live', message: 'Ping', everyMinutes: 30 })).timer as { id: string }

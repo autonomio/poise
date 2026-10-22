@@ -118,13 +118,21 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
   }
   container.querySelector('.chat-timers-add')!.addEventListener('submit', (event) => {
     event.preventDefault()
+    const submitted = { label: labelEl.value, message: messageEl.value, minutes: minutesEl.value, kind: kindEl.value }
     const minutes = Number(minutesEl.value)
     const input: TimerInput = { sessionId: session.id, label: labelEl.value, message: messageEl.value,
       ...(kindEl.value === 'once' ? { delayMinutes: minutes } : { everyMinutes: minutes }) }
     void actions.add(input).then(() => {
-      labelEl.value = ''
-      messageEl.value = ''
-      minutesEl.value = ''
+      // add() refetches and replaces the form. Clear its current copy only
+      // if the person has not started a different draft while it was pending.
+      const label = container.querySelector<HTMLInputElement>('.chat-timers-label')
+      const message = container.querySelector<HTMLTextAreaElement>('.chat-timers-message')
+      const minutes = container.querySelector<HTMLInputElement>('.chat-timers-minutes')
+      const kind = container.querySelector<HTMLSelectElement>('.chat-timers-kind')
+      if (label?.value === submitted.label && message?.value === submitted.message
+        && minutes?.value === submitted.minutes && kind?.value === submitted.kind) {
+        label.value = ''; message.value = ''; minutes.value = ''
+      }
       showError(null)
     }).catch(showError)
   })

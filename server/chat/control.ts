@@ -267,7 +267,10 @@ export class ChatControl {
       store.resumeDelivery(this.runtime.instance, envelope.sessionId)
       // The person's own message or queued task releases a Stop's hold; an
       // explicit Hold clears only on Resume.
-      store.releaseChatHold(this.runtime.instance, envelope.sessionId, 'stopped')
+      if (store.holds(this.runtime.instance).some(hold => hold.sessionId === envelope.sessionId && hold.cause === 'stopped')) {
+        this.accountHeldTimers((this.options.now ?? Date.now)(), envelope.sessionId)
+        store.releaseChatHold(this.runtime.instance, envelope.sessionId, 'stopped')
+      }
     }
     if (!['turn.finished', 'question.asked', 'permission.requested', 'error', 'session.closed'].includes(envelope.event.type)) return
     const parents = store.children(this.runtime.instance).filter(c => c.child === envelope.sessionId)
@@ -956,7 +959,7 @@ export class ChatControl {
    *  the message is paused, or the chat is `interrupted`, `error` or `closed`. */
   private deliver(now: number): void {
     const instance = this.runtime.instance
-    const page = store.pending(instance, this.deliveryAfter)
+    const page = store.pending(instance, this.deliveryAfter, now)
     let at = 0
     while (at < page.length) {
       if (this.stopped || this.runtime.draining) return
@@ -1110,16 +1113,31 @@ export class ChatControl {
     return timer
   }
 
+  /** Account through the release instant while the hold still exists, so
+   *  occurrences between the last tick and Resume cannot fire afterwards. */
+  private accountHeldTimers(now: number, sessionId?: string): void {
+    for (const timer of store.liveTimers(this.runtime.instance)) {
+      if (sessionId && timer.sessionId !== sessionId) continue
+      this.evaluateTimerHold(timer, now)
+    }
+  }
+
   setHold(sessionId: string, held: boolean): void {
     if (this.stopped) throw new ChatError(503, 'chat control is stopped', 'invalid')
     const record = this.session(sessionId)
-    if (held) store.holdChat(this.runtime.instance, record.id, 'held', (this.options.now ?? Date.now)())
-    else store.releaseChatHold(this.runtime.instance, record.id)
+    const now = (this.options.now ?? Date.now)()
+    if (held) store.holdChat(this.runtime.instance, record.id, 'held', now)
+    else {
+      this.accountHeldTimers(now, record.id)
+      store.releaseChatHold(this.runtime.instance, record.id)
+    }
   }
 
   setAllHeld(held: boolean): void {
     if (this.stopped) throw new ChatError(503, 'chat control is stopped', 'invalid')
-    store.setAllTimersHeld(this.runtime.instance, held, (this.options.now ?? Date.now)())
+    const now = (this.options.now ?? Date.now)()
+    if (!held) this.accountHeldTimers(now)
+    store.setAllTimersHeld(this.runtime.instance, held, now)
   }
 
   timersOf(sessionId: string): { timers: TimerView[], holds: ChatHold[], allHeld: { held: boolean, since: string | null } } {

@@ -53,6 +53,11 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   expect(sock.framesOf('timer.create')[0].command).toMatchObject(
     { type: 'timer.create', sessionId: 's1', label: 'Heartbeat', message: 'Are we green?', everyMinutes: 15 })
   await expect(pane.locator('.chat-timer')).toHaveCount(3)
+  await expect(pane.locator('.chat-timers-label')).toHaveValue('')
+  await expect(pane.locator('.chat-timers-message')).toHaveValue('')
+  await expect(pane.locator('.chat-timers-minutes')).toHaveValue('')
+  await pane.getByRole('button', { name: 'Add timer' }).click()
+  expect(sock.framesOf('timer.create')).toHaveLength(1)
 
   await pane.locator('.chat-timer[data-timer="timer-1"] .chat-timer-cancel').click()
   await expect.poll(() => sock.framesOf('timer.cancel').length).toBe(1)
@@ -120,6 +125,55 @@ test('holds and resumes all timers, shows scheduler outages, and refetches every
   // Nothing else touches the pane now: only the 30-second interval refetches it.
   const before = timersGets()
   await expect.poll(() => timersGets(), { timeout: 40_000 }).toBeGreaterThan(before)
+})
+
+test('keeps a new timer draft typed while the previous add is pending', async ({ page }) => {
+  const state = makeState([session({ id: 's1' })])
+  state.timers = { s1: timersData() }
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  const pane = page.locator('#chat-timers-pane')
+  await pane.locator('.chat-timers-label').fill('First')
+  await pane.locator('.chat-timers-message').fill('First message')
+  await pane.locator('.chat-timers-minutes').fill('15')
+  sock.autoAck = false
+  await pane.getByRole('button', { name: 'Add timer' }).click()
+  await expect.poll(() => sock.framesOf('timer.create').length).toBe(1)
+  await pane.locator('.chat-timers-label').fill('Next')
+  await pane.locator('.chat-timers-message').fill('Next message')
+  await pane.locator('.chat-timers-minutes').fill('30')
+  const created = timerView({ id: 'first', sessionId: 's1', label: 'First', message: 'First message', schedule: { kind: 'every', minutes: 15 } })
+  state.timers!.s1.timers.push(created)
+  sock.ack(sock.framesOf('timer.create')[0], true, '', undefined, { timer: created })
+  await expect(pane.locator('.chat-timer')).toHaveCount(1)
+  await expect(pane.locator('.chat-timers-label')).toHaveValue('Next')
+  await expect(pane.locator('.chat-timers-message')).toHaveValue('Next message')
+  await expect(pane.locator('.chat-timers-minutes')).toHaveValue('30')
+})
+
+test('recovers timer controls after a failed refetch returns unchanged data', async ({ page }) => {
+  const one = timerView({ id: 'timer-1', label: 'Check CI' })
+  const state = makeState([session({ id: 's1' })])
+  state.timers = { s1: timersData({ timers: [one] }) }
+  await installRoutes(page, state)
+  let unavailable = false
+  await page.route('**/api/chat/sessions/s1/timers', route => unavailable
+    ? route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } }) : route.fallback())
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  const pane = page.locator('#chat-timers-pane')
+  await expect(pane.locator('.chat-timer')).toHaveCount(1)
+  unavailable = true
+  sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'held' })
+  await expect(pane.getByRole('alert')).toContainText('Timers could not be loaded')
+  unavailable = false
+  sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'released' })
+  await expect(pane.locator('.chat-timer')).toHaveCount(1)
+  await expect(pane.locator('.chat-timers-add')).toBeVisible()
+  await expect(pane.getByRole('alert')).toBeHidden()
 })
 
 test('renders timer turns, timer changes and every wait cause with escaped labels', async ({ page }) => {

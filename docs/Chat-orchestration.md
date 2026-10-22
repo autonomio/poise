@@ -89,13 +89,17 @@ with their count, and the schedule keeps its phase.
 
 The person stays in charge. Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold
-until Resume. A timer whose turns fail backs off exponentially and trips
+until Resume. Releasing a hold skips occurrences through that release instant,
+including those since the last scheduler tick. A timer whose turns fail backs
+off exponentially without blocking other timers or messages on that chat and trips
 after three consecutive failures, with a note and a warning; re-arming starts
 it over, and tripping drops any firing still queued. A stopped or cut turn
 ends a one-shot and leaves an every-timer on its schedule; a turn that
 finishes after its timer ended changes nothing. Timers never target the
 Switchboard or a Poise change session, and only the person can change a
-timer the person set.
+timer the person set. Ended timers retain their history for 30 days; live timers
+retain admitted rows for seven days, preserving open-turn mappings until the
+turn outcome is recorded.
 
 ## Authority
 

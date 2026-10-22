@@ -141,7 +141,7 @@ export function inbox(instance: string, recipient: string, after = 0): InternalM
  *  oldest pending timer row. A hold excludes the recipient from both: while
  *  a chat is held, its timers skip their firings and turns other chats
  *  would start in it wait. The tick picks at most one row per recipient. */
-export function pending(instance: string, afterRecipient = ''): InternalMessage[] {
+export function pending(instance: string, afterRecipient = '', now = Date.now()): InternalMessage[] {
   const page = db.prepare(`SELECT ${INBOX_COLUMNS} FROM (
       SELECT ${INBOX_COLUMNS} FROM chat_control_inbox
       WHERE instance = ? AND state = 'pending' AND timer_id IS NULL
@@ -154,12 +154,14 @@ export function pending(instance: string, afterRecipient = ''): InternalMessage[
       WHERE i.instance = ? AND i.state = 'pending' AND i.timer_id IS NOT NULL
         AND i.seq = (SELECT MIN(seq) FROM chat_control_inbox
           WHERE instance = ? AND state = 'pending' AND timer_id IS NOT NULL AND recipient = i.recipient
-          AND timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active'))
+          AND timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active'
+            AND (not_before IS NULL OR not_before <= ?)))
         AND i.recipient IN (SELECT id FROM chat_sessions WHERE status IN ('idle','interrupted','error','closed'))
-        AND i.timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active')
+        AND i.timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active'
+          AND (not_before IS NULL OR not_before <= ?))
         AND i.recipient NOT IN (SELECT session FROM chat_control_holds WHERE instance = ?)
     ) ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient, seq LIMIT 100`)
-    .all(instance, instance, instance, instance, instance, instance, instance, instance, instance, afterRecipient) as InternalMessage[]
+    .all(instance, instance, instance, instance, instance, instance, instance, now, instance, now, instance, afterRecipient) as InternalMessage[]
   return page
 }
 export function pauseDelivery(instance: string, session: string): void {
@@ -587,7 +589,8 @@ export const sweepStaleTimers = db.transaction((instance: string, now: number): 
 })
 
 /** Bounded retention: an ended timer goes 30 days after `ended_at` with its
- *  inbox rows; a live timer's admitted rows go after 7 days. */
+ *  inbox rows; a live timer's admitted rows go after 7 days once their
+ *  turns finish. Open-turn mappings remain available for outcome accounting. */
 export const retainTimers = db.transaction((instance: string, now: number): { timers: number, rows: number } => {
   const ended = db.prepare(`SELECT id FROM chat_control_timers WHERE instance = ? AND state IN ${ENDED_STATES}
     AND ended_at <= ? ORDER BY ended_at LIMIT 100`).all(instance, now - 30 * 86_400_000) as Array<{ id: string }>
@@ -596,7 +599,9 @@ export const retainTimers = db.transaction((instance: string, now: number): { ti
     db.prepare('DELETE FROM chat_control_timers WHERE id = ?').run(timer.id)
   }
   const rows = db.prepare(`DELETE FROM chat_control_inbox WHERE instance = ? AND timer_id IS NOT NULL AND state = 'admitted'
-    AND admitted_at <= ? AND timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state IN ${LIVE_STATES}) LIMIT 500`)
+    AND admitted_at <= ? AND timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state IN ${LIVE_STATES})
+    AND NOT EXISTS (SELECT 1 FROM chat_sessions s WHERE s.instance = chat_control_inbox.instance
+      AND s.open_turn_id = chat_control_inbox.turn_id) LIMIT 500`)
     .run(instance, now - 7 * 86_400_000, instance).changes
   return { timers: ended.length, rows: Number(rows) }
 })
