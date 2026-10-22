@@ -438,27 +438,32 @@ async function capCacheDir(key: string, root: string, capBytes: number, now: num
   }
 }
 
-/** Enforce the mirror cap by removing whole mirrors, oldest first. A mirror
- *  is only ever removed whole, never thinned, so survivors stay valid and a
- *  removed one is simply fetched again. */
+/** Caller owns the mirror layout and its fcntl lock. Eviction must use that
+ *  same lock rather than removing owner directories from this process. */
 async function capMirrors(root: string, capBytes: number, now: number, dryRun: boolean, report: MaintenanceReport): Promise<void> {
-  const dirs = await listDirs(root)
-  if (!dirs.length) return
-  const sized = await Promise.all(dirs.map(async (dir) => {
-    const [bytes, mtimeMs] = await Promise.all([dirSize(dir), lstat(dir).then((info) => info.mtimeMs, () => 0)])
-    return { dir, bytes, mtimeMs }
-  }))
-  let total = sized.reduce((sum, mirror) => sum + mirror.bytes, 0)
-  if (total <= capBytes) return
-  for (const mirror of sized.filter((m) => now - m.mtimeMs >= CACHE_FRESH_MS).sort((a, b) => a.mtimeMs - b.mtimeMs)) {
-    if (total <= capBytes) break
-    const bytes = await removePath(mirror.dir, dryRun)
-    total -= bytes
-    report.caches.push({ path: mirror.dir, bytes })
-    report.reclaimedBytes += bytes
-  }
-  if (total > capBytes) {
-    report.held.push({ path: root, reason: `mirrors still ${(total - capBytes) / 1024 ** 2 | 0} MB over their cap; the rest is in use` })
+  if (!(await listDirs(root)).length) return
+  try {
+    const args = ['--prune-mirrors', root, '--cap-bytes', String(capBytes), '--now-ms', String(now), '--fresh-ms', String(CACHE_FRESH_MS)]
+    if (dryRun) args.push('--dry-run')
+    const { stdout } = await runFile('github-interface', args, { timeoutMs: 120_000, maxOutputBytes: 1024 * 1024 })
+    const result: unknown = JSON.parse(stdout)
+    if (!result || typeof result !== 'object' || !('removed' in result) || !Array.isArray(result.removed)
+      || !('held' in result) || !Array.isArray(result.held)) throw new Error('Caller mirror maintenance returned an invalid report')
+    for (const item of result.removed) {
+      if (!item || typeof item !== 'object' || !('path' in item) || typeof item.path !== 'string'
+        || !('bytes' in item) || typeof item.bytes !== 'number' || !Number.isFinite(item.bytes) || item.bytes < 0) {
+        throw new Error('Caller mirror maintenance returned an invalid removal')
+      }
+      report.caches.push({ path: item.path, bytes: item.bytes })
+      report.reclaimedBytes += item.bytes
+    }
+    for (const item of result.held) {
+      if (!item || typeof item !== 'object' || !('path' in item) || typeof item.path !== 'string'
+        || !('reason' in item) || typeof item.reason !== 'string') throw new Error('Caller mirror maintenance returned an invalid hold')
+      report.held.push({ path: item.path, reason: item.reason })
+    }
+  } catch (error) {
+    report.errors.push({ path: root, message: `Caller mirror maintenance failed: ${error instanceof Error ? error.message : String(error)}` })
   }
 }
 

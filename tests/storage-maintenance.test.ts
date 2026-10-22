@@ -39,6 +39,14 @@ async function age(path: string, ms: number): Promise<void> {
   await utimes(path, at, at)
 }
 
+async function ageTree(path: string, ms: number): Promise<void> {
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (entry.isDirectory()) await ageTree(join(path, entry.name), ms)
+    else await age(join(path, entry.name), ms)
+  }
+  await age(path, ms)
+}
+
 function claimsFor(status: string, updatedAt: string, extra: Partial<{ openTurn: boolean, queued: boolean }> = {}) {
   return () => [{ sessionId: 'session-1', status, updatedAt, openTurn: false, queued: false, ...extra }]
 }
@@ -404,19 +412,32 @@ describe('bounded caches', () => {
     await expect(lstat(join(pip, 'hot'))).resolves.toBeDefined()
   })
 
-  it('caps mirrors by removing whole mirrors, oldest first', async () => {
+  it('uses Caller to cap actual owner/repo.git mirrors while preserving owner and lock files', async () => {
     const mirrors = join(home, 'mirrors')
-    await seed(join(mirrors, 'stale.git'), [{ name: 'pack', bytes: 100, ageMs: 2 * DAY }])
-    await seed(join(mirrors, 'fresh.git'), [{ name: 'pack', bytes: 100, ageMs: 2 * DAY }])
-    await age(join(mirrors, 'stale.git'), 2 * DAY)
-    await age(join(mirrors, 'fresh.git'), 60_000)
+    const owner = join(mirrors, 'owner')
+    await mkdir(owner, { recursive: true })
+    const stale = join(owner, 'stale.git')
+    const fresh = join(owner, 'fresh.git')
+    git(root, 'init', '--quiet', '--bare', stale)
+    git(root, 'init', '--quiet', '--bare', fresh)
+    await ageTree(stale, 2 * DAY)
+    await ageTree(fresh, 2 * DAY)
+    await writeFile(join(fresh, 'objects', 'pack', 'recent'), 'active fetch\n')
+    await age(fresh, 2 * DAY)
+    const lock = join(owner, 'stale.lock')
+    await writeFile(lock, 'original lock inode\n')
+    const inode = (await lstat(lock)).ino
     const report = await maintenance.runStorageMaintenance({
       now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
-      claims: () => [], caps: { pip: 1, uv: 1, npm: 1, mirrors: 150 },
+      claims: () => [], caps: { pip: 1, uv: 1, npm: 1, mirrors: 1 },
     })
-    expect(report.caches.map((item) => item.path)).toEqual([join(mirrors, 'stale.git')])
-    await expect(lstat(join(mirrors, 'stale.git'))).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(lstat(join(mirrors, 'fresh.git', 'pack'))).resolves.toBeDefined()
+    expect(report.errors).toEqual([])
+    expect(report.caches.map((item) => item.path)).toEqual([stale])
+    await expect(lstat(stale)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(fresh, 'objects', 'pack', 'recent'), 'utf8')).resolves.toBe('active fetch\n')
+    expect((await lstat(lock)).ino).toBe(inode)
+    await expect(readFile(lock, 'utf8')).resolves.toBe('original lock inode\n')
+    await expect(lstat(owner)).resolves.toBeDefined()
   })
 })
 

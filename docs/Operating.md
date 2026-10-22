@@ -712,9 +712,14 @@ still restores dependencies on the next turn. Maintenance takes the checkout
 lease and rechecks turn claims before tidying its Git data. It expires
 incident snapshots after 30 days unless pinned with a
 `KEEP` file, and caps the pip, uv, npm and GitHub-mirror caches with
-least-recently-used eviction. A workspace with uncommitted or unpushed work,
-or with a turn running or queued, is never touched; everything kept is listed
+least-recently-used eviction. Workspace content with uncommitted or unpushed
+work stays held, and a running or queued turn blocks all workspace maintenance;
+everything kept is listed
 as held with the reason, and every run is logged with the bytes it reclaimed.
+GitHub mirrors are evicted through Caller's local `--prune-mirrors` behavior,
+which shares checkout's per-repository lock and keeps owner directories and
+lock files. A recent descendant write, a busy lock or uncertain bare-mirror
+identity holds the mirror; symlinks are never followed for deletion.
 
 ### Giving space back on a VM host
 
