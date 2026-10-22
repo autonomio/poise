@@ -57,6 +57,15 @@ describe('what the settings model accepts', () => {
     expect(setSettings({ org: 'a--b' }).org).toBe('a--b')
   })
 
+  it('grandfathers a stored consecutive-hyphen value a save does not change', () => {
+    mocks.store.set('me', 'a--b')
+    mocks.store.set('agentAccount', 'x--y')
+    expect(setSettings({ me: 'a--b', timezone: 'UTC' })).toMatchObject({ me: 'a--b', timezone: 'UTC' })
+    expect(setSettings({ agentAccount: 'x--y' }).agentAccount).toBe('x--y')
+    expect(() => setSettings({ me: 'c--d' })).toThrow(/single hyphens/)
+    expect(() => setSettings({ agentAccount: 'z--w' })).toThrow(/single hyphens/)
+  })
+
   it('allows clearing a field back to empty', () => {
     setSettings({ org: 'Vaquum', me: 'mikkokotila' })
     expect(setSettings({ org: '' }).org).toBe('')

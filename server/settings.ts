@@ -172,7 +172,12 @@ export function setSettings(partial: Partial<Settings>, catalog?: Catalog): Sett
     // The legacy org keeps the shape check only: saveAll() re-sends the
     // stored org on every save, and there is no org field left to fix a
     // stored value with, so tightening it here would brick Settings saves.
-    if (ACCOUNT_KEYS.has(k) && trimmed && (!GITHUB_NAME.test(trimmed) || (k !== 'org' && trimmed.includes('--')))) {
+    // A value identical to the stored one is likewise grandfathered past the
+    // consecutive-hyphen check: the account fields ride along on every save,
+    // so refusing a stored value would refuse every save on installs that
+    // stored one while the rule was permissive.
+    const unchanged = (k === 'me' || k === 'agentAccount') && trimmed === (getMeta(k) || '')
+    if (ACCOUNT_KEYS.has(k) && trimmed && (!GITHUB_NAME.test(trimmed) || (k !== 'org' && !unchanged && trimmed.includes('--')))) {
       throw new Error(`${k} must be a GitHub name: letters, digits and single hyphens`)
     }
     if (k === 'timezone' && trimmed && !knownTimeZone(trimmed)) {

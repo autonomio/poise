@@ -298,6 +298,26 @@ test('keeps your GitHub account and the agent account under GitHub in Settings',
   await expect(page.getByLabel('GitHub automation account')).toHaveValue('other-bot')
 })
 
+test('still saves Settings that keep stored consecutive-hyphen accounts', async ({ page }) => {
+  let settings: Record<string, unknown> = { org: 'acme', me: 'a--b', agentAccount: 'x--y', timezone: 'UTC', models: {} }
+  const posts: Array<Record<string, unknown>> = []
+  await page.route('**/api/settings', async (route) => {
+    if (route.request().method() === 'POST') {
+      posts.push(route.request().postDataJSON())
+      settings = { ...settings, ...posts.at(-1) }
+    }
+    await route.fulfill({ json: settings })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Menu', exact: true }).click()
+  await page.locator('[data-settings="general"]').click()
+  await expect(page.getByLabel('Your GitHub account')).toHaveValue('a--b')
+  await expect(page.getByLabel('GitHub automation account')).toHaveValue('x--y')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.locator('.st-status')).toHaveText('Saved.')
+  expect(posts).toHaveLength(1)
+})
+
 test('shows in Settings whether production is on main', async ({ page }) => {
   const deployed = 'b'.repeat(40)
   let production: Record<string, unknown> = {
