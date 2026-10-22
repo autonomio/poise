@@ -13,7 +13,9 @@ See [Chat orchestration](Chat-orchestration.md).
 ## Scope and migration
 
 Chat is a full view alongside Current, Swarm and Editor. Its sidebar stores
-named sessions; the transcript renders streamed prose, thinking when exposed,
+named sessions, each with when it was created on Poise's clock: the time today
+(`19:38`), the date alone on another day (`20 Oct`) and in another year
+(`31 Dec 2025`). The transcript renders streamed prose, thinking when exposed,
 tool activity, file diffs, questions and permission cards. The composer supports
 attachments, checkout-file mentions, advertised commands, draft preservation,
 steering during a turn and Stop. Capabilities belong to each native session:
@@ -157,7 +159,9 @@ kept, and the delete confirmation says which applies. Lock files are never
 deleted, and no server sweeps workspaces by its own session table: development
 and production share the chat root but keep separate session tables. A setting
 caps concurrently running Poise-local turns (default 4); a turn held by the
-cap shows `queued` with its own reason, "waiting for a free agent slot". The
+cap shows `queued` with its own reason, "waiting for a free agent slot".
+Raising the cap starts waiting turns at once, in queue order, up to the new
+cap; lowering it stops nothing, and new turns wait. The
 Switchboard's chat runs one turn at a time outside that cap, so it keeps
 reporting while every slot is busy, and the Manager's turns run outside it
 too, so supervision still runs when every slot is busy.

@@ -1,7 +1,7 @@
 import { createJevWorkspace } from './jev-workspace'
 import { cancelMotion, layout, motionValue, retire, spring } from '../motion'
 import { patchContent } from '../dom-patch'
-import { parseSwitchCreation, RESERVED_SWITCHES, type ChatSwitches } from '../chat-switches'
+import { MANAGER_SWITCH, parseSwitchCreation, RESERVED_SWITCHES, type ChatSwitches } from '../chat-switches'
 // Chat — one view for a full coding-agent conversation with any installed
 // agent, running as itself under a Poise-native interface. Sessions live on
 // the Poise server (server/chat/); this view is the window: a sidebar of
@@ -25,6 +25,8 @@ import type {
 import { AGENT_LABELS } from '../../server/chat/protocol'
 import { chatClient, ChatCommandError, ChatHttpError, type AgentsResponse, type AgentInfo } from '../chat-client'
 import { escapeHtml } from '../markdown'
+import { listTime } from '../clock'
+import { effectiveTimezone } from '../config'
 import { recoverDraft } from '../chat-draft-recovery'
 import { parseChatCommandChain as parseChain, commandBody } from '../../server/chat/commands'
 import { commandDraftText } from '../chat-command-draft'
@@ -37,6 +39,7 @@ import { createSwitchboardPane, ICON_SWITCHBOARD } from './chat-switchboard'
 import { renderNewSessionDialog } from './chat-new-session'
 import {
   createModel, applyEvent, addOptimisticTurn, dropOptimisticTurns, focusedPending, createTranscriptView, pickQuestionOption,
+  shortActorTitle, actorTitleAttr,
   type TranscriptModel, type TranscriptView,
 } from './chat-transcript'
 import { createComposer, emptyDraft, type Composer, type ComposerDraft } from './chat-composer'
@@ -197,11 +200,8 @@ function isRunning(status: SessionStatus): boolean {
 }
 
 function dateLabel(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
-  return sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  if (Number.isNaN(Date.parse(iso))) return ''
+  return listTime(iso, effectiveTimezone(), Date.now())
 }
 
 function agentFor(id: string): AgentInfo | undefined {
@@ -323,6 +323,7 @@ function renderShell(): void {
     onQuestion: (id, answers) => { void answerQuestion(id, answers) },
     onRevert: (diffId) => { void revertDiff(diffId) },
     onLoadDiff: (diffId) => { void loadCompleteDiff(diffId) },
+    onSelectSession: (id) => { void selectSession(id) },
   })
   transcriptEl.addEventListener('chat:rerender', () => queueRender())
 
@@ -596,6 +597,20 @@ function listed(id: string): boolean {
   return record?.context?.kind !== 'switchboard' || !!record.forkedFrom
 }
 
+/** The chat that created this one, when one did: the live creator while it
+ *  exists (following renames), the frozen snapshot once it is gone. */
+function creatorHtml(s: SessionRecord): string {
+  const createdBy = s.createdBy
+  if (!createdBy) return ''
+  const creator = sessions.get(createdBy.sessionId)?.record
+  if (creator) {
+    const text = creator.role === 'manager' ? 'from Manager' : `from chat "${shortActorTitle(creator.title)}"`
+    return `<div class="chat-session-creator" title="${escapeHtml(actorTitleAttr({ title: creator.title, sessionId: creator.id }))}">${escapeHtml(text)}</div>`
+  }
+  const text = createdBy.role === 'manager' ? 'from a deleted Manager' : `from a deleted chat "${shortActorTitle(createdBy.title)}"`
+  return `<div class="chat-session-creator" title="${escapeHtml(actorTitleAttr(createdBy))}">${escapeHtml(text)}</div>`
+}
+
 function sidebarHtml(): string {
   const visible = order.filter(listed)
   if (!visible.length) {
@@ -611,6 +626,7 @@ function sidebarHtml(): string {
     const waiting = s.status === 'waiting' || (s.pendingRequests?.length || 0) > 0
     return `<div class="chat-session-item${id === activeId ? ' active' : ''}${e.pending ? ' pending' : ''}" role="listitem" data-id="${escapeHtml(id)}" tabindex="0">`
       + `<div class="chat-session-title" title="${escapeHtml(sessionTitle(s))}">${escapeHtml(sessionTitle(s))}</div>`
+      + creatorHtml(s)
       + `<div class="chat-session-meta">`
       + (s.role === 'manager' ? `<span class="chat-pill chat-pill-manager">Manager</span>` : '')
       + `<span class="chat-pill">${escapeHtml(AGENT_LABELS[s.agent] || s.agent)} · ${escapeHtml(s.model)}</span>`
@@ -908,6 +924,11 @@ async function queueDraft(draft: ComposerDraft): Promise<void> {
   }
   const source = entry()
   const chain = parseChatCommandChain(draft.text)
+  if (chain.switches?.includes(MANAGER_SWITCH) && source?.record.role !== 'manager') {
+    restoreDraftTo(origin, draft)
+    if (activeId === origin) setNotice('/manager is not supported in regular chats.', 'info')
+    queueRender(); return
+  }
   const requestedModel = draft.model || chain.model || source?.record.model || freshModelIdentity
   const model = requestedModel || quickSessionModel(agentsInfo?.agents || [])?.identity || ''
   const agent = agentsInfo?.agents.find(agent => agent.models.some(option => option.identity === model))
@@ -1433,6 +1454,7 @@ async function sendPrompt(draft: ComposerDraft): Promise<void> {
     if (activeId !== origin) { restoreDraftTo(origin, draft); return }
   }
   const chain = parseChatCommandChain(draft.text)
+  if (chain.switches?.includes(MANAGER_SWITCH) && entry()?.record.role !== 'manager') { restoreDraftTo(origin, draft); setNotice('/manager is not supported in regular chats.', 'info'); return }
   if (chain.missingModel) { restoreDraftTo(origin, draft); setNotice('Choose a model from /model first.'); return }
   if (chain.review && !entry()) { restoreDraftTo(origin, draft); setNotice('There is no reply to review yet.'); return }
   if (chain.context === 'compact' && !entry() && !chain.review && !chain.text && !chain.switches?.length && !draft.attachments.length) {
@@ -1504,6 +1526,7 @@ async function steer(draft: ComposerDraft): Promise<void> {
   if (activeId !== e.record.id) { restoreDraftTo(e.record.id, draft); return }
   const chain = parseChatCommandChain(commandDraftText(draft))
   if (chain.create) { await createSavedSwitch(draft, e.record.id); return }
+  if (chain.switches?.includes(MANAGER_SWITCH) && e.record.role !== 'manager') { restoreDraftTo(e.record.id, draft); setNotice('/manager is not supported in regular chats.', 'info'); return }
   if (chain.context === 'reset' && !chain.queue) { await resetPrompt(draft, e.record.id); return }
   if (chain.queue || chain.context || chain.review || chain.model) { queueDraft(draft); return }
   try {
@@ -2039,7 +2062,8 @@ function render(): void {
   const distance = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
   const wasAtBottom = distance <= STICK_TO_BOTTOM_PX
   if (e) {
-    transcript.render(e.model, { showActivity, showReasoning, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId })
+    transcript.render(e.model, { showActivity, showReasoning, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId,
+      chats: [...sessions.values()].map((entry) => ({ id: entry.record.id, title: entry.record.title, role: entry.record.role })) })
   } else {
     transcript.clear()
   }
