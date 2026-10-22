@@ -146,8 +146,13 @@ export function compareCheckoutSnapshots(before: CheckoutSnapshot, after: Checko
     if (old.exists && old.text !== undefined && isSymlinkVersion(next)) { warnings.push(`${path}: replaced by a symlink`); continue }
     // A binary file created during the turn reverts by deletion, like any
     // other new file, so its creation stays quiet; removal or modification
-    // still warns because the lost bytes cannot be restored.
-    if (!old.exists && isBinaryVersion(next)) continue
+    // still warns because the lost bytes cannot be restored. A binary file
+    // sitting where a directory was still warns, since the recorded child
+    // deletions cannot be reverted while it occupies their parent path.
+    if (!old.exists && isBinaryVersion(next)) {
+      if ([...before.files.keys()].some(key => key.startsWith(`${path}/`))) warnings.push(`${path}: replaced by a binary file`)
+      continue
+    }
     if (old.text === undefined || next.text === undefined) {
       warnings.push(`${path}: ${old.reason || next.reason || 'a trustworthy before/after image is unavailable'}`)
       continue
