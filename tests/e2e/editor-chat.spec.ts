@@ -243,7 +243,7 @@ test("shows a document's earlier conversation and continues it", async ({ page }
 })
 
 test('sends the highlighted text as a quote with the next message and clears the chip', async ({ page }) => {
-  const { sock } = await editor(page)
+  const { state, sock } = await editor(page)
   await openDocChat(page)
   await selectLine(page, 'Opening paragraph.')
   const chip = pane(page).locator('.chat-surface-highlight')
@@ -255,6 +255,8 @@ test('sends the highlighted text as a quote with the next message and clears the
   await sock.subscribed(firstId)
   sock.push(firstId, { type: 'turn.started', turnId: 't1', prompt: { text: 'What does this mean?', attachments: [], mentions: [] } })
   sock.push(firstId, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+  const created = state.sessions.find((s) => s.id === firstId)!
+  sock.push(firstId, { type: 'session.updated', session: { ...created, status: 'idle' } })
   await expect(chip).toBeHidden()
   // A refused send keeps the chip with the draft.
   await selectLine(page, 'A final thought.')
