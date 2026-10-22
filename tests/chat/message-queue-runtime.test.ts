@@ -165,9 +165,11 @@ describe('deferred message execution', () => {
   it('reports a visible error when an unrun steer cannot be queued', async () => {
     const w = await world({ auto: false })
     w.c.dropSteers = true
-    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun-full', branch: { new: randomUUID() } })
-    await until(() => w.runtime.get(s.id)?.status === 'idle')
-    for (let i = 0; i < 8; i++) await w.runtime.enqueue(s.id, randomUUID(), input(`filler ${i} ${'x'.repeat(240_000)}`))
+    const s = w.s
+    // Fill the durable queue near its 2 MiB bound directly: eight ~240 KiB
+    // rows succeed, but the ~250 KiB deferred steer past them does not.
+    for (let i = 0; i < 8; i++) queues.enqueueMessage(s.id, { id: randomUUID(), sourceSessionId: s.id, prompt: input(`filler ${i} ${'x'.repeat(240_000)}`),
+      agent: 'grok', model: 'grok-4.6-high', effort: 'high', createdAt: new Date().toISOString(), state: 'waiting' })
     w.runtime.prompt(s.id, input('Long task'))
     await until(() => w.c.calls.length === 1)
     await w.runtime.steer(s.id, `scope note ${'y'.repeat(250_000)}`)
@@ -180,7 +182,7 @@ describe('deferred message execution', () => {
     // The queue still advances normally past the failed deferral.
     await until(() => w.c.calls.length === 2)
     expect(w.runtime.get(s.id)?.queue?.items).toHaveLength(8)
-  }, 60_000)
+  })
 
   it('enqueues during an active turn without steering it and waits through real pending questions', async () => {
     const w = await world({ auto: false })
