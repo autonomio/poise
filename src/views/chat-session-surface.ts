@@ -54,14 +54,25 @@ interface EditRetry {
   messageId: string
   index: number
   decision: EditDecision
-  edit: EditProposal
+  edit?: EditProposal
   error: string
+}
+
+interface SavedEdit {
+  turnId: string
+  messageId: string
+  index: number
+  afterSeq: number
 }
 
 interface EditState {
   deciding: Set<string>
   applied: Set<string>
   confirmed: Set<string>
+  baselines: Map<string, number>
+  saved: Map<string, SavedEdit>
+  storageKey: string | null
+  storageError: string | null
   retries: Map<string, EditRetry>
   listeners: Set<(key?: string, decision?: EditDecision) => void>
   revision: number
@@ -72,7 +83,50 @@ interface EditState {
 const pendingEdits = new Map<string, EditState>()
 
 function newEditState(): EditState {
-  return { deciding: new Set(), applied: new Set(), confirmed: new Set(), retries: new Map(), listeners: new Set(), revision: 0 }
+  return { deciding: new Set(), applied: new Set(), confirmed: new Set(), baselines: new Map(), saved: new Map(),
+    storageKey: null, storageError: null, retries: new Map(), listeners: new Set(), revision: 0 }
+}
+
+// localStorage is origin-scoped; the instance and session namespace prevents
+// another workspace from consuming the marker. Only card identity/cursor is
+// retained, never document text or the proposed edit.
+function restoreEditState(session: SessionRecord): EditState {
+  const pending = pendingEdits.get(session.id)
+  if (pending) return pending
+  const state = newEditState()
+  state.storageKey = `poise:editor-applied:v1:${session.instance}:${session.id}`
+  const raw = localStorage.getItem(state.storageKey)
+  if (!raw) return state
+  const saved: unknown = JSON.parse(raw)
+  if (!Array.isArray(saved)) throw new Error('Saved edit recovery markers are invalid')
+  for (const value of saved) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved edit recovery marker is invalid')
+    const item = value as Record<string, unknown>
+    if (typeof item.turnId !== 'string' || typeof item.messageId !== 'string' || typeof item.index !== 'number'
+      || !Number.isSafeInteger(item.index) || item.index < 0 || typeof item.afterSeq !== 'number'
+      || !Number.isSafeInteger(item.afterSeq) || item.afterSeq < 0) throw new Error('Saved edit recovery identity is invalid')
+    const marker: SavedEdit = { turnId: item.turnId, messageId: item.messageId, index: item.index, afterSeq: item.afterSeq }
+    const key = `${marker.turnId}:${marker.messageId}:${marker.index}`
+    state.applied.add(key)
+    state.baselines.set(key, marker.afterSeq)
+    state.saved.set(key, marker)
+    state.retries.set(key, { ...marker, decision: 'applied', error: 'The saved edit decision has not been acknowledged' })
+  }
+  return state
+}
+
+function persistEditState(state: EditState): void {
+  if (!state.storageKey) return
+  try {
+    if (state.saved.size) {
+      const raw = JSON.stringify([...state.saved.values()])
+      localStorage.setItem(state.storageKey, raw)
+      if (localStorage.getItem(state.storageKey) !== raw) throw new Error('Recovery marker write was not retained')
+    } else localStorage.removeItem(state.storageKey)
+    state.storageError = null
+  } catch (error) {
+    state.storageError = `Edit recovery could not be saved — ${(error as Error).message}. Keep this page open until the decision is recorded.`
+  }
 }
 
 interface ModelPlaceAnswer {
@@ -221,9 +275,10 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   function showEditRetry(): void {
     const retry = [...editState.retries].find(([key]) => !editState.deciding.has(key))?.[1]
-    if (retry) setNotice(`Decision failed — ${retry.error}`, [{ label: 'Retry', run: () => {
+    if (retry) setNotice(`Decision failed — ${retry.error}${editState.storageError ? `. ${editState.storageError}` : ''}`, [{ label: 'Retry', run: () => {
       void decideEdit(retry.turnId, retry.messageId, retry.index, retry.decision, retry.edit)
     } }])
+    else if (editState.storageError) setNotice(editState.storageError)
   }
 
   function editStateChanged(key?: string, decision?: EditDecision): void {
@@ -233,18 +288,20 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   }
 
   function notifyEditState(state: EditState, sessionId: string, key?: string, decision?: EditDecision): void {
+    persistEditState(state)
     state.revision++
     for (const listener of state.listeners) listener(key, decision)
     if (!state.deciding.size && !state.applied.size && !state.retries.size) pendingEdits.delete(sessionId)
   }
 
-  async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit: EditProposal): Promise<void> {
+  async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit?: EditProposal): Promise<void> {
     if (!record || !options.edits) return
     const sessionId = record.id
     const key = `${turnId}:${messageId}:${index}`
     const state = editState
     if (state.deciding.has(key)) return
     state.deciding.add(key)
+    if (!state.applied.has(key)) state.baselines.set(key, seenSeq)
     pendingEdits.set(sessionId, state)
     notifyEditState(state, sessionId)
     try {
@@ -252,6 +309,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
       // document was saved, a retry only records it, even for pure insertions.
       if (state.applied.has(key)) decision = 'applied'
       else if (decision === 'applied') {
+        if (!edit) { setNotice('The edit proposal is unavailable. Reopen this chat before accepting it.'); return }
         let outcome: 'applied' | 'conflict' | 'failed'
         try {
           outcome = await options.edits.accept(edit)
@@ -262,11 +320,18 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
         // A failed save records nothing; the Editor showed the save error.
         if (outcome === 'failed') return
         decision = outcome
-        if (outcome === 'applied') state.applied.add(key)
+        if (outcome === 'applied') {
+          state.applied.add(key)
+          state.saved.set(key, { turnId, messageId, index, afterSeq: state.baselines.get(key)! })
+          state.retries.set(key, { turnId, messageId, index, decision, edit, error: 'The saved edit decision has not been acknowledged' })
+          notifyEditState(state, sessionId)
+        }
       }
       try {
         await chatClient.send({ type: 'edit.decide', sessionId, turnId, messageId, index, decision })
         state.applied.delete(key)
+        state.saved.delete(key)
+        state.baselines.delete(key)
         state.retries.delete(key)
         notifyEditState(state, sessionId, key, decision)
         setNotice(null)
@@ -360,7 +425,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     adopting = pending
     record = session
     editState.listeners.delete(editStateChanged)
-    editState = pendingEdits.get(session.id) ?? newEditState()
+    editState = restoreEditState(session)
     editState.listeners.add(editStateChanged)
     earlierEl.hidden = true
     earlierEl.innerHTML = ''
@@ -619,9 +684,15 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     else if (envelope.event.type === 'edit.decided') {
       const event = envelope.event
       const key = `${event.turnId}:${event.messageId}:${event.index}`
-      if (editState.deciding.has(key)) editState.confirmed.add(key)
-      editState.applied.delete(key)
-      editState.retries.delete(key)
+      const baseline = editState.baselines.get(key)
+      if (baseline !== undefined && envelope.seq > baseline && (!editState.applied.has(key) || event.decision === 'applied')) {
+        if (editState.deciding.has(key)) editState.confirmed.add(key)
+        editState.applied.delete(key)
+        editState.saved.delete(key)
+        editState.retries.delete(key)
+        if (!editState.deciding.has(key)) editState.baselines.delete(key)
+        persistEditState(editState)
+      }
     }
     applyEvent(model, envelope)
   }

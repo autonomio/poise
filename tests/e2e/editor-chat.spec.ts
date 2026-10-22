@@ -280,6 +280,53 @@ for (const confirmation of ['live', 'replayed'] as const) {
   })
 }
 
+for (const reopen of ['remount', 'reload'] as const) {
+  test(`keeps a later saved insertion after replaying an old conflict on ${reopen}`, async ({ page }) => {
+    const { state, sock, saves } = await editor(page, TEXT, { preserveOnReload: true })
+    await openDocChat(page)
+    const id = await sendPaneMessage(page, sock, 'Add one sentence')
+    state.history[id] = await finishReply(sock, id, 'Add one sentence', INSERTION)
+    state.history[id].push(sock.push(id, { type: 'edit.decided', turnId: 't1', messageId: 'reply-1', index: 0, decision: 'conflict' }))
+    const card = paneTranscript(page).locator('.chat-edit-card').first()
+    await expect(card.locator('.chat-edit-card-badge-conflict')).toContainText('Conflict')
+    sock.autoAck = false
+    await card.getByRole('button', { name: 'Accept', exact: true }).click()
+    await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
+    sock.ack(sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
+    await expect(pane(page).locator('.chat-surface-notice')).toContainText('Decision unavailable')
+    const recoveryKey = `poise:editor-applied:v1:${state.sessions.find(s => s.id === id)!.instance}:${id}`
+    const marker = await page.evaluate(key => localStorage.getItem(key), recoveryKey)
+    expect(JSON.parse(marker!)).toEqual([{ turnId: 't1', messageId: 'reply-1', index: 0, afterSeq: state.history[id].at(-1)!.seq }])
+    expect(marker).not.toContain('Opening paragraph')
+    expect(marker).not.toContain('Added once')
+    if (reopen === 'reload') {
+      await page.reload()
+      await expect(page.locator('#editor-doc')).toContainText('Opening paragraph. Added once.')
+    } else await pane(page).getByRole('button', { name: 'Close chat', exact: true }).click()
+    await openDocChat(page)
+    await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    await expect(card.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
+    await expect(pane(page).getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+    sock.autoAck = true
+    await pane(page).getByRole('button', { name: 'Retry', exact: true }).click()
+    await expect.poll(() => sock.framesOf('edit.decide').length).toBe(2)
+    expect(sock.framesOf('edit.decide')[1].command).toMatchObject({ sessionId: id, decision: 'applied' })
+    await expect.poll(() => page.evaluate(key => localStorage.getItem(key), recoveryKey)).toBeNull()
+    expect(saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+    await expect(page.locator('#editor-doc')).not.toContainText('Added once. Added once.')
+    // Once the authoritative receipt exists, history owns the decision and
+    // another reload needs neither a local marker nor a retry.
+    state.history[id].push({ seq: sock.seq, sessionId: id, at: NOW,
+      event: { type: 'edit.decided', turnId: 't1', messageId: 'reply-1', index: 0, decision: 'applied' } })
+    await page.reload()
+    await expect(page.locator('#editor-doc')).toContainText('Opening paragraph. Added once.')
+    await openDocChat(page)
+    await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    await expect(pane(page).getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+    expect(saves).toHaveLength(1)
+  })
+}
+
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
   const { sock } = await editor(page)
   await openDocChat(page)

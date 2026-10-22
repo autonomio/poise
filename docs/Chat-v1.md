@@ -38,7 +38,12 @@ pi, image input, worktrees and parallel turns on the same checkout are outside v
 
 Editor edit cards disable Accept and Decline while saving and recording a
 decision. Failed saves allow another Accept; retrying a failed decision after
-a successful save records it without applying the edit again. Closing or moving
+a successful save records it without applying the edit again, across pane
+remounts and page reloads. Origin-local recovery markers contain only the
+workspace/session/card identity and the operation's transcript cursor; a later
+authoritative decision or acknowledgement removes them. Older decisions cannot
+clear a later saved edit. This retains a known successful save, not an atomic
+transaction between the server save and the client recovery write. Closing or moving
 a passage chat preserves its outstanding permission and question requests;
 the Needs you marker remains until every request has been answered.
 
