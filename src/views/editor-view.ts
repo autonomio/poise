@@ -8,6 +8,7 @@ import { ICON_PUBLISH, closePublishPanel, togglePublishPanel } from './editor-pu
 import { setGoogleConnectionResult, setGoogleNavigationGuard, takeGoogleConnectionResult, takeGooglePublishReturn } from '../google'
 import { EditorReviews } from './editor-reviews'
 import { GoogleDocuments } from './google-documents'
+import { chatClient } from '../chat-client'
 import { chatSidePane, registerEditorSurface } from './chat-side-pane'
 import { clearInlineThreads, closeInlineThread, dropThread, inlineThreadSubjectInView, keepThreadDraft, openInlineThread, syncThreadMarker } from './editor-inline-thread'
 import type { SurfaceOptions } from './chat-session-surface'
@@ -2685,11 +2686,14 @@ function applyEditToDoc(edit: EditProposal, slug: string): 'applied' | 'conflict
 
 // Accept runs the existing apply, then saves before the decision is
 // recorded: 'applied' means the saved document changed. A failed save
-// records nothing and shows the save error; 'conflict' can be retried.
+// withdraws the edit (best-effort revert) so Accept can be retried from a
+// clean document instead of conflicting with its own mutation; 'conflict'
+// can be retried.
 async function acceptEditForDoc(edit: EditProposal, slug: string): Promise<'applied' | 'conflict' | 'failed'> {
   if (applyEditToDoc(edit, slug) === 'conflict') return 'conflict'
   if (!await flushEditorSaves()) {
-    setMeta('The edit was applied but the document could not be saved, so the decision was not recorded. Resolve the save and Accept again.')
+    applyEditToDoc({ ...edit, old: edit.new, new: edit.old }, slug)
+    setMeta('The edit could not be saved, so it was withdrawn and the decision was not recorded. Resolve the save and Accept again.')
     return 'failed'
   }
   return 'applied'
@@ -4638,11 +4642,17 @@ if (typeof window !== 'undefined') {
       }
       void fetchDocs({ fresh: true })
       await loadDoc(detail.slug)
-      // Chat's read-only edit cards carry their session: open the document
-      // and the side pane on it.
+      // Chat's read-only edit cards carry their session: open the side pane
+      // on the session they came from (falling back to the document chat
+      // when it cannot be read).
       if (detail.session && currentSlug === detail.slug) {
         const d = currentDoc()
-        chatSidePane.toggle({ subject: { surface: 'editor-document', key: detail.slug, label: d?.title || detail.slug } })
+        let subject: ChatSubject = { surface: 'editor-document', key: detail.slug, label: d?.title || detail.slug }
+        try {
+          const found = await chatClient.fetchSession(detail.session, 0)
+          if (found.session.subject) subject = found.session.subject
+        } catch { /* fall through to the document chat */ }
+        chatSidePane.toggle({ subject })
       }
     })()
   })

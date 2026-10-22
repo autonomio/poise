@@ -72,18 +72,17 @@ export class EditorReviews {
     window.addEventListener('focus', () => { if (this.visible()) void this.synchronize() })
     window.addEventListener('resize', () => this.renderMarks())
     // Escape and outside presses close the thread, but never from inside it:
-    // the thread owns its own Escape and buttons.
+    // the thread owns its own Escape and buttons. Editing the document or
+    // working in the side pane (a moved thread, Use as reply) keeps it.
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return
-      if ((event.target as HTMLElement).closest?.('.editor-inline-thread')) return
+      const target = (event.target as HTMLElement).closest?.('.editor-inline-thread, #editor-doc, #chat-side-pane')
+      if (target) return
       this.close()
     })
     document.addEventListener('mousedown', (event) => {
       const target = event.target as HTMLElement
-      if (target.closest('.editor-inline-thread')) return
-      // Editing the document keeps the thread: like a passage thread, it
-      // stays open while the person types around it.
-      if (target.closest('#editor-doc')) return
+      if (target.closest('.editor-inline-thread, #editor-doc, #chat-side-pane')) return
       if (!this.list.contains(target) && !target.closest('[data-review]')) this.close()
     }, true)
   }

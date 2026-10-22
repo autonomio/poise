@@ -44,6 +44,8 @@ export interface SessionSurface {
   takeDraft(): ComposerDraft | null
   destroy(): void
   setHighlight(text: string | null): void
+  /** Highest event seq applied, for resubscribing without a replay. */
+  lastSeq(): number
 }
 
 interface ModelPlaceAnswer {
@@ -179,7 +181,11 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
    *  person's bubble in every surface, and it survives a reload. */
   function withHighlight(text: string): string {
     if (!highlight) return text
-    return `${highlight.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${text}`
+    const quote = highlight.split('\n').map((line) => `> ${line}`).join('\n')
+    // The runtime only parses a command at the very start of the prompt,
+    // so a command keeps the head and the quote follows it.
+    if (text.startsWith('/')) return `${text}\n\n${quote}`
+    return `${quote}\n\n${text}`
   }
 
   async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit: EditProposal): Promise<void> {
@@ -272,22 +278,23 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     }
   }
 
+  let seenSeq = 0
   async function adopt(session: SessionRecord): Promise<void> {
     record = session
     earlierEl.hidden = true
     earlierEl.innerHTML = ''
     transcript.clear()
     model = createModel()
-    let after = 0
+    seenSeq = 0
     for (let guard = 0; guard < 100; guard++) {
-      const page = await chatClient.fetchSession(session.id, after)
+      const page = await chatClient.fetchSession(session.id, seenSeq)
       record = page.session
       for (const envelope of page.events) {
-        if (envelope.seq > after) { applyEvent(model, envelope); after = envelope.seq }
+        if (envelope.seq > seenSeq) { applyEvent(model, envelope); seenSeq = envelope.seq }
       }
       if (!page.truncated || !page.events.length) break
     }
-    chatClient.subscribe(session.id, after)
+    chatClient.subscribe(session.id, seenSeq)
     setNotice(null)
     state()
     render()
@@ -517,6 +524,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   function onEvent(envelope: ChatEnvelope): void {
     if (destroyed || !record || envelope.sessionId !== record.id) return
+    if (envelope.seq > seenSeq) seenSeq = envelope.seq
     if (envelope.event.type === 'session.updated') record = envelope.event.session
     else if (envelope.event.type === 'session.closed') record = { ...record, status: 'closed' }
     applyEvent(model, envelope)
@@ -529,6 +537,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   return {
     session: () => record?.id ?? null,
+    lastSeq: () => seenSeq,
     focus: () => composer.focus(),
     takeDraft: () => {
       const draft = composer.getDraft()

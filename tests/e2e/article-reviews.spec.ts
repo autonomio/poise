@@ -312,6 +312,23 @@ test('fills the GitHub reply from a suggested reply without posting it', async (
   expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
 })
 
+test('uses a suggested reply from a review moved to the side pane', async ({ page }) => {
+  const { state, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  const id = await sendThreadMessage(page, sock, 'Draft a reply')
+  const reply = JSON.stringify({ chat: 'Here is a draft.', reply: 'Thanks — clarified in the latest update.' })
+  const envelopes = await finishReply(sock, id, 'Draft a reply', reply)
+  state.history[id] = envelopes
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  const paneTranscript = page.locator('#chat-side-pane .chat-surface-transcript')
+  await expect(paneTranscript).toContainText('Suggested GitHub reply')
+  // Clicking in the pane must not drop the review selection first.
+  await paneTranscript.getByRole('button', { name: 'Use as reply', exact: true }).click()
+  await page.locator('#chat-side-pane').getByRole('button', { name: 'Back to the review', exact: true }).click()
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Thanks — clarified in the latest update.')
+})
+
 test("opens an unlocated review's thread under the review list", async ({ page }) => {
   const missing: ArticleReview = { ...review(), id: 'missing', anchor: { quote: 'Absent passage.', before: '', after: '', unique: false }, outdated: true }
   await editorWithReviews(page, [missing])

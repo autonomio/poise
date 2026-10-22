@@ -238,6 +238,36 @@ test('shows Working, Needs you and New reply in the margin for a closed passage 
   await expect(markerCount(page)).toHaveCount(0)
 })
 
+test('shows no New reply marker for turns the open thread already showed', async ({ page }) => {
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'What does it say?')
+  const envelopes = await finishReply(sock, id, 'What does it say?', 'It says hello.')
+  // The transcript is recorded as well as pushed: closing resubscribes, and
+  // replaying these must not mark them new.
+  state.history[id] = envelopes
+  await expect(threadTranscript(page)).toContainText('It says hello.')
+  const created = state.sessions.find((s) => s.id === id)!
+  sock.push(id, { type: 'session.updated', session: { ...created, status: 'idle' } })
+  await thread(page).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(thread(page)).toBeHidden()
+  await expect(marker(page, 'New reply')).toHaveCount(0)
+  await expect(markerCount(page)).toHaveCount(0)
+  // Genuinely new activity still marks.
+  sock.push(id, { type: 'turn.finished', turnId: 't2', stopReason: 'end_turn' })
+  await expect(marker(page, 'New reply')).toBeVisible()
+})
+
+test("opens a passage session from Chat's Open in Editor instead of the document chat", async ({ page }) => {
+  const { state } = await editor(page, [annotation({ id: 'ann-1' })])
+  const passage = session({ id: 's-passage', title: 'Passage chat', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' })
+  state.sessions.unshift(passage)
+  state.history['s-passage'] = [env('s-passage', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'About this passage', attachments: [], mentions: [] } })]
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft', session: 's-passage' } })))
+  await expect(pane(page).locator('.chat-surface-transcript')).toContainText('About this passage')
+  expect(state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(0)
+})
+
 test('moves a passage chat to the side pane and back with its draft', async ({ page }) => {
   await editor(page, [annotation({ id: 'ann-1' })])
   await openThreadForMark(page, 'ann-1')

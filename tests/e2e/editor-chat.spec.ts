@@ -135,6 +135,13 @@ test('proposes edits in the document chat and applies an accepted one to the doc
   await expect.poll(() => saves.length).toBe(1)
   await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
   await expect(await feedback(page, 'Editor needs attention')).toContainText('could not be saved')
+  // The failed save withdrew the edit, so Accept can be retried cleanly.
+  await expect(page.locator('#editor-doc')).not.toContainText('A final thought, revised.')
+  failSaves.on = false
+  await cards.nth(1).getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect.poll(() => sock.framesOf('edit.decide').length).toBe(2)
+  expect(sock.framesOf('edit.decide')[1].command).toMatchObject({ decision: 'applied' })
+  await expect(page.locator('#editor-doc')).toContainText('A final thought, revised.')
 })
 
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
@@ -260,6 +267,14 @@ test('sends the highlighted text as a quote with the next message and clears the
   await expect(pane(page).locator('.chat-surface-notice')).toContainText('No thanks')
   await expect(chip).toBeVisible()
   sock.autoAck = true
+  // A command keeps the head of the prompt so the runtime parses it; the
+  // quote follows.
+  await paneInput(page).fill('/model opus-5-max')
+  await paneInput(page).press('Enter')
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(2)
+  const text = (sock.framesOf('prompt')[1].command as { text: string }).text
+  expect(text.startsWith('/model opus-5-max')).toBe(true)
+  expect(text).toContain('> A final thought.')
 })
 
 test('keeps the highlight chip when focus moves to the composer', async ({ page }) => {

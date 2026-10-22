@@ -244,7 +244,7 @@ function untrack(key: string): void {
 /** Watch a closed passage chat: later activity grows a marker, and the
  *  Editor's overlay pass moves it with its passage. Anything without news
  *  shows no marker. */
-function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null): void {
+function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null, afterSeq?: number): void {
   if (subject.surface !== 'editor-passage') return
   const key = subjectKey(subject)
   if (open?.key === key) return
@@ -264,8 +264,11 @@ function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement
     entry.last = line
   }
   if (entry.sessionId && !entry.unsubscribe) {
+    // Resubscribe from what the surface already showed: from 0 the server
+    // replays the whole transcript and every historical turn.finished would
+    // raise a spurious New reply marker.
     const id = entry.sessionId
-    chatClient.subscribe(id, chatClient.subscribedAfter(id) ?? 0)
+    chatClient.subscribe(id, afterSeq ?? chatClient.subscribedAfter(id) ?? 0)
     const off = chatClient.on('event', (envelope: ChatEnvelope) => {
       if (envelope.sessionId !== id) return
       const event = envelope.event
@@ -307,8 +310,9 @@ function fireClosed(state: OpenThread, returnCaret: boolean): void {
 }
 
 function closeState(state: OpenThread, returnCaret: boolean): void {
+  const afterSeq = state.surface.lastSeq()
   teardown(state)
-  if (state.sessionId) track(state.subject, state.sessionId, state.page, state.line, state.status)
+  if (state.sessionId) track(state.subject, state.sessionId, state.page, state.line, state.status, afterSeq)
   fireClosed(state, returnCaret)
 }
 
@@ -500,10 +504,11 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       const subject = state.subject
       const page = state.page
       const line = state.line
+      const afterSeq = state.surface.lastSeq()
       teardown(state)
       // The chat is open in the pane now; its marker reads In side pane.
       inPane.add(key)
-      track(subject, sessionId, page, line, status)
+      track(subject, sessionId, page, line, status, afterSeq)
       chatSidePane.close()
       chatSidePane.toggle({ subject, ...(draft ? { draft } : {}), back: () => {
         window.dispatchEvent(new CustomEvent('editor:inline-thread-back', { detail: { subject } }))
