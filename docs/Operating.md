@@ -554,6 +554,10 @@ reports which workspaces are still pending, with the release each runs, the
 one it waits for and how long it has waited, and fails: a deploy run is
 green only once the workspaces run what it deployed. `deploy/install.sh`
 proves the same after it starts the gateway.
+Both scripts capture workspace handles before building or retagging the image,
+then retain that inventory and add any workspaces observed during verification.
+A removed container stays pending until its replacement is verified; another
+healthy workspace cannot hide a missing one.
 
 The gateway upgrades those workspaces by itself, when it starts and every
 five minutes. Most upgrades change Poise but not the system it runs on, and

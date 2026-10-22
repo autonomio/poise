@@ -6,6 +6,7 @@ once every workspace serves the deployed commit, else pending with its age.
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,8 +42,17 @@ if args[:2] == ['image', 'inspect']:
 elif args[:1] == ['ps']:
     if not state.get('ps_ok', True):
         sys.exit(1)
-    for index, _ in enumerate(state['containers']):
-        print(f'c{index}')
+    inventories = state.get('inventories')
+    if inventories:
+        seen = state.get('inventories_seen', 0)
+        state['containers'] = inventories[min(seen, len(inventories) - 1)]
+        state['inventories_seen'] = seen + 1
+        save()
+    for index, line in enumerate(state['containers']):
+        if '--format' in args:
+            print(f'c{index} {line.split()[0]}')
+        else:
+            print(f'c{index}')
 elif args[:1] == ['inspect']:
     for name in args[3:]:
         print(state['containers'][int(name[1:])])
@@ -54,6 +64,9 @@ elif args[:1] == ['exec']:
     if not answers:
         sys.exit(1)
     print(answers[min(seen, len(answers) - 1)])
+elif args[:1] == ['build']:
+    state['containers'] = state['after_build']
+    save()
 else:
     sys.exit(2)
 '''
@@ -140,9 +153,11 @@ class PendingAgeTest(LibTest):
 
 
 class VerifyTest(LibTest):
-    def verify(self, state, sha=NEW, timeout=0):
-        script = (f'verify_timeout_seconds={timeout}; verify_poll_seconds=0; '
-                  f'verify_workspaces \'{sha}\' poise-runtime:latest')
+    def verify(self, state, sha=NEW, timeout=0, expire_after_poll=False):
+        clock = 'sleep() { SECONDS=$((SECONDS + verify_timeout_seconds)); }; ' if expire_after_poll else ''
+        script = (clock + f'verify_timeout_seconds={timeout}; verify_poll_seconds=0; '
+                  'expected=$(workspace_handles) || exit 1; '
+                  f'verify_workspaces \'{sha}\' poise-runtime:latest "$expected"')
         return self.lib(script, {'image_id': IMAGE_ID, 'containers': [], 'health': {}, **state})
 
     def test_skips_a_development_build_and_an_empty_server(self):
@@ -170,6 +185,77 @@ class VerifyTest(LibTest):
         self.assertIn(f'Every workspace serves {NEW}: alice.', result.stdout)
         execs = [call for call in self.calls() if call.startswith('exec ')]
         self.assertGreaterEqual(len(execs), 2)
+
+    def test_missing_workspace_before_first_poll_cannot_hide_behind_a_healthy_one(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice, bob], [alice]],
+                              'health': {'poise-ws-alice': [health(NEW)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing (waiting for its replacement)', result.stderr)
+        self.assertNotIn('Every workspace serves', result.stdout)
+
+    def test_workspace_seen_after_snapshot_remains_required_when_it_disappears(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice], [alice, bob], [alice]],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(OLD)]}},
+                             timeout=30, expire_after_poll=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing (waiting for its replacement)', result.stderr)
+        self.assertNotIn('Every workspace serves', result.stdout)
+
+    def test_remove_create_gap_waits_and_recovers_only_after_replacement_is_verified(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
+        replacement = f'bob {IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice, bob], [alice], [alice, replacement]],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(NEW)]}}, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'Every workspace serves {NEW}: alice bob.', result.stdout)
+        self.assertTrue(any(call.startswith('exec poise-ws-bob ') for call in self.calls()))
+
+    def test_all_workspaces_missing_before_first_poll_remain_pending(self):
+        result = self.verify({'inventories': [[f'alice {IMAGE_ID} true /poise-ws-alice',
+                                                f'bob {IMAGE_ID} true /poise-ws-bob'], []]})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('alice: missing', result.stderr)
+        self.assertIn('bob: missing', result.stderr)
+        self.assertNotIn('No workspace exists yet.', result.stdout)
+        self.assertNotIn('Every workspace serves', result.stdout)
+
+    def test_operator_scripts_capture_workspaces_before_build_can_remove_them(self):
+        # Execute the real entrypoints. Building retags the image, which can
+        # trigger even the old gateway before compose replaces that gateway.
+        directory = os.path.join(self.work.name, 'operator')
+        os.mkdir(directory)
+        with open(os.path.join(directory, 'lib.sh'), 'w') as file:
+            file.write(f'. {shlex.quote(LIB)}\n'
+                       'require_linux() { :; }\nrequire_docker() { :; }\n'
+                       'require_env_file() { require_free_ports() { :; }; }\n'
+                       'env_value() { :; }\nproxy_listen() { :; }\n'
+                       f'source_sha() {{ printf %s {NEW}; }}\n'
+                       'runtime_image() { printf %s poise-runtime:latest; }\n'
+                       'build_runtime_image() { docker build; }\n'
+                       'compose() { :; }\nwait_for_gateway() { :; }\n'
+                       'check_gateway_networks() { :; }\nprune_docker_storage() { :; }\n'
+                       'verify_timeout_seconds=0\nverify_poll_seconds=0\n')
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
+        for name, args in [('install.sh', []), ('upgrade.sh', ['--no-pull'])]:
+            with self.subTest(script=name):
+                target = os.path.join(directory, name)
+                with open(os.path.join(ROOT, 'deploy', name)) as source, open(target, 'w') as output:
+                    output.write(source.read())
+                with open(self.state, 'w') as file:
+                    json.dump({'image_id': IMAGE_ID, 'containers': [alice, bob], 'after_build': [alice],
+                               'health': {'poise-ws-alice': [health(NEW)]}, 'calls': []}, file)
+                env = {key: value for key, value in os.environ.items() if not key.startswith(('POISE_', 'COMPOSE_'))}
+                env.update(PATH=f'{self.bin}{os.pathsep}{env["PATH"]}', FAKE_DOCKER_STATE=self.state)
+                result = subprocess.run(['bash', target, *args], capture_output=True, text=True, env=env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('bob: missing', result.stderr)
+                self.assertNotIn('Every workspace serves', result.stdout)
 
     def test_reports_a_stuck_switch_as_pending_instead_of_success(self):
         result = self.verify({
@@ -221,7 +307,8 @@ class VerifyAgeTest(LibTest):
     def test_reports_how_long_the_switch_has_been_pending(self):
         since = (datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)).isoformat().replace('+00:00', 'Z')
         script = ('verify_timeout_seconds=0; verify_poll_seconds=0; '
-                  f'verify_workspaces \'{NEW}\' poise-runtime:latest')
+                  'expected=$(workspace_handles) || exit 1; '
+                  f'verify_workspaces \'{NEW}\' poise-runtime:latest "$expected"')
         result = self.lib(script, {'image_id': IMAGE_ID,
                                    'containers': [f'alice {IMAGE_ID} true /poise-ws-alice'],
                                    'health': {'poise-ws-alice': [health(OLD, desired=NEW, installed=NEW, since=since)]}})

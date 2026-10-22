@@ -246,6 +246,22 @@ wait_for_gateway() {
 verify_timeout_seconds=600
 verify_poll_seconds=10
 
+# Capture the expected handles before building/retagging the runtime image:
+# even the old gateway can notice that tag and start replacing containers.
+# Container IDs change during replacement; these workspace labels do not.
+workspace_handles() {
+  local lines container handle handles=''
+  lines=$(docker ps --all --filter label=poise.managed=true --format '{{.ID}} {{.Label "poise.workspace"}}') \
+    || die "cannot list the managed workspaces."
+  if [ -n "$lines" ]; then
+    while read -r container handle; do
+      [ -n "$handle" ] || die "managed container $container has no poise.workspace label."
+      handles="$handles$handle "
+    done <<<"$lines"
+  fi
+  printf '%s' "$handles"
+}
+
 # The string value of KEY in the flat JSON OBJECT, or empty when null or
 # absent. Health answers hold only release names, ISO times and nulls under
 # these keys, so no value carries a quote.
@@ -302,19 +318,15 @@ pending_line() {
 # reports what is still pending, with its age, instead of success. A
 # development build (no SHA) has no release to prove.
 verify_workspaces() {
-  local sha=$1 image=$2
-  local image_id ids lines pending waiting serving deadline announced seen
+  [ $# -eq 3 ] || die "verify_workspaces needs the workspace handles captured before building the image."
+  local sha=$1 image=$2 expected=$3
+  local image_id ids lines pending waiting serving deadline announced observed
   local handle id running name health active desired installed has_installed since
   if [ -z "$sha" ]; then
     say "This is a development build, which reports no release; skipping workspace verification."
     return 0
   fi
   image_id=$(docker image inspect --format '{{.Id}}' "$image") || die "cannot read the workspace image $image."
-  ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
-  if [ -z "$ids" ]; then
-    say "No workspace exists yet."
-    return 0
-  fi
   say "Waiting for every workspace to serve $sha."
   deadline=$((SECONDS + verify_timeout_seconds))
   announced=$SECONDS
@@ -322,7 +334,7 @@ verify_workspaces() {
     pending=''
     waiting=''
     serving=''
-    seen=0
+    observed=''
     # The gateway replaces containers as it recreates them, so list them anew every poll.
     ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
     if [ -n "$ids" ]; then
@@ -331,8 +343,11 @@ verify_workspaces() {
         || die "cannot inspect the managed workspaces."
       while read -r handle id running name; do
         name=${name#/}
-        handle=${handle:-$name}
-        seen=$((seen + 1))
+        [ -n "$handle" ] || die "managed container $name has no poise.workspace label."
+        observed="$observed$handle "
+        # New workspaces join the obligation; a disappearing container never
+        # removes one captured before the upgrade or seen in an earlier poll.
+        if [[ " $expected" != *" $handle "* ]]; then expected="$expected$handle "; fi
         if [ "$running" = true ]; then
           if health=$(docker exec "$name" curl -fsS --max-time 10 http://127.0.0.1:5555/api/service/health 2>/dev/null); then
             active=$(health_field "$health" release)
@@ -358,15 +373,21 @@ verify_workspaces() {
         waiting="$waiting$handle "
       done <<<"$lines"
     fi
-    # No containers at all is a recreate in flight, not a converged deploy.
-    if [ -z "$pending" ] && [ "$seen" -gt 0 ]; then
+    for handle in $expected; do
+      if [[ " $observed" != *" $handle "* ]]; then
+        pending="$pending  $handle: missing (waiting for its replacement)\n"
+        waiting="$waiting$handle "
+      fi
+    done
+    if [ -z "$expected" ]; then
+      say "No workspace exists yet."
+      return 0
+    fi
+    if [ -z "$pending" ]; then
       say "Every workspace serves $sha: ${serving% }."
       return 0
     fi
     if [ "$SECONDS" -ge "$deadline" ]; then
-      if [ "$seen" -eq 0 ]; then
-        die "the deploy of $sha is still pending after ${verify_timeout_seconds}s: no managed workspace exists."
-      fi
       die "the deploy of $sha is still pending after ${verify_timeout_seconds}s: these workspaces do not serve it yet:
 $(printf '%b' "$pending")"
     fi
