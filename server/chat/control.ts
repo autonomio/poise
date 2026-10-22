@@ -18,10 +18,12 @@ import { actorOf, nativeName } from './actors'
 import type { ChatActor, ChatEnvelope, ChatHold, PersonActor, PoiseActor, Question, SessionRecord, TimerInput, TimerSummary, TimerView, TurnSource } from './protocol'
 import { findEvent } from './storage'
 import { ChatError, type ChatRuntime } from './runtime'
-import { getEnabledMap, getBehaviorsRuntimeHealth } from '../behaviors'
+import { GREY_CI_INTENT_KEY, getEnabledMap, getBehaviorsRuntimeHealth } from '../behaviors'
 import * as store from './control-store'
 import { isSwitchboardSession } from './switchboard-store'
 import { SWITCHBOARD_LOOKUPS, SWITCHBOARD_OPERATIONS, SWITCHBOARD_PERSON, SWITCHBOARD_READS, type SwitchboardControl } from './switchboard'
+import { BEHAVIOR_KEYS } from '../../src/behavior-types'
+import { organizationArgs, organizationForRepository } from '../organizations'
 
 const PATH = '/api/chat/control'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -213,6 +215,38 @@ function ciWatched(ci: CiObservation): unknown {
   return ci.failing.length > 0 ? { head: ci.head, failing: ci.failing } : { failing: ci.failing }
 }
 
+/** A bound target's state as the datastore has it; unknown when the
+ *  datastore has no such target or cannot be asked, so the monitor wakes
+ *  as before instead of dropping a notice it cannot place. */
+export type WorkTargetStatus = 'open' | 'closed' | 'merged' | 'unknown'
+export async function readWorkTargetStatus(target: store.WorkTarget): Promise<WorkTargetStatus> {
+  const org = organizationForRepository(target.repo)
+  if (!org) return 'unknown'
+  try {
+    const view = target.kind === 'pull' ? 'pr' : 'issue'
+    const { stdout } = await runFile('github-datastore',
+      organizationArgs(org, ['view', view, '--repo', target.repo, '--number', String(target.number), '--format', 'json']),
+      { timeoutMs: 30_000, maxOutputBytes: 1024 * 1024 })
+    const parsed: unknown = JSON.parse(stdout)
+    if (!Array.isArray(parsed) || parsed.length > 1) return 'unknown'
+    const row = parsed[0] as { repo?: unknown, number?: unknown, status?: unknown } | undefined
+    if (!row || String(row.repo ?? '').toLowerCase() !== target.repo || Number(row.number) !== target.number) return 'unknown'
+    const status = String(row.status ?? '')
+    return status === 'open' || status === 'closed' || status === 'merged' ? status : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** Automation's own keys: the behaviors plus the grey-CI recovery intents,
+ *  which carry launch state outside any behavior key. Anything else in
+ *  behavior_seen is human activity and still wakes a closed target. Panel
+ *  slots share their behavior's key before the colon, so they stay automation. */
+const AUTOMATION_KEYS = new Set<string>([...(BEHAVIOR_KEYS as readonly string[]), GREY_CI_INTENT_KEY])
+function humanOnly(actionable: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return actionable.filter(row => !AUTOMATION_KEYS.has(String(row.key ?? '').split(':')[0]))
+}
+
 export class ChatControl {
   private readonly secret = randomBytes(32)
   private origin = ''
@@ -378,7 +412,7 @@ export class ChatControl {
         ...(timer.reason ? { reason: timer.reason } : {}), ...(error ? { error } : {}) } })
   }
 
-  constructor(private readonly runtime: ChatRuntime, private readonly options: { ci?: typeof readWorkCi, now?: () => number, switchboard?: SwitchboardControl } = {}) {
+  constructor(private readonly runtime: ChatRuntime, private readonly options: { ci?: typeof readWorkCi, targetStatus?: typeof readWorkTargetStatus, now?: () => number, switchboard?: SwitchboardControl } = {}) {
     runtime.on('event', this.onEvent)
     runtime.on('deleted', this.onDeleted)
   }
@@ -805,18 +839,9 @@ export class ChatControl {
           detail: 'Read the complete supervision instruction and work bindings with the list operation before acting.' }), now)
       })
     }
-    for (const binding of store.bindings(instance)) {
-      if (this.stopped) return
-      this.isolate('binding', binding.target, () => {
-        if (!this.runtime.ownsSession(binding.session)) { store.forgetSession(instance, binding.session, now); return }
-        const target = store.workTarget(binding.target)
-        const local = this.workOperations(target)
-        const actionable = actionableOperations(local.operations)
-        this.observe(binding, `behavior:${target.url}`, { kind: 'behavior', target: target.url, ...local }, now, actionable.length > 0, false, actionable)
-      })
-    }
-    // CI reads run in their own pass, started at most once at a time and
-    // never awaited here, so a slow read never delays timers or delivery.
+    // Binding observation and CI run in their own pass, started at most once
+    // at a time and never awaited here: target-status and CI reads cannot
+    // delay timers or delivery.
     this.kickCiPass()
   }
 
@@ -854,16 +879,35 @@ export class ChatControl {
     } while (this.ciQueued && !this.stopped)
   }
 
-  /** Read only claimed targets, once per five minutes, with no browser-driven polling. */
+  /** Observe claimed targets in the background, caching remote reads for five minutes. */
   private async runCiPass(): Promise<void> {
     const instance = this.runtime.instance
     for (const binding of store.bindings(instance)) {
       if (this.stopped) return
-      const target = store.workTarget(binding.target)
-      if (target.kind !== 'pull') continue
       const now = (this.options.now ?? Date.now)()
+      if (!this.runtime.ownsSession(binding.session)) { store.forgetSession(instance, binding.session, now); continue }
+      const target = store.workTarget(binding.target)
+      try {
+        const local = this.workOperations(target)
+        let actionable = actionableOperations(local.operations)
+        let initiallyActionable = actionable.length > 0
+        // A closed or merged target drops late automation bookkeeping; only
+        // human activity still wakes. The datastore is read only when there
+        // is something to drop, so bookkeeping-only ticks stay local.
+        if (initiallyActionable) {
+          const status = await this.workTargetStatus(target, now)
+          if (status === 'closed' || status === 'merged') {
+            actionable = humanOnly(actionable)
+            initiallyActionable = actionable.length > 0
+          }
+        }
+        this.observe(binding, `behavior:${target.url}`, { kind: 'behavior', target: target.url, ...local }, now, initiallyActionable, false, actionable)
+      } catch (error) { this.itemFailed('binding', binding.target, error) }
+      if (target.kind !== 'pull') continue
       const previous = store.observation(instance, `ci:${target.url}`)
       if (previous && now - previous.checked_at < CI_INTERVAL) continue
+      const ciStatus = await this.workTargetStatus(target, now)
+      if (ciStatus === 'closed' || ciStatus === 'merged') continue
       try {
         const ci = await (this.options.ci ?? readWorkCi)(target)
         const data = { kind: 'ci', target: target.url, head: ci.head, failing: ci.failing }
@@ -1163,6 +1207,17 @@ export class ChatControl {
       WHERE launch_repo = ? AND launch_pr = ? AND ((? = 'issues' AND launch_behavior = 'issue_review') OR (? = 'pull' AND COALESCE(launch_behavior, '') <> 'issue_review'))
       ORDER BY key, launch_call_id LIMIT 10`).all(target.repo, target.number, target.kind, target.kind)
     return { operations, details: '/api/behaviors', bounded: true }
+  }
+
+  /** Bound targets' states, cached for five minutes like CI reads. */
+  private readonly targetStatusCache = new Map<string, { status: WorkTargetStatus, expiry: number }>()
+  private async workTargetStatus(target: store.WorkTarget, now: number): Promise<WorkTargetStatus> {
+    const cached = this.targetStatusCache.get(target.url)
+    if (cached && cached.expiry > now) return cached.status
+    const status = await (this.options.targetStatus ?? readWorkTargetStatus)(target)
+    for (const [url, entry] of this.targetStatusCache) if (entry.expiry <= now) this.targetStatusCache.delete(url)
+    this.targetStatusCache.set(target.url, { status, expiry: now + CI_INTERVAL })
+    return status
   }
 
   async stop(runtimeStopped?: Promise<void>): Promise<void> {
