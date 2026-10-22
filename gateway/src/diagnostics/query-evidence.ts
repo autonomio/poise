@@ -31,7 +31,10 @@ function matches(event: LogEvent, selector: EvidenceSelector): boolean {
     const canonicalCause = (value: string) => materialFailureCause(failureCause(value).replace(/[\x00-\x1f\x7f]/g, ' '))
     const expected = canonicalCause(selector.cause)
     const tail = event.stderr?.trim().split('\n').pop()?.trim()
-    const candidates = [event.message, event.stderr ?? '', tail ? `${event.message}: ${tail}` : event.message]
+    // The selected-cause summary health stores for a multiline stderr, next
+    // to the legacy last-line form it replaced.
+    const selected = event.stderr?.trim() ? `${event.message}: ${failureCause(event.stderr)}` : event.message
+    const candidates = [event.message, event.stderr ?? '', tail ? `${event.message}: ${tail}` : event.message, selected]
     if (!candidates.some((cause) => canonicalCause(cause) === expected)) return false
   }
   return true

@@ -46,6 +46,23 @@ describe('retained exact-key association', () => {
       expect(db.query(access).total).toBe(2)
     } finally { db.close() }
   })
+  it('joins a selected-cause summary to its multiline stderr while the legacy last-line form still joins', () => {
+    const stderr = 'error: GitHub 403 rate-limit: {\'x-ratelimit-resource\': \'core\', \'x-ratelimit-remaining\': \'0\', '
+      + '\'x-ratelimit-reset\': \'1800000000\'} body={\n\t"message": "API rate limit exceeded for user ID 42.",\n\t"status": "403"\n}'
+    const summary = 'Command failed (1): github-interface: GitHub 403 rate-limit '
+      + '{\'x-ratelimit-resource\': \'core\', \'x-ratelimit-remaining\': \'0\', \'x-ratelimit-reset\': \'1800000000\'}: '
+      + 'API rate limit exceeded for user ID 42.'
+    const db = new DiagnosticStore(':memory:')
+    try {
+      const event = normalize({ id: 'quota-check', workspace: 'alice', source: 'poise', level: 'error',
+        operation: 'github-interface', message: 'Command failed (1): github-interface', stderr, correlationId })!
+      db.append([event])
+      const selector = { source: 'poise' as const, correlationId, cause: summary }
+      expect(joinEvidence(db, access, [selector])[0].evidence?.eventId).toBe(event.id)
+      expect(joinEvidence(db, access, [{ ...selector, cause: 'Command failed (1): github-interface: }' }])[0].evidence?.eventId).toBe(event.id)
+      expect(joinEvidence(db, access, [{ ...selector, cause: 'Command failed (1): github-interface: something else' }])[0].evidence).toBeUndefined()
+    } finally { db.close() }
+  })
   it.each(['precise\nprovider cause', 'precise\tprovider cause'])('matches decoded control characters symmetrically: %j', (message) => {
     const db = new DiagnosticStore(':memory:')
     try {
