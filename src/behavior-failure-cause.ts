@@ -3,7 +3,7 @@
 // holds a brace: a Grok balance error showed as "Internal error: {" or "}".
 
 import { terminalProviderMessage } from '../gateway/src/diagnostics/material-cause'
-export { failureCause, jsonMessageCause, terminalProviderMessage } from '../gateway/src/diagnostics/material-cause'
+export { failureCause, jsonMessageCause, lastCauseLine, terminalProviderMessage } from '../gateway/src/diagnostics/material-cause'
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
 export interface DiagnosticClassification { severity: DiagnosticSeverity; code: string }

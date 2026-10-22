@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { failureCause, jsonMessageCause, selectFailureCause, terminalProviderMessage } from '../src/diagnostics/material-cause.js'
+import { failureCause, jsonMessageCause, lastCauseLine, selectFailureCause, terminalProviderMessage } from '../src/diagnostics/material-cause.js'
 
 // The shared cause selector behind health summaries, rail details and
 // retained-evidence joins: select first, redact and bound afterwards.
@@ -30,6 +30,11 @@ describe('shared failure cause selection', () => {
     const stream = `${QUOTA}\n{"type":"error","message":"Reconnecting..."}\n{"type":"turn.failed","error":{"message":"Selected model is at capacity."}}`
     expect(selectFailureCause(stream)).toBe('Selected model is at capacity.')
     expect(terminalProviderMessage(stream)).toBe('Selected model is at capacity.')
+  })
+  it('reads past a link-only tail to the line that names the cause', () => {
+    expect(lastCauseLine('error: not logged in\nhttps://example.com/login')).toBe('error: not logged in')
+    expect(lastCauseLine('{\n}')).toBeNull()
+    expect(lastCauseLine('')).toBeNull()
   })
   it('bounds only the display form, never the selected text', () => {
     const cause = selectFailureCause(`error: GitHub 500: {"message":"${'x'.repeat(500)}"}`)

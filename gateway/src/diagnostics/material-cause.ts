@@ -69,6 +69,20 @@ export function selectFailureCause(error: string): string | null {
   return terminalProviderMessage(error) ?? jsonMessageCause(error)
 }
 
+// The last stderr line that can be a cause. Undecoded JSON fragments, bare
+// punctuation and bare links name no cause, so the outer error stands alone.
+export function lastCauseLine(stderr: string): string | null {
+  const lines = stderr.split('\n').map((line) => line.trim()).filter((line) => line)
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]!
+    if (line.startsWith('{') || line.startsWith('"')) continue
+    if (/^[{}\[\](),:;."'\s\-_=]+$/.test(line)) continue
+    if (/^https?:\/\/\S+$/.test(line)) continue
+    return line
+  }
+  return null
+}
+
 export function failureCause(error: string): string {
   const selected = selectFailureCause(error)
   if (selected) return selected.slice(0, 300)

@@ -1,4 +1,4 @@
-import { classifyBehaviorDiagnostic, diagnosticClassification, jsonMessageCause, terminalProviderMessage } from '../src/behavior-failure-cause'
+import { classifyBehaviorDiagnostic, diagnosticClassification, jsonMessageCause, lastCauseLine, terminalProviderMessage } from '../src/behavior-failure-cause'
 import { environmentSecrets, redact } from '../gateway/src/diagnostics/redaction.mjs'
 import type { fetchAgentLogSnapshot } from './agent'
 import type { BehaviorDeadLetter, BehaviorLaunchClaim } from './db'
@@ -37,20 +37,6 @@ export function behaviorIncidentDiagnostics(incidents: BehaviorDeadLetter[], sna
       held: !noAction, errorCode: exact ? call.error_code : null,
     }) }
   })
-}
-
-// The last stderr line that can be a cause. Undecoded JSON fragments, bare
-// punctuation and bare links name no cause, so the outer error stands alone.
-function lastCauseLine(stderr: string): string | null {
-  const lines = stderr.split('\n').map((line) => line.trim()).filter((line) => line)
-  for (let index = lines.length - 1; index >= 0; index--) {
-    const line = lines[index]!
-    if (line.startsWith('{') || line.startsWith('"')) continue
-    if (/^[{}\[\](),:;."'\s\-_=]+$/.test(line)) continue
-    if (/^https?:\/\/\S+$/.test(line)) continue
-    return line
-  }
-  return null
 }
 
 // Keep bounded, redacted CLI evidence in health instead of an opaque exit code.

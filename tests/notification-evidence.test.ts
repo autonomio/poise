@@ -63,6 +63,17 @@ describe('retained exact-key association', () => {
       expect(joinEvidence(db, access, [{ ...selector, cause: 'Command failed (1): github-interface: something else' }])[0].evidence).toBeUndefined()
     } finally { db.close() }
   })
+  it('joins a summary whose stored line skips a link-only tail', () => {
+    const db = new DiagnosticStore(':memory:')
+    try {
+      const event = normalize({ id: 'link-tail-check', workspace: 'alice', source: 'poise', level: 'error',
+        operation: 'github-interface', message: 'Command failed (1): github-interface',
+        stderr: 'error: not logged in\nhttps://example.com/login', correlationId })!
+      db.append([event])
+      expect(joinEvidence(db, access, [{ source: 'poise', correlationId,
+        cause: 'Command failed (1): github-interface: error: not logged in' }])[0].evidence?.eventId).toBe(event.id)
+    } finally { db.close() }
+  })
   it.each(['precise\nprovider cause', 'precise\tprovider cause'])('matches decoded control characters symmetrically: %j', (message) => {
     const db = new DiagnosticStore(':memory:')
     try {
