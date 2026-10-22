@@ -541,7 +541,13 @@ export interface RenderContext {
   sessionId?: string
   /** Render a finished turn's last text message as edit cards when it parses
    *  as the contract. Read-only cards show badges instead of buttons. */
-  edits?: { surface: 'editor-document' | 'editor-passage' | 'editor-review', readOnly: boolean }
+  edits?: {
+    surface: 'editor-document' | 'editor-passage' | 'editor-review'
+    readOnly: boolean
+    deciding?: ReadonlySet<string>
+    applied?: ReadonlySet<string>
+    revision?: number
+  }
   /** Live chats for actor labels: a listed source is a select button, a
    *  missing one renders with a deleted marker. */
   chats?: Array<{ id: string, title: string, role?: 'manager' }>
@@ -831,6 +837,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
         const review = ctx.edits.surface === 'editor-review'
         if (parsed && (parsed.edits || (review && parsed.reply))) {
           const states = new Map<number, EditDecision>()
+          const deciding = new Set<number>()
           const prefix = `${turn.turnId}:${item.messageId}:`
           for (const [at, decision] of decisions) {
             if (!at.startsWith(prefix)) continue
@@ -838,11 +845,13 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
             if (Number.isSafeInteger(index)) states.set(index, decision)
           }
           for (const [index, edit] of (parsed.edits || []).entries()) {
+            if (ctx.edits.applied?.has(`${prefix}${index}`)) states.set(index, 'applied')
+            if (ctx.edits.deciding?.has(`${prefix}${index}`)) deciding.add(index)
             cards.set(`${item.key}:${index}`, { turnId: turn.turnId, messageId: item.messageId, index, edit })
           }
           const prose = parsed.chat ? `<div class="chat-msg-body chat-msg-md">${renderMarkdown(parsed.chat, { localFileLinks: !!handlers.onFile })}</div>` : ''
           return `<div class="chat-msg chat-msg-agent chat-msg-final">${prose}`
-            + renderEditCards(parsed, item.key, states, { readOnly: ctx.edits.readOnly, review }) + '</div>'
+            + renderEditCards(parsed, item.key, states, { readOnly: ctx.edits.readOnly, review, deciding }) + '</div>'
         }
       }
     }
@@ -1054,7 +1063,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     }
   }
 
-  function renderTurn(el: HTMLElement, turn: TurnModel, ctx: RenderContext, clock: Clock, focused: PermissionItem | QuestionItem | null, isLast: boolean, repaintActors: boolean, decisions: TranscriptModel['decisions']): void {
+  function renderTurn(el: HTMLElement, turn: TurnModel, ctx: RenderContext, clock: Clock, focused: PermissionItem | QuestionItem | null, isLast: boolean, repaintActors: boolean, repaintEdits: boolean, decisions: TranscriptModel['decisions']): void {
     let head = el.querySelector<HTMLElement>(':scope > .chat-turn-head')
     let items = el.querySelector<HTMLElement>(':scope > .chat-turn-items')
     let foot = el.querySelector<HTMLElement>(':scope > .chat-turn-foot')
@@ -1084,7 +1093,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
       // repaints the items that carry one. Drafts survive: questions
       // remember and restore theirs around the repaint.
       const actorItem = (item.kind === 'steer' && !!item.source) || (item.kind === 'question' && item.answered?.by === 'chat')
-      if ((repaintActors && actorItem) || setRev(item.key, rev) || (item.kind === 'tool' && node.childElementCount === 0)) {
+      if ((repaintActors && actorItem) || (repaintEdits && item.kind === 'text') || setRev(item.key, rev) || (item.kind === 'tool' && node.childElementCount === 0)) {
         const paint = () => {
         switch (item.kind) {
           case 'text': patchContent(node, textHtml(turn, item, item === final, ctx, decisions)); break
@@ -1146,7 +1155,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     // Actor labels follow the session list: a rename, delete or reload
     // re-renders them without any new transcript event.
     const chatsKey = (ctx.chats || []).map((c) => `${c.id}\n${c.role || ''}\n${c.title}`).join('\n')
-    const ctxKey = `${ctx.running ? 1 : 0}:${ctx.interruptedTurnId || ''}:${focused?.id || ''}:${ctx.showActivity !== false}:${ctx.showReasoning === true}:${ctx.agent || ''}:${renderedDay}:${chatsKey}:${ctx.edits ? `${ctx.edits.surface}:${ctx.edits.readOnly ? 'ro' : 'rw'}` : ''}`
+    const ctxKey = `${ctx.running ? 1 : 0}:${ctx.interruptedTurnId || ''}:${focused?.id || ''}:${ctx.showActivity !== false}:${ctx.showReasoning === true}:${ctx.agent || ''}:${renderedDay}:${chatsKey}:${ctx.edits ? `${ctx.edits.surface}:${ctx.edits.readOnly ? 'ro' : 'rw'}:${ctx.edits.revision ?? 0}` : ''}`
     const ctxChanged = ctxKey !== lastCtxKey
     lastCtxKey = ctxKey
     const chatsChanged = chatsKey !== lastChatsKey
@@ -1163,7 +1172,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
         // and the turn holding the request; both sit in the item revisions,
         // so a turn renders when its rev moved or the context did.
         const isLast = b.key === lastTurnKey
-        if (setRev(b.key, b.turn.rev) || ctxChanged || isLast) renderTurn(el, b.turn, b.turn.agent ? { ...ctx, agent: b.turn.agent } : ctx, clock, focused, isLast, chatsChanged, model.decisions)
+        if (setRev(b.key, b.turn.rev) || ctxChanged || isLast) renderTurn(el, b.turn, b.turn.agent ? { ...ctx, agent: b.turn.agent } : ctx, clock, focused, isLast, chatsChanged, ctxChanged && !!ctx.edits, model.decisions)
       } else if (setRev(b.key, b.rev)) {
         if (b.kind === 'error') {
           el.innerHTML = `<div class="chat-msg chat-msg-agent chat-msg-error"><div class="chat-msg-body">${escapeHtml(b.message)}</div></div>`

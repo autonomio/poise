@@ -36,6 +36,12 @@ in the catalogue, but native Chat launches need a permission/question channel
 its current CLI does not offer.
 pi, image input, worktrees and parallel turns on the same checkout are outside v1.
 
+Editor edit cards disable Accept and Decline while saving and recording a
+decision. Failed saves allow another Accept; retrying a failed decision after
+a successful save records it without applying the edit again. Closing or moving
+a passage chat preserves its outstanding permission and question requests;
+the Needs you marker remains until every request has been answered.
+
 ## Fresh console and split pane
 
 The empty console is writable without selecting or creating a session first.

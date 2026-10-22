@@ -144,6 +144,65 @@ test('proposes edits in the document chat and applies an accepted one to the doc
   await expect(page.locator('#editor-doc')).toContainText('A final thought, revised.')
 })
 
+const INSERTION = JSON.stringify({
+  chat: 'One insertion.',
+  edits: [{ old: '', new: ' Added once.', context_before: 'Opening paragraph.' }],
+})
+
+test('locks a pure insertion across rapid decisions and rerenders while its save is pending', async ({ page }) => {
+  const { state, sock, saves, holdSaves } = await editor(page)
+  await openDocChat(page)
+  const id = await sendPaneMessage(page, sock, 'Add one sentence')
+  await finishReply(sock, id, 'Add one sentence', INSERTION)
+  const card = paneTranscript(page).locator('.chat-edit-card').first()
+  holdSaves.on = true
+  await card.getByRole('button', { name: 'Accept', exact: true }).evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+  await expect.poll(() => saves.length).toBe(1)
+  const accept = card.getByRole('button', { name: 'Accept', exact: true })
+  const decline = card.getByRole('button', { name: 'Decline', exact: true })
+  await expect(accept).toBeDisabled()
+  await expect(decline).toBeDisabled()
+  sock.push(id, { type: 'session.updated', session: { ...state.sessions.find((s) => s.id === id)!, status: 'idle' } })
+  sock.push(id, { type: 'text.delta', turnId: 't1', messageId: 'reply-1', delta: '' })
+  await expect(accept).toBeDisabled()
+  await expect(decline).toBeDisabled()
+  // Dispatching through the delegated handler also exercises the guard;
+  // native disabled buttons already suppress normal clicks.
+  for (const button of [accept, decline]) await button.dispatchEvent('click')
+  await expect(page.locator('#editor-doc')).toContainText('Opening paragraph. Added once.')
+  await expect(page.locator('#editor-doc')).not.toContainText('Added once. Added once.')
+  expect(sock.framesOf('edit.decide')).toHaveLength(0)
+  holdSaves.on = false
+  for (const release of holdSaves.release.splice(0)) release()
+  await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
+  await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+  expect(saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+})
+
+test('retries recording a saved pure insertion without applying it again', async ({ page }) => {
+  const { sock, saves } = await editor(page)
+  await openDocChat(page)
+  const id = await sendPaneMessage(page, sock, 'Add one sentence')
+  await finishReply(sock, id, 'Add one sentence', INSERTION)
+  const card = paneTranscript(page).locator('.chat-edit-card').first()
+  sock.autoAck = false
+  await card.getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
+  sock.ack(sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
+  await expect(pane(page).locator('.chat-surface-notice')).toContainText('Decision unavailable')
+  await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+  sock.autoAck = true
+  await pane(page).getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect.poll(() => sock.framesOf('edit.decide').length).toBe(2)
+  expect(sock.framesOf('edit.decide')[1].command).toMatchObject({ decision: 'applied' })
+  await expect(pane(page).locator('.chat-surface-notice')).toBeHidden()
+  expect(saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+  await expect(page.locator('#editor-doc')).not.toContainText('Added once. Added once.')
+})
+
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
   const { sock } = await editor(page)
   await openDocChat(page)

@@ -62,13 +62,14 @@ export function renderEditCards(
   reply: StructuredReply,
   key: string,
   states: ReadonlyMap<number, EditDecision>,
-  options: { readOnly: boolean, review: boolean },
+  options: { readOnly: boolean, review: boolean, deciding?: ReadonlySet<number> },
 ): string {
   const parts: string[] = []
   if (reply.edits?.length) {
     const cards = reply.edits.map((e, idx) => {
       const cardKey = `${key}:${idx}`
       const state = states.get(idx) || 'pending'
+      const disabled = options.deciding?.has(idx) ? ' disabled' : ''
       const showOld = e.old.length > 0
       const showNew = e.new.length > 0
       const kind = showOld && showNew ? 'replace' : showOld ? 'delete' : 'insert'
@@ -94,8 +95,8 @@ export function renderEditCards(
             : ''
       const actions = !options.readOnly && (state === 'pending' || state === 'conflict')
         ? `<div class="chat-edit-card-actions">${badge}`
-          + '<button type="button" class="chat-edit-card-btn chat-edit-card-decline" data-edit-decline>Decline</button>'
-          + '<button type="button" class="chat-edit-card-btn chat-edit-card-accept" data-edit-accept>Accept</button></div>'
+          + `<button type="button" class="chat-edit-card-btn chat-edit-card-decline" data-edit-decline${disabled}>Decline</button>`
+          + `<button type="button" class="chat-edit-card-btn chat-edit-card-accept" data-edit-accept${disabled}>Accept</button></div>`
         : badge ? `<div class="chat-edit-card-actions">${badge}</div>` : ''
       return `<div class="chat-edit-card" data-kind="${kind}" data-state="${state}" data-card-key="${escapeHtml(cardKey)}" data-old="${escapeHtml(e.old)}" data-new="${escapeHtml(e.new)}" data-context-before="${escapeHtml(e.context_before || '')}" data-context-after="${escapeHtml(e.context_after || '')}" data-description="${escapeHtml(e.description || '')}">${desc}${oldRow}${newRow}${actions}</div>`
     }).join('')

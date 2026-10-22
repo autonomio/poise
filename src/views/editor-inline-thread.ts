@@ -63,6 +63,7 @@ interface Tracked {
   subject: ChatSubject
   sessionId: string | null
   status: string | null
+  pendingRequests: Set<string>
   page: HTMLElement
   first: HTMLElement
   firstIndex: number
@@ -80,8 +81,6 @@ const drafts = new Map<string, ComposerDraft>()
 const tracked = new Map<string, Tracked>()
 /** A turn finished since the thread was last open. */
 const unseenReply = new Set<string>()
-/** A permission or question waits for an answer. */
-const needsYou = new Set<string>()
 /** The chat is open in the side pane. */
 const inPane = new Set<string>()
 /** The passage can no longer be located. */
@@ -167,8 +166,8 @@ function observeThread(state: OpenThread): void {
 function markerLabel(key: string, sessionId: string | null, status: string | null): string | null {
   if (inPane.has(key)) return 'In side pane'
   if (passageChanged.has(key)) return 'Passage changed'
+  if (tracked.get(key)?.pendingRequests.size) return 'Needs you'
   if (sessionId && (status === 'running' || status === 'starting')) return 'Working'
-  if (needsYou.has(key)) return 'Needs you'
   if (unseenReply.has(key)) return 'New reply'
   return null
 }
@@ -238,20 +237,19 @@ function untrack(key: string): void {
   entry.unsubscribe?.()
   tracked.delete(key)
   unseenReply.delete(key)
-  needsYou.delete(key)
 }
 
 /** Watch a closed passage chat: later activity grows a marker, and the
  *  Editor's overlay pass moves it with its passage. Anything without news
  *  shows no marker. */
-function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null, afterSeq?: number): void {
+function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null, afterSeq?: number, pendingRequests?: readonly string[]): void {
   if (subject.surface !== 'editor-passage') return
   const key = subjectKey(subject)
   if (open?.key === key) return
   let entry = tracked.get(key)
   if (!entry) {
     entry = {
-      subject, sessionId, status, page, first: line,
+      subject, sessionId, status, pendingRequests: new Set(pendingRequests), page, first: line,
       firstIndex: lineIndexOf(line.parentElement as HTMLElement, line), last: line, el: null, unsubscribe: null,
     }
     tracked.set(key, entry)
@@ -262,6 +260,7 @@ function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement
     entry.first = line
     entry.firstIndex = lineIndexOf(line.parentElement as HTMLElement, line)
     entry.last = line
+    if (pendingRequests) entry.pendingRequests = new Set(pendingRequests)
   }
   if (entry.sessionId && !entry.unsubscribe) {
     // Resubscribe from what the surface already showed: from 0 the server
@@ -275,10 +274,10 @@ function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement
       const live = tracked.get(key)
       if (!live) return
       if (event.type === 'turn.finished') unseenReply.add(key)
-      else if (event.type === 'permission.requested' || event.type === 'question.asked') needsYou.add(key)
-      else if (event.type === 'permission.resolved' || event.type === 'question.answered') needsYou.delete(key)
+      else if (event.type === 'permission.requested' || event.type === 'question.asked') live.pendingRequests.add(event.id)
+      else if (event.type === 'permission.resolved' || event.type === 'question.answered') live.pendingRequests.delete(event.id)
       else if (event.type === 'session.updated') live.status = event.session.status
-      else if (event.type === 'session.reset') { unseenReply.delete(key); needsYou.delete(key) }
+      else if (event.type === 'session.reset') { unseenReply.delete(key); live.pendingRequests.clear() }
       else return
       renderMarker(key)
     })
@@ -311,8 +310,9 @@ function fireClosed(state: OpenThread, returnCaret: boolean): void {
 
 function closeState(state: OpenThread, returnCaret: boolean): void {
   const afterSeq = state.surface.lastSeq()
+  const pendingRequests = state.surface.pendingRequests()
   teardown(state)
-  if (state.sessionId) track(state.subject, state.sessionId, state.page, state.line, state.status, afterSeq)
+  if (state.sessionId) track(state.subject, state.sessionId, state.page, state.line, state.status, afterSeq, pendingRequests)
   fireClosed(state, returnCaret)
 }
 
@@ -509,10 +509,11 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       const page = state.page
       const line = state.line
       const afterSeq = state.surface.lastSeq()
+      const pendingRequests = state.surface.pendingRequests()
       teardown(state)
       // The chat is open in the pane now; its marker reads In side pane.
       inPane.add(key)
-      track(subject, sessionId, page, line, status, afterSeq)
+      track(subject, sessionId, page, line, status, afterSeq, pendingRequests)
       chatSidePane.close()
       chatSidePane.toggle({ subject, ...(draft ? { draft } : {}), back: () => {
         window.dispatchEvent(new CustomEvent('editor:inline-thread-back', { detail: { subject } }))
@@ -523,7 +524,7 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
   if (!paneCloseWatched && typeof window !== 'undefined') {
     paneCloseWatched = true
     window.addEventListener('chat:side-pane-closed', (event) => {
-      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number }>).detail
+      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number, pendingRequests?: string[] }>).detail
       const subject = detail?.subject
       if (!subject) return
       const closedKey = subjectKey(subject)
@@ -541,9 +542,10 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
           layoutMarkers(entry.page)
           return
         }
-        track(subject, sessionId, entry.page, entry.first, detail?.status ?? null, detail?.afterSeq ?? 0)
+        track(subject, sessionId, entry.page, entry.first, detail?.status ?? null, detail?.afterSeq ?? 0, detail.pendingRequests)
         return
       }
+      if (detail.pendingRequests) entry.pendingRequests = new Set(detail.pendingRequests)
       renderMarker(closedKey)
     })
   }

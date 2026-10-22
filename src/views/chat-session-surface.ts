@@ -46,6 +46,7 @@ export interface SessionSurface {
   setHighlight(text: string | null): void
   /** Highest event seq applied, for resubscribing without a replay. */
   lastSeq(): number
+  pendingRequests(): string[]
 }
 
 interface ModelPlaceAnswer {
@@ -75,6 +76,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   let agents: AgentsResponse | null = null
   /** Text highlighted in the document, sent as a quote with the next message. */
   let highlight: string | null = null
+  const decidingEdits = new Set<string>()
+  const appliedEdits = new Set<string>()
+  let editsRevision = 0
 
   container.classList.add('chat-surface')
   container.innerHTML = '<div class="chat-surface-notice" hidden></div>'
@@ -193,22 +197,39 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit: EditProposal): Promise<void> {
     if (!record || !options.edits) return
-    if (decision === 'applied') {
-      let outcome: 'applied' | 'conflict' | 'failed'
-      try {
-        outcome = await options.edits.accept(edit)
-      } catch (err) {
-        setNotice(`Accept failed — ${(err as Error).message}`)
-        return
-      }
-      // A failed save records nothing; the Editor showed the save error.
-      if (outcome === 'failed') return
-      decision = outcome
-    }
+    const sessionId = record.id
+    const key = `${turnId}:${messageId}:${index}`
+    if (decidingEdits.has(key)) return
+    decidingEdits.add(key)
+    editsRevision++
+    render()
     try {
-      await chatClient.send({ type: 'edit.decide', sessionId: record.id, turnId, messageId, index, decision })
-    } catch (err) {
-      setNotice(`Decision failed — ${(err as Error).message}`)
+      // Saving and recording the decision are separate operations. Once the
+      // document was saved, a retry only records it, even for pure insertions.
+      if (appliedEdits.has(key)) decision = 'applied'
+      else if (decision === 'applied') {
+        let outcome: 'applied' | 'conflict' | 'failed'
+        try {
+          outcome = await options.edits.accept(edit)
+        } catch (err) {
+          setNotice(`Accept failed — ${(err as Error).message}`)
+          return
+        }
+        // A failed save records nothing; the Editor showed the save error.
+        if (outcome === 'failed') return
+        decision = outcome
+        if (outcome === 'applied') appliedEdits.add(key)
+      }
+      try {
+        await chatClient.send({ type: 'edit.decide', sessionId, turnId, messageId, index, decision })
+        setNotice(null)
+      } catch (err) {
+        setNotice(`Decision failed — ${(err as Error).message}`, [{ label: 'Retry', run: () => { void decideEdit(turnId, messageId, index, decision, edit) } }])
+      }
+    } finally {
+      decidingEdits.delete(key)
+      editsRevision++
+      render()
     }
   }
 
@@ -231,7 +252,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     transcript.render(model, {
       running: !!record && isRunning(record.status),
       sessionId: record?.id,
-      ...(subject.surface === 'current' ? {} : { edits: { surface: subject.surface, readOnly: false } }),
+      ...(subject.surface === 'current' ? {} : { edits: { surface: subject.surface, readOnly: false, deciding: decidingEdits, applied: appliedEdits, revision: editsRevision } }),
     })
     composer.setCommands(record?.commands || [], { model: true, modes: false, fork: false, poise: false, create: false })
     queuePanel.render(record?.id ?? null, record?.queue, agents?.agents || [], !!record && isRunning(record.status), new Set())
@@ -559,6 +580,26 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   return {
     session: () => record?.id ?? null,
     lastSeq: () => seenSeq,
+    pendingRequests: () => {
+      const pending = new Set(record?.pendingRequests)
+      for (const [id, item] of model.permissions) {
+        if (item.resolved) pending.delete(id)
+        else pending.add(id)
+      }
+      for (const [id, item] of model.questions) {
+        if (item.answered) pending.delete(id)
+        else pending.add(id)
+      }
+      // A surface can close while history is loading and live requests are
+      // buffered for adoption. Those requests still need a margin marker.
+      for (const envelope of adopting || []) {
+        const event = envelope.event
+        if (event.type === 'permission.requested' || event.type === 'question.asked') pending.add(event.id)
+        else if (event.type === 'permission.resolved' || event.type === 'question.answered') pending.delete(event.id)
+        else if (event.type === 'session.reset') pending.clear()
+      }
+      return [...pending]
+    },
     focus: () => composer.focus(),
     takeDraft: () => {
       const draft = composer.getDraft()

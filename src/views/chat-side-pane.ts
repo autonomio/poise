@@ -116,6 +116,7 @@ function closePane(): void {
   const sessionId = surface?.session() ?? null
   const status = lastStatus
   const afterSeq = surface?.lastSeq() ?? 0
+  const pendingRequests = sessionId ? surface?.pendingRequests() : undefined
   teardownSurface()
   const was = current
   current = null
@@ -125,7 +126,7 @@ function closePane(): void {
   panelEl.classList.remove('open')
   panelEl.setAttribute('inert', '')
   panelEl.setAttribute('aria-hidden', 'true')
-  if (was) window.dispatchEvent(new CustomEvent('chat:side-pane-closed', { detail: { subject: was, sessionId, status, afterSeq } }))
+  if (was) window.dispatchEvent(new CustomEvent('chat:side-pane-closed', { detail: { subject: was, sessionId, status, afterSeq, pendingRequests } }))
 }
 
 export const chatSidePane = {

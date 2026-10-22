@@ -238,6 +238,65 @@ test('shows Working, Needs you and New reply in the margin for a closed passage 
   await expect(markerCount(page)).toHaveCount(0)
 })
 
+async function requestAnswers(state: ServerState, sock: ChatSocket, id: string): Promise<void> {
+  await sock.subscribed(id)
+  const current = state.sessions.find((s) => s.id === id)!
+  Object.assign(current, { status: 'waiting', pendingRequests: ['p1', 'q1'] })
+  state.history[id] = [
+    sock.push(id, { type: 'turn.started', turnId: 't1', prompt: { text: 'Check this passage', attachments: [], mentions: [] } }),
+    sock.push(id, { type: 'permission.requested', id: 'p1', turnId: 't1', title: 'Run tests?', options: [{ id: 'yes', name: 'Yes', kind: 'allow_once' }] }),
+    sock.push(id, { type: 'question.asked', id: 'q1', turnId: 't1', questions: [{ id: 'target', question: 'Which target?', options: [], multiSelect: false, freeText: true }] }),
+    sock.push(id, { type: 'session.updated', session: { ...current } }),
+  ]
+}
+
+test('keeps already visible permission and question requests marked through close and reopen', async ({ page }) => {
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'Check this passage')
+  await requestAnswers(state, sock, id)
+  await expect(threadTranscript(page)).toContainText('Run tests?')
+  await expect(threadTranscript(page)).toContainText('Which target?')
+  await thread(page).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(marker(page, 'Needs you')).toBeVisible()
+  state.history[id].push(sock.push(id, { type: 'permission.resolved', id: 'p1', optionId: 'yes', by: 'user' }))
+  const current = state.sessions.find((s) => s.id === id)!
+  Object.assign(current, { status: 'idle', pendingRequests: ['q1'] })
+  state.history[id].push(sock.push(id, { type: 'session.updated', session: { ...current } }))
+  await expect(marker(page, 'Needs you')).toBeVisible()
+  await marker(page, 'Needs you').click()
+  await expect(threadTranscript(page).locator('.chat-question.pending')).toContainText('Which target?')
+  await thread(page).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(marker(page, 'Needs you')).toBeVisible()
+  sock.push(id, { type: 'question.answered', id: 'q1', answers: { target: 'local' }, by: 'user' })
+  await expect(markerCount(page)).toHaveCount(0)
+})
+
+for (const leave of ['closing the pane', 'switching to the document chat'] as const) {
+  test(`keeps already visible permission and question requests marked after ${leave}`, async ({ page }) => {
+    const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+    await openThreadForMark(page, 'ann-1')
+    await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+    const input = pane(page).locator('.chat-input')
+    await input.fill('Check this passage')
+    await input.press('Enter')
+    await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
+    const id = (sock.framesOf('prompt')[0].command as { sessionId: string }).sessionId
+    await requestAnswers(state, sock, id)
+    await expect(pane(page).locator('.chat-surface-transcript')).toContainText('Which target?')
+    if (leave === 'closing the pane') await pane(page).locator('.chat-close').click()
+    else await page.locator('.editor-chat-btn').click()
+    await expect(marker(page, 'Needs you')).toBeVisible()
+    sock.push(id, { type: 'permission.resolved', id: 'p1', optionId: 'yes', by: 'user' })
+    const current = state.sessions.find((s) => s.id === id)!
+    sock.push(id, { type: 'session.updated', session: { ...current, status: 'running', pendingRequests: ['q1'] } })
+    await expect(marker(page, 'Needs you')).toBeVisible()
+    sock.push(id, { type: 'question.answered', id: 'q1', answers: { target: 'local' }, by: 'user' })
+    sock.push(id, { type: 'session.updated', session: { ...current, status: 'idle', pendingRequests: [] } })
+    await expect(markerCount(page)).toHaveCount(0)
+  })
+}
+
 test('shows no New reply marker for turns the open thread already showed', async ({ page }) => {
   const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
   await openThreadForMark(page, 'ann-1')
