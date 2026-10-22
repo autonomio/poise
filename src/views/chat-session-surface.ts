@@ -61,6 +61,7 @@ interface EditRetry {
 interface EditState {
   deciding: Set<string>
   applied: Set<string>
+  confirmed: Set<string>
   retries: Map<string, EditRetry>
   listeners: Set<(key?: string, decision?: EditDecision) => void>
   revision: number
@@ -71,7 +72,7 @@ interface EditState {
 const pendingEdits = new Map<string, EditState>()
 
 function newEditState(): EditState {
-  return { deciding: new Set(), applied: new Set(), retries: new Map(), listeners: new Set(), revision: 0 }
+  return { deciding: new Set(), applied: new Set(), confirmed: new Set(), retries: new Map(), listeners: new Set(), revision: 0 }
 }
 
 interface ModelPlaceAnswer {
@@ -270,10 +271,13 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
         notifyEditState(state, sessionId, key, decision)
         setNotice(null)
       } catch (err) {
-        state.retries.set(key, { turnId, messageId, index, decision, edit, error: (err as Error).message })
+        // The decision event can arrive before a lost acknowledgement fails.
+        // Authoritative live or replayed history wins over that uncertainty.
+        if (!state.confirmed.has(key)) state.retries.set(key, { turnId, messageId, index, decision, edit, error: (err as Error).message })
       }
     } finally {
       state.deciding.delete(key)
+      state.confirmed.delete(key)
       notifyEditState(state, sessionId)
     }
   }
@@ -615,6 +619,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     else if (envelope.event.type === 'edit.decided') {
       const event = envelope.event
       const key = `${event.turnId}:${event.messageId}:${event.index}`
+      if (editState.deciding.has(key)) editState.confirmed.add(key)
       editState.applied.delete(key)
       editState.retries.delete(key)
     }

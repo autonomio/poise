@@ -247,6 +247,39 @@ for (const closeAt of ['after the acknowledgement fails', 'while the acknowledge
   })
 }
 
+for (const confirmation of ['live', 'replayed'] as const) {
+  test(`trusts a ${confirmation} saved edit decision before a late failed acknowledgement after remount`, async ({ page }) => {
+    const { state, sock, saves } = await editor(page)
+    await openDocChat(page)
+    const id = await sendPaneMessage(page, sock, 'Add one sentence')
+    state.history[id] = await finishReply(sock, id, 'Add one sentence', INSERTION)
+    sock.autoAck = false
+    const card = paneTranscript(page).locator('.chat-edit-card').first()
+    await card.getByRole('button', { name: 'Accept', exact: true }).click()
+    await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
+    const decided: ChatEnvelope = { seq: ++sock.seq, sessionId: id, at: NOW,
+      event: { type: 'edit.decided', turnId: 't1', messageId: 'reply-1', index: 0, decision: 'applied' } }
+    state.history[id].push(decided)
+    if (confirmation === 'live') {
+      sock.ws!.send(JSON.stringify({ kind: 'event', envelope: decided }))
+      await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    }
+    await pane(page).getByRole('button', { name: 'Close chat', exact: true }).click()
+    await openDocChat(page)
+    await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    sock.ack(sock.framesOf('edit.decide')[0], false, 'Acknowledgement lost')
+    // The following frame proves the late acknowledgement and its promise
+    // continuation were processed before checking that no retry reappeared.
+    sock.push(id, { type: 'session.updated', session: { ...state.sessions.find(s => s.id === id)!, status: 'running' } })
+    await expect(pane(page).locator('.chat-pane-state')).toHaveText('running')
+    await expect(pane(page).locator('.chat-surface-notice')).toBeHidden()
+    await expect(pane(page).getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+    await expect(card.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
+    expect(saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+    expect(sock.framesOf('edit.decide')).toHaveLength(1)
+  })
+}
+
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
   const { sock } = await editor(page)
   await openDocChat(page)
