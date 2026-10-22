@@ -24,6 +24,7 @@ import { prepareProviderCli } from '../provider-clis'
 
 import { readMemories } from './memories'
 import { expandSwitches, savedSwitchNames, saveSwitch } from './custom-switches'
+import { MANAGER_SWITCH } from '../../src/chat-switches'
 import { appendMemories } from './memory-content'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -252,6 +253,11 @@ class SubjectTakenError extends Error {
     super(`the subject ${subject.surface}:${subject.key} already has a session`)
     this.name = 'SubjectTakenError'
   }
+}
+
+/** /manager carries the Manager's charter; no other chat may use it. */
+function refuseManagerSwitch(switches: readonly string[] | undefined, isManager: boolean): void {
+  if (switches?.includes(MANAGER_SWITCH) && !isManager) throw new ChatError(400, '/manager is not supported in regular chats.', 'invalid')
 }
 
 /** Provenance header for a chat's steer: source data, not the person's message. */
@@ -1327,6 +1333,7 @@ export class ChatRuntime extends EventEmitter {
     this.assertAcceptingWork()
     const request = String(text || '').trim()
     const names = context.switches
+    refuseManagerSwitch(names, this.get(sourceId)?.role === 'manager')
     if (names !== undefined) {
       const known = savedSwitchNames()
       if (!Array.isArray(names) || names.length > 128 || !names.every(name => typeof name === 'string' && known.has(name))) throw new ChatError(400, 'The selected saved switches are unavailable.', 'invalid')
@@ -1600,6 +1607,7 @@ export class ChatRuntime extends EventEmitter {
     }
     const prompt = this.validatePrompt(id, input)
     const chain = parseCommands(prompt.text)
+    refuseManagerSwitch(chain.switches, session.record.role === 'manager')
     if (chain.missingModel) throw new ChatError(400, 'Choose a model from /model first.', 'invalid')
     if (chain.create) throw new ChatError(400, 'Save a switch with the create command, not an agent prompt.', 'invalid')
     if (chain.content !== undefined || chain.consensus !== undefined) throw new ChatError(400, 'Run /content or /consensus as a chat command, not as an agent prompt.', 'invalid')
@@ -1653,6 +1661,7 @@ export class ChatRuntime extends EventEmitter {
     return this.control(session, async () => {
       const submitted = this.validatePrompt(id, input)
       const chain = parseCommands(submitted.text)
+      refuseManagerSwitch(chain.switches, session.record.role === 'manager')
       if (chain.create) throw new ChatError(400, 'Save the switch directly with /create, then queue its use.', 'invalid')
       if (chain.content !== undefined || chain.consensus !== undefined) throw new ChatError(400, 'Run /content or /consensus now; queueing them would run them as prompts.', 'invalid')
       expandSwitches(chain.text, chain.switches)
@@ -1948,6 +1957,7 @@ export class ChatRuntime extends EventEmitter {
       if (turn.queueItem) {
         const chain = parseCommands(input.text)
         if (chain.create) throw new ChatError(400, 'Switch definitions cannot be created by a queued provider task.', 'invalid')
+        refuseManagerSwitch(chain.switches, record.role === 'manager')
         turn.switches = chain.switches
         turn.contextAction = chain.context
         if (chain.context || chain.switches?.length) { turn.shown = input; input = { ...input, text: chain.text } }
@@ -2335,6 +2345,7 @@ export class ChatRuntime extends EventEmitter {
     // expansion. A leading /review, /reset or /model is delivered as plain
     // text, never run.
     const chain = actor ? null : parseCommands(shown.text)
+    refuseManagerSwitch(chain?.switches, session.record.role === 'manager')
     if (chain && (chain.create || chain.queue || chain.context || chain.review || chain.model || chain.content !== undefined || chain.consensus !== undefined)) throw new ChatError(400, 'This command starts a separate action; queue it instead of steering.', 'invalid')
     // Do not put this wait on the control chain: startup drains that chain
     // before invoking the prompt. Early interjections belong after that boundary.
