@@ -24,6 +24,7 @@ import { prepareProviderCli } from '../provider-clis'
 
 import { readMemories } from './memories'
 import { expandSwitches, savedSwitchNames, saveSwitch } from './custom-switches'
+import { MANAGER_SWITCH } from '../../src/chat-switches'
 import { appendMemories } from './memory-content'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -243,6 +244,11 @@ export interface AgentAvailability {
 
 function parseCommands(text: string) {
   return parseChatCommandChain(text, /^\s*\//.test(text) ? savedSwitchNames() : undefined)
+}
+
+/** /manager carries the Manager's charter; no other chat may use it. */
+function refuseManagerSwitch(switches: readonly string[] | undefined, isManager: boolean): void {
+  if (switches?.includes(MANAGER_SWITCH) && !isManager) throw new ChatError(400, '/manager is not supported in regular chats.', 'invalid')
 }
 
 /** Provenance header for a chat's steer: source data, not the person's message. */
@@ -1226,6 +1232,7 @@ export class ChatRuntime extends EventEmitter {
     this.assertAcceptingWork()
     const request = String(text || '').trim()
     const names = context.switches
+    refuseManagerSwitch(names, this.get(sourceId)?.role === 'manager')
     if (names !== undefined) {
       const known = savedSwitchNames()
       if (!Array.isArray(names) || names.length > 128 || !names.every(name => typeof name === 'string' && known.has(name))) throw new ChatError(400, 'The selected saved switches are unavailable.', 'invalid')
@@ -1499,6 +1506,7 @@ export class ChatRuntime extends EventEmitter {
     }
     const prompt = this.validatePrompt(id, input)
     const chain = parseCommands(prompt.text)
+    refuseManagerSwitch(chain.switches, session.record.role === 'manager')
     if (chain.missingModel) throw new ChatError(400, 'Choose a model from /model first.', 'invalid')
     if (chain.create) throw new ChatError(400, 'Save a switch with the create command, not an agent prompt.', 'invalid')
     expandSwitches(chain.text, chain.switches)
@@ -1551,6 +1559,7 @@ export class ChatRuntime extends EventEmitter {
     return this.control(session, async () => {
       const submitted = this.validatePrompt(id, input)
       const chain = parseCommands(submitted.text)
+      refuseManagerSwitch(chain.switches, session.record.role === 'manager')
       if (chain.create) throw new ChatError(400, 'Save the switch directly with /create, then queue its use.', 'invalid')
       expandSwitches(chain.text, chain.switches)
       if (chain.context === 'reset' && chain.review) throw new ChatError(400, 'A reset removes the reply to review.', 'invalid')
@@ -1845,6 +1854,7 @@ export class ChatRuntime extends EventEmitter {
       if (turn.queueItem) {
         const chain = parseCommands(input.text)
         if (chain.create) throw new ChatError(400, 'Switch definitions cannot be created by a queued provider task.', 'invalid')
+        refuseManagerSwitch(chain.switches, record.role === 'manager')
         turn.switches = chain.switches
         turn.contextAction = chain.context
         if (chain.context || chain.switches?.length) { turn.shown = input; input = { ...input, text: chain.text } }
@@ -2224,6 +2234,7 @@ export class ChatRuntime extends EventEmitter {
     // expansion. A leading /review, /reset or /model is delivered as plain
     // text, never run.
     const chain = actor ? null : parseCommands(shown.text)
+    refuseManagerSwitch(chain?.switches, session.record.role === 'manager')
     if (chain && (chain.create || chain.queue || chain.context || chain.review || chain.model)) throw new ChatError(400, 'This command starts a separate action; queue it instead of steering.', 'invalid')
     // Do not put this wait on the control chain: startup drains that chain
     // before invoking the prompt. Early interjections belong after that boundary.
@@ -2441,14 +2452,12 @@ export class ChatRuntime extends EventEmitter {
 
   /** Take one of the bounded Poise-local agent slots, FIFO. A turn that
    *  waits shows `queued` with the cap's own reason; cancelling the turn
-   *  wakes it. Lowering the cap converges as running turns release. */
+   *  wakes it. Lowering the cap converges as running turns release;
+   *  raising it starts waiters through localTurnCapChanged. */
   private async acquireLocalTurnSlot(session: LiveSession, turn: RunningTurn): Promise<void> {
     const cap = Math.max(1, this.maxConcurrentLocalTurns())
     // A raised cap frees earlier waiters first; the arrival never jumps them.
-    while (this.localTurnWaiters.length > 0 && this.localTurnSlots < cap) {
-      this.localTurnSlots += 1
-      this.localTurnWaiters.shift()!.resolve()
-    }
+    this.grantLocalTurnSlots()
     if (this.localTurnSlots < cap) {
       this.localTurnSlots += 1
       turn.localSlot = true
@@ -2476,9 +2485,22 @@ export class ChatRuntime extends EventEmitter {
   private releaseLocalTurnSlot(turn: RunningTurn): void {
     if (!turn.localSlot) return
     turn.localSlot = false
-    const next = this.localTurnSlots <= Math.max(1, this.maxConcurrentLocalTurns()) ? this.localTurnWaiters.shift() : undefined
-    if (next) next.resolve()
-    else this.localTurnSlots -= 1
+    this.localTurnSlots -= 1
+    this.grantLocalTurnSlots()
+  }
+
+  /** The cap setting changed: start every slot waiter that now fits, in order. */
+  localTurnCapChanged(): void {
+    this.grantLocalTurnSlots()
+  }
+
+  /** Hand free slots to parked waiters in FIFO order, up to the live cap. */
+  private grantLocalTurnSlots(): void {
+    const cap = Math.max(1, this.maxConcurrentLocalTurns())
+    while (this.localTurnWaiters.length > 0 && this.localTurnSlots < cap) {
+      this.localTurnSlots += 1
+      this.localTurnWaiters.shift()!.resolve()
+    }
   }
 
   /** Fresh session: cut/verify/check out its branch under the lease. */
