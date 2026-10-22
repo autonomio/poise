@@ -32,6 +32,7 @@ describe('stripMarkdownForTitle', () => {
     expect(stripMarkdownForTitle('*Hello*')).toBe('Hello')
     expect(stripMarkdownForTitle('_Hello_')).toBe('Hello')
     expect(stripMarkdownForTitle('*Hello* world')).toBe('Hello world')
+    expect(stripMarkdownForTitle('*a* and *b*')).toBe('a and b')
     // Word-edge rule, as in the editor: identifiers stay literal.
     expect(stripMarkdownForTitle('some_variable_name')).toBe('some_variable_name')
   })
@@ -40,6 +41,14 @@ describe('stripMarkdownForTitle', () => {
     expect(stripMarkdownForTitle('[My Doc](https://example.com/x)')).toBe('My Doc')
     expect(stripMarkdownForTitle('[not a link]')).toBe('[not a link]')
     expect(stripMarkdownForTitle('[empty]()')).toBe('[empty]()')
+    // The URL stops at the first `)`, as in the editor.
+    expect(stripMarkdownForTitle('[A](u)[B](v)')).toBe('AB')
+    expect(stripMarkdownForTitle('([docs](https://x.com))')).toBe('(docs)')
+  })
+
+  it('leaves markup inside code spans alone — the editor shows it as written', () => {
+    expect(stripMarkdownForTitle('Notes on `__init__`')).toBe('Notes on __init__')
+    expect(stripMarkdownForTitle('`[x](y)`')).toBe('[x](y)')
   })
 
   it('handles the malformed bold that older documents already contain', () => {

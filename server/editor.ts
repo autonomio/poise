@@ -262,18 +262,20 @@ export function stripMarkdownForTitle(line: string): string {
   t = t.replace(/^(?:-\s+|\d+[.)]\s+)/, '')
   // Fenced-code markers carry no prose; drop the fence and any language.
   t = t.replace(/^```+\s*\S*\s*/, '')
-  // Inline runs: unwrap the content, drop the delimiters. Links go
-  // first so a URL's punctuation never becomes title text; bold before
+  // Inline runs in one left-to-right pass, the way the editor parses
+  // them: a code span matches whole, so markup inside backticks is
+  // never unwrapped. Alternation order is precedence — bold before
   // italic so `**x**` isn't consumed one asterisk at a time. Italic
-  // keeps the editor's own rules — word edges both sides, no space
-  // inside the delimiters — so arithmetic and identifiers stay literal.
-  // Whitespace that sat inside a delimiter (`**Portfolio **`) is
-  // preserved as the space it renders as, then collapsed below.
-  t = t.replace(/\[([^\]]+)\]\(\S+\)/g, '$1')
-  t = t.replace(/\*\*([^*]+)\*\*/g, '$1')
-  t = t.replace(/(?<!\w)\*(\S.*?\S|\S)\*(?!\w)/g, '$1')
-  t = t.replace(/(?<!\w)_(\S.*?\S|\S)_(?!\w)/g, '$1')
-  t = t.replace(/`([^`]+)`/g, '$1')
+  // keeps the editor's own rules (word edges both sides, no space
+  // inside the delimiters), so arithmetic and identifiers stay
+  // literal, and the link URL stops at the first `)`, as the
+  // editor's parser does. Whitespace that sat inside a delimiter
+  // (`**Portfolio **`) is preserved as the space it renders as, then
+  // collapsed below.
+  t = t.replace(
+    /`([^`]+)`|\*\*([^*]+)\*\*|(?<!\w)\*(\S|\S.*?\S)\*(?!\w)|(?<!\w)_(\S|\S.*?\S)_(?!\w)|\[([^\]]+)\]\(\S+?\)/g,
+    (_match, code, bold, star, underscore, link) => code ?? bold ?? star ?? underscore ?? link,
+  )
   // Any delimiters left over are unmatched, so they render literally in
   // the editor too — leave them alone rather than guess.
   return t.replace(/\s+/g, ' ').trim()
