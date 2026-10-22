@@ -192,11 +192,17 @@ test('import freezes typing and agent edits before draining pending annotation s
   await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
   const id = (sock.framesOf('prompt')[0].command as { sessionId: string }).sessionId
   await sock.subscribed(id)
-  sock.push(id, { type: 'turn.started', turnId: 't1', prompt: { text: 'Tighten this up', attachments: [], mentions: [] } })
-  sock.push(id, { type: 'text.delta', turnId: 't1', messageId: 'reply-1', delta: GOOGLE_PROPOSAL })
-  sock.push(id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
-  const card = page.locator('#chat-side-pane .chat-edit-card').first()
-  await expect(card).toBeVisible()
+  // The reply is recorded as well as pushed: the pane closes for the
+  // annotation flow below (it covers the comment button) and reopens from
+  // history for the Accept.
+  state.history[id] = [
+    sock.push(id, { type: 'turn.started', turnId: 't1', prompt: { text: 'Tighten this up', attachments: [], mentions: [] } }),
+    sock.push(id, { type: 'text.delta', turnId: 't1', messageId: 'reply-1', delta: GOOGLE_PROPOSAL }),
+    sock.push(id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' }),
+  ]
+  await expect(page.locator('#chat-side-pane .chat-edit-card').first()).toBeVisible()
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click()
+  await expect(page.locator('#chat-side-pane')).not.toHaveClass(/open/)
   await page.clock.install()
   await page.clock.fastForward(1000)
   await google.locator('summary').click()
@@ -218,6 +224,9 @@ test('import freezes typing and agent edits before draining pending annotation s
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await pending
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
+  await page.locator('.editor-chat-btn').click()
+  const card = page.locator('#chat-side-pane .chat-edit-card').first()
+  await expect(card).toBeVisible()
   await card.getByRole('button', { name: 'Accept', exact: true }).click()
   await expect(card.locator('.chat-edit-card-badge-conflict')).toHaveText('Conflict — text not found')
   await expect(page.locator('#editor-doc')).toContainText('The local paragraph.')

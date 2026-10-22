@@ -162,9 +162,10 @@ test('keeps the saved document text unchanged while a thread is open', async ({ 
   const before = await page.locator('#editor-doc').innerText()
   await openThreadForMark(page, 'ann-1')
   expect(await page.locator('#editor-doc').innerText()).toBe(before)
-  // Enter in the passage's last line splits the text, not the thread.
+  // Enter in the passage's last line splits the text, not the thread. The
+  // line carries the thread's padding, so click its text, not its center.
   const line = page.locator('#editor-doc .editor-line', { hasText: 'Opening paragraph.' }).first()
-  await line.click()
+  await line.click({ position: { x: 8, y: 8 } })
   await page.keyboard.press('End')
   await page.keyboard.press('Enter')
   await expect.poll(() => saves.length).toBe(1)
@@ -239,7 +240,7 @@ test('moves a passage chat to the side pane and back with its draft', async ({ p
   await expect(pane(page).locator('.chat-input')).toHaveValue('An unsent thought')
   await pane(page).locator('.chat-input').fill('An unsent thought, edited')
   await pane(page).getByRole('button', { name: 'Back to the passage', exact: true }).click()
-  await expect(pane(page)).toBeHidden()
+  await expect(pane(page)).not.toHaveClass(/open/)
   await expect(thread(page)).toBeVisible()
   await expect(threadInput(page)).toHaveValue('An unsent thought, edited')
 })

@@ -192,7 +192,8 @@ test('shows the same edit decisions after a reload and read-only in Chat', async
   // The reload replays the transcript, including the recorded decision.
   state.history[id] = [...envelopes, { seq: 99, sessionId: id, at: NOW, event: { type: 'edit.decided', turnId: 't1', messageId: 'reply-1', index: 0, decision: 'applied' } }]
   await page.reload()
-  await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
+  // The accepted edit persisted: the doc reopens revised.
+  await expect(page.locator('#editor-doc')).toContainText('Opening paragraph, revised.')
   await openDocChat(page)
   await expect(paneTranscript(page).locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
   // Chat shows the same cards read-only, with Open in Editor.
@@ -253,8 +254,9 @@ test('sends the highlighted text as a quote with the next message and clears the
   await paneInput(page).press('Enter')
   await expect.poll(() => sock.held.length).toBe(1)
   await expect(chip).toBeVisible()
-  await expect(paneInput(page)).toHaveValue('And this?')
   sock.ack(sock.held[0], false, 'No thanks')
+  // The refused send restores the draft and keeps the chip.
+  await expect(paneInput(page)).toHaveValue('And this?')
   await expect(pane(page).locator('.chat-surface-notice')).toContainText('No thanks')
   await expect(chip).toBeVisible()
   sock.autoAck = true
