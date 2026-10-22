@@ -257,7 +257,8 @@ describe('chat runtime', () => {
     const { runtime, controls, events } = makeRuntime()
     const session = await runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'chat/alpha' } })
     await waitFor(() => lastStatus(events, session.id) === 'idle')
-    const idle = await runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'main' } })
+    // On chat/alpha, never main: a later test refuses dirty state on a branch no session owns.
+    const idle = await runtime.create({ agent: 'grok', model: 'grok-4.6-xhigh', repo: 'acme/repo', branch: { existing: 'chat/alpha' } })
     await waitFor(() => lastStatus(events, idle.id) === 'idle')
     controls.adapters[0].auto = false
     await runtime.prompt(session.id, { text: 'long one', attachments: [], mentions: [] })
