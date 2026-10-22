@@ -153,6 +153,26 @@ test('keeps a new timer draft typed while the previous add is pending', async ({
   await expect(pane.locator('.chat-timers-minutes')).toHaveValue('30')
 })
 
+test('keeps the add draft when closing and reopening timers on the same chat', async ({ page }) => {
+  const state = makeState([session({ id: 's1' })])
+  state.timers = { s1: timersData() }
+  await installRoutes(page, state)
+  await installSocket(page, state)
+  await page.goto('/')
+  const toggle = page.getByRole('button', { name: 'Timers', exact: true })
+  await toggle.click()
+  const pane = page.locator('#chat-timers-pane')
+  await pane.locator('.chat-timers-label').fill('Unsent')
+  await pane.locator('.chat-timers-message').fill('Keep this timer draft')
+  await pane.locator('.chat-timers-minutes').fill('15')
+  await toggle.click()
+  await expect(pane).toBeHidden()
+  await toggle.click()
+  await expect(pane.locator('.chat-timers-label')).toHaveValue('Unsent')
+  await expect(pane.locator('.chat-timers-message')).toHaveValue('Keep this timer draft')
+  await expect(pane.locator('.chat-timers-minutes')).toHaveValue('15')
+})
+
 test("replaces another chat's timer controls while its new pane is loading", async ({ page }) => {
   const old = timerView({ id: 'old', sessionId: 's1', label: 'Old chat timer' })
   const next = timerView({ id: 'next', sessionId: 's2', label: 'Next chat timer' })
