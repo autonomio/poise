@@ -401,6 +401,32 @@ describe('bounded behavior ledger transport', () => {
     } finally { await writeFile(release, '') }
   })
 
+  it('spills sustained overload after the stall budget even while captures succeed', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      const observer = await fixture(`
+        port.postMessage({ready:true,health,pending:[]});
+        port.on('message', request => {
+          const reply=()=>{
+            if(request.observation?.type==='loss') health.dropped+=request.observation.count;
+            if(health.dropped) health.status='incomplete';
+            port.postMessage({id:request.id,status:200,body:{version:1,health},pending:[]});
+          };
+          setTimeout(reply,request.operation==='capture'?10:0);
+        });`, { captureLimit: 1, stallTimeoutMs: 60 })
+      observer.capture(admission)
+      observer.capture({ ...admission, nativeId: 'second' })
+      // The first capture succeeds after the second was queued: progress
+      // must not exempt that remaining backlog from its age limit.
+      clock.mockReturnValue(1_000_001)
+      expect((await observer.read({ operation: 'health' })).body.health)
+        .toMatchObject({ pending: 1, dropped: 0 })
+      clock.mockReturnValue(1_000_061)
+      observer.capture({ ...admission, nativeId: 'third' })
+      expect((await observer.read({ operation: 'health' })).body.health.dropped).toBe(1)
+    } finally { clock.mockRestore() }
+  })
+
   it('sheds invalid captures with loss accounting instead of retrying them', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'ledger-poison-'))
     directories.push(directory)

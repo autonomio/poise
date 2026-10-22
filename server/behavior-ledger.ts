@@ -53,7 +53,6 @@ export class BehaviorLedgerObserver {
   private captureBytes = 0
   private reads = 0
   private unreportedLoss = 0
-  private lastCaptureSuccessAt = 0
   private retryAt = 0
   private retryTimer?: ReturnType<typeof setTimeout>
   private health = emptyHealth()
@@ -107,7 +106,6 @@ export class BehaviorLedgerObserver {
             if (!message.health || !Array.isArray(message.health.gaps)) throw new Error('Invalid ledger worker health')
             clearTimeout(timer)
             this.ready = true
-            this.lastCaptureSuccessAt = Date.now()
             this.health = message.health
             this.setPending(message.pending)
             resolveReady()
@@ -164,7 +162,7 @@ export class BehaviorLedgerObserver {
   private stalled(): boolean {
     // Idle is not stalled: a fresh burst is always accepted, and sustained
     // overload or a wedged worker spills once the oldest capture outwaits the budget.
-    return this.captures > 0 && this.lastCaptureSuccessAt <= this.oldestCaptureAt()
+    return this.captures > 0
       && Date.now() - this.oldestCaptureAt() > (this.options.stallTimeoutMs ?? 10_000)
   }
 
@@ -249,7 +247,6 @@ export class BehaviorLedgerObserver {
         if (message.status < 400) this.unreportedLoss = Math.max(0, this.unreportedLoss - job.observation.count)
         else { this.fail(); return }
       } else if (message.status >= 400) this.lose(1)
-      else this.lastCaptureSuccessAt = Date.now()
     }
     if (job.operation === 'read') this.reads--
     if (job.resolve) {
