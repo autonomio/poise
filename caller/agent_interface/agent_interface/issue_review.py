@@ -599,9 +599,11 @@ def provider_error(stdout: str, stderr: str) -> str:
     return stderr.strip()[-500:]
 
 
-def _reconcile_post(repo: str, number: int, actor: str, call_id: str) -> dict | None:
+def _reconcile_post(repo: str, number: int, actor: str, call_id: str, seen: set[int]) -> dict | None:
     """A comment lost to a timeout may still exist: match this call's marker
-    in the issue's comments rather than assuming failure."""
+    in the issue's comments rather than assuming failure. Already-receipted
+    comments are skipped, so a timed-out later part of a split body cannot
+    reconcile to an earlier part's comment."""
     try:
         comments = interface("--issue-comments", f"#{number}", "--repository", repo,
                              "--token-user", actor).get("comments") or []
@@ -614,7 +616,7 @@ def _reconcile_post(repo: str, number: int, actor: str, call_id: str) -> dict | 
         if not match or match.group(1) != call_id:
             continue
         comment_id = comment.get("id")
-        if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+        if isinstance(comment_id, bool) or not isinstance(comment_id, int) or comment_id in seen:
             continue
         author = comment.get("author")
         if not isinstance(author, str):
@@ -642,7 +644,8 @@ def post(posts: list[dict], actor: str, call_id: str, model: str, record) -> lis
         except (subprocess.TimeoutExpired, review_budget.ReviewLimitError) as error:
             # The comment may exist: reconcile through the call marker before
             # calling it a failure. Unreconciled stays uncertain, never definite.
-            reconciled = _reconcile_post(repo, number, actor, call_id)
+            reconciled = _reconcile_post(repo, number, actor, call_id,
+                                           {receipt["comment_id"] for receipt in receipts})
             if reconciled is not None:
                 receipts.append(reconciled)
                 record(receipts)

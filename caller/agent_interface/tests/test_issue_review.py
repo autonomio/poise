@@ -839,3 +839,75 @@ class TestVerifiedResultsOrExplicitFailures(IssueReviewCase):
             status = issue_review.artifact_status(missing)
             self.assertTrue(status["present"])
             self.assertFalse(status["readable"])
+
+    def test_timed_out_later_part_never_reconciles_to_an_earlier_part(self):
+        paragraph = "p" * 40_000
+        review = {"comments": [{"issue": f"{REPO}#452", "body": f"{paragraph}\n\n{paragraph}"}]}
+        github = FakeGitHub()
+        comments = {"calls": 0}
+
+        def flaky(*args: str, seconds: float = 120):
+            if args[0] == "--comment-issue":
+                comments["calls"] += 1
+                if comments["calls"] > 1:
+                    raise subprocess.TimeoutExpired(list(args), seconds)
+                return github(*args, seconds=seconds)
+            if args[0] == "--issue-comments":
+                call_id = github.last_call_id
+                marker = f"<!-- agent-interface issue-review call={call_id} -->"
+                return {"comments": [
+                    {"id": 9000 + 452, "author": ACTOR, "body": f"Part 1\n\n{marker}",
+                     "html_url": "https://example.test/c/part1"},
+                    {"id": 777, "author": ACTOR, "body": f"Part 2\n\n{marker}",
+                     "html_url": "https://example.test/c/part2"},
+                ]}
+            return github(*args, seconds=seconds)
+
+        original_track = agent_interface.track
+
+        def tracking(*args, **kwargs):
+            call_id = original_track(*args, **kwargs)
+            github.last_call_id = call_id
+            return call_id
+
+        with patch.object(agent_interface, "track", side_effect=tracking):
+            row, _ = self.run_review(flaky, agent_writes(review))
+        exported = self.exported(row)
+        self.assertEqual(exported["status"], "completed")
+        self.assertEqual([receipt["comment_id"] for receipt in exported["receipts"]], [9000 + 452, 777])
+
+    def test_timed_out_part_missing_from_the_issue_stays_uncertain(self):
+        paragraph = "p" * 40_000
+        review = {"comments": [{"issue": f"{REPO}#452", "body": f"{paragraph}\n\n{paragraph}"}]}
+        github = FakeGitHub()
+        comments = {"calls": 0}
+
+        def flaky(*args: str, seconds: float = 120):
+            if args[0] == "--comment-issue":
+                comments["calls"] += 1
+                if comments["calls"] > 1:
+                    raise subprocess.TimeoutExpired(list(args), seconds)
+                return github(*args, seconds=seconds)
+            if args[0] == "--issue-comments":
+                call_id = github.last_call_id
+                return {"comments": [
+                    {"id": 9000 + 452, "author": ACTOR,
+                     "body": f"Part 1\n\n<!-- agent-interface issue-review call={call_id} -->",
+                     "html_url": "https://example.test/c/part1"},
+                ]}
+            return github(*args, seconds=seconds)
+
+        original_track = agent_interface.track
+
+        def tracking(*args, **kwargs):
+            call_id = original_track(*args, **kwargs)
+            github.last_call_id = call_id
+            return call_id
+
+        with patch.object(agent_interface, "track", side_effect=tracking):
+            row, _ = self.run_review(flaky, agent_writes(review), expect_exit=True)
+        exported = self.exported(row)
+        self.assertEqual(exported["status"], "failed")
+        self.assertEqual(exported["error_code"], "posting_failed")
+        self.assertIn("uncertain publication", exported["error"])
+        self.assertEqual([receipt["comment_id"] for receipt in exported["receipts"]], [9000 + 452])

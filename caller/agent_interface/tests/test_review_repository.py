@@ -274,3 +274,25 @@ class TestStructuredInspection(TestCase):
                 patch.object(sr.subprocess, "run") as submit, self.assertRaises(atoms.AgentPreflightError):
             sr.run("/repo", "system", "packet", CATALOG.resolve("gpt-6-astra-ultra"), "pr_review", PR, "bot", HEAD, 60, repository=repo)
         submit.assert_not_called()
+
+    def test_final_inspection_round_accepts_the_terminal_only_verdict(self):
+        repo = rr.Repository(Path("/tmp/review"), {"head_sha": HEAD})
+        schemas = []
+
+        def ask(*args):
+            schemas.append(args[4])
+            if len(schemas) == 1:
+                return json.dumps({"action": "inspect", "comments": [], "requests": [REQUEST]})
+            return json.dumps({"action": "request_changes", "comments": [FINDING]})
+
+        receipt = json.dumps({"action": "requested_changes", "review_id": 91, "head_sha": HEAD})
+        with patch.dict(sr.ASK, {"codex": ask}), patch.object(repo, "inspect", return_value={}), \
+                patch.object(sr, "MAX_INSPECTION_ROUNDS", 1), \
+                patch.object(sr.subprocess, "run",
+                             return_value=SimpleNamespace(returncode=0, stdout=receipt, stderr="")) as submit:
+            sr.run("/repo", "system", "packet", CATALOG.resolve("gpt-6-astra-ultra"), "pr_review", PR,
+                   "bot", HEAD, 60, repository=repo)
+        self.assertEqual(len(schemas), 2)
+        self.assertIn("requests", schemas[0].get("properties", {}))
+        self.assertNotIn("requests", schemas[1].get("properties", {}))
+        submit.assert_called_once()

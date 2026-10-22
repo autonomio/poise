@@ -1118,9 +1118,19 @@ def run_governed_behavior(
 def _run_review_with_recovery(mod, behavior, pr, pwd, actor, head, note, seconds, p, spec, recovery, before, call_id):
     try:
         return mod.run(pwd, pr, actor, head, note, seconds, p, model=spec.identity), None
-    except (review_budget.ReviewLimitError, subprocess.TimeoutExpired) as error:
-        failure = error if isinstance(error, review_budget.ReviewLimitError) else review_budget.ReviewLimitError(
-            "Review reached its total time limit; needs attention", "review_budget_exhausted")
+    except (review_budget.ReviewLimitError, subprocess.TimeoutExpired, review_receipt.SubmissionError) as error:
+        if isinstance(error, review_budget.ReviewLimitError):
+            failure = error
+        elif isinstance(error, subprocess.TimeoutExpired):
+            failure = review_budget.ReviewLimitError(
+                "Review reached its total time limit; needs attention", "review_budget_exhausted")
+        else:
+            # An uncertain write: verify against GitHub below and adopt a
+            # landed review, but never auto-retry the write itself.
+            failure = review_budget.ReviewLimitError(
+                str(error), "review_submission_failed",
+                {"version": 1, "source": "caller", "severity": "error", "operation": "provider.review",
+                 "phase": "submitting", "submission": "uncertain"})
         progress.stage("verifying", "Checking GitHub after interrupted review")
         try:
             facts = review_facts(mod, pr, pwd, actor, head, 0)
@@ -1197,8 +1207,8 @@ def own_reviews(before: dict, facts: dict, receipt: dict | None, call_id: str | 
     """The reviews this run posted: the receipted one, or without a receipt the
     new ones no sibling run claims. None when github-interface predates
     per-review ids; the activity counters decide then. A second new review
-    that is neither receipted nor sibling-claimed is a duplicate write, not
-    this run's own."""
+    that is neither receipted nor sibling-claimed is blamed on this run only
+    when no concurrent sibling could have written it invisibly."""
     after = _review_items(facts)
     earlier = _review_items(before)
     if after is None or earlier is None:
@@ -1215,7 +1225,7 @@ def own_reviews(before: dict, facts: dict, receipt: dict | None, call_id: str | 
                 sleep(SIBLING_GRACE_SECONDS)
                 extra = [item for item in new if item["id"] != receipt["review_id"]
                          and item["id"] not in review_receipt.sibling_ids(DB, call_id, repo, number)]
-            if extra:
+            if extra and not review_receipt.concurrent_unclaimed_run_exists(DB, call_id, repo, number):
                 raise review_budget.ReviewLimitError(
                     "review behavior produced duplicate GitHub reviews; needs attention"
                     if len(own) == 1 else

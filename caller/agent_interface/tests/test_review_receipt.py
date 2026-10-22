@@ -422,7 +422,7 @@ class TestRecoveryWithSiblings(TestCase):
         self.assertIsNone(row["review_id"])
         self.assertEqual(self.mod.run.call_count, 1)
 
-    def test_github_accepted_review_wins_over_lost_submission_response(self):
+    def test_github_accepted_review_wins_over_lost_claude_submission_response(self):
         def lost(*args, **kwargs):
             review_receipt.record_failure("error: GitHub 502:")
             return "response lost"
@@ -430,6 +430,37 @@ class TestRecoveryWithSiblings(TestCase):
         self.assertEqual(row["status"], "completed")
         self.assertEqual(row["outcome"], "clean")
         self.assertIsNone(row["error_code"])
+        self.assertEqual(self.mod.run.call_count, 1)
+
+    def test_github_accepted_review_wins_over_lost_structured_submission(self):
+        def lost(*args, **kwargs):
+            raise review_receipt.SubmissionError("error: GitHub 502:")
+        row = self.execute([lost], [facts(), facts([CLEAN])])
+        self.assertEqual(row["status"], "completed")
+        self.assertEqual(row["outcome"], "clean")
+        self.assertIsNone(row["error_code"])
+        self.assertIsNone(row["recovery_model"])
+        self.assertEqual(self.mod.run.call_count, 1)
+
+    def test_uncertain_structured_submission_without_a_landed_review_is_never_retried(self):
+        row = self.execute([review_receipt.SubmissionError(
+            "review submission timed out; publication uncertain, reconcile before retry")],
+            [facts(), facts()])
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_code"], "review_submission_failed")
+        self.assertIn("uncertain", row["error"])
+        for field in ("action", "outcome", "review_id", "recovery_model"):
+            self.assertIsNone(row[field])
+        self.assertEqual(self.mod.run.call_count, 1)
+
+    def test_deterministic_submission_rejection_is_not_recovered(self):
+        row = self.execute([budget.ReviewLimitError(
+            "review submission rejected: error: GitHub 422: line not in diff", "review_contract_violation")],
+            [facts(), facts()])
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_code"], "review_contract_violation")
+        self.assertIn("line not in diff", row["error"])
+        self.assertIsNone(row["recovery_model"])
         self.assertEqual(self.mod.run.call_count, 1)
 
     def test_a_siblings_review_does_not_stop_recovery(self):
@@ -556,3 +587,40 @@ class TestDuplicatePrevention(TestCase):
         self.assertEqual(row["status"], "failed")
         self.assertEqual(row["error_code"], "stopped")
         self.assertIsNone(row["outcome"])
+
+    def test_recent_uncertain_sibling_run_is_never_blamed_on_this_run(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, status, error_code, started_at, ended_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'failed', 'review_submission_failed', 50, 100)")
+        after = facts([CHANGES, CLEAN])
+        result = api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                      receipt=receipt("reviewed_clean", 92), call_id="me")
+        self.assertEqual(result["outcome"], "clean")
+
+    def test_running_sibling_run_is_never_blamed_on_this_run(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, status, started_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'running', 50)")
+        after = facts([CHANGES, CLEAN])
+        result = api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                      receipt=receipt("reviewed_clean", 92), call_id="me")
+        self.assertEqual(result["outcome"], "clean")
+
+    def test_long_finished_uncertain_sibling_does_not_shield_a_duplicate(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("update calls set started_at = 2000 where id = 'me'")
+            conn.execute("insert into calls (id, behavior, repo, pr_id, status, error_code, started_at, ended_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'failed', 'review_submission_failed', 500, 1000)")
+        after = facts([CHANGES, CLEAN])
+        with self.assertRaisesRegex(budget.ReviewLimitError, "duplicate"):
+            api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                 receipt=receipt("reviewed_clean", 92), call_id="me")
+
+    def test_provable_preflight_sibling_does_not_shield_a_duplicate(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, status, outcome, action, started_at, ended_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'failed', 'preflight_failed', 'not_started', 50, 100)")
+        after = facts([CHANGES, CLEAN])
+        with self.assertRaisesRegex(budget.ReviewLimitError, "duplicate"):
+            api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                 receipt=receipt("reviewed_clean", 92), call_id="me")

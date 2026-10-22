@@ -209,6 +209,12 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
                     verdict = validate_verdict(raw, behavior)
                     break
                 step = _loads_no_duplicates(raw)
+                if round_number == MAX_INSPECTION_ROUNDS and isinstance(step, dict) \
+                        and set(step) == {"action", "comments"}:
+                    # The final round offers the terminal-only verdict schema,
+                    # which has no requests property at all.
+                    verdict = validate_verdict(raw, behavior)
+                    break
                 if not isinstance(step, dict) or set(step) != {"action", "comments", "requests"}:
                     raise InvalidVerdict("review step must contain action, comments, and requests")
                 requests = step["requests"]
