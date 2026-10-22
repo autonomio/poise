@@ -274,6 +274,19 @@ test('keeps your GitHub account and the agent account under GitHub in Settings',
   await expect(agent).toBeFocused()
   expect(posts).toEqual([])
 
+  await yours.fill('a--b')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.locator('.st-status')).toHaveText('Your GitHub account must be a GitHub login, not a URL or email.')
+  await expect(yours).toBeFocused()
+  expect(posts).toEqual([])
+
+  await yours.fill('octocat')
+  await agent.fill('x--y')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.locator('.st-status')).toHaveText('The agent account must be a GitHub login, not a URL or email.')
+  await expect(agent).toBeFocused()
+  expect(posts).toEqual([])
+
   await agent.fill('other-bot')
   await agent.press('Enter')
   await expect(page.locator('.st-status')).toHaveText('Saved.')

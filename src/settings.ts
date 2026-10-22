@@ -762,12 +762,12 @@ async function saveAll() {
     setHelp('Your GitHub account is required.', 'error')
     return
   }
-  if (!GITHUB_NAME.test(me)) {
+  if (!GITHUB_NAME.test(me) || me.includes('--')) {
     setHelp('Your GitHub account must be a GitHub login, not a URL or email.', 'error')
     meInput.focus()
     return
   }
-  if (agentAccount && !GITHUB_NAME.test(agentAccount)) {
+  if (agentAccount && (!GITHUB_NAME.test(agentAccount) || agentAccount.includes('--'))) {
     setHelp('The agent account must be a GitHub login, not a URL or email.', 'error')
     agentInput.focus()
     return
