@@ -1283,3 +1283,53 @@ describe('Review New Issues settings', () => {
     expect(behaviors.getReviewers('review-new-prs')).toBe(1)
   })
 })
+
+describe('Review New Issues reviewer account trips', () => {
+  const BALANCE_ERROR = 'Internal error: {\n  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",\n  "http_status": 402\n}'
+  const SIGNIN_ERROR = 'Not signed in. To authenticate without a browser, run:\n  grok login --device-code\n\nAlternatively, set the XAI_API_KEY environment variable or run `grok login` on a machine with a browser.'
+
+  const accountFailures: Array<{ name: string, error: string, errorCode?: string }> = [
+    { name: 'a 402 balance-exhausted failure', error: BALANCE_ERROR, errorCode: 'review_provider_blocked' },
+    { name: 'a not-signed-in failure', error: SIGNIN_ERROR },
+  ]
+
+  it.each(accountFailures)('trips the reviewer on $name and falls back to the next reviewer', async ({ error, errorCode }) => {
+    const { behaviors, database } = await start({ reviewers: 1 })
+    database.setMeta('models', JSON.stringify({ issue_review: {
+      default: 'grok-4.6-xhigh', fallback: 'gpt-6-astra-ultra',
+      secondary: 'opus-5-xhigh', tertiary: 'gpt-6-astra-ultra',
+    } }))
+    issues = [issue(452)]
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(launches()).toHaveLength(1)
+    expect(flag(launches()[0], '--model')).toBe('grok-4.6-xhigh')
+
+    const target = `${REPO}#452`
+    agentLogs = [finished(target, {
+      status: 'failed', model: 'grok-4.6-xhigh', error,
+      ...(errorCode ? { error_code: errorCode } : {}),
+    })]
+    await behaviors.runEnabledBehaviorsOnce()
+
+    // One clear failure about the reviewer — not a dead letter for the issue.
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+    expect(behaviors.getBehaviorsRuntimeHealth().failures).toEqual([
+      expect.objectContaining({
+        behavior: KEY, target: 'reviewer:grok-4.6-xhigh', kind: 'operation',
+        consecutiveFailures: 1,
+        error: expect.stringContaining('grok-4.6-xhigh cannot review'),
+      }),
+    ])
+    // The same tick relaunches the review with the next configured reviewer.
+    expect(launches()).toHaveLength(2)
+    expect(flag(launches()[1], '--model')).toBe('opus-5-xhigh')
+
+    // Later reviews skip the tripped reviewer without further dead letters.
+    issues = [issue(452), issue(453)]
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(launches()).toHaveLength(3)
+    expect(flag(launches()[2], '--model')).toBe('opus-5-xhigh')
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+    expect(behaviors.getBehaviorsRuntimeHealth().failures).toHaveLength(1)
+  })
+})

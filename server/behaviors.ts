@@ -26,7 +26,7 @@ import { tmpdir, homedir } from 'node:os'
 import { mkdir } from 'node:fs/promises'
 import { ISSUE_REVIEW_BEHAVIOR, fetchAgentLogSnapshot, quarantinedLogMayMatch, type LogEntry } from './agent'
 import { claudeAuth } from './claude-auth'
-import { REVIEW_POLICY, needsClaude, reviewChoice, reviewPanel, type ReviewPlace } from './review-model'
+import { REVIEW_POLICY, needsClaude, reviewChoice, reviewPanel, type ReviewPanel, type ReviewPlace } from './review-model'
 import { type Catalog, type ReviewerSlot, REVIEWER_SLOTS, loadCatalog } from './models'
 import {
   db,
@@ -403,7 +403,7 @@ function readBehaviorFailure(key: BehaviorKey, target?: string): PersistedBehavi
 }
 
 function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string }): void
-function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string): void
+function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string, options?: DiagnosticOptions & { callId?: string }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions & { callId?: string } = {}): void {
   if (!isEnabled(key)) return
   const previous = readBehaviorFailure(key, target)
@@ -588,6 +588,81 @@ function reviewSlotOfTarget(target: string): ReviewerSlot {
     if (target.endsWith(`:${slot}`)) return slot
   }
   return 'primary'
+}
+
+// ── Reviewer account trips ──────────────────────────────────────────────
+// A reviewer failure about the account, not the review: the provider refused
+// the run because the account is out of balance or not signed in. Tripping
+// the reviewer stops every further launch of it — no dead letter per target —
+// and the panel slides the next configured reviewers into its place, or waits
+// when none is healthy. The trip retries on the usual backoff and clears when
+// the reviewer succeeds again. Anything else — a fumbled verdict, a stopped
+// run, a local latch — stays on the ordinary per-target path.
+export type ReviewAccountFailureKind = 'balance' | 'signin'
+
+export function reviewAccountFailure(call: LogEntry): ReviewAccountFailureKind | null {
+  const error = String(call.error || '')
+  if (/\b402\b/.test(error) || /balance\s+exhausted/i.test(error)) return 'balance'
+  if (/not\s+signed\s+in/i.test(error) || /missing\s+credentials/i.test(error)) return 'signin'
+  return null
+}
+
+const REVIEWER_TRIP_TARGET_PREFIX = 'reviewer:'
+
+function reviewerTripTarget(identity: string): string {
+  return `${REVIEWER_TRIP_TARGET_PREFIX}${identity}`
+}
+
+function tripReviewerAccount(behavior: PanelBehavior, identity: string, kind: ReviewAccountFailureKind, callId: string): void {
+  const message = kind === 'balance'
+    ? `${identity} cannot review: its account is out of balance (402). Top up its credit; Poise retries automatically.`
+    : `${identity} cannot review: it is not signed in. Sign it in from Settings → Connected accounts; Poise retries automatically.`
+  recordBehaviorFailure(behavior, 'operation', message, reviewerTripTarget(identity), { callId })
+}
+
+// A trip one panel behavior recorded gates the other too, until its backoff
+// comes due and one launch probes whether the account works again.
+function reviewerAccountTripped(identity: string): boolean {
+  return PANEL_BEHAVIORS.some((behavior) => !behaviorRetryDue(behavior, reviewerTripTarget(identity)))
+}
+
+function clearReviewerAccountTrip(identity: string): void {
+  for (const behavior of PANEL_BEHAVIORS) clearBehaviorFailure(behavior, reviewerTripTarget(identity))
+}
+
+// The reviewers that launch now: the roster without tripped identities, the
+// next configured reviewers sliding into their places, slots positional.
+async function launchReviewPanel(count: number, place: 'pr_review' | 'issue_review' = 'pr_review'): Promise<ReviewPanel> {
+  const full = await reviewPanel(REVIEWER_SLOTS.length, place)
+  const reviewers = full.reviewers
+    .filter(({ model }) => !reviewerAccountTripped(model))
+    .slice(0, count)
+    .map(({ model }, index) => ({ slot: REVIEWER_SLOTS[index], model }))
+  return { ...full, reviewers }
+}
+
+// A trip for a reviewer neither place configures anymore says nothing: retire
+// it so the diagnostics do not outlive the roster edit. Unreadable rosters
+// keep every trip; the tick itself reports the outage.
+async function retireStaleReviewerTrips(): Promise<void> {
+  const tripped = new Set<string>()
+  for (const behavior of PANEL_BEHAVIORS) {
+    for (const target of behaviorFailureTargets(behavior)) {
+      if (target.startsWith(REVIEWER_TRIP_TARGET_PREFIX)) tripped.add(target.slice(REVIEWER_TRIP_TARGET_PREFIX.length))
+    }
+  }
+  if (tripped.size === 0) return
+  const configured = new Set<string>()
+  for (const place of ['pr_review', 'issue_review'] as const) {
+    try {
+      for (const { model } of (await reviewPanel(REVIEWER_SLOTS.length, place)).reviewers) configured.add(model)
+    } catch {
+      return
+    }
+  }
+  for (const identity of tripped) {
+    if (!configured.has(identity)) clearReviewerAccountTrip(identity)
+  }
 }
 
 // ── Per-behavior memory (scratchpad) ────────────────────────────────────
@@ -1397,6 +1472,12 @@ async function reconcileBehaviorLaunchClaims(
       continue
     }
     if (FAILED_AGENT_STATUSES.has(status) && boundedReviewFailure(call)) {
+      const accountFailure = reviewAccountFailure(call)
+      if (behavior === 'review-new-prs' && accountFailure && call.model) {
+        tripReviewerAccount(behavior, call.model, accountFailure, call.id)
+        releaseOwnedClaim(behavior, claim.target, claim.claimId)
+        continue
+      }
       deadLetterClaim(claim, call.error || 'Review needs attention')
       continue
     }
@@ -1419,6 +1500,12 @@ async function reconcileBehaviorLaunchClaims(
         if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
+        const accountFailure = reviewAccountFailure(call)
+        if (behavior === 'review-new-prs' && accountFailure && call.model) {
+          tripReviewerAccount(behavior, call.model, accountFailure, call.id)
+          releaseOwnedClaim(behavior, claim.target, claim.claimId)
+          continue
+        }
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
           recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false, callId: call.id })
@@ -1451,6 +1538,9 @@ async function reconcileBehaviorLaunchClaims(
         console.error(`[behaviors] ${error} for ${claim.launchRepo}#${claim.launchPr}`)
         continue
       }
+      // A verified verdict proves the account works again, whatever behavior
+      // launched it.
+      if (call.model) clearReviewerAccountTrip(call.model)
       const completed = completeBehaviorLaunchOwned({
         key: claim.key,
         target: claim.target,
@@ -1480,7 +1570,11 @@ async function reconcileBehaviorLaunchClaims(
       }
     } else if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
-      if (deadLetterClaim(claim, message)) {
+      const accountFailure = reviewAccountFailure(call)
+      if (behavior === 'review-new-prs' && accountFailure && call.model) {
+        tripReviewerAccount(behavior, call.model, accountFailure, call.id)
+        releaseOwnedClaim(behavior, claim.target, claim.claimId)
+      } else if (deadLetterClaim(claim, message)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target)
         // A run the user stopped from Swarm, or one a restart cut off, says nothing about the provider.
         if (call.error_code !== 'stopped' && call.error_code !== 'interrupted' && needsClaude(catalogForCalls, call.model)) {
@@ -1772,7 +1866,7 @@ function settleClaimAfterExit(
 // The model a reviewer slot launches right now, or null when the panel no
 // longer has that slot — the count was lowered while this tick was waiting.
 async function slotModel(slot: ReviewerSlot): Promise<{ model: string, recovery: string, catalog: Catalog } | null> {
-  const panel = await reviewPanel(getReviewers('review-new-prs'))
+  const panel = await launchReviewPanel(getReviewers('review-new-prs'))
   const reviewer = panel.reviewers.find((entry) => entry.slot === slot)
   return reviewer ? { model: reviewer.model, recovery: panel.recovery, catalog: panel.catalog } : null
 }
@@ -2094,7 +2188,10 @@ async function tickReviewNewPrs(): Promise<void> {
   if (await initializeReviewBaseline()) return
   try {
     const panel = await reviewPanel(getReviewers('review-new-prs'))
-    const slots = availableReviewSlots(panel)
+    await retireStaleReviewerTrips()
+    // Admission remembers the configured panel; only launches slide past
+    // tripped reviewers, so a recovered reviewer still owns its waiting slot.
+    const slots = availableReviewSlots(await launchReviewPanel(getReviewers('review-new-prs')))
     if (slots.length === 0) return
     const prs = await listEligiblePrs('review-new-prs', author)
     await recoverSnapshotReviews(prs, reviewer)
@@ -2161,7 +2258,8 @@ async function tickReviewNewPrs(): Promise<void> {
     try {
       await underLifecycleSignal(() => withBehaviorProcessLock('review-new-prs', async () => {
         const fresh = await reviewPanel(getReviewers('review-new-prs'))
-        const freshModels = new Map(fresh.reviewers.map((entry) => [entry.slot, entry.model]))
+        const launch = await launchReviewPanel(getReviewers('review-new-prs'))
+        const freshModels = new Map(launch.reviewers.map((entry) => [entry.slot, entry.model]))
         // Read the ceiling here, closest to the spawn: narrowing it in the
         // view must take effect on launches already being prepared.
         const setting = getSetting('review-new-prs')
@@ -4080,7 +4178,7 @@ async function planIssueReviews(
 }
 
 async function issueSlotModel(slot: ReviewerSlot): Promise<{ model: string, recovery: string, catalog: Catalog } | null> {
-  const panel = await reviewPanel(getReviewers(ISSUES_KEY), 'issue_review')
+  const panel = await launchReviewPanel(getReviewers(ISSUES_KEY), 'issue_review')
   const reviewer = panel.reviewers.find((entry) => entry.slot === slot)
   return reviewer ? { model: reviewer.model, recovery: panel.recovery, catalog: panel.catalog } : null
 }
@@ -4238,7 +4336,10 @@ async function tickReviewNewIssues(): Promise<void> {
   if (repositories.length === 0) return
   const policy = issueReviewPolicy()
   const panel = await reviewPanel(getReviewers(ISSUES_KEY), 'issue_review')
-  const slots = availableReviewSlots(panel)
+  await retireStaleReviewerTrips()
+  // Planned slots remember the configured panel; only launches slide past
+  // tripped reviewers, so a recovered reviewer still owns its waiting slot.
+  const slots = availableReviewSlots(await launchReviewPanel(getReviewers(ISSUES_KEY), 'issue_review'))
   if (slots.length === 0) return
   const slotSince = getIssueSlotSince()
   await requireFreshDatastore()
@@ -4518,6 +4619,7 @@ async function reconcileIssueReviewClaims(): Promise<void> {
         quarantineClaim(claim, 'invalid_result', error, call.id, quarantineEvidence(snapshot, claim, call).mayRun)
         continue
       }
+      if (call.model) clearReviewerAccountTrip(call.model)
       activeClaims.delete(claim.claimId)
       if (completeIssueReviewLaunchOwned({
         key: claim.key,
@@ -4535,6 +4637,12 @@ async function reconcileIssueReviewClaims(): Promise<void> {
     }
     if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
+      const accountFailure = reviewAccountFailure(call)
+      if (accountFailure && call.model) {
+        tripReviewerAccount(ISSUES_KEY, call.model, accountFailure, call.id)
+        releaseOwnedClaim(ISSUES_KEY, claim.target, claim.claimId)
+        continue
+      }
       if (deadLetterClaim(claim, message)) {
         const posted = call.receipts !== null && call.receipts !== undefined
         if (call.error_code !== 'stopped' && (posted || !HELD_ISSUE_REVIEW_ERRORS.has(call.error_code || ''))) {
