@@ -1879,6 +1879,7 @@ function toggleTimers(): void {
     if (timersRefresh) { clearInterval(timersRefresh); timersRefresh = null }
     timersPaneEl.hidden = true
     renderHeader()
+    queueRender()
     return
   }
   timersOpenFor = e.record.id
@@ -1887,6 +1888,7 @@ function toggleTimers(): void {
   if (timersRefresh) clearInterval(timersRefresh)
   timersRefresh = setInterval(() => { void refreshTimersPane() }, 30_000)
   renderHeader()
+  queueRender()
   void refreshTimersPane()
 }
 
@@ -2128,9 +2130,10 @@ function render(): void {
   mainEl.classList.toggle('chat-observer', !!e && !listed(e.record.id))
   composerStateFor(e)
   renderQueue()
-  // A deploy card is content too: the console must not lift over it.
+  // A deploy card is content too: the console must not lift over it. An
+  // open Timers pane is content as well, for the same reason.
   const hasCard = !!e && (!!activeChange() || localChanges.has(e.record.id))
-  const empty = !e || (!e.model.blocks.length && !e.loading && !hasCard)
+  const empty = !e || (!e.model.blocks.length && !e.loading && !hasCard && timersOpenFor === null)
   const changedConsole = lastEmpty !== empty
   const presentedLift = new DOMMatrixReadOnly(getComputedStyle(dockEl).transform).m42
   const composerEl = composer.el
