@@ -43,7 +43,7 @@ let healthFailure: Error | null = null
 let held: Record<string, { reached: () => void, release: () => void, released: Promise<void> }> = {}
 
 function pull(repo: string, number: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { repo, number, url: `https://github.com/${repo}/pull/${number}`, status: 'open', author: ME, draft: 0, ...overrides }
+  return { repo, number, url: `https://github.com/${repo}/pull/${number}`, status: 'open', author: ME, draft: 0, updated_at: '2026-07-15T12:00:00Z', ...overrides }
 }
 
 function issue(repo: string, number: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
