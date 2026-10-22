@@ -367,10 +367,14 @@ verify_workspaces() {
     # The gateway replaces containers as it recreates them, so list them anew every poll.
     ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
     if [ -n "$ids" ]; then
+      # A container removed since docker ps is its replacement's business, not
+      # a failed deploy: inspect still prints the containers it found, and the
+      # expected-handles loop below reports the missing ones as pending.
       # shellcheck disable=SC2086 # one argument per container ID
-      lines=$(docker inspect --format '{{index .Config.Labels "poise.workspace"}} {{.Image}} {{.State.Running}} {{.Name}}' $ids) \
-        || die "cannot inspect the managed workspaces."
+      lines=$(docker inspect --format '{{index .Config.Labels "poise.workspace"}} {{.Image}} {{.State.Running}} {{.Name}}' $ids 2>/dev/null) || true
       while read -r handle id running name; do
+        # No line at all when every container vanished since docker ps.
+        [ -n "$handle$id$running$name" ] || continue
         name=${name#/}
         [ -n "$handle" ] || die "managed container $name has no poise.workspace label."
         [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "managed container $name has an invalid workspace handle."

@@ -56,8 +56,17 @@ elif args[:1] == ['ps']:
         else:
             print(f'c{index}')
 elif args[:1] == ['inspect']:
+    seen = state.get('inspect_seen', 0)
+    state['inspect_seen'] = seen + 1
+    save()
+    if seen < state.get('inspect_fail_times', 0):
+        sys.exit(1)
+    missing = state.get('inspect_missing', []) if seen < state.get('inspect_missing_times', 0) else []
     for name in args[3:]:
-        print(state['containers'][int(name[1:])])
+        if int(name[1:]) not in missing:
+            print(state['containers'][int(name[1:])])
+    if missing:
+        sys.exit(1)
 elif args[:1] == ['exec']:
     answers = state['health'].get(args[1], [])
     seen = state.setdefault('execs', {}).get(args[1], 0)
@@ -226,6 +235,26 @@ class VerifyTest(LibTest):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f'Every workspace serves {NEW}: alice bob.', result.stdout)
         self.assertTrue(any(call.startswith('exec poise-ws-bob ') for call in self.calls()))
+
+    def test_container_removed_between_ps_and_inspect_retries_instead_of_aborting(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'containers': [alice, bob],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(NEW)]},
+                              'inspect_missing': [1], 'inspect_missing_times': 1}, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'Every workspace serves {NEW}: alice bob.', result.stdout)
+        inspects = [call for call in self.calls() if call.startswith('inspect ')]
+        self.assertGreaterEqual(len(inspects), 2)
+
+    def test_uninspectable_containers_report_missing_until_the_timeout(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        result = self.verify({'containers': [alice],
+                              'health': {'poise-ws-alice': [health(NEW)]},
+                              'inspect_fail_times': 99})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('alice: missing (waiting for its replacement)', result.stderr)
+        self.assertNotIn('cannot inspect', result.stderr)
 
     def test_all_workspaces_missing_before_first_poll_remain_pending(self):
         result = self.verify({'inventories': [[f'alice {IMAGE_ID} true /poise-ws-alice',
