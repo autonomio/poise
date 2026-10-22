@@ -31,6 +31,7 @@ let surface: SessionSurface | null = null
 let current: ChatSubject | null = null
 let prefill: string | undefined = undefined
 let back: (() => void) | undefined = undefined
+let lastStatus: string | null = null
 
 function isOpen(): boolean {
   return !!panelEl?.classList.contains('open')
@@ -65,6 +66,7 @@ function ensureShell(): void {
   panelEl.addEventListener('chat:surface-state', ((event: CustomEvent<{ sessionId: string | null, status: string | null }>) => {
     if (!stateEl) return
     const status = event.detail.status
+    lastStatus = status
     stateEl.textContent = status && status !== 'idle' ? status : ''
   }) as EventListener)
 }
@@ -86,6 +88,7 @@ function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft
   current = next
   prefill = cardPrefill
   back = onBack
+  lastStatus = null
   if (titleEl) titleEl.textContent = next.label
   if (stateEl) stateEl.textContent = ''
   if (backEl) {
@@ -110,15 +113,19 @@ function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft
 function closePane(): void {
   if (!panelEl) return
   if (panelEl.contains(document.activeElement)) (document.activeElement as HTMLElement | null)?.blur()
+  const sessionId = surface?.session() ?? null
+  const status = lastStatus
+  const afterSeq = surface?.lastSeq() ?? 0
   teardownSurface()
   const was = current
   current = null
   prefill = undefined
   back = undefined
+  lastStatus = null
   panelEl.classList.remove('open')
   panelEl.setAttribute('inert', '')
   panelEl.setAttribute('aria-hidden', 'true')
-  if (was) window.dispatchEvent(new CustomEvent('chat:side-pane-closed', { detail: { subject: was } }))
+  if (was) window.dispatchEvent(new CustomEvent('chat:side-pane-closed', { detail: { subject: was, sessionId, status, afterSeq } }))
 }
 
 export const chatSidePane = {

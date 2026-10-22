@@ -519,17 +519,25 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
   if (!paneCloseWatched && typeof window !== 'undefined') {
     paneCloseWatched = true
     window.addEventListener('chat:side-pane-closed', (event) => {
-      const subject = (event as CustomEvent<{ subject: ChatSubject }>).detail?.subject
+      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number }>).detail
+      const subject = detail?.subject
       if (!subject) return
       const closedKey = subjectKey(subject)
       if (!inPane.has(closedKey)) return
       inPane.delete(closedKey)
       const entry = tracked.get(closedKey)
       if (!entry) return
-      // A chat that never got a session leaves nothing to track.
+      // A chat moved to the pane before its first message has no sessionId
+      // yet; adopt the pane's session so a running or finished reply still
+      // marks. A chat that never got a session leaves nothing to track.
       if (!entry.sessionId) {
-        untrack(closedKey)
-        layoutMarkers(entry.page)
+        const sessionId = detail?.sessionId ?? null
+        if (!sessionId) {
+          untrack(closedKey)
+          layoutMarkers(entry.page)
+          return
+        }
+        track(subject, sessionId, entry.page, entry.first, detail?.status ?? null, detail?.afterSeq ?? 0)
         return
       }
       renderMarker(closedKey)
