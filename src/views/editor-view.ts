@@ -11,7 +11,7 @@ import { GoogleDocuments } from './google-documents'
 import { chatSidePane, registerEditorSurface } from './chat-side-pane'
 import { clearInlineThreads, closeInlineThread, dropThread, inlineThreadSubjectInView, keepThreadDraft, openInlineThread, syncThreadMarker } from './editor-inline-thread'
 import type { SurfaceOptions } from './chat-session-surface'
-import type { ArticleReview } from '../publishing-review'
+import { locateReview, type ArticleReview } from '../publishing-review'
 import type { ChatSubject } from '../../server/chat/protocol'
 import type { EditProposal } from '../edit-proposals'
 // Editor — minimalist markdown writing surface.
@@ -121,7 +121,6 @@ let annotations: Annotation[] = []
 let articleReviews: EditorReviews | undefined
 let googleImporting = false
 let googleDocuments: GoogleDocuments | null = null
-const reviewSessions = new Map<string, string>()
 let annotationsReadySlug: string | null = null
 const documentVersions = new Map<string, string>()
 const annotationsVersions = new Map<string, string>()
@@ -2467,53 +2466,6 @@ async function deleteCurrent() {
   }
 }
 
-// Toolbar chat button: fetch (or mint) the long-lived chat session
-// bound to this doc, then hand off to the shared chat pane via
-// `poise:open-chat`. The session_id is stable per-doc — reopening
-// the chat for the same doc resumes the same conversation. The pane
-// itself is the modular `src/views/chat-pane.ts` already used by the
-// card-chats; we just bring it up with a doc-scoped session id and
-// the doc's current title as the header label.
-async function openChatForCurrentDoc(draft?: string, reviewSession?: string): Promise<void> {
-  if (!currentSlug) return
-  const slug = currentSlug
-  try {
-    let data: { session_id: string }
-    if (reviewSession) data = { session_id: reviewSession }
-    else {
-      const res = await fetch(`/api/editor/doc/${encodeURIComponent(slug)}/chat-session`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      data = await res.json() as { session_id: string }
-    }
-    if (!data.session_id) throw new Error('no session_id in response')
-    const d = currentDoc()
-    const label = d?.title || slug
-    // parseEdits: true asks the chat-pane to interpret JSON replies as
-    // edit-card proposals (matched against the response-format
-    // directive injected server-side for editor sessions). The four
-    // callbacks bind the cards to *this* doc: hover → highlight +
-    // smooth scroll-to-center; accept → mutate the doc + save;
-    // decline → no-op on the doc side.
-    window.dispatchEvent(new CustomEvent('poise:open-chat', {
-      detail: {
-        session: data.session_id,
-        label,
-        draft,
-        parseEdits: true,
-        onEditHover: (edit: EditProposal) => {
-          if (currentSlug !== slug) return
-          showEditHoverHighlight(edit)
-        },
-        onEditLeave: () => { clearEditHoverHighlight() },
-        onEditAccept: (edit: EditProposal) => applyEditToDoc(edit, slug),
-        onEditDecline: () => { /* no doc-side work; pane updates its own state */ },
-      },
-    }))
-  } catch (err) {
-    console.error('[editor] openChatForCurrentDoc failed:', err)
-  }
-}
-
 // ── Edit-card binding ────────────────────────────────────────────────
 //
 // The session surface fires hover / accept / decline on edit cards and
@@ -3377,29 +3329,8 @@ function updateCommentButtonForSelection(): void {
 }
 
 // Create a new annotation from the current selection, append to the
-// list, persist, and immediately open the panel for it so the user
+// list, persist, and immediately open a thread for it so the user
 // can type a comment.
-// Mint a chat session id that the server recognises as belonging to this
-// document.
-//
-// This matters more than it looks. server/chat.ts only attaches the voice
-// guide, the document's current body and the edit-proposal contract when
-// slugFromEditorSession(sessionId) matches — that is, when the id has the
-// shape `editor-<slug>-<digits>` (server/editor.ts). Annotations used to
-// reuse their own `ann-xxxxxxxx` id as the session, which never matches, so
-// "Ask the agent about this passage" sent the agent nothing but the snippet
-// in quotes. Asked what a passage said, the agent answered "The working
-// directory is empty — there's no file or image here for me to read."
-//
-// The trailing group must stay all digits or the server's reverse lookup
-// rejects it, so uniqueness comes from extra digits rather than a suffix:
-// two annotations made in the same millisecond still get distinct sessions,
-// which keeps each passage's conversation separate.
-function editorChatSessionId(slug: string): string {
-  const unique = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
-  return `editor-${slug}-${unique}`
-}
-
 function createAnnotationFromSelection(): void {
   if (!currentSlug || annotationsReadySlug !== currentSlug) {
     setMeta('Annotations unavailable')
@@ -3820,10 +3751,53 @@ function openThreadForAnnotation(id: string): void {
 // Open the thread for a subject from a marker or the side pane's Back
 // button. The pane's draft moves back with it.
 function openThreadForSubject(subject: ChatSubject): void {
-  if (subject.surface !== 'editor-passage') return
   const at = subject.key.indexOf(':')
   if (at < 0) return
-  openThreadForAnnotation(subject.key.slice(at + 1))
+  if (subject.surface === 'editor-passage') openThreadForAnnotation(subject.key.slice(at + 1))
+  else if (subject.surface === 'editor-review') articleReviews?.open(subject.key.slice(at + 1))
+}
+
+// A review's thread opens under its anchored paragraph when locateReview
+// finds it, with the GitHub conversation as its first section and a private
+// agent chat below. An unlocated review renders in flow under the review
+// list instead, with no room made in the text.
+function openThreadForReview(review: ArticleReview, render: (section: HTMLElement) => void): void {
+  if (!currentSlug || !docEl) return
+  const subject: ChatSubject = { surface: 'editor-review', key: `${currentSlug}:${review.id}`, label: `Review · ${review.site} #${review.pr}` }
+  const shown = inlineThreadSubjectInView()
+  if (shown && shown.surface === subject.surface && shown.key === subject.key) return
+  const paneShown = chatSidePane.subjectInView()
+  if (paneShown && paneShown.surface === subject.surface && paneShown.key === subject.key) {
+    keepThreadDraft(subject, chatSidePane.takeDraft())
+    chatSidePane.close()
+  }
+  const page = docEl.closest('.editor-page') as HTMLElement | null
+  if (!page) return
+  const lines = Array.from(docEl.children) as HTMLElement[]
+  if (!lines.length) return
+  const hooks = editorSurfaceFor(subject)
+  const at = review.anchor ? locateReview(serializeDoc(), review.anchor) : null
+  const snap = docTextSnapshot()
+  const endLineIdx = at ? locateLine(snap.lineStarts, at.end) : -1
+  const endLine = endLineIdx >= 0 ? lines[Math.min(endLineIdx, lines.length - 1)]! : null
+  const unlocated = !at || !endLine || !domRangeForCharRange(snap, at.start, at.end)
+  if (!unlocated && endLine) {
+    const startLineIdx = locateLine(snap.lineStarts, at!.start)
+    openInlineThread({
+      page, doc: docEl, line: endLine,
+      range: startLineIdx === endLineIdx
+        ? { start: at!.start - snap.lineStarts[startLineIdx]!, end: at!.end - snap.lineStarts[endLineIdx]! }
+        : { start: 0, end: 0 },
+      subject, header: render, edits: hooks.edits, beforeSend: hooks.beforeSend!,
+    })
+    return
+  }
+  const list = viewEl?.querySelector('.editor-review-list') as HTMLElement | null
+  openInlineThread({
+    page, doc: docEl, line: lines[0]!, range: { start: 0, end: 0 },
+    subject, header: render, edits: hooks.edits, beforeSend: hooks.beforeSend!,
+    ...(list ? { inFlowAfter: list } : {}),
+  })
 }
 
 // An annotation carries a comment, a conversation, or both. One that closes
@@ -4716,13 +4690,7 @@ export async function initEditorView() {
       view: viewEl, document: docEl!, text: serializeDoc,
       range: (start, end) => domRangeForCharRange(docTextSnapshot(), start, end),
       beforeOpen: closeInlineThread,
-      ask: (review: ArticleReview) => {
-        if (!currentSlug) return
-        const key = `${currentSlug}:${review.id}`
-        const session = reviewSessions.get(key) ?? editorChatSessionId(currentSlug)
-        reviewSessions.set(key, session)
-        void openChatForCurrentDoc(`Help me address this review from @${review.messages[0]?.author} on ${review.site} (${review.prUrl}).\n\n${review.messages.map((message) => `@${message.author}: ${message.body}`).join('\n\n')}\n\n${review.anchor?.quote ?? ''}`, session)
-      },
+      openThread: (review, render) => openThreadForReview(review, render),
     })
     attachHandlers()
     setGoogleNavigationGuard(prepareGoogleNavigation)

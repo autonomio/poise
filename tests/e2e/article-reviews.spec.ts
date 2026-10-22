@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import type { ArticleReview, ArticleReviews } from '../../src/publishing-review'
 import { REVIEW_INTERVAL_MS } from '../../src/publishing-review'
 import { workspace } from './fixtures/workspace'
+import { installRoutes, installSocket, makeState } from './fixtures/chat'
+type ChatSocket = Awaited<ReturnType<typeof installSocket>>
 
 const VERSION = 'a'.repeat(64)
 const TEXT = '# A question\n\nOpening paragraph.\n\nA final thought.'
@@ -13,6 +15,16 @@ const review = (): ArticleReview => ({
 
 async function editorWithReviews(page: Page, initial: ArticleReview[] = [review()]) {
   await workspace(page)
+  const state = makeState([], {})
+  state.models = {
+    catalog: { models: [{ identity: 'opus-5-max', selector: 'claude-opus-5', effort: 'max', provider: 'claude' }], review_providers: [], path: '' },
+    places: [{ key: 'editor', default: 'opus-5-max' }],
+    fixed: [],
+    refresh: null,
+  }
+  state.forbidLegacyChat = true
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
   const data: ArticleReviews = { reviews: initial, checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [] }
   const calls: Array<{ path: string, body: Record<string, unknown> }> = []
   let content = TEXT
@@ -45,7 +57,7 @@ async function editorWithReviews(page: Page, initial: ArticleReview[] = [review(
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
   await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
   await expect.poll(() => calls.filter((call) => call.path.endsWith('/sync')).length).toBe(1)
-  return { calls, data }
+  return { calls, data, state, sock }
 }
 
 test('an inline review survives editing, updates the existing PR, and supports reply and resolution', async ({ page }, info) => {
@@ -60,7 +72,7 @@ test('an inline review survives editing, updates the existing PR, and supports r
   // The comment's time is on Poise's clock in Settings' time zone, UTC here.
   await expect(panel.locator('.editor-review-messages time')).toHaveText(/^18 Oct (2026 )?08:00$/)
   await expect(panel.getByRole('link', { name: 'PR #7' })).toHaveAttribute('href', 'https://github.com/acme/site/pull/7')
-  await expect(panel.locator('textarea')).toHaveCount(1)
+  await expect(panel.locator('.editor-review-reply')).toHaveCount(1)
   await expect.poll(() => panel.getAttribute('data-motion-running')).toBeNull()
   await page.screenshot({ path: info.outputPath('inline-review.png') })
 
@@ -106,15 +118,13 @@ test('general, metadata, outdated and ambiguous feedback stays accessible withou
 })
 
 test('private agent assistance drafts the review context without sending to GitHub', async ({ page }) => {
-  const { calls } = await editorWithReviews(page)
-  await page.evaluate(() => window.addEventListener('poise:open-chat', (event) => {
-    const detail = (event as CustomEvent<{ draft?: string, session: string }>).detail
-    document.body.dataset.reviewChat = JSON.stringify({ draft: detail.draft, session: detail.session })
-  }))
+  const { calls, state } = await editorWithReviews(page)
   await page.locator('.editor-review-mark').first().click()
-  await page.getByRole('button', { name: 'Ask agent privately' }).click()
-  await expect.poll(() => page.locator('body').getAttribute('data-review-chat')).toContain('Please clarify this passage.')
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await expect(panel).toContainText('Private agent thread · not posted to GitHub')
+  await expect(panel.locator('.editor-inline-thread-surface .chat-input')).toBeVisible()
   expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+  expect(state.calls.filter((call) => call.path === '/api/chat')).toEqual([])
 })
 
 test('review replies survive refreshing and retain reviewer text as read-only', async ({ page }) => {
@@ -220,4 +230,106 @@ for (const action of ['reply', 'resolve'] as const) test(`an earlier sync cannot
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   if (action === 'reply') await expect(panel).toContainText('A retained reply.')
   else await expect(panel.locator('.editor-review-state')).toHaveText('Resolved')
+})
+
+const thread = (page: Page) => page.locator('.editor-inline-thread')
+const threadInput = (page: Page) => thread(page).locator('.chat-input')
+const threadTranscript = (page: Page) => thread(page).locator('.chat-surface-transcript')
+
+async function sendThreadMessage(page: Page, sock: ChatSocket, text: string): Promise<string> {
+  const before = sock.framesOf('prompt').length
+  await threadInput(page).fill(text)
+  await threadInput(page).press('Enter')
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(before + 1)
+  return (sock.framesOf('prompt')[before].command as { sessionId: string }).sessionId
+}
+
+async function finishReply(sock: ChatSocket, id: string, text: string, reply: string) {
+  await sock.subscribed(id)
+  const turnId = 't1'
+  const messageId = 't1-reply'
+  return [
+    sock.push(id, { type: 'turn.started', turnId, prompt: { text, attachments: [], mentions: [] } }),
+    sock.push(id, { type: 'text.delta', turnId, messageId, delta: reply }),
+    sock.push(id, { type: 'turn.finished', turnId, stopReason: 'end_turn' }),
+  ]
+}
+
+test("opens a review thread inline with its GitHub conversation and a private agent chat", async ({ page }) => {
+  const { state, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await expect(panel).toContainText('Review · Site')
+  await expect(panel).toContainText('Please clarify this passage.')
+  await expect(panel.getByRole('button', { name: 'Reply on GitHub', exact: true })).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Resolve thread', exact: true })).toBeVisible()
+  await expect(panel).toContainText('Private agent thread · not posted to GitHub')
+  const id = await sendThreadMessage(page, sock, 'How should I address this?')
+  const created = state.calls.find((call) => call.method === 'POST' && call.path === '/api/chat/sessions')
+  expect(created?.body).toMatchObject({ subject: { surface: 'editor-review', key: 'draft:thread-1' } })
+  await finishReply(sock, id, 'How should I address this?', 'Clarify the opening sentence.')
+  await expect(threadTranscript(page)).toContainText('Clarify the opening sentence.')
+  // Under the anchored paragraph.
+  const box = await thread(page).boundingBox()
+  const line = page.locator('#editor-doc .editor-line', { hasText: 'Opening paragraph.' }).first()
+  const lineBox = await line.boundingBox()
+  expect(box!.y).toBeGreaterThanOrEqual(lineBox!.y + lineBox!.height - 16)
+})
+
+test("keeps a review's private chat across a reload", async ({ page }) => {
+  const { state, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const id = await sendThreadMessage(page, sock, 'How should I address this?')
+  const envelopes = await finishReply(sock, id, 'How should I address this?', 'Clarify the opening sentence.')
+  state.history[id] = envelopes
+  await page.reload()
+  await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
+  await page.locator('.editor-review-mark').first().click()
+  await expect(threadTranscript(page)).toContainText('Clarify the opening sentence.')
+})
+
+test('fills the GitHub reply from a suggested reply without posting it', async ({ page }) => {
+  const { calls, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  const id = await sendThreadMessage(page, sock, 'Draft a reply')
+  const reply = JSON.stringify({ chat: 'Here is a draft.', reply: 'Thanks — clarified in the latest update.' })
+  await finishReply(sock, id, 'Draft a reply', reply)
+  await expect(threadTranscript(page)).toContainText('Suggested GitHub reply')
+  await threadTranscript(page).getByRole('button', { name: 'Use as reply', exact: true }).click()
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Thanks — clarified in the latest update.')
+  expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+})
+
+test("opens an unlocated review's thread under the review list", async ({ page }) => {
+  const missing: ArticleReview = { ...review(), id: 'missing', anchor: { quote: 'Absent passage.', before: '', after: '', unique: false }, outdated: true }
+  await editorWithReviews(page, [missing])
+  await expect(page.locator('.editor-review-mark')).toHaveCount(0)
+  await page.locator('.editor-review-list summary').click()
+  await page.locator('.editor-review-item').click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await expect(panel).toContainText('Passage changed or ambiguous')
+  // In flow directly under the list, with no room made in the text.
+  const placement = await page.evaluate(() => {
+    const list = document.querySelector('.editor-review-list')!
+    const dialog = document.querySelector('.editor-inline-thread')!
+    const padded = [...document.querySelectorAll('#editor-doc .editor-line')].filter((el) => (el as HTMLElement).style.paddingBottom)
+    return { afterList: list.nextElementSibling === dialog, padded: padded.length }
+  })
+  expect(placement.afterList).toBe(true)
+  expect(placement.padded).toBe(0)
+})
+
+test("keeps the private chat's draft while the review re-renders", async ({ page }) => {
+  await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await panel.getByLabel('Reply on GitHub', { exact: true }).fill('An unfinished reply.')
+  await threadInput(page).fill('An unsent private thought')
+  const line = page.locator('#editor-doc .editor-line').first()
+  await line.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' More.')
+  await expect(threadInput(page)).toHaveValue('An unsent private thought')
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('An unfinished reply.')
 })
