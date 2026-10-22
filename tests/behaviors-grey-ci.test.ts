@@ -274,6 +274,17 @@ describe('Rerun Grey CI', () => {
     await runtime.runEnabledBehaviorsOnce()
     expect(rerunCalls()).toHaveLength(2)
   })
+  it('retries a non-exhausted 403 on backoff instead of its distant reset', async () => {
+    enable(); outcome = 'read_failed'
+    const reset = Math.floor(Date.now() / 1000) + 3600
+    response = { error: `GitHub 403 rate-limit: {'x-ratelimit-remaining': '4999', 'x-ratelimit-reset': '${reset}'} body={"message":"Resource not accessible by integration"}` }
+    await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toHaveLength(1)
+    vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(61_000)
+    outcome = 'rerun_requested'; response = {}
+    await runtime.runEnabledBehaviorsOnce()
+    expect(rerunCalls()).toHaveLength(2)
+  })
   it('reruns later batches when an earlier batch read fails', async () => {
     enable(); pulls = Array.from({ length: 51 }, (_, i) => pull(REPO, i + 1)); greyNumbers = new Set([51])
     batchFailures = 1

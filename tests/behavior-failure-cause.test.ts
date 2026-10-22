@@ -81,15 +81,24 @@ describe('rate-limit retry time', () => {
   })
   it('reads a JSON-quoted reset and prefers the later of reset and retry-after', () => {
     const reset = Math.floor(now / 1000) + 300
-    expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {"x-ratelimit-reset": "${reset}"}`, now)).toBe(reset * 1000)
-    expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {'x-ratelimit-reset': '${reset}', 'retry-after': '600'}`, now)).toBe(now + 600_000)
+    expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "${reset}"}`, now)).toBe(reset * 1000)
+    expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '${reset}', 'retry-after': '600'}`, now)).toBe(now + 600_000)
     expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {'retry-after': '30'}`, now)).toBe(now + 30_000)
+  })
+  it('honors a short retry-after over a distant reset while quota remains', () => {
+    const reset = Math.floor(now / 1000) + 3000
+    expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {'x-ratelimit-remaining': '42', 'x-ratelimit-reset': '${reset}', 'retry-after': '30'}`, now)).toBe(now + 30_000)
   })
   it('ignores anything without a sane stated time', () => {
     expect(rateLimitRetryAtMs('GitHub read unavailable', now)).toBeNull()
-    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-reset': 'yesterday'}`, now)).toBeNull()
-    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-reset': '1'}`, now)).toBeNull()
-    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-reset': '${Math.floor(now / 1000) + 100_000}'}`, now)).toBeNull()
+    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': 'yesterday'}`, now)).toBeNull()
+    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1'}`, now)).toBeNull()
+    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '${Math.floor(now / 1000) + 100_000}'}`, now)).toBeNull()
     expect(rateLimitRetryAtMs(`GitHub 429 rate-limit: {'retry-after': '999999'}`, now)).toBeNull()
+  })
+  it('ignores the reset while quota remains or its state is unknown', () => {
+    const reset = Math.floor(now / 1000) + 300
+    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-remaining': '4999', 'x-ratelimit-reset': '${reset}'} body={"message":"Resource not accessible by integration"}`, now)).toBeNull()
+    expect(rateLimitRetryAtMs(`GitHub 403 rate-limit: {'x-ratelimit-reset': '${reset}'}`, now)).toBeNull()
   })
 })
