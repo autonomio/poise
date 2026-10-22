@@ -779,6 +779,24 @@ describe('updates in place', () => {
     expect(h.logs.find((entry) => entry.event === 'workspace.update.unreachable')).toMatchObject({ handle: 'alice' })
   })
 
+  it('starts a fresh grace when the target release changes after missed probes', async () => {
+    await start()
+    const before = containerId()
+    h.workspace.reachable = false
+    await h.orchestrator.upgradePass()
+    expect(containerId()).toBe(before)
+    h.advance(11 * 60_000)
+    // A newer image arrives while the workspace is still dark: its misses belong to the old release.
+    h.docker.imageLabels.set(CURRENT_IMAGE_ID, { 'poise.release': 'third-release', 'poise.base': BASE })
+    await h.orchestrator.upgradePass()
+    expect(containerId()).toBe(before)
+    expect(h.workspace.serviceRequests.some((request) => request.url === '/api/service/drain')).toBe(false)
+    h.advance(11 * 60_000)
+    await h.orchestrator.upgradePass()
+    expect(containerId()).not.toBe(before)
+    expect(h.logs.find((entry) => entry.event === 'workspace.update.unreachable')).toMatchObject({ handle: 'alice' })
+  })
+
   it('forgets missed probes once the workspace answers again', async () => {
     await start()
     const before = containerId()
