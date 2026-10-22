@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 import { installRoutes, installSocket, makeState } from './fixtures/chat'
+type ServerState = ReturnType<typeof makeState>
 const VERSION = 'a'.repeat(64), REMOTE = 'b'.repeat(64), TEXT = '# Draft\n\nThe local paragraph.\n'
 const GOOGLE_PROPOSAL = JSON.stringify({
   chat: 'One small edit.',
@@ -8,12 +9,15 @@ const GOOGLE_PROPOSAL = JSON.stringify({
 })
 const accounts = { configured: true, clientId: 'poise.apps.googleusercontent.com', origin: 'http://127.0.0.1:5566', accounts: [{ id: 'one', email: 'one@example.test', connected: true }, { id: 'two', email: 'two@example.test', connected: true }] }
 const publication = { accountId: 'one', fileId: 'file-one', title: 'Draft', url: 'https://docs.google.com/document/d/file-one/edit', sourceSha: VERSION, remoteSha: REMOTE, email: 'one@example.test', connected: true, remoteChanged: true, localChanged: true, comments: [{ id: 'c1', author: 'Reviewer', body: 'Please clarify.', quote: 'The local paragraph.', resolved: false, replies: [{ author: 'Second reviewer', body: 'Please also check the example.' }], start: 9, end: 29 }] }
-async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string, emptyFirstLoad?: boolean } = {}) {
+async function setup(page: Page, options: { initialSyncFailure?: boolean, remoteText?: string, emptyFirstLoad?: boolean, chatState?: ServerState } = {}) {
   await workspace(page, 'current', undefined, { preserveOnReload: true })
   let content = TEXT
   const remoteText = options.remoteText ?? '# Draft\n\nThe Google paragraph.\n'
   let docListReads = 0
   const actions: Array<{ path: string, body: Record<string, unknown> }> = []
+  // After the workspace catch-all but before the editor routes: REST routes
+  // resolve last-registered-wins, so the chat fixture must sit between them.
+  if (options.chatState) await installRoutes(page, options.chatState)
   await page.route('**/api/google/accounts', route => route.fulfill({ json: accounts }))
   await page.route('**/api/editor/**', async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method()
@@ -180,9 +184,7 @@ test('import freezes typing and agent edits before draining pending annotation s
     refresh: null,
   }
   const sock = await installSocket(page, state)
-  const actions = await setup(page), google = page.locator('.google-documents')
-  // REST routes resolve last-registered-wins, so these go after setup.
-  await installRoutes(page, state)
+  const actions = await setup(page, { chatState: state }), google = page.locator('.google-documents')
   // The document chat holds one pending agent edit while the import runs.
   await page.locator('.editor-chat-btn').click()
   await expect(page.locator('#chat-side-pane')).toBeVisible()

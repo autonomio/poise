@@ -163,10 +163,18 @@ test('keeps the saved document text unchanged while a thread is open', async ({ 
   await openThreadForMark(page, 'ann-1')
   expect(await page.locator('#editor-doc').innerText()).toBe(before)
   // Enter in the passage's last line splits the text, not the thread. The
-  // line carries the thread's padding, so click its text, not its center.
-  const line = page.locator('#editor-doc .editor-line', { hasText: 'Opening paragraph.' }).first()
-  await line.click({ position: { x: 8, y: 8 } })
-  await page.keyboard.press('End')
+  // annotation mark covers the passage text, so focus lands on the title
+  // line and the caret moves to the passage end directly instead of by click.
+  await page.locator('#editor-doc .editor-line').first().click()
+  await page.evaluate(() => {
+    const line = [...document.querySelectorAll('#editor-doc .editor-line')].find((el) => el.textContent!.includes('Opening paragraph.'))!
+    const range = document.createRange()
+    range.selectNodeContents(line)
+    range.collapse(false)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
   await page.keyboard.press('Enter')
   await expect.poll(() => saves.length).toBe(1)
   expect(saves[0]).toBe(TEXT.replace('Opening paragraph.\n', 'Opening paragraph.\n\n'))
