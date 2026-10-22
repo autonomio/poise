@@ -558,7 +558,7 @@ Both scripts capture workspace handles before building or retagging the image,
 then retain that inventory and add any workspaces observed during verification.
 A removed container stays pending until its replacement is verified; another
 healthy workspace cannot hide a missing one.
-The private `deploy/.workspace-proof` retains unfinished obligations across
+The private `deploy/.env.workspace-proof` retains unfinished obligations across
 failed deploys and retries, and is cleared after successful verification.
 It proves handles captured by these scripts; a workspace already absent before
 the first captured inventory cannot be inferred from that inventory.

@@ -405,7 +405,7 @@ class VerifyTest(LibTest):
 
 
 class RestoreProofTest(LibTest):
-    def restore(self, succeeds):
+    def restore(self, succeeds, unclearable_proof=False):
         directory = os.path.join(self.work.name, 'operator')
         os.mkdir(directory)
         with open(os.path.join(directory, 'lib.sh'), 'w') as file:
@@ -430,7 +430,11 @@ class RestoreProofTest(LibTest):
             with open(os.path.join(self.bin, 'sha256sum'), 'w') as file:
                 file.write(f'#!/bin/sh\nexec {shlex.quote(shutil.which("shasum"))} -a 256 "$@"\n')
             os.chmod(os.path.join(self.bin, 'sha256sum'), 0o755)
-        with open(self.state + '.proof', 'w') as file:
+        proof = self.state + '.proof'
+        if unclearable_proof:
+            os.mkdir(proof)
+            proof = os.path.join(proof, 'pending')
+        with open(proof, 'w') as file:
             file.write('bob ')
         with open(self.state, 'w') as file:
             json.dump({'image_id': IMAGE_ID, 'containers': [], 'health': {},
@@ -452,6 +456,45 @@ class RestoreProofTest(LibTest):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         with open(self.state + '.proof') as file:
             self.assertEqual(file.read(), 'bob ')
+
+    def test_unclearable_proof_rolls_back_restored_volumes_and_retains_proof(self):
+        result = self.restore(True, unclearable_proof=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('cannot clear the completed workspace proof', result.stderr)
+        with open(os.path.join(self.state + '.proof', 'pending')) as file:
+            self.assertEqual(file.read(), 'bob ')
+        with open(self.state) as file:
+            state = json.load(file)
+        self.assertEqual(state['volumes'], [])
+        self.assertTrue(any(call.startswith('volume rm ') for call in state['calls']))
+
+
+class RollbackProofTest(LibTest):
+    def test_pending_proof_keeps_an_older_checkout_clean_for_an_exact_sha_rollback(self):
+        checkout = os.path.join(self.work.name, 'rollback')
+        directory = os.path.join(checkout, 'deploy')
+        os.makedirs(directory)
+        library = os.path.join(directory, 'lib.sh')
+        shutil.copyfile(LIB, library)
+        # This ignore rule predates deployment verification. Rolling back
+        # must not turn its retained private proof into an untracked source edit.
+        with open(os.path.join(checkout, '.gitignore'), 'w') as file:
+            file.write('.env\n.env.*\n!.env.example\n')
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(('POISE_', 'COMPOSE_', 'GIT_'))}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                   GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                   GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid',
+                   PATH=f'{self.bin}{os.pathsep}{env["PATH"]}', FAKE_DOCKER_STATE=self.state)
+        for args in [('init', '--quiet'), ('add', '.'), ('commit', '--quiet', '-m', 'chore: fixture rollback target')]:
+            subprocess.run(['git', '-C', checkout, *args], env=env, check=True, capture_output=True)
+        target = subprocess.check_output(['git', '-C', checkout, 'rev-parse', 'HEAD'], env=env, text=True).strip()
+        with open(self.state, 'w') as file:
+            json.dump({'containers': [f'bob {OLD_IMAGE_ID} true /poise-ws-bob'], 'calls': []}, file)
+        result = subprocess.run(['bash', '-c', '. "$0"; workspace_handles >/dev/null; source_sha', library],
+                                capture_output=True, text=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, target, result.stderr)
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'pending ages read ISO times with GNU date, as on the Linux server')
