@@ -12,9 +12,11 @@ import type {
   AgentId,
   ChatEnvelope,
   ChatSubject,
+  EditDecision,
   NewSessionRequest,
   SessionRecord,
 } from '../../server/chat/protocol'
+import type { EditProposal } from '../edit-proposals'
 import { parseChatCommandChain } from '../../server/chat/commands'
 import { createComposer, emptyDraft, type Composer, type ComposerDraft } from './chat-composer'
 import { createModel, applyEvent, addOptimisticTurn, dropOptimisticTurns, createTranscriptView, renderImportedHtml, type TranscriptModel } from './chat-transcript'
@@ -24,6 +26,16 @@ export interface SurfaceOptions {
   subject: ChatSubject
   prefill?: string
   draft?: ComposerDraft
+  /** Runs before an Editor surface sends, so the saved body the agent reads
+   *  is what the person sees. A throw aborts the send with the draft kept. */
+  beforeSend?: () => Promise<void>
+  /** Edit-card wiring for Editor surfaces: hover highlights the target,
+   *  accept applies the edit and saves before the decision is recorded. */
+  edits?: {
+    hover(edit: EditProposal): void
+    leave(): void
+    accept(edit: EditProposal): Promise<'applied' | 'conflict' | 'failed'>
+  }
 }
 
 export interface SessionSurface {
@@ -31,6 +43,7 @@ export interface SessionSurface {
   focus(): void
   takeDraft(): ComposerDraft | null
   destroy(): void
+  setHighlight(text: string | null): void
 }
 
 interface ModelPlaceAnswer {
@@ -58,17 +71,21 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   let destroyed = false
   let pendingModel: string | null = null
   let agents: AgentsResponse | null = null
+  /** Text highlighted in the document, sent as a quote with the next message. */
+  let highlight: string | null = null
 
   container.classList.add('chat-surface')
   container.innerHTML = '<div class="chat-surface-notice" hidden></div>'
     + '<div class="chat-surface-earlier" hidden></div>'
     + '<div class="chat-surface-transcript"></div>'
     + '<div class="chat-surface-queue"></div>'
+    + '<div class="chat-surface-highlight" hidden></div>'
     + '<div class="chat-surface-composer"></div>'
   const noticeEl = container.querySelector<HTMLElement>('.chat-surface-notice')!
   const earlierEl = container.querySelector<HTMLElement>('.chat-surface-earlier')!
   const transcriptEl = container.querySelector<HTMLElement>('.chat-surface-transcript')!
   const queueEl = container.querySelector<HTMLElement>('.chat-surface-queue')!
+  const highlightEl = container.querySelector<HTMLElement>('.chat-surface-highlight')!
   const composerEl = container.querySelector<HTMLElement>('.chat-surface-composer')!
 
   const transcript = createTranscriptView(transcriptEl, {
@@ -76,6 +93,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     onQuestion: (id, answers) => { if (record) void chatClient.send({ type: 'question.answer', sessionId: record.id, id, answers }).catch((err) => setNotice(`Answer failed — ${(err as Error).message}`)) },
     onRevert: () => { setNotice('Open in Chat to revert this diff.') },
     onFile: () => { setNotice('Open in Chat to preview files.') },
+    onEditDecide: (turnId, messageId, index, decision, edit) => { void decideEdit(turnId, messageId, index, decision, edit) },
+    onEditHover: (edit) => { options.edits?.hover(edit) },
+    onEditLeave: () => { options.edits?.leave() },
   })
   transcriptEl.addEventListener('chat:rerender', render)
 
@@ -132,6 +152,57 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     container.dispatchEvent(new CustomEvent('chat:surface-state', { bubbles: true, detail: { sessionId: record?.id ?? null, status: record?.status ?? null } }))
   }
 
+  function renderHighlight(): void {
+    if (!highlight) { highlightEl.hidden = true; highlightEl.innerHTML = ''; return }
+    highlightEl.hidden = false
+    highlightEl.innerHTML = ''
+    const flat = highlight.replace(/\s+/g, ' ').trim()
+    const excerpt = flat.length > 80 ? `${flat.slice(0, 80)}…` : flat
+    const label = document.createElement('span')
+    label.textContent = `Highlighted · “${excerpt}”`
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'chat-surface-highlight-remove'
+    remove.setAttribute('aria-label', 'Remove highlight')
+    remove.textContent = '×'
+    remove.addEventListener('click', () => setHighlight(null))
+    highlightEl.append(label, remove)
+  }
+
+  function setHighlight(text: string | null): void {
+    highlight = text
+    renderHighlight()
+  }
+
+  /** The highlight travels as a quote at the start of the message text, so
+   *  prompts, steers and queued messages carry it unchanged, it shows in the
+   *  person's bubble in every surface, and it survives a reload. */
+  function withHighlight(text: string): string {
+    if (!highlight) return text
+    return `${highlight.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${text}`
+  }
+
+  async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit: EditProposal): Promise<void> {
+    if (!record || !options.edits) return
+    if (decision === 'applied') {
+      let outcome: 'applied' | 'conflict' | 'failed'
+      try {
+        outcome = await options.edits.accept(edit)
+      } catch (err) {
+        setNotice(`Accept failed — ${(err as Error).message}`)
+        return
+      }
+      // A failed save records nothing; the Editor showed the save error.
+      if (outcome === 'failed') return
+      decision = outcome
+    }
+    try {
+      await chatClient.send({ type: 'edit.decide', sessionId: record.id, turnId, messageId, index, decision })
+    } catch (err) {
+      setNotice(`Decision failed — ${(err as Error).message}`)
+    }
+  }
+
   function composerState(): void {
     const status = record?.status
     const closed = status === 'closed'
@@ -148,7 +219,11 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   function render(): void {
     if (destroyed) return
-    transcript.render(model, { running: !!record && isRunning(record.status), sessionId: record?.id })
+    transcript.render(model, {
+      running: !!record && isRunning(record.status),
+      sessionId: record?.id,
+      ...(subject.surface === 'current' ? {} : { edits: { surface: subject.surface, readOnly: false } }),
+    })
     composer.setCommands(record?.commands || [], { model: true, modes: false, fork: false, poise: false, create: false })
     queuePanel.render(record?.id ?? null, record?.queue, agents?.agents || [], !!record && isRunning(record.status), new Set())
     composerState()
@@ -162,8 +237,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   async function placeDefault(): Promise<{ agent: AgentId, model: string }> {
     const answer = await (await fetch('/api/models', { cache: 'no-store' })).json() as ModelPlaceAnswer
-    const identity = answer.places.find((place) => place.key === 'chat')?.default
-    if (!identity) throw new Error('Chat has no default model. Choose one in the console.')
+    const place = subject.surface === 'current' ? 'chat' : 'editor'
+    const identity = answer.places.find((row) => row.key === place)?.default
+    if (!identity) throw new Error(`${place === 'chat' ? 'Chat' : 'Editor chat'} has no default model. Choose one in the console.`)
     const provider = answer.catalog.models.find((row) => row.identity === identity)?.provider
     return { agent: (provider || 'grok') as AgentId, model: identity }
   }
@@ -255,6 +331,11 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     const text = commandDraftText({ ...draft, text: draft.text })
     const refused = refusedCommand(text)
     if (refused) { keepDraft(draft); setNotice(`Open in Chat to use /${refused}.`); return }
+    if (options.beforeSend) {
+      try {
+        await options.beforeSend()
+      } catch (err) { keepDraft(draft); setNotice((err as Error).message); return }
+    }
     const chain = parseChatCommandChain(text)
     if (chain.context === 'reset' && !chain.queue) { await resetThenSend(draft); return }
     if (!record) {
@@ -266,7 +347,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
       await ensureSession(first)
     } catch (err) { creationFailed(err, draft, () => sendPrompt(draft)); return }
     const session = record!
-    const prompt = { text, attachments: draft.attachments, mentions: draft.mentions }
+    const prompt = { text: withHighlight(text), attachments: draft.attachments, mentions: draft.mentions }
     dropOptimisticTurns(model)
     addOptimisticTurn(model, prompt)
     record = { ...session, ...(!session.title ? { title: text.slice(0, 200) } : {}), status: 'running' }
@@ -274,6 +355,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     render()
     try {
       await chatClient.send({ type: 'prompt', sessionId: session.id, ...prompt })
+      setHighlight(null)
     } catch (err) {
       dropOptimisticTurns(model)
       if (record?.status === 'running' && !model.running) record = { ...record, status: 'idle' }
@@ -330,6 +412,11 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
 
   async function queuePrompt(draft: ComposerDraft): Promise<void> {
     const chain = parseChatCommandChain(commandDraftText(draft))
+    if (options.beforeSend) {
+      try {
+        await options.beforeSend()
+      } catch (err) { keepDraft(draft); setNotice((err as Error).message); return }
+    }
     const first = { ...draft, model: draft.model || chain.model }
     try {
       await ensureSession(first)
@@ -337,9 +424,10 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     const session = record!
     try {
       const queue = await chatClient.queueCommand({ type: 'queue.add', sessionId: session.id, itemId: crypto.randomUUID(),
-        text: chain.text, attachments: draft.attachments, mentions: draft.mentions, model: first.model || session.model })
+        text: withHighlight(chain.text), attachments: draft.attachments, mentions: draft.mentions, model: first.model || session.model })
       record = { ...session, queue }
       setNotice(null)
+      setHighlight(null)
       render()
     } catch (err) {
       keepDraft(draft)
@@ -362,8 +450,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   async function steer(draft: ComposerDraft): Promise<void> {
     if (!record) return
     try {
-      await chatClient.send({ type: 'steer', sessionId: record.id, text: draft.text,
+      await chatClient.send({ type: 'steer', sessionId: record.id, text: withHighlight(draft.text),
         ...(draft.attachments.length ? { attachments: draft.attachments } : {}), ...(draft.mentions.length ? { mentions: draft.mentions } : {}) })
+      setHighlight(null)
     } catch (err) {
       keepDraft(draft)
       setNotice(`Steer failed — ${(err as Error).message}`)
@@ -445,6 +534,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
       const draft = composer.getDraft()
       return draft.text || draft.attachments.length ? draft : null
     },
+    setHighlight,
     destroy: () => {
       if (destroyed) return
       destroyed = true

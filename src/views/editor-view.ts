@@ -8,7 +8,11 @@ import { ICON_PUBLISH, closePublishPanel, togglePublishPanel } from './editor-pu
 import { setGoogleConnectionResult, setGoogleNavigationGuard, takeGoogleConnectionResult, takeGooglePublishReturn } from '../google'
 import { EditorReviews } from './editor-reviews'
 import { GoogleDocuments } from './google-documents'
+import { chatSidePane, registerEditorSurface } from './chat-side-pane'
+import type { SurfaceOptions } from './chat-session-surface'
 import type { ArticleReview } from '../publishing-review'
+import type { ChatSubject } from '../../server/chat/protocol'
+import type { EditProposal } from '../edit-proposals'
 // Editor — minimalist markdown writing surface.
 //
 // Single horizontal control bar at the top, sharing the exact alignment
@@ -2301,6 +2305,7 @@ async function loadDoc(slug: string) {
   if (!(await flushBeforeLeavingDocument('switch documents')) || requestId !== loadRequestId) return
   closePanel()
   closePublishPanel()
+  chatSidePane.setHighlight(null)
   try {
     const res = await fetch(`/api/editor/doc/${encodeURIComponent(slug)}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2501,12 +2506,12 @@ async function openChatForCurrentDoc(draft?: string, reviewSession?: string): Pr
         label,
         draft,
         parseEdits: true,
-        onEditHover: (edit: EditCardData) => {
+        onEditHover: (edit: EditProposal) => {
           if (currentSlug !== slug) return
           showEditHoverHighlight(edit)
         },
         onEditLeave: () => { clearEditHoverHighlight() },
-        onEditAccept: (edit: EditCardData) => applyEditToDoc(edit, slug),
+        onEditAccept: (edit: EditProposal) => applyEditToDoc(edit, slug),
         onEditDecline: () => { /* no doc-side work; pane updates its own state */ },
       },
     }))
@@ -2517,31 +2522,21 @@ async function openChatForCurrentDoc(draft?: string, reviewSession?: string): Pr
 
 // ── Edit-card binding ────────────────────────────────────────────────
 //
-// The chat-pane fires hover / accept / decline events on edit cards
-// and passes back a plain-object EditCardData shape (mirrors the
-// EditProposal interface in chat-pane.ts — kept local here so the
-// editor doesn't import from a sibling view). The host's job is:
+// The session surface fires hover / accept / decline on edit cards and
+// passes back the shared EditProposal shape. The host's job is:
 //   - hover  → locate the `old` text in the doc and visually highlight
 //              it; smooth-scroll the highlight into vertical centre.
 //   - accept → apply the patch (replace `old` with `new`, or insert
 //              after `context_before` for a pure insertion), then
-//              save. Returns 'applied' or 'conflict' so the pane can
-//              update card state accordingly.
-//   - decline → nothing on the doc; pane handles its own visual.
+//              save. Returns 'applied', 'conflict' or 'failed' so the
+//              surface can record the decision accordingly.
+//   - decline → nothing on the doc; the surface records it.
 //
 // All locate operations work in the same character-offset space as
 // the existing annotation system (sum of textContent across lines,
 // joined by '\n'). Disambiguation when `old` appears more than once
 // uses context_before / context_after as anchors — the same model
 // the response-format directive promises.
-
-interface EditCardData {
-  description?: string
-  context_before?: string
-  old: string
-  new: string
-  context_after?: string
-}
 
 // Snapshot of the doc as a flat string + a line-prefix table for
 // converting global char offsets back into (line, lineOffset) pairs.
@@ -2569,7 +2564,7 @@ function docTextSnapshot(): { text: string, lineStarts: number[] } {
 // For pure insertions (old=""): the "range" is a zero-width slot
 // positioned right after context_before's occurrence; we never insert
 // blind into an ambiguous doc.
-function findCharRangeForEdit(text: string, edit: EditCardData): { start: number, end: number } | null {
+function findCharRangeForEdit(text: string, edit: EditProposal): { start: number, end: number } | null {
   const before = edit.context_before || ''
   const after  = edit.context_after  || ''
   if (edit.old === '') {
@@ -2663,7 +2658,7 @@ function locateLine(lineStarts: number[], charIdx: number): number {
 // rather than a persistent annotation underline. Replaced (not
 // appended to) on every hover so a fast move between cards doesn't
 // pile up stale marks.
-function showEditHoverHighlight(edit: EditCardData): void {
+function showEditHoverHighlight(edit: EditProposal): void {
   clearEditHoverHighlight()
   if (!docEl || !overlayEl) return
   const snap = docTextSnapshot()
@@ -2719,7 +2714,7 @@ function clearEditHoverHighlight(): void {
 // document switch, so without this an Accept landed on whatever happened to be
 // open — rewriting a document the agent never saw, and silently not applying
 // the edit to the one it was about.
-function applyEditToDoc(edit: EditCardData, slug: string): 'applied' | 'conflict' {
+function applyEditToDoc(edit: EditProposal, slug: string): 'applied' | 'conflict' {
   if (!docEl || googleImporting) return 'conflict'
   if (currentSlug !== slug) return 'conflict'
   const snap = docTextSnapshot()
@@ -2740,6 +2735,43 @@ function applyEditToDoc(edit: EditCardData, slug: string): 'applied' | 'conflict
   renderAnnotationOverlay()
   scheduleSave()
   return 'applied'
+}
+
+// Accept runs the existing apply, then saves before the decision is
+// recorded: 'applied' means the saved document changed. A failed save
+// records nothing and shows the save error; 'conflict' can be retried.
+async function acceptEditForDoc(edit: EditProposal, slug: string): Promise<'applied' | 'conflict' | 'failed'> {
+  if (applyEditToDoc(edit, slug) === 'conflict') return 'conflict'
+  if (!await flushEditorSaves()) {
+    setMeta('The edit was applied but the document could not be saved, so the decision was not recorded. Resolve the save and Accept again.')
+    return 'failed'
+  }
+  return 'applied'
+}
+
+// The document a subject's chat belongs to: the key itself for a document
+// chat, the part before the first colon for a passage or review chat.
+function editorSlugForKey(subject: ChatSubject): string {
+  if (subject.surface === 'editor-document') return subject.key
+  const at = subject.key.indexOf(':')
+  return at < 0 ? subject.key : subject.key.slice(0, at)
+}
+
+// Session-surface wiring for Editor subjects: edit cards bind to the
+// mounted subject's document, and every send flushes pending saves first so
+// the saved body the agent reads is what the person sees.
+function editorSurfaceFor(subject: ChatSubject): Pick<SurfaceOptions, 'edits' | 'beforeSend'> {
+  const slug = editorSlugForKey(subject)
+  return {
+    edits: {
+      hover: (edit) => { if (currentSlug === slug) showEditHoverHighlight(edit) },
+      leave: () => { clearEditHoverHighlight() },
+      accept: (edit) => acceptEditForDoc(edit, slug),
+    },
+    beforeSend: async () => {
+      if (!await flushEditorSaves()) throw new Error('The document has unsaved changes that could not be saved. Resolve the save before sending.')
+    },
+  }
 }
 
 async function persistDocumentSnapshot(snapshot: DocumentSaveSnapshot): Promise<void> {
@@ -4165,6 +4197,23 @@ function onPanelKeydown(e: KeyboardEvent): void {
   }
 }
 
+// While the side pane shows the open document's session, a non-collapsed
+// selection inside #editor-doc sets the surface's highlight chip; a collapsed
+// one clears it. Selections elsewhere — including in the composer — are
+// ignored, so moving focus to the composer keeps the chip. This listener must
+// not inherit the selection-actions rule above that returns early unless the
+// editor has focus.
+function updateHighlightFromSelection(): void {
+  const shown = chatSidePane.subjectInView()
+  if (!currentSlug || !docEl || shown?.surface !== 'editor-document' || shown.key !== currentSlug) return
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  if (!docEl.contains(range.commonAncestorContainer) && range.commonAncestorContainer !== docEl) return
+  const text = sel.toString()
+  chatSidePane.setHighlight(!sel.isCollapsed && text ? text : null)
+}
+
 function attachHandlers() {
   triggerEl!.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -4190,15 +4239,18 @@ function attachHandlers() {
   copyBtnEl = viewEl.querySelector<HTMLButtonElement>('.editor-copy-btn')!
   copyBtnEl.addEventListener('click', () => { void copyDoc() })
   viewEl.querySelector<HTMLButtonElement>('.editor-chat-btn')!
-    .addEventListener('click', () => { void openChatForCurrentDoc() })
-  // Chat view handoff: the person picks the repository the session runs in;
-  // the runtime stages the document into that checkout.
+    .addEventListener('click', () => {
+      if (!currentSlug) return
+      const d = currentDoc()
+      chatSidePane.toggle({ subject: { surface: 'editor-document', key: currentSlug, label: d?.title || currentSlug } })
+    })
+  // Chat view handoff: opens the document's own chat in Chat.
   viewEl.querySelector<HTMLButtonElement>('.editor-chat-session-btn')!
     .addEventListener('click', () => {
       if (!currentSlug) return
       const d = currentDoc()
       window.dispatchEvent(new CustomEvent('poise:open-chat-session', {
-        detail: { context: { kind: 'document', slug: currentSlug, title: d?.title || currentSlug }, pickRepo: true },
+        detail: { subject: { surface: 'editor-document', key: currentSlug, label: d?.title || currentSlug } },
       }))
     })
 
@@ -4931,8 +4983,8 @@ function sendPendingEditorBeacons(): void {
 // in-memory `docs` array or an older discovery response yet).
 if (typeof window !== 'undefined') {
   window.addEventListener('poise:editor-load-doc', (ev) => {
-    const slug = (ev as CustomEvent<{ slug: string }>).detail?.slug
-    if (!slug) return
+    const detail = (ev as CustomEvent<{ slug: string, session?: string }>).detail
+    if (!detail?.slug) return
     void (async () => {
       if (!initialized) {
         // initEditorView hasn't run yet — main.ts switchTo('editor')
@@ -4940,7 +4992,13 @@ if (typeof window !== 'undefined') {
         await new Promise((r) => setTimeout(r, 100))
       }
       void fetchDocs({ fresh: true })
-      await loadDoc(slug)
+      await loadDoc(detail.slug)
+      // Chat's read-only edit cards carry their session: open the document
+      // and the side pane on it.
+      if (detail.session && currentSlug === detail.slug) {
+        const d = currentDoc()
+        chatSidePane.toggle({ subject: { surface: 'editor-document', key: detail.slug, label: d?.title || detail.slug } })
+      }
     })()
   })
 }
@@ -4971,6 +5029,8 @@ export async function initEditorView() {
         if (docEl) docEl.contentEditable = !frozen && currentSlug ? 'true' : 'false'
       },
     })
+    registerEditorSurface(editorSurfaceFor)
+    document.addEventListener('selectionchange', updateHighlightFromSelection)
     articleReviews = new EditorReviews({
       view: viewEl, document: docEl!, text: serializeDoc,
       range: (start, end) => domRangeForCharRange(docTextSnapshot(), start, end),

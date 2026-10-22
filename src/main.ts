@@ -15,7 +15,7 @@ import { loggingCallId, loggingHref, type LoggingLink } from './logging'
 import { initMainView, refreshMainView, stopMainRefresh } from './views/main-view'
 import { initCurrentView, stopCurrentPolling } from './views/current-view'
 import { initSwarmView, stopSwarmRefresh, focusRow as focusSwarmRow, focusCall as focusSwarmCall } from './views/swarm-view'
-import { initChatView, stopChatRefresh, openChatSession, openChatWithContext, openChatForSubject, chatSessionInView, type NewSessionPrefill } from './views/chat-view'
+import { initChatView, stopChatRefresh, openChatSession, openChatForSubject, chatSessionInView } from './views/chat-view'
 import { initBehaviorsView, stopBehaviorsRefresh } from './views/behaviors-view'
 import { initSnippetsView } from './views/snippets-view'
 import { initEditorView, stopEditorRefresh } from './views/editor-view'
@@ -310,17 +310,15 @@ window.addEventListener('poise:open-chat', (ev) => {
 })
 
 // Chat handoffs. `{ id }` opens an existing session (Swarm's Target column);
-// `{ subject, prefill?, draft? }` opens a card's Chat session, or its
-// composer with the prefill when it has no session yet. `{ context, … }`
-// still opens the New session dialog, which the Editor uses until #370.
+// `{ subject, prefill?, draft? }` opens a subject's Chat session, or its
+// composer with the prefill when it has no session yet.
 window.addEventListener('poise:open-chat-session', (ev) => {
-  const detail = (ev as CustomEvent<{ id?: string, subject?: import('../server/chat/protocol').ChatSubject, prefill?: string, draft?: import('./views/chat-composer').ComposerDraft } & NewSessionPrefill>).detail
+  const detail = (ev as CustomEvent<{ id?: string, subject?: import('../server/chat/protocol').ChatSubject, prefill?: string, draft?: import('./views/chat-composer').ComposerDraft }>).detail
   if (!detail) return
   menu.switchTo('chat')
   window.requestAnimationFrame(() => {
     if (detail.id) void openChatSession(detail.id)
     else if (detail.subject) void openChatForSubject(detail.subject, detail.prefill, detail.draft)
-    else void openChatWithContext(detail)
   })
 })
 
@@ -361,12 +359,12 @@ window.addEventListener('popstate', () => {
   if (new URLSearchParams(location.search).get('view') === 'logging' || menu.currentView() === 'logging') menu.switchTo('logging')
 })
 
-// Chat /content → editor article. The chat pane dispatches
-// `poise:open-editor-doc` after agent-interface --author-content
-// completes; we switch to the editor view and re-dispatch a
-// `poise:editor-load-doc` event the editor view listens for.
+// Chat /content → editor article, and Chat's read-only edit cards → the
+// Editor. The sender dispatches `poise:open-editor-doc`; we switch to the
+// editor view and re-dispatch a `poise:editor-load-doc` event the editor
+// view listens for. `session` opens the side pane on that session.
 window.addEventListener('poise:open-editor-doc', (ev) => {
-  const detail = (ev as CustomEvent<{ slug: string }>).detail
+  const detail = (ev as CustomEvent<{ slug: string, session?: string }>).detail
   if (!detail?.slug) return
   menu.switchTo('editor')
   window.requestAnimationFrame(() => {
