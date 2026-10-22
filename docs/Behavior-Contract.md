@@ -105,7 +105,10 @@ exhausted", or "not signed in" or missing credentials — trips that reviewer
 instead of holding the target: Poise records one failure naming the reviewer,
 the cause and the fix, launches the next configured reviewer in its place, or
 waits when none is healthy. The trip retries on the usual backoff and clears
-when the reviewer succeeds again. Other provider blocks (a local account
+when the reviewer succeeds again, with a single probe launch per window. A
+failure Caller's recovery reports trips the recovery model while its target
+holds, and a run that posted anything holds without tripping. Other provider
+blocks (a local account
 latch, safeguards) keep the per-target hold, preventing them from launching
 identical workers.
 Codex input overflow is staged within the existing total review budget, with

@@ -602,9 +602,36 @@ export type ReviewAccountFailureKind = 'balance' | 'signin'
 
 export function reviewAccountFailure(call: LogEntry): ReviewAccountFailureKind | null {
   const error = String(call.error || '')
-  if (/\b402\b/.test(error) || /balance\s+exhausted/i.test(error)) return 'balance'
+  // A bare 402 also matches pull/issue numbers and line numbers in wrapped
+  // exceptions, so only the HTTP status reading trips: Caller's
+  // "API error (status 402 Payment Required)" and `"http_status": 402`.
+  if (/balance\s+exhausted/i.test(error)
+    || /status\s+402\b/i.test(error)
+    || /\b402\s+payment\b/i.test(error)
+    || /http_status\D{0,8}402\b/i.test(error)) return 'balance'
   if (/not\s+signed\s+in/i.test(error) || /missing\s+credentials/i.test(error)) return 'signin'
   return null
+}
+
+// Who an account failure trips: Caller's recovery report names the run's
+// primary in `model` and the failed recovery in `recovery_model`, so the
+// trip follows the model that actually refused the work.
+function accountFailureTripIdentity(call: LogEntry): string | null {
+  if (call.error_code === 'review_recovery_failed') return call.recovery_model || null
+  return call.model || null
+}
+
+// Only a run that provably posted nothing trips: anything submitted proves
+// the account worked, and holds exactly as before.
+function postedNothing(call: LogEntry): boolean {
+  return !call.head_sha && call.review_id == null && call.receipts == null
+}
+
+// A recovery report holds its target even as it trips the recovery model:
+// the primary hit its output limit and needs the recovery to proceed, so
+// releasing would relaunch it every tick.
+function tripHoldsTarget(call: LogEntry): boolean {
+  return call.error_code === 'review_recovery_failed'
 }
 
 const REVIEWER_TRIP_TARGET_PREFIX = 'reviewer:'
@@ -621,9 +648,29 @@ function tripReviewerAccount(behavior: PanelBehavior, identity: string, kind: Re
 }
 
 // A trip one panel behavior recorded gates the other too, until its backoff
-// comes due and one launch probes whether the account works again.
+// comes due and one probe launch tests whether the account works again.
 function reviewerAccountTripped(identity: string): boolean {
   return PANEL_BEHAVIORS.some((behavior) => !behaviorRetryDue(behavior, reviewerTripTarget(identity)))
+}
+
+// Claims this launch as the backoff window's probe: bumps every due trip
+// record for the identity first, so waiting targets behind it in the same
+// tick resolve the substitute instead of launching a wave of probes. The
+// probe's success clears the trip; its failure re-trips with a longer
+// backoff. True for a reviewer with no trip at all. Two racing ticks may
+// each claim one probe; anything more is serialized out.
+function claimReviewerTripProbe(identity: string): boolean {
+  const trips = PANEL_BEHAVIORS.map((behavior) => ({
+    behavior,
+    trip: readBehaviorFailure(behavior, reviewerTripTarget(identity)),
+  }))
+  if (trips.some(({ trip }) => trip && Date.now() < trip.nextRetryAtMs)) return false
+  for (const { behavior, trip } of trips) {
+    if (!trip) continue
+    recordBehaviorFailure(behavior, 'operation', trip.error ?? `${identity} cannot review`,
+      reviewerTripTarget(identity), trip.callId ? { callId: trip.callId } : undefined)
+  }
+  return true
 }
 
 function clearReviewerAccountTrip(identity: string): void {
@@ -1473,10 +1520,13 @@ async function reconcileBehaviorLaunchClaims(
     }
     if (FAILED_AGENT_STATUSES.has(status) && boundedReviewFailure(call)) {
       const accountFailure = reviewAccountFailure(call)
-      if (behavior === 'review-new-prs' && accountFailure && call.model) {
-        tripReviewerAccount(behavior, call.model, accountFailure, call.id)
-        releaseOwnedClaim(behavior, claim.target, claim.claimId)
-        continue
+      const tripIdentity = accountFailure ? accountFailureTripIdentity(call) : null
+      if (behavior === 'review-new-prs' && accountFailure && tripIdentity && postedNothing(call)) {
+        tripReviewerAccount(behavior, tripIdentity, accountFailure, call.id)
+        if (!tripHoldsTarget(call)) {
+          releaseOwnedClaim(behavior, claim.target, claim.claimId)
+          continue
+        }
       }
       deadLetterClaim(claim, call.error || 'Review needs attention')
       continue
@@ -1501,10 +1551,13 @@ async function reconcileBehaviorLaunchClaims(
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
         const accountFailure = reviewAccountFailure(call)
-        if (behavior === 'review-new-prs' && accountFailure && call.model) {
-          tripReviewerAccount(behavior, call.model, accountFailure, call.id)
-          releaseOwnedClaim(behavior, claim.target, claim.claimId)
-          continue
+        const tripIdentity = accountFailure ? accountFailureTripIdentity(call) : null
+        if (behavior === 'review-new-prs' && accountFailure && tripIdentity && postedNothing(call)) {
+          tripReviewerAccount(behavior, tripIdentity, accountFailure, call.id)
+          if (!tripHoldsTarget(call)) {
+            releaseOwnedClaim(behavior, claim.target, claim.claimId)
+            continue
+          }
         }
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
@@ -1539,8 +1592,10 @@ async function reconcileBehaviorLaunchClaims(
         continue
       }
       // A verified verdict proves the account works again, whatever behavior
-      // launched it.
-      if (call.model) clearReviewerAccountTrip(call.model)
+      // launched it. A verdict recovered from an output limit proves the
+      // recovery model, which Caller names in `recovery_model`.
+      const prover = call.recovery_model || call.model
+      if (prover) clearReviewerAccountTrip(prover)
       const completed = completeBehaviorLaunchOwned({
         key: claim.key,
         target: claim.target,
@@ -1571,10 +1626,15 @@ async function reconcileBehaviorLaunchClaims(
     } else if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
       const accountFailure = reviewAccountFailure(call)
-      if (behavior === 'review-new-prs' && accountFailure && call.model) {
-        tripReviewerAccount(behavior, call.model, accountFailure, call.id)
-        releaseOwnedClaim(behavior, claim.target, claim.claimId)
-      } else if (deadLetterClaim(claim, message)) {
+      const tripIdentity = accountFailure ? accountFailureTripIdentity(call) : null
+      if (behavior === 'review-new-prs' && accountFailure && tripIdentity && postedNothing(call)) {
+        tripReviewerAccount(behavior, tripIdentity, accountFailure, call.id)
+        if (!tripHoldsTarget(call)) {
+          releaseOwnedClaim(behavior, claim.target, claim.claimId)
+          continue
+        }
+      }
+      if (deadLetterClaim(claim, message)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target)
         // A run the user stopped from Swarm, or one a restart cut off, says nothing about the provider.
         if (call.error_code !== 'stopped' && call.error_code !== 'interrupted' && needsClaude(catalogForCalls, call.model)) {
@@ -2258,8 +2318,6 @@ async function tickReviewNewPrs(): Promise<void> {
     try {
       await underLifecycleSignal(() => withBehaviorProcessLock('review-new-prs', async () => {
         const fresh = await reviewPanel(getReviewers('review-new-prs'))
-        const launch = await launchReviewPanel(getReviewers('review-new-prs'))
-        const freshModels = new Map(launch.reviewers.map((entry) => [entry.slot, entry.model]))
         // Read the ceiling here, closest to the spawn: narrowing it in the
         // view must take effect on launches already being prepared.
         const setting = getSetting('review-new-prs')
@@ -2293,7 +2351,14 @@ async function tickReviewNewPrs(): Promise<void> {
             if (!admittedNow) { releaseLeases(null); continue }
             // The panel may have changed while this target was prepared;
             // the prepared CLI environment belongs to the prepared model.
-            if (freshModels.get(slot) !== bundle.model) { releaseLeases(null); continue }
+            // Resolved per target: claiming a probe re-trips its reviewer,
+            // so targets behind it in this tick see the substitute.
+            const launchModels = new Map((await launchReviewPanel(getReviewers('review-new-prs')))
+              .reviewers.map((entry) => [entry.slot, entry.model]))
+            if (launchModels.get(slot) !== bundle.model) { releaseLeases(null); continue }
+            // At most one probe per backoff window: a sibling that already
+            // claimed it makes this target wait for the verdict.
+            if (!claimReviewerTripProbe(bundle.model)) { releaseLeases(null); continue }
             // Atomic claim: exactly one caller succeeds for any given key
             // across all concurrent runtimes. Losers skip silently.
             const claimId = claimSeenOwnedAs('review-new-prs', target, operationId)
@@ -4208,6 +4273,9 @@ async function fireIssueReview(
   if ((await waitForBehavior(issueSlotModel(slot)))?.model !== model) return false
   if (!isEnabled(ISSUES_KEY) || behaviorAborted()) return false
   if (issueReviewRefusal(issueReviewPolicy(), issue.repo, issue.number, issue)) return false
+  // At most one probe per backoff window: a sibling that already claimed it
+  // makes this issue wait for the verdict.
+  if (!claimReviewerTripProbe(model)) return false
   const startedAt = new Date().toISOString()
   if (!markBehaviorLaunchIntentOwned({
     key: ISSUES_KEY,
@@ -4619,7 +4687,8 @@ async function reconcileIssueReviewClaims(): Promise<void> {
         quarantineClaim(claim, 'invalid_result', error, call.id, quarantineEvidence(snapshot, claim, call).mayRun)
         continue
       }
-      if (call.model) clearReviewerAccountTrip(call.model)
+      const prover = call.recovery_model || call.model
+      if (prover) clearReviewerAccountTrip(prover)
       activeClaims.delete(claim.claimId)
       if (completeIssueReviewLaunchOwned({
         key: claim.key,
@@ -4638,10 +4707,13 @@ async function reconcileIssueReviewClaims(): Promise<void> {
     if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
       const accountFailure = reviewAccountFailure(call)
-      if (accountFailure && call.model) {
-        tripReviewerAccount(ISSUES_KEY, call.model, accountFailure, call.id)
-        releaseOwnedClaim(ISSUES_KEY, claim.target, claim.claimId)
-        continue
+      const tripIdentity = accountFailure ? accountFailureTripIdentity(call) : null
+      if (accountFailure && tripIdentity && postedNothing(call)) {
+        tripReviewerAccount(ISSUES_KEY, tripIdentity, accountFailure, call.id)
+        if (!tripHoldsTarget(call)) {
+          releaseOwnedClaim(ISSUES_KEY, claim.target, claim.claimId)
+          continue
+        }
       }
       if (deadLetterClaim(claim, message)) {
         const posted = call.receipts !== null && call.receipts !== undefined
