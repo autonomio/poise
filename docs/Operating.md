@@ -697,6 +697,38 @@ history, the GitHub indexes Poise reads, and the repositories agents check
 out. Review checkouts are removed a day after their last use. Old images and
 build cache are removed after each deploy ([Upgrades](#upgrades)).
 
+### Storage maintenance
+
+Each workspace also cleans itself: every 6 hours, whenever its own disk
+passes 80% used, and on demand from Settings → Storage, which shows the
+storage breakdown and the last run. A run removes a closed session's scratch
+workspace after 24 hours when its tree is clean and nothing is unpushed,
+prunes only regenerable artifacts (`node_modules`, build output, virtualenvs,
+tool caches) from open sessions idle over 3 days and reinstalls them on the
+next turn, expires incident snapshots after 30 days unless pinned with a
+`KEEP` file, and caps the pip, uv, npm and GitHub-mirror caches with
+least-recently-used eviction. A workspace with uncommitted or unpushed work,
+or with a turn running or queued, is never touched; everything kept is listed
+as held with the reason, and every run is logged with the bytes it reclaimed.
+
+### Giving space back on a VM host
+
+When Poise runs [in a virtual machine](#in-a-virtual-machine-on-a-shared-server),
+freed guest blocks only return to the host if the disk passes discards
+through. Without that, the image keeps growing while the guest reports free
+space. On the libvirt host, set `discard='unmap'` on the VM's disk (with the
+VM shut down, `virsh edit` the domain and find the `<driver>` line of its
+disk):
+
+```xml
+<driver name='qemu' type='qcow2' discard='unmap'/>
+```
+
+Then start the VM and compare the guest's `df` against the host's
+`virsh domblkinfo` allocation: after the guest trims, the two agree again.
+The guest side needs nothing from the operator: each maintenance run issues
+`fstrim` on the home volume when the tool is available.
+
 ## Logs
 
 From `deploy/`:

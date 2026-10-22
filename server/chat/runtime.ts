@@ -36,7 +36,7 @@ import { parseChatCommandChain, commandBody } from './commands'
 import { latestReviewTarget, prepareReview, type ReviewTarget } from './review'
 import type { AutoMergeAck, SafeModeAck } from './protocol'
 import type { ChildProcess } from 'node:child_process'
-import { mkdir, rm, rmdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rm, rmdir, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { loadCatalog, catalogModel, type Catalog, type CatalogModel } from '../models'
 import { claudeAuth } from '../claude-auth'
@@ -44,6 +44,7 @@ import { HttpError } from '../http'
 import { chatTurnFinished, chatWaiting, chatWaitingEnded, type ChatSessionAlertContext } from '../alerts/producers'
 import { localCheckoutPath } from '../gh'
 import { discardUnclaimedWorkspace, ensureLocalWorkspace, ensureWorkerWorkspace, LOCAL_CHAT_ROOT, workerWorkspaceRef, workspaceMarkerValid } from './local-workspace'
+import { restorePrunedArtifacts } from '../storage-maintenance'
 import { catalogueAgents } from './catalog-agents'
 import { runFile } from '../process'
 import { CheckoutLease, canonicalCheckout, describeHolder, type AcquireResult, type CheckoutLeaseOptions } from './checkout-lock'
@@ -977,11 +978,12 @@ export class ChatRuntime extends EventEmitter {
     let freed = true
     try {
       const cli = await this.checkSessionCli(session, signal)
+      const recreated = await this.recreateRemovedWorkspace(session, lease, signal)
       if (!options.lease) await lease.acquire({ signal, onBusy: (busy) => this.reportBusy(session, busy) })
       else if (!lease.held) throw new Error('the checkout lease was lost before native startup')
       signal.throwIfAborted()
       session.lease = lease
-      const fresh = options.fresh || (!record.nativeSessionId && record.branch.provisional && !record.branch.baseSha)
+      const fresh = recreated || options.fresh || (!record.nativeSessionId && record.branch.provisional && !record.branch.baseSha)
       if (fresh) await this.prepareBranch(session, lease)
       await this.prepareCheckout(session, lease)
       if ((fresh || options.forkFrom) && record.context?.kind === 'document' && record.context.slug) {
@@ -1078,7 +1080,13 @@ export class ChatRuntime extends EventEmitter {
     this.assertAcceptingWork()
     const session = this.requireLive(id)
     await this.serialized(session, async () => {
-      if (session.record.status === 'closed' || session.lifecycle.signal.aborted) { session.lifecycle = new AbortController(); session.record.status = 'idle' }
+      if (session.record.status === 'closed' || session.lifecycle.signal.aborted) {
+        session.lifecycle = new AbortController()
+        session.record.status = 'idle'
+        // Persisted before the workspace is touched: from here the session
+        // is open, and storage maintenance holds its workspace.
+        this.saveRecord(session)
+      }
       if (!session.adapter?.alive) await this.startSession(session)
     })
     return session.record
@@ -2748,6 +2756,34 @@ export class ChatRuntime extends EventEmitter {
     }
   }
 
+  /** A closed session whose scratch workspace storage maintenance removed
+   *  resumes in a fresh one; the transcript survives in the database.
+   *  Anything but a missing workers/<id>/workspace still fails loud. The
+   *  initializer takes the checkout's lease, so a lease this start already
+   *  holds is released across the init and taken back afterwards. */
+  private async recreateRemovedWorkspace(session: LiveSession, lease?: CheckoutLease, signal?: AbortSignal): Promise<boolean> {
+    const record = session.record
+    if (record.workspaceKind !== 'poise-local') return false
+    const root = this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT
+    const ref = workerWorkspaceRef(root, record.checkout)
+    if (!ref) return false
+    try {
+      await lstat(record.checkout)
+      return false
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+    const held = lease?.held ?? false
+    if (held) lease!.release()
+    try {
+      await ensureWorkerWorkspace(root, ref.id, this.instance)
+    } finally {
+      if (held) await lease!.acquire({ signal, onBusy: (busy) => this.reportBusy(session, busy) })
+    }
+    this.emit_(record.id, { type: 'status.changed', status: record.status, detail: 'storage maintenance had removed this workspace after the session closed; starting fresh' })
+    return true
+  }
+
   /** Fresh session: cut/verify/check out its branch under the lease. */
   private async prepareBranch(session: LiveSession, lease: CheckoutLease): Promise<void> {
     const record = session.record
@@ -2773,10 +2809,27 @@ export class ChatRuntime extends EventEmitter {
   private async prepareCheckout(session: LiveSession, lease: CheckoutLease): Promise<void> {
     const record = session.record
     const state = await inspectCheckout(record.checkout)
-    if (state.currentBranch === record.branch.name) { lease.setBranch(record.branch.name); return }
-    await this.makeCheckoutSwitchable(session, lease)
-    await switchBranch(lease, record.checkout, record.branch.name)
+    if (state.currentBranch !== record.branch.name) {
+      await this.makeCheckoutSwitchable(session, lease)
+      await switchBranch(lease, record.checkout, record.branch.name)
+    }
     lease.setBranch(record.branch.name)
+    await this.restorePrunedWorkspace(session)
+  }
+
+  /** Reinstall what storage maintenance pruned from an idle scratch
+   *  workspace. Best-effort: a failure never stops the turn, and the agent
+   *  reinstalls whatever is still missing. */
+  private async restorePrunedWorkspace(session: LiveSession): Promise<void> {
+    if (session.record.workspaceKind !== 'poise-local') return
+    try {
+      const restored = await restorePrunedArtifacts(session.record.checkout, this.options.localWorkspaceRoot ?? LOCAL_CHAT_ROOT)
+      if (restored.length) {
+        this.emit_(session.record.id, { type: 'status.changed', status: session.record.status, detail: `storage maintenance had pruned ${restored.join(', ')} while idle; reinstalled` })
+      }
+    } catch (error) {
+      console.error(`[chat] reinstalling pruned artifacts failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private async makeCheckoutSwitchable(session: LiveSession, lease: CheckoutLease): Promise<void> {
