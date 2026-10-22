@@ -268,7 +268,7 @@ describe('Muse adapter', () => {
     expect(adapter.alive).toBe(true)
   })
 
-  it('ends the process when a steered message never starts its native turn', async () => {
+  it('reports a steered message that never runs so the runtime queues it, keeping the process', async () => {
     const host = createFakeHost(FAKE, ['--drop-steer'])
     const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
     hosts.push(host)
@@ -276,11 +276,29 @@ describe('Muse adapter', () => {
     await adapter.start(MODEL)
     const turn = adapter.prompt('turn-1', prompt('steer'), new AbortController().signal)
     await host.waitFor((event) => event.type === 'text.delta')
-    await adapter.steer('go left')
+    await adapter.steer('go left', { correlationId: 'steer-1' })
+    // A steer without a correlation id (an Auto-merge toggle) is never reported back.
+    await adapter.steer('Auto-merge ON')
     const result = await turn
-    expect(result.stopReason).toBe('error')
-    expect(result.error).toMatch(/did not run a steered message/)
-    await until(() => !adapter.alive)
+    expect(result.stopReason).toBe('end_turn')
+    expect(result).toMatchObject({ unrunSteers: ['steer-1'] })
+    expect(adapter.alive).toBe(true)
+  })
+
+  it('counts a steer absorbed into the running turn as run', async () => {
+    const host = createFakeHost(FAKE, ['--absorb-steer'])
+    const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
+    hosts.push(host)
+    adapters.push(adapter)
+    await adapter.start(MODEL)
+    const turn = adapter.prompt('turn-1', prompt('steer'), new AbortController().signal)
+    await host.waitFor((event) => event.type === 'text.delta')
+    await adapter.steer('go left', { correlationId: 'steer-1' })
+    const result = await turn
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.unrunSteers).toBeUndefined()
+    expect(host.ofType('text.delta').map((event) => event.delta).join('')).toContain('absorbed: go left')
+    expect(adapter.alive).toBe(true)
   })
 
   it('reclaims queued steering before a cancelled foreground turn can release the checkout', async () => {

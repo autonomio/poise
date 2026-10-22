@@ -28,7 +28,7 @@ function git(cwd: string, ...args: string[]): string {
   if (r.status) throw new Error(r.stderr)
   return r.stdout.trim()
 }
-interface Controls { auto: boolean, failAgent?: AgentId, calls: { agent: AgentId, input: PromptInput, turnId: string }[], adapters: Fake[], active: number, maximum: number }
+interface Controls { auto: boolean, failAgent?: AgentId, dropSteers?: boolean, calls: { agent: AgentId, input: PromptInput, turnId: string }[], adapters: Fake[], active: number, maximum: number }
 class Fake implements Adapter {
   alive = false
   nativeSessionId: string | undefined
@@ -36,6 +36,7 @@ class Fake implements Adapter {
   options?: AdapterStartOptions
   finish?: (result: TurnResult) => void
   steered: string[] = []
+  unrun: string[] = []
   compactions: Array<{ turnId: string, memories: string }> = []
   modelChanges: string[] = []
   modeChanges: string[] = []
@@ -52,13 +53,13 @@ class Fake implements Adapter {
     try {
       if (this.c.auto) return { stopReason: 'end_turn' }
       return await new Promise<TurnResult>(resolve => {
-        this.finish = result => { this.finish = undefined; resolve(result) }
+        this.finish = result => { this.finish = undefined; resolve({ ...result, ...(this.unrun.length ? { unrunSteers: this.unrun.splice(0) } : {}) }) }
         signal.addEventListener('abort', () => this.finish?.({ stopReason: 'cancelled' }), { once: true })
       })
     } finally { this.c.active-- }
   }
   async compact(turnId: string, memories: string): Promise<TurnResult> { this.compactions.push({ turnId, memories }); return { stopReason: 'end_turn', compaction: { changed: true } } }
-  async steer(text: string) { this.steered.push(text) }
+  async steer(text: string, opts?: { correlationId?: string }) { this.steered.push(text); if (opts?.correlationId && this.c.dropSteers) this.unrun.push(opts.correlationId) }
   async cancel() { this.finish?.({ stopReason: 'cancelled' }) }
   async close() { this.alive = false; this.finish?.({ stopReason: 'cancelled' }) }
   async setModel(modelId: string, effort: string) { this.modelChanges.push(modelId); return { modelId, effort } }
@@ -113,6 +114,29 @@ describe('deferred message execution', () => {
     expect(w.c.maximum).toBe(1); expect(w.runtime.get(w.s.id)?.queue?.items).toEqual([])
     await w.add('A later idle task'); await pause(100)
     expect(w.c.calls).toHaveLength(6)
+  })
+
+  it('queues a Muse steer the agent never ran as the next prompt instead of failing the turn', async () => {
+    const w = await world({ auto: false })
+    w.c.dropSteers = true
+    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun', branch: { new: randomUUID() } })
+    await until(() => w.runtime.get(s.id)?.status === 'idle')
+    w.runtime.prompt(s.id, input('Long task'))
+    await until(() => w.c.calls.length === 1)
+    await w.runtime.steer(s.id, 'scope note')
+    w.finish()
+    await until(() => w.c.calls.length === 2)
+    w.finish()
+    const finished = () => w.runtime.events(s.id, 0).events.filter(e => e.event.type === 'turn.finished')
+    await until(() => finished().length === 2)
+    await until(() => w.runtime.get(s.id)?.status === 'idle')
+    expect(finished().map(e => e.event)).toMatchObject([{ stopReason: 'end_turn' }, { stopReason: 'end_turn' }])
+    expect(w.c.calls[1].input.text).toContain('scope note')
+    expect(w.c.calls[1].input.text).toContain('arrived after the previous turn')
+    expect(w.c.adapters.find(adapter => adapter.agent === 'muse')!.alive).toBe(true)
+    expect(w.runtime.get(s.id)?.queue?.items).toEqual([])
+    await pause(150)
+    expect(w.c.calls).toHaveLength(2)
   })
 
   it('enqueues during an active turn without steering it and waits through real pending questions', async () => {

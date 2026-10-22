@@ -27,6 +27,7 @@ function scripted() {
   let turn = null // { id, interrupted, steered: [], decided: [], answered: [] }
   const requireDialogs = process.argv.includes('--require-dialogs')
   const dropSteer = process.argv.includes('--drop-steer')
+  const absorbSteer = process.argv.includes('--absorb-steer')
   const holdAfterSteer = process.argv.includes('--hold-after-steer')
   const reclaimRace = process.argv.includes('--reclaim-race')
   let dialogs = false
@@ -235,6 +236,18 @@ function scripted() {
         await sleep(20)
       }
       item('item/completed', { itemId, kind: 'agentMessage', revision: 2, status: 'completed', text: 'first' })
+      if (absorbSteer) {
+        // Muse 1.4.x (observed live): the steer is absorbed into the running
+        // turn — its userMessage carries the steer's command id, and no
+        // successor turn ever starts for it.
+        const steered = turn.steered[0]
+        if (steered && !turn.interrupted) {
+          item('item/completed', { itemId: uuid('user'), kind: 'userMessage', status: 'completed', text: steered.text, steered: true, commandId: steered.commandId })
+          await streamMessage(uuid('msg'), [`absorbed: ${steered.text}`])
+        }
+        await completeTurn(turn.interrupted ? 'cancelled' : 'completed')
+        return
+      }
       if (holdAfterSteer) await waitFor(() => turn.interrupted)
       const steered = turn.steered[0]
       await completeTurn(turn.interrupted ? 'cancelled' : 'completed')
