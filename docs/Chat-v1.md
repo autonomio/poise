@@ -69,7 +69,7 @@ text label and tooltip, so the state never depends on colour alone: Working
 (pulsing green), Completed (solid green), Error or interruption (red),
 Waiting for you (amber), and Queued (grey). Chats order by their latest
 change — started, hit an error or a question, or completed — newest on top,
-and a reorder animates smoothly. Dragging a chat pins it where it dropped,
+with the Manager always first, and a reorder animates smoothly. Dragging a chat pins it where it dropped,
 with a pin mark, and automatic ordering skips it; dragging it back into the
 list, or Unpin, returns it to automatic order. Alt+ArrowUp/Down moves the
 focused chat for keyboard users. Pins survive reloads in this browser.

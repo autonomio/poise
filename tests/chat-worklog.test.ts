@@ -52,7 +52,8 @@ describe('status dots', () => {
 })
 
 describe('work log order', () => {
-  const entry = (updatedAt: string, createdAt = '2026-10-21T16:00:00.000Z', pending = false): WorklogEntry => ({ pending, updatedAt, createdAt })
+  const entry = (updatedAt: string, createdAt = '2026-10-21T16:00:00.000Z', pending = false, manager = false): WorklogEntry =>
+    ({ pending, manager, updatedAt, createdAt })
 
   it('puts the newest change first, breaking ties by creation', () => {
     expect(compareWorklog(entry('2026-10-21T16:02:00Z'), entry('2026-10-21T16:01:00Z'))).toBeLessThan(0)
@@ -63,6 +64,12 @@ describe('work log order', () => {
 
   it('keeps a pending session above everything', () => {
     expect(compareWorklog(entry('2026-10-21T16:00:00Z', '2026-10-21T16:00:00Z', true), entry('2026-10-21T17:00:00Z'))).toBeLessThan(0)
+  })
+
+  it('keeps the Manager first, below only a pending session', () => {
+    expect(compareWorklog(entry('2026-10-21T16:00:00Z', '2026-10-21T16:00:00Z', false, true), entry('2026-10-21T17:00:00Z'))).toBeLessThan(0)
+    expect(compareWorklog(entry('2026-10-21T17:00:00Z'), entry('2026-10-21T16:00:00Z', '2026-10-21T16:00:00Z', false, true))).toBeGreaterThan(0)
+    expect(compareWorklog(entry('2026-10-21T16:00:00Z', '2026-10-21T16:00:00Z', true), entry('2026-10-21T17:00:00Z', '2026-10-21T16:00:00Z', false, true))).toBeLessThan(0)
   })
 
   it('holds pinned chats in their slots while the rest re-sort', () => {

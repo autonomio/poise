@@ -42,14 +42,17 @@ export function sessionDot(
 export interface WorklogEntry {
   /** Created locally; the server has not answered yet. */
   pending: boolean
+  /** The workspace Manager, which always stays first. */
+  manager: boolean
   updatedAt: string
   createdAt: string
 }
 
 /** Newest change first: a pending session is the newest thing there is, then
- *  the latest status change, with creation breaking ties. */
+ *  the Manager, then the latest status change, with creation breaking ties. */
 export function compareWorklog(a: WorklogEntry, b: WorklogEntry): number {
   if (a.pending !== b.pending) return a.pending ? -1 : 1
+  if (a.manager !== b.manager) return a.manager ? -1 : 1
   return (b.updatedAt || '').localeCompare(a.updatedAt || '') || (b.createdAt || '').localeCompare(a.createdAt || '')
 }
 

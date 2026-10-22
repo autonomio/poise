@@ -547,8 +547,9 @@ function applyRestoredSnapshot(): void {
 
 function compareEntries(a: string, b: string): number {
   const ea = sessions.get(a)!, eb = sessions.get(b)!
-  return compareWorklog({ pending: ea.pending, updatedAt: ea.record.updatedAt, createdAt: ea.record.createdAt },
-    { pending: eb.pending, updatedAt: eb.record.updatedAt, createdAt: eb.record.createdAt })
+  return compareWorklog(
+    { pending: ea.pending, manager: ea.record.role === 'manager', updatedAt: ea.record.updatedAt, createdAt: ea.record.createdAt },
+    { pending: eb.pending, manager: eb.record.role === 'manager', updatedAt: eb.record.updatedAt, createdAt: eb.record.createdAt })
 }
 
 function sortOrder(): void {
@@ -680,7 +681,7 @@ function sidebarHtml(): string {
       + `<span class="chat-session-state" title="${escapeHtml(dot.label)}">${escapeHtml(dot.label)}</span>`
       + `<span class="chat-session-date">${escapeHtml(dateLabel(s.createdAt))}</span>`
       + `</div>`
-      + (pinned ? `<button type="button" class="chat-session-pin" data-id="${escapeHtml(id)}" title="Unpin — return to automatic order" aria-label="Unpin chat">${ICON_PIN}</button>` : '')
+      + (pinned ? `<button type="button" class="chat-session-pin" title="Unpin — return to automatic order" aria-label="Unpin chat">${ICON_PIN}</button>` : '')
       + `<button type="button" class="chat-session-delete${armed ? ' armed' : ''}" data-id="${escapeHtml(id)}" title="${escapeHtml(confirm ? confirm.title : 'Delete session')}" aria-label="${escapeHtml(confirm ? confirm.label : 'Delete session')}">${armed ? 'Sure?' : '×'}</button>`
       + `</div>`
   }).join('')
@@ -731,10 +732,13 @@ function clearDropIndicator(): void {
 function attachSidebar(): void {
   listEl.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
+    // The pin carries no data-id of its own: sibling keys must be unique for
+    // reconciliation, so it resolves its session through the row.
     const pin = target.closest<HTMLButtonElement>('.chat-session-pin')
     if (pin) {
       e.stopPropagation()
-      unpinSession(pin.dataset.id!)
+      const item = pin.closest<HTMLElement>('.chat-session-item')
+      if (item?.dataset.id) unpinSession(item.dataset.id)
       return
     }
     const del = target.closest<HTMLButtonElement>('.chat-session-delete')
@@ -1053,7 +1057,9 @@ function ensureQuickSession(firstPrompt?: ComposerDraft, title?: string, deferSt
     request.safeMode = selectedSafeMode
     if (freshSubject) request.subject = freshSubject
     if (deferStart) request.deferStart = true
-    if (firstPrompt?.text) request.title = deriveSessionTitle(firstPrompt.text).slice(0, 200)
+    // The creation request carries the raw slice; the server derives the name
+    // when the first turn starts.
+    if (firstPrompt?.text) request.title = firstPrompt.text.slice(0, 200)
     else if (title) request.title = title.slice(0, 200)
     const created = await createSessionEntry(request, draft, firstPrompt, null)
     freshModelIdentity = null
