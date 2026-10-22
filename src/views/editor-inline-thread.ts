@@ -59,24 +59,25 @@ interface OpenThread {
   resizeObserver: ResizeObserver | null
 }
 
-interface Marker {
-  el: HTMLButtonElement
+interface Tracked {
   subject: ChatSubject
   sessionId: string | null
+  status: string | null
+  page: HTMLElement
   first: HTMLElement
   firstIndex: number
   last: HTMLElement
+  el: HTMLButtonElement | null
+  unsubscribe: (() => void) | null
 }
 
 let open: OpenThread | null = null
 /** Unsent drafts by subject, while the page lives. */
 const drafts = new Map<string, ComposerDraft>()
-/** Closed-chat markers by subject. */
-const markers = new Map<string, Marker>()
-/** Marker subscriptions by subject. */
-const subscriptions = new Map<string, () => void>()
-/** Last session status per marked subject. */
-const lastStatus = new Map<string, string | null>()
+/** Closed passage chats under watch, with or without a marker on screen. A
+ *  chat is tracked from close until its thread reopens: later activity grows
+ *  a marker, and the Editor's overlay pass moves it with its passage. */
+const tracked = new Map<string, Tracked>()
 /** A turn finished since the thread was last open. */
 const unseenReply = new Set<string>()
 /** A permission or question waits for an answer. */
@@ -181,75 +182,37 @@ function layoutMarkers(page: HTMLElement): void {
   // line stack.
   const narrow = window.innerWidth - pageBox.right < 140
   const stride = new Map<number, number>()
-  for (const marker of markers.values()) {
-    if (!marker.first.isConnected || !marker.last.isConnected) {
-      marker.el.hidden = true
+  for (const entry of tracked.values()) {
+    if (entry.page !== page || !entry.el) continue
+    if (!entry.first.isConnected || !entry.last.isConnected) {
+      entry.el.hidden = true
       continue
     }
-    marker.el.hidden = false
-    const first = pageRect(page, marker.first)
+    entry.el.hidden = false
+    const first = pageRect(page, entry.first)
     if (narrow) {
-      const last = pageRect(page, marker.last)
-      marker.el.style.left = `${first.left}px`
-      marker.el.style.top = `${last.bottom + 4}px`
+      const last = pageRect(page, entry.last)
+      entry.el.style.left = `${first.left}px`
+      entry.el.style.top = `${last.bottom + 4}px`
     } else {
-      const slot = stride.get(marker.firstIndex) || 0
-      stride.set(marker.firstIndex, slot + 1)
-      marker.el.style.left = `${pageBox.width + 12}px`
-      marker.el.style.top = `${first.top + slot * (marker.el.offsetHeight + 6)}px`
+      const slot = stride.get(entry.firstIndex) || 0
+      stride.set(entry.firstIndex, slot + 1)
+      entry.el.style.left = `${pageBox.width + 12}px`
+      entry.el.style.top = `${first.top + slot * (entry.el.offsetHeight + 6)}px`
     }
   }
 }
 
-function renderMarker(key: string, page: HTMLElement): void {
-  const marker = markers.get(key)
-  if (!marker) return
-  const label = markerLabel(key, marker.sessionId, lastStatus.get(key) ?? null)
+function renderMarker(key: string): void {
+  const entry = tracked.get(key)
+  if (!entry) return
+  const label = markerLabel(key, entry.sessionId, entry.status)
   if (!label) {
-    removeMarker(key)
+    entry.el?.remove()
+    entry.el = null
     return
   }
-  marker.el.textContent = label
-  marker.el.dataset.label = label
-  layoutMarkers(page)
-}
-
-function ensureSubscription(key: string, sessionId: string, page: HTMLElement): void {
-  if (subscriptions.has(key)) return
-  chatClient.subscribe(sessionId, chatClient.subscribedAfter(sessionId) ?? 0)
-  const off = chatClient.on('event', (envelope: ChatEnvelope) => {
-    if (envelope.sessionId !== sessionId) return
-    const event = envelope.event
-    if (event.type === 'turn.finished') unseenReply.add(key)
-    else if (event.type === 'permission.requested' || event.type === 'question.asked') needsYou.add(key)
-    else if (event.type === 'permission.resolved' || event.type === 'question.answered') needsYou.delete(key)
-    else if (event.type === 'session.updated') lastStatus.set(key, event.session.status)
-    else if (event.type === 'session.reset') { unseenReply.delete(key); needsYou.delete(key) }
-    else return
-    renderMarker(key, page)
-  })
-  subscriptions.set(key, () => { off(); chatClient.unsubscribe(sessionId) })
-}
-
-function removeMarker(key: string): void {
-  markers.get(key)?.el.remove()
-  markers.delete(key)
-  subscriptions.get(key)?.()
-  subscriptions.delete(key)
-  unseenReply.delete(key)
-  needsYou.delete(key)
-  lastStatus.delete(key)
-}
-
-/** A closed passage chat with a session shows a margin marker; anything
- *  without news shows none. */
-function showMarker(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null): void {
-  if (subject.surface !== 'editor-passage') return
-  const key = subjectKey(subject)
-  if (open?.key === key) return
-  lastStatus.set(key, status)
-  let marker = markers.get(key)
-  if (!marker) {
+  if (!entry.el) {
     const el = document.createElement('button')
     el.type = 'button'
     el.className = 'editor-thread-marker'
@@ -257,20 +220,68 @@ function showMarker(subject: ChatSubject, sessionId: string | null, page: HTMLEl
       // A chat open in the pane moves back like its Back button; a closed
       // chat opens in place.
       window.dispatchEvent(new CustomEvent(inPane.has(key) ? 'editor:inline-thread-back' : 'editor:inline-thread-open', {
-        detail: { subject },
+        detail: { subject: entry.subject },
       }))
     })
-    ensureLayer(page).appendChild(el)
-    marker = { el, subject, sessionId, first: line, firstIndex: lineIndexOf(line.parentElement as HTMLElement, line), last: line }
-    markers.set(key, marker)
-  } else {
-    marker.sessionId = sessionId
-    marker.first = line
-    marker.firstIndex = lineIndexOf(line.parentElement as HTMLElement, line)
-    marker.last = line
+    ensureLayer(entry.page).appendChild(el)
+    entry.el = el
   }
-  if (sessionId) ensureSubscription(key, sessionId, page)
-  renderMarker(key, page)
+  entry.el.textContent = label
+  entry.el.dataset.label = label
+  layoutMarkers(entry.page)
+}
+
+function untrack(key: string): void {
+  const entry = tracked.get(key)
+  if (!entry) return
+  entry.el?.remove()
+  entry.unsubscribe?.()
+  tracked.delete(key)
+  unseenReply.delete(key)
+  needsYou.delete(key)
+}
+
+/** Watch a closed passage chat: later activity grows a marker, and the
+ *  Editor's overlay pass moves it with its passage. Anything without news
+ *  shows no marker. */
+function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement, line: HTMLElement, status: string | null): void {
+  if (subject.surface !== 'editor-passage') return
+  const key = subjectKey(subject)
+  if (open?.key === key) return
+  let entry = tracked.get(key)
+  if (!entry) {
+    entry = {
+      subject, sessionId, status, page, first: line,
+      firstIndex: lineIndexOf(line.parentElement as HTMLElement, line), last: line, el: null, unsubscribe: null,
+    }
+    tracked.set(key, entry)
+  } else {
+    entry.sessionId = sessionId ?? entry.sessionId
+    entry.status = status
+    entry.page = page
+    entry.first = line
+    entry.firstIndex = lineIndexOf(line.parentElement as HTMLElement, line)
+    entry.last = line
+  }
+  if (entry.sessionId && !entry.unsubscribe) {
+    const id = entry.sessionId
+    chatClient.subscribe(id, chatClient.subscribedAfter(id) ?? 0)
+    const off = chatClient.on('event', (envelope: ChatEnvelope) => {
+      if (envelope.sessionId !== id) return
+      const event = envelope.event
+      const live = tracked.get(key)
+      if (!live) return
+      if (event.type === 'turn.finished') unseenReply.add(key)
+      else if (event.type === 'permission.requested' || event.type === 'question.asked') needsYou.add(key)
+      else if (event.type === 'permission.resolved' || event.type === 'question.answered') needsYou.delete(key)
+      else if (event.type === 'session.updated') live.status = event.session.status
+      else if (event.type === 'session.reset') { unseenReply.delete(key); needsYou.delete(key) }
+      else return
+      renderMarker(key)
+    })
+    entry.unsubscribe = () => { off(); chatClient.unsubscribe(id) }
+  }
+  renderMarker(key)
 }
 
 // ── Open / close / move ────────────────────────────────────────────────
@@ -297,7 +308,7 @@ function fireClosed(state: OpenThread, returnCaret: boolean): void {
 
 function closeState(state: OpenThread, returnCaret: boolean): void {
   teardown(state)
-  if (state.sessionId) showMarker(state.subject, state.sessionId, state.page, state.line, state.status)
+  if (state.sessionId) track(state.subject, state.sessionId, state.page, state.line, state.status)
   fireClosed(state, returnCaret)
 }
 
@@ -319,15 +330,15 @@ export function clearInlineThreads(): void {
     teardown(state)
     fireClosed(state, false)
   }
-  for (const key of [...markers.keys()]) removeMarker(key)
+  for (const key of [...tracked.keys()]) untrack(key)
   inPane.clear()
   passageChanged.clear()
 }
 
-/** Drop one subject's marker, subscription and draft, for a delete. */
+/** Drop one subject's tracking, marker and draft, for a delete. */
 export function dropThread(subject: ChatSubject): void {
   const key = subjectKey(subject)
-  removeMarker(key)
+  untrack(key)
   drafts.delete(key)
   inPane.delete(key)
   passageChanged.delete(key)
@@ -340,20 +351,19 @@ export function keepThreadDraft(subject: ChatSubject, draft: ComposerDraft | nul
   else drafts.delete(subjectKey(subject))
 }
 
-/** Move the tracked marker for a subject, from the Editor's overlay pass.
- *  Subjects without a marker are ignored. */
+/** Move the tracked chat for a subject, from the Editor's overlay pass.
+ *  Untracked subjects are ignored; a newly unlocatable passage grows its
+ *  Passage changed marker here. */
 export function syncThreadMarker(subject: ChatSubject, position: { first: HTMLElement, last: HTMLElement, changed: boolean }): void {
   const key = subjectKey(subject)
-  const marker = markers.get(key)
-  if (!marker) return
+  const entry = tracked.get(key)
+  if (!entry) return
   if (position.changed) passageChanged.add(key)
   else passageChanged.delete(key)
-  marker.first = position.first
-  marker.last = position.last
-  const page = marker.el.closest('.editor-page') as HTMLElement | null
-  if (!page) return
-  marker.firstIndex = lineIndexOf(position.first.parentElement as HTMLElement, position.first)
-  renderMarker(key, page)
+  entry.first = position.first
+  entry.last = position.last
+  entry.firstIndex = lineIndexOf(position.first.parentElement as HTMLElement, position.first)
+  renderMarker(key)
 }
 
 /** The open thread's session, for the notification rail. */
@@ -375,7 +385,7 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
     closeState(previous, false)
   }
   const key = subjectKey(options.subject)
-  removeMarker(key)
+  untrack(key)
   inPane.delete(key)
 
   const thread = document.createElement('div')
@@ -493,7 +503,7 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       teardown(state)
       // The chat is open in the pane now; its marker reads In side pane.
       inPane.add(key)
-      showMarker(subject, sessionId, page, line, status)
+      track(subject, sessionId, page, line, status)
       chatSidePane.close()
       chatSidePane.toggle({ subject, ...(draft ? { draft } : {}), back: () => {
         window.dispatchEvent(new CustomEvent('editor:inline-thread-back', { detail: { subject } }))
@@ -509,16 +519,15 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       const closedKey = subjectKey(subject)
       if (!inPane.has(closedKey)) return
       inPane.delete(closedKey)
-      const marker = markers.get(closedKey)
-      if (!marker) return
-      const page = marker.el.closest('.editor-page') as HTMLElement | null
+      const entry = tracked.get(closedKey)
+      if (!entry) return
       // A chat that never got a session leaves nothing to track.
-      if (!marker.sessionId) {
-        removeMarker(closedKey)
-        if (page) layoutMarkers(page)
+      if (!entry.sessionId) {
+        untrack(closedKey)
+        layoutMarkers(entry.page)
         return
       }
-      if (page) renderMarker(closedKey, page)
+      renderMarker(closedKey)
     })
   }
   if (!inFlow) {
