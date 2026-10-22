@@ -22,9 +22,12 @@ export async function legacyIdFor(subject: ChatSubject): Promise<string | null> 
 }
 
 /** The subject's earlier conversation, oldest first. Newest turns are kept
- *  first when the bound bites; `omitted` counts the turns left out. */
+ *  first when the bound bites; `omitted` counts the turns left out. Rows
+ *  without a reply are skipped: like the legacy pane, only completed rows
+ *  that have a response carry one, so a failed, interrupted, running or
+ *  pending call cannot fail the whole import. */
 export async function readLegacyConversation(id: string): Promise<LegacyConversation> {
-  const rows = await listChatHistory(id)
+  const rows = (await listChatHistory(id)).filter((row) => row.status === 'completed' && row.response)
   const kept: LegacyConversation['turns'] = []
   let bytes = 0
   let omitted = 0

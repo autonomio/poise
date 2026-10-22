@@ -90,8 +90,8 @@ const clients: WebSocket[] = []
 const card = (key = 'poise.card.7'): ChatSubject => ({ surface: 'current', key, label: 'A card' })
 const createBody = (subject: ChatSubject, extra: Record<string, unknown> = {}) => ({ agent: 'grok', model: 'grok-4.6-xhigh', subject, ...extra })
 
-function logRow(id: string, sessionId: string, prompt: string, startedAt: string) {
-  return { id, model: 'grok-4.6-xhigh', behavior: 'chat', session_id: sessionId, prompt, started_at: startedAt, time_elapsed: '1s', status: 'completed' }
+function logRow(id: string, sessionId: string, prompt: string, startedAt: string, extra: Record<string, unknown> = {}) {
+  return { id, model: 'grok-4.6-xhigh', behavior: 'chat', session_id: sessionId, prompt, started_at: startedAt, time_elapsed: '1s', status: 'completed', response: 'abcd1234', ...extra }
 }
 
 function serveLog(rows: unknown[], bodies: Record<string, string>) {
@@ -261,6 +261,29 @@ describe('legacy conversation import', () => {
     expect(event.turns[0].prompt).toContain(`q${event.omitted}`)
     const reads = mocks.calls.filter(({ args }) => args[0] === '--read-response')
     expect(reads.length).toBeLessThanOrEqual(50)
+  }, 120_000)
+
+  it('skips calls that have no response instead of failing the import', async () => {
+    serveLog([
+      logRow('a'.repeat(32), 'poise.card.7', 'first question', '2026-10-20T10:00:00.000Z'),
+      logRow('b'.repeat(32), 'poise.card.7', 'failed question', '2026-10-20T10:01:00.000Z', { status: 'failed', response: null, error: 'boom' }),
+      logRow('c'.repeat(32), 'poise.card.7', 'running question', '2026-10-20T10:02:00.000Z', { status: 'running', response: null }),
+      logRow('d'.repeat(32), 'poise.card.7', 'second question', '2026-10-20T10:03:00.000Z'),
+    ], { ['a'.repeat(32)]: 'first answer', ['d'.repeat(32)]: 'second answer' })
+    const created = await postSessions(createBody(card()))
+    expect(created.status).toBe(201)
+    expect(created.json.session.importedFrom).toBe('poise.card.7')
+    const imports = importedEvents(created.json.session.id)
+    expect(imports).toHaveLength(1)
+    expect(imports[0].event).toMatchObject({
+      type: 'history.imported', legacyId: 'poise.card.7', omitted: 0,
+      turns: [
+        { prompt: 'first question', reply: 'first answer' },
+        { prompt: 'second question', reply: 'second answer' },
+      ],
+    })
+    expect(mocks.calls.filter(({ args }) => args[0] === '--read-response').map(({ args }) => args[1]).sort())
+      .toEqual(['a'.repeat(32), 'd'.repeat(32)])
   }, 120_000)
 
   it('records nothing for an empty earlier conversation', async () => {

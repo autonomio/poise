@@ -7,6 +7,7 @@
 import { chatClient, ChatHttpError, type AgentsResponse } from '../chat-client'
 import { consoleModelLabel } from '../chat-catalog'
 import { commandDraftText } from '../chat-command-draft'
+import { recoverDraft } from '../chat-draft-recovery'
 import type {
   AgentId,
   ChatEnvelope,
@@ -406,16 +407,21 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   async function runCommand(name: string, arg: string): Promise<void> {
     if (name === 'model') { await setSessionModel(arg); return }
     if (name !== 'content' && name !== 'consensus') return
+    const submitted = composer.getDraft()
     let session: SessionRecord
     try {
       session = await ensureSession()
-    } catch (err) { creationFailed(err, composer.getDraft(), () => runCommand(name, arg)); return }
+    } catch (err) { creationFailed(err, submitted, () => runCommand(name, arg)); return }
     const topic = arg.trim() || subject.label
+    // Clear at send: the submitted command must not linger for the next
+    // Enter, and nothing typed while a debate runs may be erased by it.
+    composer.setDraft({ ...emptyDraft(), model: submitted.model })
     try {
       if (name === 'content') await chatClient.runContent(session.id, topic)
       else await chatClient.runConsensus(session.id, topic)
       setNotice(null)
     } catch (err) {
+      keepDraft(recoverDraft(submitted, composer.getDraft()))
       setNotice(`/${name} failed — ${(err as Error).message}`)
     }
   }

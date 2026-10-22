@@ -1643,16 +1643,18 @@ async function runOwnCommand(name: string, arg: string): Promise<void> {
     await startPoiseChange({ request: arg.trim(), form: 'slash' }, { ...emptyDraft(), text: `/poise ${arg}`.trim() })
     return
   }
+  // Content and consensus make their own session when the console has none.
+  if (name === 'content' || name === 'consensus') { await runChatCommand(name, arg); return }
   const e = entry()
   if (!e) return
   if (name === 'model') await setModel(arg, e.record.effort)
   else if (name === 'mode') await setMode(arg)
   else if (name === 'fork') await forkActive()
-  else if (name === 'content' || name === 'consensus') await runChatCommand(name, arg)
 }
 
 async function runChatCommand(name: 'content' | 'consensus', arg: string): Promise<void> {
   let e = entry()
+  const submitted = composer.getDraft()
   if (!e) {
     try {
       e = await ensureQuickSession()
@@ -1665,13 +1667,15 @@ async function runChatCommand(name: 'content' | 'consensus', arg: string): Promi
   if (e.pending) return
   const topic = arg.trim() || e.record.subject?.label.trim() || ''
   if (!topic) { setNotice(`Give /${name} a topic.`); return }
-  const before = composer.getDraft()
+  // Clear at send, like a prompt: a debate holds its request for minutes,
+  // and nothing submitted later may be erased when it lands.
+  composer.setDraft({ ...emptyDraft(), model: submitted.model })
   try {
     if (name === 'content') await chatClient.runContent(e.record.id, topic)
     else await chatClient.runConsensus(e.record.id, topic)
-    composer.setDraft({ ...emptyDraft(), model: before.model })
     setNotice(null)
   } catch (err) {
+    restoreDraftTo(e.record.id, submitted)
     if (activeId === e.record.id) commandFailed(err, name === 'content' ? 'Content' : 'Consensus')
     else e.error = `/${name} failed — ${(err as Error).message}`
   }
@@ -2308,12 +2312,9 @@ export async function initChatView(): Promise<void> {
       savedSwitches = { revision: 0, switches: [] }; switchNames.clear()
       composer.setSwitches([])
       void loadSwitches(true).catch(() => undefined)
-      // Sessions may have been interrupted or cleaned up; re-read them and
-      // re-subscribe from what each transcript already holds.
+      // Sessions may have been interrupted or cleaned up; re-read them.
+      // The client re-subscribes every held session from its own watermark.
       chatClient.resetSubscriptions()
-      for (const e of sessions.values()) {
-        if (e.loaded) chatClient.subscribe(e.record.id, e.record.lastSeq || 0)
-      }
       void loadSessions()
       // A restart is what a promotion or rollback looks like from here.
       scheduleSelfPoll(0)

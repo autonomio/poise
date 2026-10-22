@@ -60,8 +60,9 @@ interface ServerState {
   content?: (topic: string, chatSession: string) => { status: number, json: unknown }
   /** Author-content jobs by call_id or launch_id for the status route. */
   contentJobs?: Record<string, unknown>
-  /** Answer for POST /api/debate; recorded in state.calls. */
-  debate?: (topic: string, chatSession: string) => { status: number, json: unknown }
+  /** Answer for POST /api/debate; recorded in state.calls. A test may hold
+   *  the answer open to stage what happens while a debate runs. */
+  debate?: (topic: string, chatSession: string) => { status: number, json: unknown } | Promise<{ status: number, json: unknown }>
   /** Fail the legacy card-chat endpoints, so a card chat reaching
    *  /api/chat again fails loudly instead of passing against {}. */
   forbidLegacyChat?: boolean
@@ -119,7 +120,7 @@ async function installRoutes(page: Page, state: ServerState): Promise<void> {
     }
     if (path === '/api/debate' && method === 'POST') {
       const { topic, chatSession } = (body || {}) as { topic: string, chatSession: string }
-      const answer = state.debate ? state.debate(topic, chatSession) : { status: 200, json: { id: 'd1', synthesis: 'Debated.', rounds: [] } }
+      const answer = state.debate ? await state.debate(topic, chatSession) : { status: 200, json: { id: 'd1', synthesis: 'Debated.', rounds: [] } }
       await route.fulfill(answer)
       return
     }

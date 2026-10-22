@@ -723,6 +723,38 @@ test('runs /content and /consensus from the Chat composer and shows their result
   await expect(page.locator('.chat-consensus-card')).toContainText('Use the second approach.')
 })
 
+test('runs /consensus from a fresh console by creating its session first', async ({ page }) => {
+  const state = makeState([], {})
+  await installRoutes(page, state)
+  await installSocket(page)
+  await page.goto('/')
+  await expect(input(page)).toBeEnabled()
+  await input(page).fill('/consensus Which approach?')
+  await input(page).press('Enter')
+  await expect.poll(() => state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(1)
+  await expect.poll(() => state.calls.filter((c) => c.method === 'POST' && c.path === '/api/debate')).toHaveLength(1)
+  const debate = state.calls.find((c) => c.method === 'POST' && c.path === '/api/debate')!.body as Record<string, unknown>
+  expect(debate).toMatchObject({ topic: 'Which approach?', chatSession: state.sessions[0].id })
+})
+
+test('clears /consensus at send and merges it back only if the debate fails', async ({ page }) => {
+  const state = makeState([session({ status: 'idle' })], { s1: [] })
+  let release!: (answer: { status: number, json: unknown }) => void
+  state.debate = () => new Promise((resolve) => { release = resolve })
+  await installRoutes(page, state)
+  const sock = await installSocket(page)
+  await page.goto('/')
+  await sock.subscribed('s1')
+  await input(page).fill('/consensus Which approach?')
+  await input(page).press('Enter')
+  await expect.poll(() => state.calls.filter((c) => c.method === 'POST' && c.path === '/api/debate')).toHaveLength(1)
+  // Cleared while the debate is still running, not when it lands.
+  await expect(input(page)).toHaveValue('')
+  await input(page).fill('Meanwhile, a follow-up')
+  release({ status: 500, json: { error: 'all models are busy' } })
+  await expect(input(page)).toHaveValue('/consensus Which approach?\n\nMeanwhile, a follow-up')
+})
+
 test('sends a card-like message in a card\'s session as a prompt, not a Poise change', async ({ page }) => {
   const state = makeState([session({ subject: { surface: 'current', key: 'poise.card.9', label: 'A manual card' } })], { s1: [] })
   await installRoutes(page, state)

@@ -461,11 +461,11 @@ export class ChatClient {
     this.sendFrame({ id: requestId(), command: { type: 'unsubscribe', sessionId } })
   }
 
-  /** Forget every subscription; the caller re-subscribes from its own state. */
+  /** Drop buffered wire state after a restart. Demand stays: every held
+   *  session keeps its watermark, and the hello handler re-subscribes each
+   *  one, so every open surface keeps receiving events. */
   resetSubscriptions(): void {
-    this.subscriptions.clear()
     this.bufferedEvents.clear()
-    this.holders.clear()
   }
 
   // ── REST ───────────────────────────────────────────────────────────────

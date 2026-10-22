@@ -249,3 +249,54 @@ test('refuses a Chat-only command with a note that names it', async ({ page }) =
   expect(sock.framesOf('prompt')).toHaveLength(0)
   expect(state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(0)
 })
+
+test('keeps the pane session subscribed across a server restart', async ({ page }) => {
+  const existing = session({ id: 'card-1', title: 'Broken logout', subject: SUBJECT, lastSeq: 1 })
+  const state = makeState([existing], { 'card-1': [
+    env('card-1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'Fix it', attachments: [], mentions: [] } }),
+  ] })
+  state.forbidLegacyChat = true
+  state.models = modelsState()
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await currentRoutes(page)
+  await page.addInitScript(() => localStorage.setItem('poise-view', 'chat'))
+  await page.goto('/')
+  await sock.subscribed('card-1')
+  const cardSubs = () => sock.framesOf('subscribe').filter((f) => (f.command as { sessionId: string }).sessionId === 'card-1').length
+  const before = cardSubs()
+  await page.getByRole('button', { name: 'Current', exact: true }).click()
+  await openCardPane(page)
+  await expect(paneTranscript(page).locator('.chat-msg-user')).toContainText('Fix it')
+  state.serverStartedAt = 'new-server-start'
+  sock.ws!.close()
+  await expect.poll(cardSubs).toBeGreaterThan(before)
+  sock.seq = 1
+  sock.push('card-1', { type: 'text.delta', turnId: 't1', messageId: 'reply', delta: 'Fixed by clearing the cookie.' })
+  sock.push('card-1', { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+  await expect(paneTranscript(page).locator('.chat-msg-agent')).toContainText('Fixed by clearing the cookie.')
+  await pane(page).locator('.chat-close').click()
+  await expect(pane(page)).not.toHaveClass(/open/)
+  expect(sock.framesOf('unsubscribe')).toHaveLength(0)
+})
+
+test('clears a /content command at send in the pane and keeps the composer usable', async ({ page }) => {
+  const existing = session({ id: 'card-1', title: 'Broken logout', subject: SUBJECT, lastSeq: 0 })
+  const state = makeState([existing], { 'card-1': [] })
+  state.forbidLegacyChat = true
+  state.models = modelsState()
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await currentRoutes(page)
+  await page.goto('/')
+  await openCardPane(page)
+  await sock.subscribed('card-1')
+  await paneInput(page).fill('/content Release notes')
+  await paneInput(page).press('Enter')
+  await expect(paneInput(page)).toHaveValue('')
+  await expect.poll(() => state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat-content')).toHaveLength(1)
+  await paneInput(page).fill('A follow-up question')
+  await paneInput(page).press('Enter')
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
+  expect(sock.framesOf('prompt')[0].command).toMatchObject({ text: 'A follow-up question' })
+})
