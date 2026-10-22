@@ -118,7 +118,7 @@ async function cli(command: string, all: string[], options?: { cwd?: string }) {
         state: 'OPEN', draft: false, head_sha: HEAD, reviewer_requested: false, active_change_request_authors: [],
         unresolved_conversation_count: unresolvedConversations, unresolved_live_conversation_count: unresolvedConversations,
         unresolved_conversation_authors: [], unresolved_live_conversation_authors: [],
-        reviewer_latest_state: null, reviewer_latest_commit: null, reviewer_reviews_since: 0, reviewer_pending_reviews: 0,
+        reviewer_latest_state: 'APPROVED', reviewer_latest_commit: HEAD, reviewer_reviews_since: 0, reviewer_pending_reviews: 0,
         latest_activity_at: null,
       })
     }
