@@ -34,6 +34,7 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   const sock = await installSocket(page, state)
   await page.goto('/')
   await page.locator('.chat-session-item[data-id="s1"]').click()
+  await expect(page.locator('.chat-session-item[data-id="s1"]')).toHaveClass(/active/)
 
   const timersButton = page.getByRole('button', { name: 'Timers' })
   await expect(timersButton).toContainText('Timers 2')
