@@ -317,18 +317,21 @@ export class ChatControl {
 
   /** Account a finished timer turn: successes reset the failures, failures
    *  back off and trip after three with two marks, a person's Stop holds the
-   *  chat, and an interruption writes its diagnostic. A timer turn's failure
-   *  never pauses the chat's ordinary delivery. */
+   *  chat, and an interruption writes its diagnostic. A stopped or cut turn
+   *  ends a one-shot but leaves an every-timer on its schedule. A timer
+   *  turn's failure never pauses the chat's ordinary delivery. */
   private accountTimerTurn(sessionId: string, timer: TimerView, event: Extract<ChatEnvelope['event'], { type: 'turn.finished' }>): void {
     const now = (this.options.now ?? Date.now)()
     if (event.stopReason === 'interrupted') {
       diagnostic({ level: 'warning', operation: 'chat.timer.changed', target: timer.id,
         message: 'A timer turn was cut before it finished and was not replayed',
         context: { timerId: timer.id, sessionId, change: 'interrupted', turnId: event.turnId } })
+      this.endCutOneShot(sessionId, timer, now)
       return
     }
     if (event.stopReason === 'cancelled') {
       if (event.stoppedBy?.kind === 'person') store.holdChat(this.runtime.instance, sessionId, 'stopped', now)
+      this.endCutOneShot(sessionId, timer, now)
       return
     }
     if (event.stopReason === 'end_turn') {
@@ -345,6 +348,17 @@ export class ChatControl {
     if (!view) return
     if (result.tripped) this.emitTimerChanged(sessionId, view, 'tripped', timer.setBy, lastError)
     else if (result.ended) this.emitTimerChanged(sessionId, view, 'ended', timer.setBy)
+  }
+
+  /** A one-shot fired its single occurrence, so a stopped or cut turn ends
+   *  it instead of leaving it scheduled on nothing. The firing did not
+   *  complete, which is what the `turn_failed` reason records. */
+  private endCutOneShot(sessionId: string, timer: TimerView, now: number): void {
+    if (timer.schedule.kind !== 'once') return
+    const result = store.recordTimerTurn(this.runtime.instance, timer.id, 'fail', now)
+    if (!result.ended) return
+    const view = store.timerById(this.runtime.instance, timer.id)
+    if (view) this.emitTimerChanged(sessionId, view, 'ended', timer.setBy)
   }
 
   /** A timer change lands in the target's transcript and in Logging, with

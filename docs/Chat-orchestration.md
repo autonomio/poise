@@ -91,8 +91,11 @@ The person stays in charge. Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold
 until Resume. A timer whose turns fail backs off exponentially and trips
 after three consecutive failures, with a note and a warning; re-arming starts
-it over. Timers never target the Switchboard or a Poise change session, and
-only the person can change a timer the person set.
+it over, and tripping drops any firing still queued. A stopped or cut turn
+ends a one-shot and leaves an every-timer on its schedule; a turn that
+finishes after its timer ended changes nothing. Timers never target the
+Switchboard or a Poise change session, and only the person can change a
+timer the person set.
 
 ## Authority
 

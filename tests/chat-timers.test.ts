@@ -651,7 +651,9 @@ describe('durable timers that wake chats', () => {
     await control.tick()
     await runtime.close(p.id)
     await until(() => runtime.get(p.id)?.status === 'closed')
-    expect(await waitsFor()).toBe('reopening')
+    // A background tick may already have begun the reopen; either way the
+    // firing waits for the resume rather than delivering into a closed chat.
+    expect(['reopening', 'starting']).toContain(await waitsFor())
     await control.tick()
     await until(() => runtime.get(p.id)?.status === 'idle')
     await control.tick()
@@ -987,8 +989,185 @@ describe('durable timers that wake chats', () => {
     expect(long()[0].context).toMatchObject({ change: 'waiting_long', waitingFor: 'running' })
     await control.tick()
     expect(long()).toHaveLength(1)
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     expect(store.timerById(instance, created.id)!.state).toBe('active')
   }, 120_000)
+
+  it('ends one-shots whose turn was stopped or cut, and keeps every-timers scheduled', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const count = () => (prompts.get(p.id) ?? []).length
+    // A Manager stop ends a one-shot: it fired its single occurrence.
+    const once = await heartbeat(m, p)
+    clock += 10 * 60_000
+    await control.tick()
+    await until(() => count() === 1)
+    await command(m.id, { operation: 'stop', sessionId: p.id })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, once.id)).toMatchObject({ state: 'done', reason: 'turn_failed' })
+    expect(timerNotes(p.id).at(-1)).toMatchObject({ change: 'ended' })
+    expect(runtime.get(p.id)!.timers ?? []).toHaveLength(0)
+    // The same stop leaves an every-timer on its schedule.
+    const every = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Every', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
+    clock += 30 * 60_000
+    await control.tick()
+    await until(() => count() === 2)
+    const phase = store.timerById(instance, every.id)!.nextAt
+    await command(m.id, { operation: 'stop', sessionId: p.id })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, every.id)).toMatchObject({ state: 'active', failures: 0, nextAt: phase })
+    clock += 30 * 60_000
+    await control.tick()
+    await until(() => count() === 3)
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, every.id)!.failures).toBe(0)
+    // A restart that cuts a one-shot's turn ends it with its diagnostic.
+    const cut = await heartbeat(m, p)
+    clock += 10 * 60_000
+    await control.tick()
+    await until(() => count() === 4)
+    expect(prompts.get(p.id)!.at(-1)!.text).toContain(cut.id)
+    await control.stop()
+    runtime.removeAllListeners('event')
+    runtime = makeRuntime()
+    control = new Control(runtime, { ci, now: () => clock })
+    control.attach(server)
+    await runtime.recover()
+    control.start()
+    expect(runtime.get(p.id)?.status).toBe('interrupted')
+    expect(store.timerById(instance, cut.id)).toMatchObject({ state: 'done', reason: 'turn_failed' })
+    expect(timerNotes(p.id).at(-1)).toMatchObject({ change: 'ended' })
+    const interruptions = reported('chat.timer.changed').filter(e => e.target === cut.id)
+    expect(interruptions).toHaveLength(1)
+    expect(interruptions[0].severity).toBe('warning')
+  }, 120_000)
+
+  it('expires one-shots that already fired when a hold lands', async () => {
+    const m = await workspaceManager(), p = await manager('Worker'), q = await manager('Other')
+    // A firing already waiting when the person stops the chat expires.
+    const once = await heartbeat(m, p)
+    runtime.prompt(p.id, { text: 'Busy', attachments: [], mentions: [] })
+    await until(() => prompts.has(p.id))
+    clock += 10 * 60_000
+    await control.tick()
+    expect(store.timerPendingRow(instance, once.id)).toBeDefined()
+    await runtime.cancel(p.id, { kind: 'person' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    prompts.delete(p.id)
+    await control.tick()
+    expect(store.timerById(instance, once.id)).toMatchObject({ state: 'expired', reason: 'skipped_while_held', skipped: 1 })
+    expect(store.timerPendingRow(instance, once.id)).toBeUndefined()
+    expect(timerNotes(p.id).at(-1)).toMatchObject({ change: 'ended' })
+    // Releasing the hold resurrects nothing: the timer stays expired.
+    runtime.prompt(p.id, { text: 'Back', attachments: [], mentions: [] })
+    await until(() => prompts.has(p.id))
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    await control.tick()
+    expect(store.timerById(instance, once.id)!.state).toBe('expired')
+    // A Hold toggle mid-turn expires the one-shot; its finish changes nothing.
+    const mid = await heartbeat(m, q)
+    clock += 10 * 60_000
+    await control.tick()
+    await until(() => prompts.has(q.id))
+    control.setHold(q.id, true)
+    await control.tick()
+    expect(store.timerById(instance, mid.id)).toMatchObject({ state: 'expired', reason: 'skipped_while_held' })
+    const notesBefore = timerNotes(q.id).length
+    finishes.get(q.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(q.id)?.status === 'idle')
+    expect(store.timerById(instance, mid.id)).toMatchObject({ state: 'expired', reason: 'skipped_while_held' })
+    expect(timerNotes(q.id)).toHaveLength(notesBefore)
+  }, 120_000)
+
+  it('ignores turns that finish after their timer was cancelled', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const rep = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Rep', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
+    for (let i = 0; i < 2; i++) {
+      clock += 30 * 60_000
+      await control.tick()
+      await until(() => prompts.has(p.id))
+      prompts.delete(p.id)
+      finishes.get(p.id)!({ stopReason: 'error', error: 'boom' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      clock = Date.parse(store.timerById(instance, rep.id)!.notBefore!)
+    }
+    expect(store.timerById(instance, rep.id)).toMatchObject({ failures: 2 })
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    await command(m.id, { operation: 'cancelTimer', timerId: rep.id })
+    const notesBefore = timerNotes(p.id).length
+    finishes.get(p.id)!({ stopReason: 'error', error: 'third boom' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    // Still cancelled: no trip, no warning, no new note.
+    expect(store.timerById(instance, rep.id)).toMatchObject({ state: 'cancelled', reason: 'cancelled_by_manager', failures: 2 })
+    expect(timerNotes(p.id)).toHaveLength(notesBefore)
+    expect(reported('chat.timer.changed').filter(e => e.target === rep.id)).toHaveLength(0)
+    // A cancelled one-shot whose turn then succeeds stays cancelled.
+    prompts.delete(p.id)
+    const once = await heartbeat(m, p)
+    clock += 10 * 60_000
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    await command(m.id, { operation: 'cancelTimer', timerId: once.id })
+    const onceNotes = timerNotes(p.id).length
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, once.id)).toMatchObject({ state: 'cancelled', reason: 'cancelled_by_manager' })
+    expect(timerNotes(p.id)).toHaveLength(onceNotes)
+  }, 120_000)
+
+  it('tripping drops the queued firing so other timers still deliver', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const tripper = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Tripper', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
+    for (let i = 0; i < 2; i++) {
+      clock += 30 * 60_000
+      await control.tick()
+      await until(() => prompts.has(p.id))
+      prompts.delete(p.id)
+      finishes.get(p.id)!({ stopReason: 'error', error: 'boom' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      clock = Date.parse(store.timerById(instance, tripper.id)!.notBefore!)
+    }
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    prompts.delete(p.id)
+    // A second firing queues while the third turn runs, older than any other row.
+    clock += 30 * 60_000
+    await control.tick()
+    expect(store.timerPendingRow(instance, tripper.id)).toBeDefined()
+    const other = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Other', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
+    clock += 30 * 60_000
+    await control.tick()
+    expect(store.timerPendingRow(instance, other.id)).toBeDefined()
+    finishes.get(p.id)!({ stopReason: 'error', error: 'third boom' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    expect(store.timerById(instance, tripper.id)!.state).toBe('tripped')
+    // The orphan is gone, so the other timer's older-second row still delivers.
+    expect(store.timerPendingRow(instance, tripper.id)).toBeUndefined()
+    await holdingTimers(async () => {
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    expect(prompts.get(p.id)!.at(-1)!.text).toContain(`[Poise timer ${other.id} "Other"`)
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    // Re-arming starts clean: no stale firing delivers.
+    prompts.delete(p.id)
+    await command(m.id, { operation: 'rearmTimer', timerId: tripper.id })
+    await control.tick()
+    expect(store.timerPendingRow(instance, tripper.id)).toBeUndefined()
+    expect(prompts.has(p.id)).toBe(false)
+    clock += 30 * 60_000
+    await control.tick()
+    await until(() => prompts.has(p.id))
+    const source = starts(p.id).at(-1)!.source as Extract<TurnSource, { kind: 'timer' }>
+    expect(source).toMatchObject({ kind: 'timer', timerId: tripper.id, missed: 0 })
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 180_000)
 })

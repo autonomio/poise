@@ -153,12 +153,13 @@ export function pending(instance: string, afterRecipient = ''): InternalMessage[
       SELECT ${INBOX_COLUMNS} FROM chat_control_inbox i
       WHERE i.instance = ? AND i.state = 'pending' AND i.timer_id IS NOT NULL
         AND i.seq = (SELECT MIN(seq) FROM chat_control_inbox
-          WHERE instance = ? AND state = 'pending' AND timer_id IS NOT NULL AND recipient = i.recipient)
+          WHERE instance = ? AND state = 'pending' AND timer_id IS NOT NULL AND recipient = i.recipient
+          AND timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active'))
         AND i.recipient IN (SELECT id FROM chat_sessions WHERE status IN ('idle','interrupted','error','closed'))
         AND i.timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active')
         AND i.recipient NOT IN (SELECT session FROM chat_control_holds WHERE instance = ?)
     ) ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient, seq LIMIT 100`)
-    .all(instance, instance, instance, instance, instance, instance, instance, instance, afterRecipient) as InternalMessage[]
+    .all(instance, instance, instance, instance, instance, instance, instance, instance, instance, afterRecipient) as InternalMessage[]
   return page
 }
 export function pauseDelivery(instance: string, session: string): void {
@@ -363,8 +364,12 @@ export function cancelTimer(instance: string, id: string, by: ChatActor | Person
 export function rearmTimer(instance: string, id: string, by: ChatActor | PersonActor, now: number): TimerView {
   const row = timerForChange(instance, id, by)
   if (row.state !== 'tripped') throw new HttpError(400, 'only a tripped timer can be re-armed')
-  db.prepare(`UPDATE chat_control_timers SET state = 'active', reason = NULL, failures = 0, not_before = NULL,
-    next_at = ?, updated_at = ? WHERE id = ?`).run(now + row.interval_ms, now, id)
+  db.transaction(() => {
+    // A firing orphaned before trips cleaned up never delivers stale.
+    db.prepare(`DELETE FROM chat_control_inbox WHERE instance = ? AND timer_id = ? AND state = 'pending'`).run(instance, id)
+    db.prepare(`UPDATE chat_control_timers SET state = 'active', reason = NULL, failures = 0, not_before = NULL,
+      next_at = ?, updated_at = ? WHERE id = ?`).run(now + row.interval_ms, now, id)
+  })()
   return timerById(instance, id)!
 }
 
@@ -474,8 +479,8 @@ export const fireTimer = db.transaction((instance: string, id: string, now: numb
 })
 
 /** Skip a held timer's due occurrences: no row, `skipped` grows, a pending
- *  row is deleted and counted, a due one-shot expires, and the timer carries
- *  the hold's reason until the hold is gone. */
+ *  row is deleted and counted, a fired or due one-shot expires, and the
+ *  timer carries the hold's reason until the hold is gone. */
 export const applyTimerHold = db.transaction((instance: string, id: string, reason: TimerReason, now: number):
   { state: TimerState, became: 'held' | 'expired' | 'already' } => {
   const row = timerRowById(instance, id)
@@ -484,7 +489,9 @@ export const applyTimerHold = db.transaction((instance: string, id: string, reas
   if (pending) db.prepare(`DELETE FROM chat_control_inbox WHERE seq = ?`).run(pending.seq)
   const due = occurrencesDue(row.kind, row.interval_ms, row.next_at, now)
   const skipped = row.skipped + (due?.count ?? 0) + (pending ? 1 : 0)
-  if (row.kind === 'once' && due) {
+  // A fired one-shot (`next_at` NULL) holds nothing back: expiring it now
+  // keeps the release from resurrecting a timer with no row and no schedule.
+  if (row.kind === 'once' && (due || row.next_at === null)) {
     db.prepare(`UPDATE chat_control_timers SET state = 'expired', reason = 'skipped_while_held', next_at = NULL,
       skipped = ?, updated_at = ?, ended_at = ? WHERE id = ?`).run(skipped, now, now, id)
     return { state: 'expired', became: 'expired' }
@@ -508,6 +515,9 @@ export function recordTimerTurn(instance: string, id: string, outcome: 'ok' | 'f
   { state: TimerState, failures: number, tripped: boolean, ended: boolean } {
   const row = timerRowById(instance, id)
   if (!row) return { state: 'done', failures: 0, tripped: false, ended: true }
+  // A turn that finishes after its timer ended changes nothing: the ending
+  // already recorded and noted it. Only live timers record outcomes.
+  if (row.state !== 'active' && row.state !== 'held') return { state: row.state, failures: row.failures, tripped: false, ended: false }
   if (outcome === 'ok') {
     if (row.kind === 'once') {
       db.prepare(`UPDATE chat_control_timers SET state = 'done', reason = 'completed', failures = 0, updated_at = ?, ended_at = ?
@@ -528,8 +538,13 @@ export function recordTimerTurn(instance: string, id: string, outcome: 'ok' | 'f
     return { state: 'done', failures, tripped: false, ended: true }
   }
   if (failures >= TIMER_LIMITS.tripAfter) {
-    db.prepare(`UPDATE chat_control_timers SET state = 'tripped', reason = 'failed_3_times', failures = ?, next_at = NULL,
-      updated_at = ? WHERE id = ?`).run(failures, now, id)
+    db.transaction(() => {
+      // A firing queued while the third turn ran dies with the trip: leaving
+      // it would block the chat's other timers and deliver stale on re-arm.
+      db.prepare(`DELETE FROM chat_control_inbox WHERE instance = ? AND timer_id = ? AND state = 'pending'`).run(instance, id)
+      db.prepare(`UPDATE chat_control_timers SET state = 'tripped', reason = 'failed_3_times', failures = ?, next_at = NULL,
+        updated_at = ? WHERE id = ?`).run(failures, now, id)
+    })()
     return { state: 'tripped', failures, tripped: true, ended: false }
   }
   db.prepare('UPDATE chat_control_timers SET failures = ?, not_before = ?, updated_at = ? WHERE id = ?')
