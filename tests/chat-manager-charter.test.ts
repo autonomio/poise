@@ -39,6 +39,7 @@ let Runtime: typeof ChatRuntime
 let Control: typeof ChatControl
 let transportModule: typeof import('../server/chat/transport')
 let snippetApi: typeof import('../server/snippet-api')
+let library: typeof import('../server/snippet-library')
 let messageQueue: typeof import('../server/chat/message-queue')
 let logging: typeof import('../server/logging')
 const prompts = new Map<string, PromptInput[]>()
@@ -123,6 +124,7 @@ beforeAll(async () => {
   database = await import('../server/db')
   transportModule = await import('../server/chat/transport')
   snippetApi = await import('../server/snippet-api')
+  library = await import('../server/snippet-library')
   messageQueue = await import('../server/chat/message-queue')
   logging = await import('../server/logging')
 })
@@ -371,8 +373,6 @@ it('places /manager between the control context and the request in Manager turns
   found = positions(prompts.get(manager.id)!.at(-1)!.text)
   expect(found.charter).toBeGreaterThan(found.control)
   expect(found.request).toBeGreaterThan(found.charter)
-  // #352 owns the person/non-person [User request] split; without it, only the
-  // unset Auto-merge state provably carries no [User request] on any turn.
   expect(found.userRequest).toBe(-1)
 
   await runtime.setAutoMerge(manager.id, true)
@@ -385,6 +385,14 @@ it('places /manager between the control context and the request in Manager turns
   }
   expect(on.text.slice(found.request)).toContain('Do the thing')
   expect(on.memories).toBe('Saved memories')
+  store.message(instance, manager.id, 'worker-session', 'Worker needs help')
+  await control.tick()
+  await finishTurn(manager.id)
+  found = positions(prompts.get(manager.id)!.at(-1)!.text)
+  expect(found.modeOn).toBeGreaterThanOrEqual(0)
+  expect(found.userRequest).toBe(-1)
+  expect(found.charter).toBeGreaterThan(found.control)
+  expect(found.request).toBeGreaterThan(found.charter)
 
   await runtime.setAutoMerge(manager.id, false)
   await runPrompt(manager.id, 'Do the thing')
@@ -394,6 +402,14 @@ it('places /manager between the control context and the request in Manager turns
   expect(found.userRequest).toBeGreaterThan(found.modeOff)
   expect(found.charter).toBeGreaterThan(found.control)
   expect(found.request).toBeGreaterThan(found.charterText)
+  store.message(instance, manager.id, 'worker-session', 'Worker needs help')
+  await control.tick()
+  await finishTurn(manager.id)
+  found = positions(prompts.get(manager.id)!.at(-1)!.text)
+  expect(found.modeOff).toBeGreaterThanOrEqual(0)
+  expect(found.userRequest).toBe(-1)
+  expect(found.charter).toBeGreaterThan(found.control)
+  expect(found.request).toBeGreaterThan(found.charter)
 
   await runtime.setAutoMerge(ordinary.id, true)
   await runPrompt(ordinary.id, 'Ordinary work')
@@ -454,6 +470,31 @@ it('fails Manager turns with a named error while /manager cannot be read or is t
   expect(prompts.get(manager.id)).toHaveLength(2)
   expect(prompts.get(manager.id)!.at(-1)!.text).toContain('[Manager charter —')
 }, 60_000)
+
+it('lets /manager write failures throw instead of reporting unreadable', async () => {
+  // Fill the library to just under the 1 MiB serialized cap, measuring the
+  // real YAML/header overhead so the top-up lands exactly.
+  const listed = await getSnippets()
+  const probeSize = 1024 * 1024 - 65536
+  await library.saveSkillSnippets([{ trigger: ';big', replace: 'x'.repeat(probeSize) }], listed.json.version, true)
+  const overhead = (await readFile(matchFile, 'utf8')).length - probeSize
+  const topped = await library.readSkillSnippets()
+  await library.saveSkillSnippets([{ trigger: ';big', replace: 'x'.repeat(1024 * 1024 - overhead - 300) }], topped.version, true)
+
+  await expect(library.ensureSnippetSwitch('manager', MANAGER_SNIPPET_DEFAULT)).rejects.toThrow('serialized snippets exceed 1048576 bytes')
+  expect(await readFile(matchFile, 'utf8')).not.toContain(';manager')
+
+  const logs: string[] = []
+  runtime.on('log', (line: string) => { logs.push(line) })
+  const manager = await createManagerViaBrowser()
+  expect(logs).toContainEqual(expect.stringContaining('[chat] creating /manager failed: serialized snippets exceed 1048576 bytes'))
+
+  runtime.prompt(manager.id, { text: 'Do the thing', attachments: [], mentions: [] })
+  await until(() => seen.get(manager.id)?.some(event => event.type === 'turn.finished') ?? false)
+  const failure = seen.get(manager.id)!.filter(event => event.type === 'error').at(-1)
+  expect(failure).toMatchObject({ message: expect.stringContaining('serialized snippets exceed 1048576 bytes') })
+  expect(JSON.stringify(failure)).not.toContain('it is missing')
+}, 30_000)
 
 it('records a diagnostic only when the /manager revision advances', async () => {
   expect(charterChanged()).toHaveLength(0)

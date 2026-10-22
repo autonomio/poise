@@ -293,37 +293,29 @@ export async function saveSwitch(input: { name: string, content: string, revisio
   })
   return publish().skills
 }
-/** Creates the named snippet only when no live snippet has that name; never replaces one. */
+/** Creates the named snippet only when no live snippet has that name; never replaces one.
+ *  Only a library that cannot be read returns 'unreadable'; write failures
+ *  and conflicts throw, as they do for every other library write. */
 export async function ensureSnippetSwitch(name: string, content: string): Promise<'present' | 'created' | 'unreadable'> {
   try {
-    await importLegacy()
+    plan(readSnippetSnapshotSync())
   } catch {
     return 'unreadable'
   }
-  let outcome: 'present' | 'created' | 'unreadable' = 'present'
-  try {
-    await mutateSnippetLibrary(snapshot => {
-      let prepared: Plan
-      try {
-        prepared = plan(snapshot)
-      } catch {
-        outcome = 'unreadable'
-        return null
-      }
-      const bindings = new Map(prepared.metadata.names)
-      if (prepared.state.snippets.some(snippet => bindings.get(snippet.trigger) === name)) return null
-      let trigger = [...bindings].find(([, alias]) => alias === name)?.[0] || `;${name}`
-      for (let n = 2; prepared.state.snippets.some(snippet => snippet.trigger === trigger); n++) trigger = `;${name}-${n}`
-      bindings.set(trigger, name)
-      prepared.metadata.names = [...bindings]
-      outcome = 'created'
-      return { snippets: [...prepared.state.snippets, { trigger, replace: content }], header: header(prepared.metadata) }
-    })
-  } catch (error) {
-    if (error instanceof SnippetConflictError) throw error
-    return 'unreadable'
-  }
-  return outcome
+  await importLegacy()
+  let created = false
+  await mutateSnippetLibrary(snapshot => {
+    const prepared = plan(snapshot)
+    const bindings = new Map(prepared.metadata.names)
+    if (prepared.state.snippets.some(snippet => bindings.get(snippet.trigger) === name)) return null
+    let trigger = [...bindings].find(([, alias]) => alias === name)?.[0] || `;${name}`
+    for (let n = 2; prepared.state.snippets.some(snippet => snippet.trigger === trigger); n++) trigger = `;${name}-${n}`
+    bindings.set(trigger, name)
+    prepared.metadata.names = [...bindings]
+    created = true
+    return { snippets: [...prepared.state.snippets, { trigger, replace: content }], header: header(prepared.metadata) }
+  })
+  return created ? 'created' : 'present'
 }
 export function savedSwitchNames(): Set<string> {
   // Retired invocation names remain recognizable. A queued or recalled use of

@@ -482,7 +482,9 @@ export async function handleChatApi(req: IncomingMessage, res: ServerResponse, u
         if (!person) throw new ChatError(403, 'A Manager is created from the New session dialog in the browser.', 'invalid')
         const session = await runtime.create({ ...localSessionRequest(body), role: body.role })
         try {
-          await ensureSnippetSwitch(MANAGER_SWITCH, MANAGER_SNIPPET_DEFAULT)
+          if (await ensureSnippetSwitch(MANAGER_SWITCH, MANAGER_SNIPPET_DEFAULT) === 'unreadable') {
+            runtime.emit('log', '[chat] /manager could not be read; Snippets shows the problem')
+          }
         } catch (error) {
           runtime.emit('log', `[chat] creating /manager failed: ${error instanceof Error ? error.message : String(error)}`)
         }
