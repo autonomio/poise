@@ -583,6 +583,8 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.observation(runtime.instance, `ci:${target}`)).toBeUndefined()
     ci.mockResolvedValue(failure)
     await control.tick()
+    // CI reads run in their own pass behind the tick; the new owner's read follows the crossed one.
+    await until(() => store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure')))
     expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
   })
 

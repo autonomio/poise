@@ -31,6 +31,10 @@ between agents running as the same operating-system user.
 | `bind` | Exact GitHub issue/PR `target` URL | Exclusive work ownership for the caller |
 | `unbind` | `target` | Release the caller's work |
 | `stop` | Your worker, or any chat if you are the workspace Manager: `sessionId` | Cancel its turn and pause automatic message dispatch; the transcript names the acting chat. A closed chat refuses; stopping an idle chat reports `stopped: false` |
+| `timer` | Manager only: `sessionId`, `label`, `message`, exactly one of `delayMinutes` (1–10080) or `everyMinutes` (5–1440) | Durable timer; at most 5 live timers per chat, 100 chat-set timers per instance |
+| `timers` | Manager only: optional `sessionId` | Live timers and timers ended in the last 24 hours, every hold, the workspace hold |
+| `cancelTimer` | Manager only: `timerId` | Cancel the timer; ended timers return unchanged. Never counts against the budget |
+| `rearmTimer` | Manager only: `timerId` | Re-arm a tripped timer; failures clear and the next fire is now plus its interval |
 | `api` (command only) | `path`, optional `method`, `body` | Normal local Poise API response |
 
 Mutating control requests use a UUID `requestId`. The command prints that ID
@@ -72,6 +76,23 @@ decision and all permission requests remain with the person/native Safe mode.
 Answering a question that someone else answered first names the first answerer
 relative to the caller ("by you", "by the person", "by the workspace Manager",
 or the answering chat); a cancelled question keeps "no longer pending".
+
+### Timers
+
+The workspace Manager and the person can set durable timers on any chat,
+including the Manager itself, from the control operations or the browser's
+Timers pane. Each firing starts one turn whose text is the timer message
+under a `[Poise timer …]` header; the transcript shows the message with its
+timer, setter and collapsed firings, and timer changes land as notes. A
+timer survives restarts: missed occurrences collapse into the next delivery
+with their count, and the schedule keeps its phase.
+
+The person stays in charge. Their Stop holds the chat, skipping its timers'
+firings until their next message or Resume; the Hold toggle and Hold-all hold
+until Resume. A timer whose turns fail backs off exponentially and trips
+after three consecutive failures, with a note and a warning; re-arming starts
+it over. Timers never target the Switchboard or a Poise change session, and
+only the person can change a timer the person set.
 
 ## Authority
 
