@@ -74,6 +74,9 @@ export interface BranchBinding {
 export interface QueuedMessage {
   /** Validated attachment/mention provenance across an isolated Poise handoff. */
   sourceSessionId?: string
+  /** Actor whose deferred steer this row continues; dispatched as source
+   *  data under that actor, never as the person's request. */
+  source?: ChatActor | PoiseActor
   id: string
   prompt: PromptInput
   agent: AgentId
@@ -295,9 +298,10 @@ export interface ChatActor { kind: 'chat', sessionId: string, title: string, rol
 export interface PoiseActor { kind: 'poise', name: string }
 /** The person, acting from the browser: a Stop, a hold, or a timer they set. */
 export interface PersonActor { kind: 'person' }
-/** What started a turn the person did not start: a chat, Poise, or a timer,
- *  delivered through the control inbox. `seq` is the delivered inbox row. */
-export type TurnSource = ((ChatActor | PoiseActor) & { seq: number })
+/** What started a turn the person did not start: a chat, Poise, or a timer.
+ *  `seq` is the delivered inbox row, absent for a deferred steer. Timer
+ *  sources retain the required delivered inbox row and firing metadata. */
+export type TurnSource = ((ChatActor | PoiseActor) & { seq?: number })
   | { kind: 'timer', timerId: string, label: string, setBy: ChatActor | PersonActor, missed: number, dueAt: string, seq: number }
 
 /** One durable timer on a chat, as the Timers pane and session records show
