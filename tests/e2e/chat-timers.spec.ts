@@ -59,18 +59,18 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   expect(sock.framesOf('timer.cancel')[0].command).toMatchObject({ type: 'timer.cancel', timerId: 'timer-1' })
   await expect(pane.locator('.chat-timer[data-timer="timer-1"] .chat-timer-status')).toHaveText('cancelled')
 
-  const hold = pane.getByRole('button', { name: 'Hold' })
+  const hold = pane.getByRole('button', { name: 'Hold', exact: true })
   await hold.click()
   await expect.poll(() => sock.framesOf('chat.hold').length).toBe(1)
   expect(sock.framesOf('chat.hold')[0].command).toMatchObject({ type: 'chat.hold', sessionId: 's1', held: true })
-  await expect(pane.getByRole('button', { name: 'Resume' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(pane.getByRole('button', { name: 'Resume', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(pane.locator('.chat-timers-add')).toContainText('On hold: new timers start when you resume.')
   await expect(timersButton).toContainText('on hold')
 
-  await pane.getByRole('button', { name: 'Resume' }).click()
+  await pane.getByRole('button', { name: 'Resume', exact: true }).click()
   await expect.poll(() => sock.framesOf('chat.hold').length).toBe(2)
   expect(sock.framesOf('chat.hold')[1].command).toMatchObject({ type: 'chat.hold', sessionId: 's1', held: false })
-  await expect(pane.getByRole('button', { name: 'Hold' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveAttribute('aria-pressed', 'false')
 
   // A refused create surfaces the server's error in the pane's alert.
   sock.autoAck = false
