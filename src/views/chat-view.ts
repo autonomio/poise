@@ -47,7 +47,10 @@ import { createComposer, emptyDraft, type Composer, type ComposerDraft } from '.
 import { quickSessionRequest, quickSessionModel, consoleModelLabel } from '../chat-catalog'
 import { attachChatSidebar } from './chat-sidebar'
 import { createFilePreview } from './chat-file-preview'
-import { ICON_FORK, ICON_HANDOFF, ICON_ACTIVITY, ICON_AUTO_MERGE, ICON_MEMORIES, ICON_SAFE_MODE, ICON_REASONING } from './chat-icons'
+import { ICON_FORK, ICON_HANDOFF, ICON_ACTIVITY, ICON_TOOLS, ICON_AUTO_MERGE, ICON_MEMORIES, ICON_SAFE_MODE, ICON_REASONING, ICON_PIN } from './chat-icons'
+import { deriveSessionTitle } from '../chat-title'
+import { applyWorklogOrder, compareWorklog, sessionDot } from '../chat-worklog'
+import { shortElapsed } from '../chat-turn-time'
 import { createDeployCard, type DeployCard, type LocalPendingChange } from './chat-deploy-card'
 import { recognisePoiseRequest } from '../poise-request-intent'
 import { planPoiseTurn } from '../poise-service-turn'
@@ -173,6 +176,30 @@ try { showReasoning = localStorage.getItem(REASONING_KEY) === 'true' } catch { /
 const ACTIVITY_KEY = 'poise-chat-show-activity'
 let showActivity = true
 try { showActivity = localStorage.getItem(ACTIVITY_KEY) !== 'false' } catch { /* optional preference */ }
+const TOOLS_KEY = 'poise-chat-show-tools'
+let showTools = true
+try { showTools = localStorage.getItem(TOOLS_KEY) !== 'false' } catch { /* optional preference */ }
+// Pinned chats hold their sidebar slots across status changes and reloads:
+// the pin set plus the last visible order, reconciled against the server list.
+const PINS_KEY = 'poise-chat-pinned'
+const ORDER_KEY = 'poise-chat-sidebar-order'
+let pins = new Set<string>()
+try {
+  const saved = JSON.parse(localStorage.getItem(PINS_KEY) || '[]')
+  if (Array.isArray(saved)) pins = new Set(saved.filter((id): id is string => typeof id === 'string'))
+} catch { /* pinning still works for the page */ }
+let savedOrder: string[] = []
+try {
+  const saved = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]')
+  if (Array.isArray(saved)) savedOrder = saved.filter((id): id is string => typeof id === 'string')
+} catch { /* the server list still orders the pane */ }
+let orderRestored = false
+function persistWorklog(): void {
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify([...pins]))
+    localStorage.setItem(ORDER_KEY, JSON.stringify(order))
+  } catch { /* the in-page order still works */ }
+}
 
 const ICON_PLUS = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
 const ICON_SIDEBAR = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="2.5" width="11" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5 2.5v9" stroke="currentColor" stroke-width="1.2"/></svg>'
@@ -516,15 +543,19 @@ function applyRestoredSnapshot(): void {
 
 // ── Sessions list ──────────────────────────────────────────────────────────
 
+function compareEntries(a: string, b: string): number {
+  const ea = sessions.get(a)!, eb = sessions.get(b)!
+  return compareWorklog({ pending: ea.pending, updatedAt: ea.record.updatedAt, createdAt: ea.record.createdAt },
+    { pending: eb.pending, updatedAt: eb.record.updatedAt, createdAt: eb.record.createdAt })
+}
+
 function sortOrder(): void {
-  order.sort((a, b) => {
-    const ea = sessions.get(a)!, eb = sessions.get(b)!
-    // A pending session is the newest thing there is.
-    if (ea.pending !== eb.pending) return ea.pending ? -1 : 1
-    const ma = ea.record.role === 'manager', mb = eb.record.role === 'manager'
-    if (ma !== mb) return ma ? -1 : 1
-    return (eb.record.createdAt || '').localeCompare(ea.record.createdAt || '')
-  })
+  // New sessions join the end, deleted ones leave; a restored order keeps its
+  // slots, so pins survive a reload, while unpinned chats take change order.
+  for (const id of sessions.keys()) if (!order.includes(id)) order.push(id)
+  order = order.filter((id) => sessions.has(id))
+  pins = new Set([...pins].filter((id) => sessions.has(id)))
+  order = applyWorklogOrder(order, (id) => pins.has(id), compareEntries)
 }
 
 function upsertRecord(record: SessionRecord, opts: { pending?: boolean } = {}): SessionEntry {
@@ -573,6 +604,11 @@ async function readSessions(): Promise<void> {
         if (activeId === id) activeId = null
       }
     }
+    if (!orderRestored) {
+      orderRestored = true
+      const kept = savedOrder.filter((id) => sessions.has(id))
+      order = [...kept, ...order.filter((id) => !kept.includes(id))]
+    }
     sortOrder()
     setNotice(null)
   } catch (err) {
@@ -620,31 +656,83 @@ function sidebarHtml(): string {
     return '<div class="chat-empty chat-sidebar-empty">No sessions yet.</div>'
   }
   const records = order.map((id) => sessions.get(id)!.record)
+  const now = Date.now()
+  const zone = effectiveTimezone()
   return visible.map((id) => {
     const e = sessions.get(id)!
     const s = e.record
-    const running = isRunning(s.status)
     const armed = armedDelete?.id === id && armedDelete.until > Date.now()
     const confirm = armed ? deleteConfirmCopy(s, records) : null
-    const waiting = s.status === 'waiting' || (s.pendingRequests?.length || 0) > 0
-    return `<div class="chat-session-item${id === activeId ? ' active' : ''}${e.pending ? ' pending' : ''}" role="listitem" data-id="${escapeHtml(id)}" tabindex="0">`
+    const dot = sessionDot(s, now, zone)
+    const pinned = pins.has(id)
+    return `<div class="chat-session-item${id === activeId ? ' active' : ''}${e.pending ? ' pending' : ''}${pinned ? ' pinned' : ''}" role="listitem" data-id="${escapeHtml(id)}" tabindex="0" draggable="true">`
       + `<div class="chat-session-title" title="${escapeHtml(sessionTitle(s))}">${escapeHtml(sessionTitle(s))}</div>`
       + (s.subject ? `<div class="chat-session-subject">From Current · ${escapeHtml(s.subject.label)}</div>` : '')
       + creatorHtml(s)
       + `<div class="chat-session-meta">`
       + (s.role === 'manager' ? `<span class="chat-pill chat-pill-manager">Manager</span>` : '')
       + `<span class="chat-pill">${escapeHtml(AGENT_LABELS[s.agent] || s.agent)} · ${escapeHtml(s.model)}</span>`
+      + `<span class="chat-session-dot" data-state="${dot.state}" title="${escapeHtml(dot.label)}" aria-hidden="true"></span>`
+      + `<span class="chat-session-state" title="${escapeHtml(dot.label)}">${escapeHtml(dot.label)}</span>`
       + `<span class="chat-session-date">${escapeHtml(dateLabel(s.createdAt))}</span>`
-      + (running ? `<span class="chat-session-running${waiting ? ' waiting' : ''}" title="${escapeHtml(statusText(s))}" aria-label="${escapeHtml(statusText(s))}"></span>` : '')
       + `</div>`
+      + (pinned ? `<button type="button" class="chat-session-pin" data-id="${escapeHtml(id)}" title="Unpin — return to automatic order" aria-label="Unpin chat">${ICON_PIN}</button>` : '')
       + `<button type="button" class="chat-session-delete${armed ? ' armed' : ''}" data-id="${escapeHtml(id)}" title="${escapeHtml(confirm ? confirm.title : 'Delete session')}" aria-label="${escapeHtml(confirm ? confirm.label : 'Delete session')}">${armed ? 'Sure?' : '×'}</button>`
       + `</div>`
   }).join('')
 }
 
+function unpinSession(id: string): void {
+  if (!pins.has(id)) return
+  pins.delete(id)
+  persistWorklog()
+  sortOrder()
+  queueRender()
+}
+
+/** Pin `id` at a visible slot: the row holds that position while automatic
+ *  ordering re-sorts the rest around it. */
+function placePinned(id: string, slot: number): void {
+  const rest = order.filter((x) => x !== id)
+  const restVisible = rest.filter(listed)
+  const at = Math.max(0, Math.min(restVisible.length, slot))
+  const anchor = restVisible[at]
+  const index = anchor ? rest.indexOf(anchor) : rest.length
+  order = [...rest.slice(0, index), id, ...rest.slice(index)]
+  pins.add(id)
+  persistWorklog()
+  sortOrder()
+  queueRender()
+}
+
+function moveSession(id: string, delta: -1 | 1): void {
+  const visible = order.filter(listed)
+  const from = visible.indexOf(id)
+  if (from < 0) return
+  const to = Math.max(0, Math.min(visible.length - 1, from + delta))
+  if (to === from) return
+  placePinned(id, to)
+}
+
+let dragId: string | null = null
+let dropTarget: { el: HTMLElement, before: boolean } | null = null
+let dropEnd = false
+
+function clearDropIndicator(): void {
+  dropTarget = null
+  dropEnd = false
+  listEl.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'))
+}
+
 function attachSidebar(): void {
   listEl.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
+    const pin = target.closest<HTMLButtonElement>('.chat-session-pin')
+    if (pin) {
+      e.stopPropagation()
+      unpinSession(pin.dataset.id!)
+      return
+    }
     const del = target.closest<HTMLButtonElement>('.chat-session-delete')
     if (del) {
       e.stopPropagation()
@@ -673,6 +761,7 @@ function attachSidebar(): void {
     }, CLICK_DELAY_MS)
   })
   listEl.addEventListener('dblclick', (e) => {
+    if ((e.target as HTMLElement).closest('button')) return
     const item = (e.target as HTMLElement).closest<HTMLElement>('.chat-session-item')
     if (!item) return
     if (clickTimer) { clearTimeout(clickTimer); clickTimer = null }
@@ -684,6 +773,67 @@ function attachSidebar(): void {
     if (!item || item !== e.target) return
     if (e.key === 'Enter') { e.preventDefault(); void selectSession(item.dataset.id!) }
     if (e.key === 'F2') { e.preventDefault(); startRename(item) }
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault()
+      moveSession(item.dataset.id!, e.key === 'ArrowUp' ? -1 : 1)
+    }
+  })
+  // Drag pins at the drop slot; dragging a pinned chat back into the list
+  // returns it to automatic order. The id travels in module state because a
+  // dataTransfer payload is unreadable during dragover.
+  listEl.addEventListener('dragstart', (e) => {
+    const item = (e.target as HTMLElement).closest<HTMLElement>('.chat-session-item')
+    if (!item || (e.target as HTMLElement).closest('.chat-session-rename, button')) { e.preventDefault(); return }
+    dragId = item.dataset.id!
+    if (e.dataTransfer) { e.dataTransfer.setData('text/plain', dragId); e.dataTransfer.effectAllowed = 'move' }
+    item.classList.add('dragging')
+  })
+  listEl.addEventListener('dragover', (e) => {
+    if (!dragId) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    const item = (e.target as HTMLElement).closest<HTMLElement>('.chat-session-item')
+    clearDropIndicator()
+    if (!item || item.dataset.id === dragId) {
+      dropEnd = !item
+      return
+    }
+    const rect = item.getBoundingClientRect()
+    const before = e.clientY < rect.top + rect.height / 2
+    item.classList.add(before ? 'drop-before' : 'drop-after')
+    dropTarget = { el: item, before }
+  })
+  listEl.addEventListener('dragleave', (e) => {
+    if (!listEl.contains(e.relatedTarget as Node | null)) clearDropIndicator()
+  })
+  listEl.addEventListener('drop', (e) => {
+    if (!dragId) return
+    e.preventDefault()
+    const id = dragId
+    const target = dropTarget
+    const end = dropEnd
+    dragId = null
+    clearDropIndicator()
+    listEl.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'))
+    // A pinned chat dropped back onto itself stays pinned; any other drop
+    // returns it to automatic order.
+    if (pins.has(id)) {
+      if (!target && !end) return
+      unpinSession(id)
+      return
+    }
+    const visible = order.filter(listed)
+    let slot = end ? visible.length - 1 : visible.indexOf(id)
+    if (target) {
+      const restVisible = visible.filter((x) => x !== id)
+      slot = restVisible.indexOf(target.el.dataset.id!) + (target.before ? 0 : 1)
+    }
+    placePinned(id, slot)
+  })
+  listEl.addEventListener('dragend', () => {
+    dragId = null
+    clearDropIndicator()
+    listEl.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'))
   })
 }
 
@@ -827,7 +977,8 @@ function onEvent(env: ChatEnvelope): void {
   } else if (ev.type === 'session.created' || ev.type === 'session.resumed' || ev.type === 'session.updated') {
     upsertRecord({ ...ev.session, lastSeq: env.seq }, { pending: false })
   } else if (ev.type === 'status.changed') {
-    e.record = { ...e.record, status: ev.status, queuedBehind: ev.queuedBehind }
+    // The server stamps its own save; the pane orders by that change.
+    e.record = { ...e.record, status: ev.status, queuedBehind: ev.queuedBehind, updatedAt: env.at }
   } else if (ev.type === 'queue.updated') {
     acceptQueue(e, ev.queue)
   } else if (ev.type === 'commands.updated') {
@@ -837,12 +988,13 @@ function onEvent(env: ChatEnvelope): void {
   } else if (ev.type === 'model.updated') {
     e.record = { ...e.record, model: ev.model, modelId: ev.modelId, effort: ev.effort, efforts: ev.efforts ?? e.record.efforts }
   } else if (ev.type === 'session.closed') {
-    e.record = { ...e.record, status: 'closed' }
+    e.record = { ...e.record, status: 'closed', updatedAt: env.at }
   } else if (ev.type === 'turn.started' && !e.record.title) {
-    e.record = { ...e.record, title: ev.prompt.text.slice(0, 200) }
+    e.record = { ...e.record, title: deriveSessionTitle(ev.prompt.text, { repo: e.record.repo }).slice(0, 200) }
   }
   applyEvent(e.model, env)
   e.record = { ...e.record, lastSeq: Math.max(e.record.lastSeq || 0, env.seq) }
+  sortOrder()
   queueRender()
 }
 
@@ -896,7 +1048,7 @@ function ensureQuickSession(firstPrompt?: ComposerDraft, title?: string, deferSt
     request.safeMode = selectedSafeMode
     if (freshSubject) request.subject = freshSubject
     if (deferStart) request.deferStart = true
-    if (firstPrompt?.text) request.title = firstPrompt.text.slice(0, 200)
+    if (firstPrompt?.text) request.title = deriveSessionTitle(firstPrompt.text).slice(0, 200)
     else if (title) request.title = title.slice(0, 200)
     const created = await createSessionEntry(request, draft, firstPrompt, null)
     freshModelIdentity = null
@@ -1424,8 +1576,9 @@ async function sendOrdinaryTurn(draft: ComposerDraft, sourceId: string | null): 
   // Reuse the immediate first-message preview made during session creation.
   dropOptimisticTurns(e.model)
   addOptimisticTurn(e.model, prompt)
-  if (!e.record.title) e.record = { ...e.record, title: draft.text.slice(0, 200) }
-  e.record = { ...e.record, status: 'running' }
+  if (!e.record.title) e.record = { ...e.record, title: deriveSessionTitle(draft.text, { repo: e.record.repo }).slice(0, 200) }
+  e.record = { ...e.record, status: 'running', updatedAt: new Date().toISOString() }
+  sortOrder()
   if (activeId === e.record.id) { setNotice(null); scrollToBottom(true) }
   queueRender()
   try {
@@ -1550,7 +1703,8 @@ async function steer(draft: ComposerDraft): Promise<void> {
 async function cancelTurn(): Promise<void> {
   const e = entry()
   if (!e) return
-  e.record = { ...e.record, status: 'stopping' }
+  e.record = { ...e.record, status: 'stopping', updatedAt: new Date().toISOString() }
+  sortOrder()
   queueRender()
   try {
     await chatClient.send({ type: 'cancel', sessionId: e.record.id })
@@ -1735,8 +1889,10 @@ let lastHeaderHtml = ''
 
 function renderHeader(): void {
   const html = headerHtml()
-  if (html === lastHeaderHtml) return
-  lastHeaderHtml = html
+  // The live "since" text ticks in place; it must not rebuild the controls.
+  const memo = html.replace(/<span class="chat-h-since" data-since="[^"]*">.*?<\/span>/, '<span class="chat-h-since">')
+  if (memo === lastHeaderHtml) { updateSinceLabel(); return }
+  lastHeaderHtml = memo
   headerEl.hidden = !html
   const focusMemories = !!document.activeElement?.closest('.chat-h-memories')
   headerEl.innerHTML = html
@@ -1791,6 +1947,28 @@ async function toggleAutoMerge(): Promise<void> {
 
 function reasoningButton(): string {
   return `<button type="button" class="chat-icon-btn chat-h-reasoning" aria-label="Reasoning" aria-pressed="${showReasoning}" aria-controls="chat-transcript" data-tooltip="Reasoning">${ICON_REASONING}</button>`
+}
+
+function toolsButton(): string {
+  return `<button type="button" class="chat-icon-btn chat-h-tools" aria-label="${showTools ? 'Hide tools' : 'Show tools'}" data-tooltip="Tools" aria-pressed="${showTools}" aria-controls="chat-transcript">${ICON_TOOLS}</button>`
+}
+
+/** How long the turn on screen has run: the running turn's start, or the
+ *  queued change for a turn still waiting. Settled chats show no duration. */
+function sinceHtml(e: SessionEntry, s: SessionRecord): string {
+  if (!isRunning(s.status)) return ''
+  const anchor = s.status === 'queued' ? s.updatedAt : e.model.running?.startedAt || s.updatedAt
+  if (!anchor || Number.isNaN(Date.parse(anchor))) return ''
+  return `<span class="chat-h-since" data-since="${escapeHtml(anchor)}">· since ${escapeHtml(shortElapsed(anchor, Date.now()))}</span>`
+}
+
+function updateSinceLabel(): void {
+  const el = headerEl.querySelector<HTMLElement>('.chat-h-since')
+  if (!el) return
+  const anchor = el.dataset.since || ''
+  if (Number.isNaN(Date.parse(anchor))) return
+  const text = `· since ${shortElapsed(anchor, Date.now())}`
+  if (el.textContent !== text) el.textContent = text
 }
 
 function safeModeButton(enabled: boolean, pending = false, deferred = false): string {
@@ -1856,7 +2034,7 @@ function headerHtml(): string {
   // answered, but its model, settings and messages are not the person's to change.
   if (!listed(s.id)) {
     return `<div class="chat-h-row"><span class="chat-pill chat-h-agent">${escapeHtml(AGENT_LABELS[s.agent] || s.agent)}</span><span class="chat-h-model">${escapeHtml(s.model)}</span>`
-      + `<span class="chat-h-status" data-status="${s.status}">${escapeHtml(statusText(s))}</span><span class="chat-controls-spacer"></span>`
+      + `<span class="chat-h-status" data-status="${s.status}">${escapeHtml(statusText(s))}</span> ${sinceHtml(e, s)}<span class="chat-controls-spacer"></span>`
       + `${isRunning(s.status) ? `<button type="button" class="chat-h-btn chat-h-stop" title="Stop the turn (⌘.)">${ICON_STOP} Stop</button>` : ''}</div>`
       + '<div class="st-help st-help-info chat-observer-note">Poise runs this chat for the Switchboard pane. It takes no messages; answer here only what it asks you.</div>'
   }
@@ -1883,10 +2061,12 @@ function headerHtml(): string {
       <span class="chat-h-repo" title="${escapeHtml(s.checkout || '')}">${s.workspaceKind === 'poise-local' ? '<span>Poise · local</span>' : s.workspaceKind === 'poise-change' ? `<span>Poise · change</span> · <code>${escapeHtml(s.branch?.name || '')}</code>` : `<code>${escapeHtml(s.repo || 'local')}</code> · <code>${escapeHtml(s.branch?.name || '')}</code>`}${ws.text ? ` <span class="chat-h-ws ${ws.cls}">${escapeHtml(ws.text)}</span>` : ''}</span>
       ${modeSel}
       <span class="chat-h-status" data-status="${s.status}">${escapeHtml(statusText(s))}</span>
+      ${sinceHtml(e, s)}
       <span class="chat-controls-spacer"></span>
       ${isRunning(s.status) ? `<button type="button" class="chat-h-btn chat-h-stop" title="Stop the turn (⌘.)">${ICON_STOP} Stop</button>` : ''}
       ${!isManager && s.capabilities?.fork ? `<button type="button" class="chat-icon-btn chat-h-fork" title="Fork session" aria-label="Fork"${between ? '' : ' disabled'}>${ICON_FORK}</button>` : ''}
       <button type="button" class="chat-icon-btn chat-h-activity" aria-label="${showActivity ? 'Hide activity' : 'Show activity'}" data-tooltip="Activity" aria-pressed="${showActivity}" aria-controls="chat-transcript">${ICON_ACTIVITY}</button>
+      ${toolsButton()}
       ${!isManager && others.length ? `<span class="chat-h-handoff-wrap"><button type="button" class="chat-icon-btn chat-h-handoff" title="Hand off to another agent" aria-label="Hand off…" aria-haspopup="true" aria-expanded="${handoffOpen}">${ICON_HANDOFF}</button>${handoffOpen ? handoffMenu(others) : ''}</span>` : ''}
       ${reasoningButton()}
       ${autoMergeButton(s.autoMerge === true, e.pending || autoMergeUpdates.has(s.id))}
@@ -1947,6 +2127,14 @@ function attachHeader(): void {
       try { localStorage.setItem(ACTIVITY_KEY, String(showActivity)) } catch { /* optional preference */ }
       renderHeader()
       headerEl.querySelector<HTMLButtonElement>('.chat-h-activity')?.focus()
+      queueRender()
+      return
+    }
+    if (t.closest('.chat-h-tools')) {
+      showTools = !showTools
+      try { localStorage.setItem(TOOLS_KEY, String(showTools)) } catch { /* optional preference */ }
+      renderHeader()
+      headerEl.querySelector<HTMLButtonElement>('.chat-h-tools')?.focus()
       queueRender()
       return
     }
@@ -2101,7 +2289,7 @@ function render(): void {
   const distance = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
   const wasAtBottom = distance <= STICK_TO_BOTTOM_PX
   if (e) {
-    transcript.render(e.model, { showActivity, showReasoning, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
+    transcript.render(e.model, { showActivity, showReasoning, showTools, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
       chats: [...sessions.values()].map((entry) => ({ id: entry.record.id, title: entry.record.title, role: entry.record.role })) })
   } else {
     transcript.clear()
@@ -2345,7 +2533,7 @@ export async function initChatView(): Promise<void> {
       void installSelfUpdateWatch().poll()
     })
   }
-  if (!tickTimer) tickTimer = setInterval(() => { if (!viewEl.hidden) transcript.tick() }, 1000)
+  if (!tickTimer) tickTimer = setInterval(() => { if (!viewEl.hidden) { transcript.tick(); updateSinceLabel() } }, 1000)
   chatClient.start()
   void loadAgents()
   void loadSwitches().catch(() => undefined)
