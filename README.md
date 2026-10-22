@@ -476,8 +476,10 @@ storage no longer needs a git checkout of Poise.
   included), scheduled behavior launches, and launches from the browser
   (`/api/pr-review`, `/api/agent-replay`, `/api/chat-content`, `/api/debate`,
   `/api/chat`, `/api/models/refresh`), which answer 503 with code `draining`.
-  Work already running continues. It returns the health body. The gateway
-  renews a drain by calling it again while it waits; one that is not renewed
+  Work already running continues. One Chat turn holds the drain at most 30
+  minutes: past that the drain stops it with a transcript notice naming the
+  update. It returns the health body. The gateway renews a drain by
+  calling it again while it waits; one that is not renewed
   lapses `POISE_DRAIN_TIMEOUT` seconds (default 5400; read from the
   workspace's environment and validated at startup) plus five minutes after
   the last drain call, so a gateway that stops renewing it cannot leave the
@@ -586,6 +588,9 @@ are never made actionable by the preview. Returning to Swarm paints received
 history immediately while a fresh read runs. The optional `limit=1` through
 `limit=100` on `GET /api/agent-logs` returns a newest-first preview and its
 `total` readable-run count. Unbounded reads retain the full-history response.
+The optional `status=running` returns only running rows (plus quarantined rows
+whose status is unreadable or running); Current's running-job accent uses it
+instead of the full history.
 
 With a current Caller release, review/approval rows show the last
 observed stage. Expand a row for timestamped activity, worker heartbeat age, last
