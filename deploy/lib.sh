@@ -371,7 +371,11 @@ verify_workspaces() {
       # a failed deploy: inspect still prints the containers it found, and the
       # expected-handles loop below reports the missing ones as pending.
       # shellcheck disable=SC2086 # one argument per container ID
-      lines=$(docker inspect --format '{{index .Config.Labels "poise.workspace"}} {{.Image}} {{.State.Running}} {{.Name}}' $ids 2>/dev/null) || true
+      if ! lines=$(docker inspect --format '{{index .Config.Labels "poise.workspace"}} {{.Image}} {{.State.Running}} {{.Name}}' $ids 2>/dev/null); then
+        # A newly listed workspace may not have supplied its handle yet.
+        # Partial output cannot prove that either the inventory or deploy is complete.
+        pending="$pending  workspace inventory: incomplete (a listed container could not be inspected)\n"
+      fi
       while read -r handle id running name; do
         # No line at all when every container vanished since docker ps.
         [ -n "$handle$id$running$name" ] || continue
@@ -416,7 +420,7 @@ verify_workspaces() {
         waiting="$waiting$handle "
       fi
     done
-    if [ -z "$expected" ]; then
+    if [ -z "$expected" ] && [ -z "$pending" ]; then
       clear_workspace_proof
       say "No workspace exists yet."
       return 0

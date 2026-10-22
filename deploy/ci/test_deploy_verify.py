@@ -256,6 +256,35 @@ class VerifyTest(LibTest):
         self.assertIn('alice: missing (waiting for its replacement)', result.stderr)
         self.assertNotIn('cannot inspect', result.stderr)
 
+    def test_new_workspace_after_empty_snapshot_stays_pending_when_inspection_fails(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        result = self.verify({'inventories': [[], [alice]], 'inspect_fail_times': 99})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('workspace inventory: incomplete', result.stderr)
+        self.assertNotIn('No workspace exists yet.', result.stdout)
+        self.assertNotIn('Every workspace serves', result.stdout)
+        self.assertTrue(os.path.exists(self.state + '.proof'))
+
+    def test_partial_inspection_cannot_skip_a_new_workspace_beside_a_healthy_one(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice], [alice, bob]],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(NEW)]},
+                              'inspect_missing': [1], 'inspect_missing_times': 99})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('workspace inventory: incomplete', result.stderr)
+        self.assertNotIn('Every workspace serves', result.stdout)
+        with open(self.state + '.proof') as file:
+            self.assertIn('alice', file.read())
+
+    def test_new_workspace_after_empty_snapshot_recovers_after_complete_inspection(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        result = self.verify({'inventories': [[], [alice]], 'inspect_fail_times': 1,
+                              'health': {'poise-ws-alice': [health(NEW)]}}, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'Every workspace serves {NEW}: alice.', result.stdout)
+        self.assertGreaterEqual(sum(call.startswith('inspect ') for call in self.calls()), 2)
+
     def test_all_workspaces_missing_before_first_poll_remain_pending(self):
         result = self.verify({'inventories': [[f'alice {IMAGE_ID} true /poise-ws-alice',
                                                 f'bob {IMAGE_ID} true /poise-ws-bob'], []]})
