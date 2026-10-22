@@ -237,7 +237,7 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   const go = { text: 'go', attachments: [], mentions: [] }
   // History and live events carry the times the server would have stamped; the fixture's helpers stamp their own.
   const at = (seq: number, time: string, event: ChatEvent): ChatEnvelope => ({ seq, sessionId: 's1', at: time, event })
-  const state = makeState([session({ lastSeq: 15 })], { s1: [
+  const state = makeState([session({ lastSeq: 15, createdAt: '2026-10-21T16:19:00.000Z' })], { s1: [
     at(1, '2026-10-20T14:04:40.000Z', { type: 'turn.started', turnId: 't1', prompt: go }),
     at(2, '2026-10-20T14:05:02.000Z', { type: 'text.delta', turnId: 't1', messageId: 'a1', delta: 'Nothing is waiting for you.' }),
     at(3, '2026-10-20T14:05:12.000Z', { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn', durationMs: 31_500, usage: { totalTokens: 18_432 } }),
@@ -273,6 +273,9 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   const tokens = await page.evaluate(() => [(18_432).toLocaleString(), (9_214).toLocaleString()])
   await expect(turns).toHaveCount(5)
   await expect.poll(() => parts(4)).toEqual(['19:38', '·', '43s', '·', `${tokens[1]} tokens`, 'button: Copy message'])
+  // The session list's date is on the same clock, and relabels with the transcript.
+  const created = page.locator('.chat-session-item[data-id="s1"] .chat-session-date')
+  await expect(created).toHaveText('19:19')
   await expect(time(4)).toHaveAttribute('datetime', '2026-10-21T16:38:12.000Z')
   await expect(time(4)).toHaveAttribute('data-help', 'Finished Wednesday 21 October 2026 at 19:38:12 EEST')
   await expect(time(4)).toMatchAriaSnapshot('- time: Finished Wednesday 21 October 2026 at 19:38:12 EEST')
@@ -340,6 +343,7 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect(shown(4)).toHaveText('21 Oct 19:38', { timeout: 2_000 })
   await expect(shown(1)).toHaveText('21 Oct 19:20')
   await expect(shown(0)).toHaveText('20 Oct 17:05')
+  await expect(created).toHaveText('21 Oct')
   // Saving another time zone relabels the times in it. Chat has its own .st-save buttons.
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.locator('[data-settings="general"]').click()
@@ -352,6 +356,29 @@ test('ends each finished turn in one meta row: its recorded end time, how it sto
   await expect(time(4)).toHaveAttribute('data-help', 'Finished Wednesday 21 October 2026 at 17:38:12 BST')
   await expect(shown(1)).toHaveText('17:20')
   await expect(shown(0)).toHaveText('20 Oct 15:05')
+  await expect(created).toHaveText('17:19')
+})
+
+test.describe('in an en-US browser on UTC', () => {
+  test.use({ locale: 'en-US', timezoneId: 'UTC' })
+
+  test("dates the session list on Poise's clock in Settings' time zone", async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-10-21T17:00:00Z'))
+    const state = makeState([
+      session({ id: 'today', title: 'Today', createdAt: '2026-10-21T16:38:00.000Z' }),
+      session({ id: 'yesterday', title: 'Yesterday', createdAt: '2026-10-20T14:05:00.000Z' }),
+      // 20 Oct in the browser's UTC, but 01:30 today in Helsinki.
+      session({ id: 'after-midnight', title: 'After midnight', createdAt: '2026-10-20T22:30:00.000Z' }),
+    ])
+    state.settings.timezone = 'Europe/Helsinki'
+    await installRoutes(page, state)
+    await installSocket(page)
+    await page.goto('/')
+    // Not the browser's "04:38 PM" or "Oct 20": Helsinki's time today, the date alone before.
+    await expect(page.locator('.chat-session-item[data-id="today"] .chat-session-date')).toHaveText('19:38')
+    await expect(page.locator('.chat-session-item[data-id="yesterday"] .chat-session-date')).toHaveText('20 Oct')
+    await expect(page.locator('.chat-session-item[data-id="after-midnight"] .chat-session-date')).toHaveText('01:30')
+  })
 })
 
 test('answers a permission with the keyboard and a question with its options', async ({ page }) => {
@@ -440,22 +467,137 @@ test('discovers native workers live and after reconnect without losing the manag
   expect(sock.framesOf('subscribe').every(frame => frame.command.type === 'subscribe' && frame.command.sessionId === 's1')).toBe(true)
 })
 
-test('attributes a worker question answer to its manager and preserves it on reload', async ({ page }) => {
-  const state = makeState([session({ status: 'running' })], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'Work on staging', attachments: [], mentions: [] } })] })
+test('attributes a question answer to the answering chat and preserves it on reload', async ({ page }) => {
+  const boss = session({ id: 'manager-1', title: 'Manager', role: 'manager', status: 'idle' })
+  const lead = session({ id: 'lead-1', title: 'Release lead', status: 'idle' })
+  const state = makeState([session({ status: 'running' }), boss, lead], { s1: [env('s1', 1, { type: 'turn.started', turnId: 't1', prompt: { text: 'Work on staging', attachments: [], mentions: [] } })] })
   await installRoutes(page, state)
   const sock = await installSocket(page)
   await page.goto('/')
+  await page.locator('.chat-session-item[data-id="s1"]').click()
   await sock.subscribed('s1')
   sock.seq = 1
   state.history.s1.push(sock.push('s1', { type: 'question.asked', id: 'q-manager', turnId: 't1', questions: [{ id: 'target', question: 'Which deployment target?', options: [], multiSelect: false, freeText: true }] }))
-  const question = page.locator('.chat-question[data-request="q-manager"]')
-  await expect(question).toContainText('Which deployment target?')
-  state.history.s1.push(sock.push('s1', { type: 'question.answered', id: 'q-manager', answers: { target: 'staging' }, by: 'chat', fromSession: 'manager-session' }))
-  await expect(question).toContainText('Answered by manager')
-  await expect(question).toHaveClass(/resolved/)
+  const managerQuestion = page.locator('.chat-question[data-request="q-manager"]')
+  await expect(managerQuestion).toContainText('Which deployment target?')
+  state.history.s1.push(sock.push('s1', { type: 'question.answered', id: 'q-manager', answers: { target: 'staging' }, by: 'chat', fromSession: 'manager-1', source: { kind: 'chat', sessionId: 'manager-1', title: 'Manager', role: 'manager' } }))
+  state.history.s1.push(sock.push('s1', { type: 'question.asked', id: 'q-lead', turnId: 't1', questions: [{ id: 'region', question: 'Which region?', options: [], multiSelect: false, freeText: true }] }))
+  state.history.s1.push(sock.push('s1', { type: 'question.answered', id: 'q-lead', answers: { region: 'eu' }, by: 'chat', fromSession: 'lead-1', source: { kind: 'chat', sessionId: 'lead-1', title: 'Release lead' } }))
+  state.history.s1.push(sock.push('s1', { type: 'question.asked', id: 'q-legacy', turnId: 't1', questions: [{ id: 'tier', question: 'Which tier?', options: [], multiSelect: false, freeText: true }] }))
+  state.history.s1.push(sock.push('s1', { type: 'question.answered', id: 'q-legacy', answers: { tier: 'prod' }, by: 'chat', fromSession: 'gone-chat' }))
+  const leadQuestion = page.locator('.chat-question[data-request="q-lead"]')
+  const legacyQuestion = page.locator('.chat-question[data-request="q-legacy"]')
+  await expect(managerQuestion).toContainText('Answered by Manager')
+  await expect(managerQuestion).toHaveClass(/resolved/)
+  await expect(managerQuestion.locator('button[data-chat-session="manager-1"]')).toBeVisible()
+  await expect(leadQuestion).toContainText('Answered by chat "Release lead"')
+  await expect(leadQuestion.locator('button[data-chat-session="lead-1"]')).toBeVisible()
+  await expect(legacyQuestion).toContainText('Answered by another chat')
+  await expect(legacyQuestion.locator('button[data-chat-session]')).toHaveCount(0)
   expect(sock.framesOf('question.answer')).toHaveLength(0)
   await page.reload()
-  await expect(page.locator('.chat-question[data-request="q-manager"]')).toContainText('Answered by manager')
+  await expect(page.locator('.chat-question[data-request="q-manager"]')).toContainText('Answered by Manager')
+  await expect(page.locator('.chat-question[data-request="q-lead"]')).toContainText('Answered by chat "Release lead"')
+  await expect(page.locator('.chat-question[data-request="q-legacy"]')).toContainText('Answered by another chat')
+})
+
+test('labels steers, messages and stops from other chats and Poise, escapes titles and marks deleted sources', async ({ page }) => {
+  const evilId = '11111111-2222-3333-4444-555555555555'
+  const leadId = '22222222-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const bossId = '33333333-0000-1111-2222-333333333333'
+  const goneId = '99999999-8888-7777-6666-555555555555'
+  const evil = session({ id: evilId, title: '<img src=x onerror=alert(1)>', status: 'idle' })
+  const lead = session({ id: leadId, title: 'Release lead', status: 'idle' })
+  const boss = session({ id: bossId, title: 'Manager', role: 'manager', status: 'idle' })
+  const state = makeState([session({ status: 'running' }), evil, lead, boss], { s1: [
+    env('s1', 1, { type: 'turn.started', turnId: 't0', prompt: { text: 'My own task', attachments: [], mentions: [] } }),
+    env('s1', 2, { type: 'turn.finished', turnId: 't0', stopReason: 'end_turn' }),
+    env('s1', 3, { type: 'turn.started', turnId: 't1', prompt: { text: 'Work on staging', attachments: [], mentions: [] } }),
+  ] })
+  await installRoutes(page, state)
+  const sock = await installSocket(page)
+  await page.goto('/')
+  await page.locator('.chat-session-item[data-id="s1"]').click()
+  await sock.subscribed('s1')
+  sock.seq = 3
+  state.history.s1.push(sock.push('s1', { type: 'steer.sent', turnId: 't1', text: 'Watch the deploy', source: { kind: 'chat', sessionId: evilId, title: '<img src=x onerror=alert(1)>' } }))
+  const evilSteer = page.locator('.chat-msg-chat', { hasText: 'Watch the deploy' })
+  await expect(evilSteer).toBeVisible()
+  await expect(evilSteer).toContainText('from chat "<img src=x onerror=alert(1)>"')
+  await expect(page.locator('.chat-msg-chat img')).toHaveCount(0)
+  state.history.s1.push(sock.push('s1', { type: 'steer.sent', turnId: 't1', text: 'Supervision note', source: { kind: 'poise', name: 'Poise' } }))
+  await expect(page.locator('.chat-msg-chat', { hasText: 'Supervision note' })).toContainText('from Poise')
+  state.history.s1.push(sock.push('s1', { type: 'turn.started', turnId: 't2', prompt: { text: 'Hello from worker', attachments: [], mentions: [] }, source: { kind: 'chat', sessionId: leadId, title: 'Release lead', seq: 7 } }))
+  const message = page.locator('.chat-msg-chat', { hasText: 'Hello from worker' })
+  await expect(message).toContainText('Message from chat "Release lead"')
+  await expect(message).toContainText('Hello from worker')
+  state.history.s1.push(sock.push('s1', { type: 'turn.finished', turnId: 't1', stopReason: 'cancelled', stoppedBy: { kind: 'chat', sessionId: bossId, title: 'Manager', role: 'manager' } }))
+  await expect(page.locator('.chat-turn-stop')).toContainText('Stopped by Manager')
+  await expect(page.locator(`button[data-chat-session="${leadId}"]`).first()).toHaveAttribute('title', /22222222/)
+  await expect(page.locator(`button[data-chat-session="${evilId}"]`).first()).toHaveAttribute('title', /11111111/)
+  state.history.s1.push(sock.push('s1', { type: 'steer.sent', turnId: 't2', text: 'Lead steer', source: { kind: 'chat', sessionId: leadId, title: 'Release lead' } }))
+  const leadSteer = page.locator('.chat-msg-chat', { hasText: 'Lead steer' })
+  await expect(leadSteer.locator(`button[data-chat-session="${leadId}"]`)).toBeVisible()
+  const gonePush = sock.push('s1', { type: 'steer.sent', turnId: 't2', text: 'Gone note', source: { kind: 'chat', sessionId: goneId, title: 'Gone chat' } })
+  state.history.s1.push(gonePush)
+  const gone = page.locator('.chat-msg-chat', { hasText: 'Gone note' })
+  await expect(gone).toContainText('(deleted)')
+  await expect(gone.locator('button[data-chat-session]')).toHaveCount(0)
+  // Deleting a listed source flips its label without any new event.
+  state.sessions.splice(state.sessions.findIndex(s => s.id === leadId), 1)
+  const disconnected = sock.ws
+  sock.ws!.close()
+  await expect.poll(() => sock.ws !== disconnected).toBe(true)
+  await expect(page.locator(`.chat-session-item[data-id="${leadId}"]`)).toHaveCount(0)
+  await expect(message).toContainText('(deleted)')
+  await expect(message.locator('button[data-chat-session]')).toHaveCount(0)
+  await expect(leadSteer).toContainText('(deleted)')
+  await expect(leadSteer.locator('button[data-chat-session]')).toHaveCount(0)
+  // The up-arrow history holds none of these items.
+  await input(page).press('ArrowUp')
+  await expect(historyRows(page)).toHaveCount(2)
+  await expect(historyRows(page).first()).toHaveText('My own task')
+  await expect(historyRows(page).last()).toHaveText('Work on staging')
+})
+
+test('shows the creating chat under chat-created sessions and follows renames', async ({ page }) => {
+  const leadId = '22222222-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const bossId = '33333333-0000-1111-2222-333333333333'
+  const goneId = '99999999-8888-7777-6666-555555555555'
+  const markupId = '44444444-5555-6666-7777-888888888888'
+  const longId = '55555555-6666-7777-8888-999999999999'
+  const longTitle = 'L'.repeat(120)
+  const lead = session({ id: leadId, title: 'Release lead', status: 'idle' })
+  const boss = session({ id: bossId, title: 'Manager', role: 'manager', status: 'idle' })
+  const markup = session({ id: markupId, title: '<b>x</b>', status: 'idle' })
+  const long = session({ id: longId, title: longTitle, status: 'idle' })
+  const state = makeState([
+    session({ id: 's1', title: 'Personal', status: 'idle' }),
+    lead, boss, markup, long,
+    session({ id: 'worker-1', title: 'Worker', status: 'idle', createdBy: { kind: 'chat', sessionId: leadId, title: 'Release lead' } }),
+    session({ id: 'worker-2', title: 'Managed', status: 'idle', createdBy: { kind: 'chat', sessionId: bossId, title: 'Manager', role: 'manager' } }),
+    session({ id: 'worker-3', title: 'Orphan', status: 'idle', createdBy: { kind: 'chat', sessionId: goneId, title: 'Release lead' } }),
+    session({ id: 'worker-4', title: 'Marked', status: 'idle', createdBy: { kind: 'chat', sessionId: markupId, title: '<b>x</b>' } }),
+    session({ id: 'worker-5', title: 'Lengthy', status: 'idle', createdBy: { kind: 'chat', sessionId: longId, title: longTitle } }),
+  ])
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  const creator = (id: string) => page.locator(`.chat-session-item[data-id="${id}"] .chat-session-creator`)
+  await expect(creator('worker-1')).toHaveText('from chat "Release lead"')
+  const renamed = state.sessions.find(s => s.id === leadId)!
+  renamed.title = 'Release captain'
+  sock.ws!.send(JSON.stringify({ kind: 'session.updated', session: { ...renamed } }))
+  await expect(creator('worker-1')).toHaveText('from chat "Release captain"')
+  await expect(creator('worker-2')).toHaveText('from Manager')
+  await expect(creator('worker-3')).toHaveText('from a deleted chat "Release lead"')
+  await expect(creator('worker-4')).toHaveText('from chat "<b>x</b>"')
+  await expect(page.locator('.chat-session-item[data-id="worker-4"] b')).toHaveCount(0)
+  await expect(creator('worker-5')).toHaveText(`from chat "${'L'.repeat(60)}…"`)
+  await expect(creator('worker-5')).toHaveAttribute('title', new RegExp(longTitle))
+  await expect(creator('worker-1')).toBeVisible()
+  await expect(creator('worker-1')).not.toHaveAttribute('aria-hidden', 'true')
+  await expect(page.locator('.chat-session-item[data-id="s1"] .chat-session-creator')).toHaveCount(0)
 })
 
 test('shows tool cards with diffs, reverts one by its diffId, and folds consecutive reads', async ({ page }) => {
@@ -3118,13 +3260,15 @@ test('CLI refresh: a completed Settings check updates the fresh console without 
   await page.route('**/api/models/refresh', async route => {
     const claude = state.agents!.agents[0] as { models: Array<{ identity: string, selector: string, effort: string }> }
     claude.models = claude.models.map(model => ({ ...model, identity: model.identity.replace('opus-5-', 'opus-5.5-'), selector: 'claude-opus-5-5' }))
-    await route.fulfill({ json: { changed: true, families: { claude: { status: 'ok' } }, cli_updates: { claude: { status: 'updated', before: '2.1.274', after: '2.1.280' } } } })
+    await route.fulfill({ json: { changed: true, completed_at: '2026-10-21T16:38:00.000Z', families: { claude: { status: 'ok' } }, cli_updates: { claude: { status: 'updated', before: '2.1.274', after: '2.1.280' } } } })
   })
   await page.goto('/'); await expect(page.locator('.chat-default-model')).toHaveText('Opus 5 · High')
   await openModelSettings(page)
   await page.getByRole('button', { name: 'Check now', exact: true }).click()
   await expect(page.locator('.st-status')).toContainText('Catalog updated.')
   await expect(page.locator('.st-catalog-status')).toHaveAttribute('data-help', /2\.1\.280/)
+  await expect(page.locator('.st-catalog-status')).toHaveAttribute('data-help', /Last checked (21 Oct (2026 )?)?16:38\. /)
+  await expect(page.locator('.st-catalog-status')).toHaveText(/ · Checked (21 Oct (2026 )?)?16:38$/)
   await expect(page.locator('.st-catalog-status')).not.toContainText('Invalid Date')
   await page.keyboard.press('Escape')
   await expect(page.locator('.chat-default-model')).toHaveText('Opus 5.5 · High')
