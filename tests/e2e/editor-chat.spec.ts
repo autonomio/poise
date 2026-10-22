@@ -250,8 +250,11 @@ test('sends the highlighted text as a quote with the next message and clears the
   await expect(chip).toContainText('Highlighted ·')
   await expect(chip).toContainText('Opening paragraph.')
   await expect(chip.getByRole('button', { name: 'Remove highlight' })).toBeVisible()
-  await sendPaneMessage(page, sock, 'What does this mean?')
+  const firstId = await sendPaneMessage(page, sock, 'What does this mean?')
   expect(sock.framesOf('prompt')[0].command).toMatchObject({ text: '> Opening paragraph.\n\nWhat does this mean?' })
+  await sock.subscribed(firstId)
+  sock.push(firstId, { type: 'turn.started', turnId: 't1', prompt: { text: 'What does this mean?', attachments: [], mentions: [] } })
+  sock.push(firstId, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
   await expect(chip).toBeHidden()
   // A refused send keeps the chip with the draft.
   await selectLine(page, 'A final thought.')
@@ -271,8 +274,8 @@ test('sends the highlighted text as a quote with the next message and clears the
   // quote follows.
   await paneInput(page).fill('/model opus-5-max')
   await paneInput(page).press('Enter')
-  await expect.poll(() => sock.framesOf('prompt').length).toBe(2)
-  const text = (sock.framesOf('prompt')[1].command as { text: string }).text
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(3)
+  const text = (sock.framesOf('prompt')[2].command as { text: string }).text
   expect(text.startsWith('/model opus-5-max')).toBe(true)
   expect(text).toContain('> A final thought.')
 })
