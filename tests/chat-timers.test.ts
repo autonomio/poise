@@ -1144,7 +1144,11 @@ describe('durable timers that wake chats', () => {
     await control.tick()
     expect(store.timerPendingRow(instance, other.id)).toBeDefined()
     finishes.get(p.id)!({ stopReason: 'error', error: 'third boom' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    // Other's firing already waits: without the hold, a background tick
+    // admits it before the first poll sees the trip's idle.
+    await holdingTimers(async () => {
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     expect(store.timerById(instance, tripper.id)!.state).toBe('tripped')
     // The orphan is gone, so the other timer's older-second row still delivers.
     expect(store.timerPendingRow(instance, tripper.id)).toBeUndefined()
@@ -1168,6 +1172,9 @@ describe('durable timers that wake chats', () => {
     const source = starts(p.id).at(-1)!.source as Extract<TurnSource, { kind: 'timer' }>
     expect(source).toMatchObject({ kind: 'timer', timerId: tripper.id, missed: 0 })
     finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    // Other fires on the same tick: hold its admission out of this idle.
+    await holdingTimers(async () => {
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
   }, 180_000)
 })
