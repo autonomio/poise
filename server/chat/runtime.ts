@@ -992,11 +992,10 @@ export class ChatRuntime extends EventEmitter {
       // An observer reading untrusted transcripts gets no MCP servers.
       const extensions = this.options.extensions && !isSwitchboardChat(record) ? await this.options.extensions.resolve(record) : null
       signal.throwIfAborted()
-      const host = this.hostFor(session)
-      const adapter = this.adapters[record.agent](host)
+      let adapter = this.adapters[record.agent](this.hostFor(session))
       session.adapter = adapter
       adapter.onExit((code, signal) => this.onAdapterExit(session, adapter, code, signal))
-      const startOptions = {
+      let startOptions = {
         modelId: record.modelId,
         effort: record.effort,
         safeMode: record.safeMode === true,
@@ -1006,7 +1005,31 @@ export class ChatRuntime extends EventEmitter {
           : record.nativeSessionId ? { resume: record.nativeSessionId } : {}),
         ...(extensions?.servers.length ? { mcpServers: extensions.servers } : {}),
       }
-      const started = await adapter.start(startOptions)
+      let started
+      try {
+        started = await adapter.start(startOptions)
+      } catch (error) {
+        if (record.agent !== 'muse' || !('resume' in startOptions) || !isStaleMuseCaller(error) || signal.aborted) throw error
+        try { await this.stopProcess(session) } catch { throw error }
+        signal.throwIfAborted()
+        if (!record.queuedHandoff && storage.findEvent(record.id, (event) => event.type === 'text.delta')) {
+          record.queuedHandoff = this.restartSummary(record)
+        }
+        record.nativeSessionId = undefined
+        this.saveRecord(session)
+        this.emit_(record.id, { type: 'error', message: 'Muse agent session was restarted on a fresh native session because Muse\'s credentials changed; the conversation continues from a summary.', recoverable: true })
+        adapter = this.adapters[record.agent](this.hostFor(session))
+        session.adapter = adapter
+        adapter.onExit((code, signal) => this.onAdapterExit(session, adapter, code, signal))
+        startOptions = {
+          modelId: record.modelId,
+          effort: record.effort,
+          safeMode: record.safeMode === true,
+          ...(record.mode ? { mode: record.mode } : {}),
+          ...(extensions?.servers.length ? { mcpServers: extensions.servers } : {}),
+        }
+        started = await adapter.start(startOptions)
+      }
       signal.throwIfAborted()
       session.nativeCliVersion = cli?.launchVersion || cli?.after || cli?.before
       session.nativeSafeMode = startOptions.safeMode
@@ -1307,7 +1330,7 @@ export class ChatRuntime extends EventEmitter {
     return created
   }
 
-  private handoffSummary(record: SessionRecord): string {
+  private collectRecentTurns(record: SessionRecord): Array<{ prompt: string, text: string, files: Set<string> }> {
     const turns: Array<{ prompt: string, text: string, files: Set<string> }> = []
     let cursor = 0
     while (true) {
@@ -1328,7 +1351,11 @@ export class ChatRuntime extends EventEmitter {
       if (!page.truncated || !page.events.length) break
       cursor = page.events[page.events.length - 1].seq
     }
-    const recent = turns
+    return turns
+  }
+
+  private handoffSummary(record: SessionRecord): string {
+    const recent = this.collectRecentTurns(record)
     const files = new Set(recent.flatMap(turn => [...turn.files]))
     const lines = [
       `[Handoff from a ${AGENT_LABEL[record.agent]} session "${record.title}" in ${record.repo} on branch ${record.branch.name}]`,
@@ -1338,6 +1365,21 @@ export class ChatRuntime extends EventEmitter {
       ...recent.map((t, i) => `${i + 1}. User: ${clip(t.prompt, 600)}\n   Agent: ${clip(t.text.trim(), 900)}`),
     ]
     if (files.size) lines.push('', `Files the previous agent changed: ${[...files].slice(0, 40).join(', ')}`)
+    lines.push('', 'Continue from here.')
+    return lines.join('\n')
+  }
+
+  private restartSummary(record: SessionRecord): string {
+    const recent = this.collectRecentTurns(record)
+    const files = new Set(recent.flatMap(turn => [...turn.files]))
+    const lines = [
+      `[Restarted ${AGENT_LABEL[record.agent]} session "${record.title}" in ${record.repo} on branch ${record.branch.name}]`,
+      'The previous native session could not be resumed because Muse\'s credentials changed. Nothing from it carried over except this summary.',
+      '',
+      'Recent turns:',
+      ...recent.map((t, i) => `${i + 1}. User: ${clip(t.prompt, 600)}\n   Agent: ${clip(t.text.trim(), 900)}`),
+    ]
+    if (files.size) lines.push('', `Files the previous session changed: ${[...files].slice(0, 40).join(', ')}`)
     lines.push('', 'Continue from here.')
     return lines.join('\n')
   }
@@ -3085,6 +3127,14 @@ function implementingTurnOutcome(sessionId: string): { started: boolean, finishe
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/** Muse rejects resuming a session whose reasoning was encrypted for a
+ *  previous credential holder (OAuth login vs API key). The native session
+ *  is unresumable; the chat restarts it fresh from a transcript summary. */
+function isStaleMuseCaller(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('encrypted_content') && message.includes('was not issued to this caller')
 }
 
 /** Recursive canonical form: nested input keys count, so two commands that
