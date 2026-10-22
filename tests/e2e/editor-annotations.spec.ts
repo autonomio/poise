@@ -101,3 +101,24 @@ test('marks a note whose text is gone as Passage changed, and opens and deletes 
   await expect(mark).toHaveCount(0)
   await expect.poll(() => state.saved).toEqual([])
 })
+
+test('keeps two orphaned notes on the same line separately clickable', async ({ page }) => {
+  // Both passages are gone and both clamp to the last line.
+  await editor(page, [
+    { id: 'ann-1', session_id: 'editor-notes-1760000000000123', range: { start_line: 5, start_offset: 0, end_line: 6, end_offset: 4 }, snippet: 'Gone\ntext', comment: 'First orphan', created_at: AT, updated_at: AT },
+    { id: 'ann-2', session_id: 'editor-notes-1760000000000124', range: { start_line: 7, start_offset: 0, end_line: 8, end_offset: 4 }, snippet: 'Lost\nwords', comment: 'Second orphan', created_at: AT, updated_at: AT },
+  ])
+  const marks = page.locator('.annotation-orphan')
+  await expect(marks).toHaveCount(2)
+  // Side by side, not stacked: each mark sits at its own offset.
+  const lefts = await marks.evaluateAll((els) => els.map((el) => (el as HTMLElement).style.left))
+  expect(new Set(lefts).size).toBe(2)
+  // Each opens its own note.
+  const note = page.locator('.editor-annotation-text')
+  await marks.first().click()
+  await expect(note).toHaveValue('First orphan')
+  await page.keyboard.press('Escape')
+  await expect(note).toBeHidden()
+  await marks.last().click()
+  await expect(note).toHaveValue('Second orphan')
+})

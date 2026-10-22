@@ -3115,16 +3115,23 @@ function renderAnnotationOverlay(): void {
   // over them. Only the first characters of the line are covered, so the
   // rest of the line can still be clicked into. Nothing about the orphan
   // state is stored: if the snippet reappears, the note is re-found.
+  // Orphans sharing a clamped line cascade rightward from the line start,
+  // one tick per note: identical boxes would stack and leave all but the
+  // topmost unreachable.
   const lineEls = Array.from(docEl.children) as HTMLElement[]
+  const orphansOnLine = new Map<number, number>()
   for (const a of annotations) {
     if (!orphans.has(a.id)) continue
-    const lineEl = lineEls[Math.max(0, Math.min(a.range.start_line, lineEls.length - 1))]
+    const lineIdx = Math.max(0, Math.min(a.range.start_line, lineEls.length - 1))
+    const lineEl = lineEls[lineIdx]
     if (!lineEl) continue
+    const slot = orphansOnLine.get(lineIdx) ?? 0
+    orphansOnLine.set(lineIdx, slot + 1)
     const rect = lineEl.getBoundingClientRect()
     const mark = document.createElement('div')
     mark.className = 'annotation-mark annotation-orphan'
     mark.dataset.annId = a.id
-    mark.style.left   = (rect.left   - pageRect.left) + 'px'
+    mark.style.left   = (rect.left - pageRect.left + slot * rect.height) + 'px'
     mark.style.top    = (rect.top    - pageRect.top)  + 'px'
     mark.style.width  = rect.height + 'px'
     mark.style.height = rect.height + 'px'
