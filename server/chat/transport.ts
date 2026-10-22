@@ -500,6 +500,12 @@ export async function handleChatApi(req: IncomingMessage, res: ServerResponse, u
         const id = storage.sessionForSubject(runtime.instance, filter.surface, filter.key)
         return json(res, 200, { session: id ? runtime.get(id) : null, instance: runtime.instance }), true
       }
+      const legacyParam = query.get('legacy')
+      if (legacyParam !== null) {
+        if (!legacyParam) throw new ChatError(400, 'legacy must not be empty', 'invalid')
+        const found = runtime.list().find((record) => record.importedFrom === legacyParam) ?? null
+        return json(res, 200, { session: found, instance: runtime.instance }), true
+      }
       return json(res, 200, { sessions: runtime.list(), instance: runtime.instance }), true
     }
     if (path === '/api/chat/legacy' && req.method === 'GET') {

@@ -157,6 +157,13 @@ async function installRoutes(page: Page, state: ServerState): Promise<void> {
         await route.fulfill({ json: { session: found, instance: 'poise-dev:test' } })
         return
       }
+      const legacy = url.searchParams.get('legacy')
+      if (legacy !== null) {
+        if (!legacy) { await route.fulfill({ status: 400, json: { error: 'legacy must not be empty' } }); return }
+        const found = state.sessions.find((s) => s.importedFrom === legacy) || null
+        await route.fulfill({ json: { session: found, instance: 'poise-dev:test' } })
+        return
+      }
       await route.fulfill({ json: { sessions: state.sessions, instance: 'poise-dev:test' } })
       return
     }
