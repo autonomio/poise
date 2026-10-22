@@ -36,7 +36,7 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   await page.locator('.chat-session-item[data-id="s1"]').click()
   await expect(page.locator('.chat-session-item[data-id="s1"]')).toHaveClass(/active/)
 
-  const timersButton = page.getByRole('button', { name: 'Timers' })
+  const timersButton = page.getByRole('button', { name: 'Timers', exact: true })
   await expect(timersButton).toContainText('Timers 2')
   await timersButton.click()
   const pane = page.locator('#chat-timers-pane')
@@ -97,7 +97,7 @@ test('holds and resumes all timers, shows scheduler outages, and refetches every
   await installRoutes(page, state)
   const sock = await installSocket(page, state)
   await page.goto('/')
-  await page.getByRole('button', { name: 'Timers' }).click()
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
   const pane = page.locator('#chat-timers-pane')
   await expect(pane.locator('.chat-timer')).toHaveCount(1)
   const timersGets = () => state.calls.filter(c => c.method === 'GET' && c.path === '/api/chat/sessions/s1/timers').length
@@ -161,7 +161,7 @@ test('renders timer turns, timer changes and every wait cause with escaped label
   await expect(page.locator('.chat-turn').last()).toContainText('Stopped by you')
 
   // The pane cuts a preview at 200 code points without splitting the emoji.
-  await page.getByRole('button', { name: 'Timers' }).click()
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
   const pane = page.locator('#chat-timers-pane')
   await expect(pane.locator('.chat-timer[data-timer="timer-9"] .chat-timer-preview')).toHaveText(`${'a'.repeat(199)}👍…`)
 
