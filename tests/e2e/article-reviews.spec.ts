@@ -13,7 +13,7 @@ const review = (): ArticleReview => ({
   anchor: { quote: 'Opening paragraph.', before: '', after: '\nA final thought.', unique: true },
 })
 
-async function editorWithReviews(page: Page, initial: ArticleReview[] = [review()]) {
+async function editorWithReviews(page: Page, initial: ArticleReview[] = [review()], options: { preserveOnReload?: boolean } = {}) {
   const state = makeState([], {})
   state.models = {
     catalog: { models: [{ identity: 'opus-5-max', selector: 'claude-opus-5', effort: 'max', provider: 'claude' }], review_providers: [], path: '' },
@@ -25,7 +25,7 @@ async function editorWithReviews(page: Page, initial: ArticleReview[] = [review(
   // The socket route must exist before navigation: registered after, the
   // WebSocket connects to the real server instead of the fixture.
   const sock = await installSocket(page, state)
-  await workspace(page)
+  await workspace(page, 'current', undefined, options)
   // REST routes resolve last-registered-wins, so these go after the
   // workspace catch-all.
   await installRoutes(page, state)
@@ -273,15 +273,22 @@ test("opens a review thread inline with its GitHub conversation and a private ag
   expect(created?.body).toMatchObject({ subject: { surface: 'editor-review', key: 'draft:thread-1' } })
   await finishReply(sock, id, 'How should I address this?', 'Clarify the opening sentence.')
   await expect(threadTranscript(page)).toContainText('Clarify the opening sentence.')
-  // Under the anchored paragraph.
-  const box = await thread(page).boundingBox()
-  const line = page.locator('#editor-doc .editor-line', { hasText: 'Opening paragraph.' }).first()
-  const lineBox = await line.boundingBox()
-  expect(box!.y).toBeGreaterThanOrEqual(lineBox!.y + lineBox!.height - 16)
+  // Under the anchored paragraph: within 16 px of its text bottom (the
+  // thread sits in the gap its own padding makes in the source line).
+  await expect.poll(async () => {
+    const box = await thread(page).boundingBox()
+    const lineBox = await page.locator('#editor-doc .editor-line', { hasText: 'Opening paragraph.' }).first().boundingBox()
+    const padding = await page.evaluate(() => {
+      const lines = [...document.querySelectorAll('#editor-doc .editor-line')]
+      const found = lines.find((el) => el.textContent!.includes('Opening paragraph.')) as HTMLElement
+      return Number.parseFloat(found.style.paddingBottom || '0')
+    })
+    return Math.abs(box!.y - (lineBox!.y + lineBox!.height - padding))
+  }).toBeLessThanOrEqual(16)
 })
 
 test("keeps a review's private chat across a reload", async ({ page }) => {
-  const { state, sock } = await editorWithReviews(page)
+  const { state, sock } = await editorWithReviews(page, [review()], { preserveOnReload: true })
   await page.locator('.editor-review-mark').first().click()
   const id = await sendThreadMessage(page, sock, 'How should I address this?')
   const envelopes = await finishReply(sock, id, 'How should I address this?', 'Clarify the opening sentence.')

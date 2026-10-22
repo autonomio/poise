@@ -81,6 +81,9 @@ export class EditorReviews {
     document.addEventListener('mousedown', (event) => {
       const target = event.target as HTMLElement
       if (target.closest('.editor-inline-thread')) return
+      // Editing the document keeps the thread: like a passage thread, it
+      // stays open while the person types around it.
+      if (target.closest('#editor-doc')) return
       if (!this.list.contains(target) && !target.closest('[data-review]')) this.close()
     }, true)
   }

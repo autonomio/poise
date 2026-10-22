@@ -32,13 +32,13 @@ interface Editor {
   failSaves: { on: boolean }
 }
 
-async function editor(page: Page, content = TEXT): Promise<Editor> {
+async function editor(page: Page, content = TEXT, options: { preserveOnReload?: boolean } = {}): Promise<Editor> {
   const state = makeState([], {})
   state.models = modelsState()
   // The socket route must exist before navigation: registered after, the
   // WebSocket connects to the real server instead of the fixture.
   const sock = await installSocket(page, state)
-  await workspace(page)
+  await workspace(page, 'current', undefined, options)
   // REST routes resolve last-registered-wins, so these go after the
   // workspace catch-all.
   await installRoutes(page, state)
@@ -183,7 +183,7 @@ test("highlights an edit card's target in the document on hover", async ({ page 
 })
 
 test('shows the same edit decisions after a reload and read-only in Chat', async ({ page }) => {
-  const { state, sock } = await editor(page)
+  const { state, sock } = await editor(page, TEXT, { preserveOnReload: true })
   await openDocChat(page)
   const id = await sendPaneMessage(page, sock, 'Tighten this up')
   const envelopes = await finishReply(sock, id, 'Tighten this up', PROPOSAL)
