@@ -84,7 +84,7 @@ function teardownSurface(): void {
 
 function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft, onBack?: () => void): void {
   ensureShell()
-  if (surface && current && subjectKey(current) !== subjectKey(next)) teardownSurface()
+  if (surface && current && subjectKey(current) !== subjectKey(next)) closePane()
   current = next
   prefill = cardPrefill
   back = onBack

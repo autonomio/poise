@@ -283,26 +283,35 @@ test('moves a passage chat to the side pane and back with its draft', async ({ p
   await expect(threadInput(page)).toHaveValue('An unsent thought, edited')
 })
 
-test('marks Working and New reply after closing the pane on a chat moved there before its first message', async ({ page }) => {
-  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
-  await openThreadForMark(page, 'ann-1')
-  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
-  await expect(thread(page)).toBeHidden()
-  await expect(pane(page)).toBeVisible()
-  const before = sock.framesOf('prompt').length
-  await pane(page).locator('.chat-input').fill('What does it say?')
-  await pane(page).locator('.chat-input').press('Enter')
-  await expect.poll(() => sock.framesOf('prompt').length).toBe(before + 1)
-  const id = (sock.framesOf('prompt')[before].command as { sessionId: string }).sessionId
-  await pane(page).locator('.chat-close').click()
-  await expect(pane(page)).not.toHaveClass(/open/)
-  await expect(marker(page, 'Working')).toBeVisible()
-  const created = state.sessions.find((s) => s.id === id)!
-  await sock.subscribed(id)
-  sock.push(id, { type: 'session.updated', session: { ...created, status: 'idle' } })
-  sock.push(id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
-  await expect(marker(page, 'New reply')).toBeVisible()
-})
+for (const leave of ['closing the pane', 'switching to the document chat'] as const) {
+  test(`marks Working and New reply after ${leave} on a chat moved there before its first message`, async ({ page }) => {
+    const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+    await openThreadForMark(page, 'ann-1')
+    await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+    await expect(thread(page)).toBeHidden()
+    await expect(pane(page)).toBeVisible()
+    const before = sock.framesOf('prompt').length
+    await pane(page).locator('.chat-input').fill('What does it say?')
+    await pane(page).locator('.chat-input').press('Enter')
+    await expect.poll(() => sock.framesOf('prompt').length).toBe(before + 1)
+    const id = (sock.framesOf('prompt')[before].command as { sessionId: string }).sessionId
+    if (leave === 'closing the pane') {
+      await pane(page).locator('.chat-close').click()
+      await expect(pane(page)).not.toHaveClass(/open/)
+    } else {
+      await page.locator('.editor-chat-btn').click()
+      await expect(pane(page)).toHaveClass(/open/)
+      await expect(pane(page).locator('.chat-title')).toHaveText('A question')
+    }
+    await expect(marker(page, 'In side pane')).toHaveCount(0)
+    await expect(marker(page, 'Working')).toBeVisible()
+    const created = state.sessions.find((s) => s.id === id)!
+    await sock.subscribed(id)
+    sock.push(id, { type: 'session.updated', session: { ...created, status: 'idle' } })
+    sock.push(id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+    await expect(marker(page, 'New reply')).toBeVisible()
+  })
+}
 
 test('closes on Escape and returns the caret to the passage', async ({ page }) => {
   await editor(page, [annotation({ id: 'ann-1' })])
