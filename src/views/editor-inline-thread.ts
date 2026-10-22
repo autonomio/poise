@@ -355,6 +355,10 @@ export function keepThreadDraft(subject: ChatSubject, draft: ComposerDraft | nul
   else drafts.delete(subjectKey(subject))
 }
 
+export function hasThreadDraft(subject: ChatSubject): boolean {
+  return drafts.has(subjectKey(subject))
+}
+
 /** Move the tracked chat for a subject, from the Editor's overlay pass.
  *  Untracked subjects are ignored; a newly unlocatable passage grows its
  *  Passage changed marker here. */
@@ -372,7 +376,7 @@ export function syncThreadMarker(subject: ChatSubject, position: { first: HTMLEl
 
 /** The open thread's session, for the notification rail. */
 export function inlineThreadSessionInView(): string | null {
-  return open?.sessionId ?? null
+  return open && !open.page.closest('[hidden]') ? open.sessionId : null
 }
 
 /** The open thread's subject, if any. */

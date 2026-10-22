@@ -283,6 +283,83 @@ test('moves a passage chat to the side pane and back with its draft', async ({ p
   await expect(threadInput(page)).toHaveValue('An unsent thought, edited')
 })
 
+test('keeps history and live replies when moving a passage chat while its history request is pending', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols)
+        this.addEventListener('message', (event) => {
+          const frame = JSON.parse(String(event.data)) as { kind: string, envelope?: { seq: number } }
+          if (frame.kind === 'event') Reflect.set(window, 'lastChatSequence', frame.envelope?.seq)
+        })
+      }
+    }
+  })
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'First question')
+  const earlier = await finishReply(sock, id, 'First question', 'The earlier reply.')
+  state.history[id] = earlier
+  await expect(threadTranscript(page)).toContainText('The earlier reply.')
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const requested = new Promise<void>((resolve) => { started = resolve })
+  await page.route(`**/api/chat/sessions/${id}?after=0`, async (route) => {
+    started()
+    await held
+    await route.fulfill({ json: { session: state.sessions.find((s) => s.id === id), events: earlier } })
+  })
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await requested
+  const live = [
+    sock.push(id, { type: 'turn.started', turnId: 't2', prompt: { text: 'Another question', attachments: [], mentions: [] } }),
+    sock.push(id, { type: 'text.delta', turnId: 't2', messageId: 'reply-2', delta: 'The live reply.' }),
+    sock.push(id, { type: 'turn.finished', turnId: 't2', stopReason: 'end_turn' }),
+  ]
+  state.history[id] = [...earlier, ...live]
+  // Wait for actual socket delivery before releasing the older REST answer.
+  await expect.poll(() => page.evaluate(() => Reflect.get(window, 'lastChatSequence'))).toBe(live[live.length - 1]!.seq)
+  release()
+  const transcript = pane(page).locator('.chat-surface-transcript')
+  await expect(transcript).toContainText('The earlier reply.')
+  await expect(transcript).toContainText('The live reply.')
+  await expect(transcript.getByText('The live reply.', { exact: true })).toHaveCount(1)
+})
+
+test('keeps a newly created passage annotation with an unsent private draft', async ({ page }) => {
+  const { state, annotationSaves } = await editor(page)
+  const doc = page.locator('#editor-doc')
+  await doc.focus()
+  await doc.press('ControlOrMeta+a')
+  await page.getByRole('button', { name: 'Add comment', exact: true }).click()
+  await expect(thread(page)).toBeVisible()
+  await threadInput(page).fill('An unfinished private question')
+  await thread(page).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(thread(page)).toBeHidden()
+  await expect.poll(() => annotationSaves[annotationSaves.length - 1]?.length).toBe(1)
+  await page.locator('.annotation-mark').first().click()
+  await expect(threadInput(page)).toHaveValue('An unfinished private question')
+  expect(state.sessions).toHaveLength(0)
+})
+
+test('shows completion and attention notices after navigating away from an open passage chat', async ({ page }) => {
+  const { sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'Keep working')
+  await page.getByRole('button', { name: 'Current', exact: true }).click()
+  const now = new Date().toISOString()
+  await page.route('**/api/notices', (route) => route.fulfill({ json: { enabled: true, notices: [
+    { id: 'passage-finished', kind: 'chat_turn_finished', title: 'Passage reply finished', body: 'A reply is ready.', since: now, due: now, silenceable: false, target: { chat: id } },
+    { id: 'passage-waiting', kind: 'chat_waiting', title: 'Passage needs an answer', body: 'An answer is needed.', since: now, due: now, silenceable: false, target: { chat: id } },
+  ] } }))
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.locator('#notification-bell').click()
+  await expect(page.locator('#notification-rail [data-id="passage-finished"]')).toBeVisible()
+  await expect(page.locator('#notification-rail [data-id="passage-waiting"]')).toBeVisible()
+})
+
 for (const leave of ['closing the pane', 'switching to the document chat'] as const) {
   test(`marks Working and New reply after ${leave} on a chat moved there before its first message`, async ({ page }) => {
     const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])

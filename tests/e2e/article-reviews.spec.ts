@@ -329,6 +329,27 @@ test('uses a suggested reply from a review moved to the side pane', async ({ pag
   await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Thanks — clarified in the latest update.')
 })
 
+test('keeps a side-pane suggestion bound to its review after another review opens inline', async ({ page }) => {
+  const second: ArticleReview = { ...review(), id: 'thread-2', site: 'Second site', anchor: { quote: 'A final thought.', before: '', after: '', unique: true } }
+  const { calls, state, sock } = await editorWithReviews(page, [review(), second])
+  await page.locator('.editor-review-mark[data-review="thread-1"]').first().click()
+  const id = await sendThreadMessage(page, sock, 'Draft a reply')
+  state.history[id] = await finishReply(sock, id, 'Draft a reply', JSON.stringify({ chat: 'A draft.', reply: 'Reply for the first review.' }))
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  const paneTranscript = page.locator('#chat-side-pane .chat-surface-transcript')
+  await expect(paneTranscript).toContainText('Reply for the first review.')
+  await page.locator('.editor-review-mark[data-review="thread-2"]').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await expect(panel).toContainText('Second site')
+  await panel.getByLabel('Reply on GitHub', { exact: true }).fill('Keep the second draft.')
+  await paneTranscript.getByRole('button', { name: 'Use as reply', exact: true }).click()
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Keep the second draft.')
+  await page.locator('#chat-side-pane').getByRole('button', { name: 'Back to the review', exact: true }).click()
+  await expect(panel).toContainText('Review · Site')
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Reply for the first review.')
+  expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+})
+
 test("opens an unlocated review's thread under the review list", async ({ page }) => {
   const missing: ArticleReview = { ...review(), id: 'missing', anchor: { quote: 'Absent passage.', before: '', after: '', unique: false }, outdated: true }
   await editorWithReviews(page, [missing])

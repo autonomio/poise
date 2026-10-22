@@ -3,6 +3,7 @@ import { shortTime } from '../clock'
 import { effectiveTimezone } from '../config'
 import { locateReview, REVIEW_INTERVAL_MS, type ArticleReview, type ArticleReviews } from '../publishing-review'
 import { closeInlineThread, inlineThreadSubjectInView } from './editor-inline-thread'
+import type { ChatSubject } from '../../server/chat/protocol'
 
 interface Host {
   view: HTMLElement
@@ -54,8 +55,13 @@ export class EditorReviews {
     // textarea is restored from drafts, and act() posts it, so replacing the
     // entry and re-rendering is the whole implementation.
     window.addEventListener('chat:use-suggested-reply', (event) => {
-      if (!this.selected) return
-      this.drafts.set(this.selected, (event as CustomEvent<{ text: string }>).detail?.text ?? '')
+      const detail = (event as CustomEvent<{ subject: ChatSubject, text: string }>).detail
+      if (!this.slug || detail?.subject?.surface !== 'editor-review') return
+      const prefix = `${this.slug}:`
+      if (!detail.subject.key.startsWith(prefix)) return
+      const id = detail.subject.key.slice(prefix.length)
+      if (!this.data.reviews.some((review) => review.id === id)) return
+      this.drafts.set(id, detail.text)
       this.render()
     })
     document.addEventListener('visibilitychange', () => {

@@ -526,6 +526,7 @@ export interface TranscriptHandlers {
   onEditHover?(edit: EditProposal): void
   onEditLeave?(): void
   onOpenInEditor?(): void
+  onSuggestedReply?(text: string): void
 }
 
 export interface RenderContext {
@@ -1318,7 +1319,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     }
     const useReply = target.closest<HTMLButtonElement>('[data-use-suggested-reply]')
     if (useReply) {
-      container.dispatchEvent(new CustomEvent('chat:use-suggested-reply', { bubbles: true, detail: { text: useReply.dataset.reply || '' } }))
+      handlers.onSuggestedReply?.(useReply.dataset.reply || '')
       return
     }
   })

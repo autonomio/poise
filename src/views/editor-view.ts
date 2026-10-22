@@ -10,7 +10,7 @@ import { EditorReviews } from './editor-reviews'
 import { GoogleDocuments } from './google-documents'
 import { chatClient } from '../chat-client'
 import { chatSidePane, registerEditorSurface } from './chat-side-pane'
-import { clearInlineThreads, closeInlineThread, dropThread, inlineThreadSubjectInView, keepThreadDraft, openInlineThread, syncThreadMarker } from './editor-inline-thread'
+import { clearInlineThreads, closeInlineThread, dropThread, hasThreadDraft, inlineThreadSubjectInView, keepThreadDraft, openInlineThread, syncThreadMarker } from './editor-inline-thread'
 import type { SurfaceOptions } from './chat-session-surface'
 import { locateReview, type ArticleReview } from '../publishing-review'
 import type { ChatSubject } from '../../server/chat/protocol'
@@ -3815,7 +3815,7 @@ function discardThreadAnnotationIfEmpty(id: string, sessionId: string | null): v
   if (id !== threadCreatedId) return
   const a = annotations.find((x) => x.id === id)
   if (!a) return
-  if (a.comment.trim() !== '' || sessionId) return
+  if (a.comment.trim() !== '' || sessionId || (currentSlug && hasThreadDraft({ surface: 'editor-passage', key: `${currentSlug}:${id}`, label: a.snippet }))) return
   annotations = annotations.filter((x) => x.id !== a.id)
   scheduleAnnotationsSave()
   renderAnnotationOverlay()

@@ -98,6 +98,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     onEditDecide: (turnId, messageId, index, decision, edit) => { void decideEdit(turnId, messageId, index, decision, edit) },
     onEditHover: (edit) => { options.edits?.hover(edit) },
     onEditLeave: () => { options.edits?.leave() },
+    onSuggestedReply: (text) => {
+      container.dispatchEvent(new CustomEvent('chat:use-suggested-reply', { bubbles: true, detail: { subject, text } }))
+    },
   })
   transcriptEl.addEventListener('chat:rerender', render)
 
@@ -279,25 +282,37 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   }
 
   let seenSeq = 0
+  let adopting: ChatEnvelope[] | null = null
+  let subscribed: string | null = null
   async function adopt(session: SessionRecord): Promise<void> {
+    if (subscribed) { chatClient.unsubscribe(subscribed); subscribed = null }
+    const pending: ChatEnvelope[] = []
+    adopting = pending
     record = session
     earlierEl.hidden = true
     earlierEl.innerHTML = ''
     transcript.clear()
     model = createModel()
     seenSeq = 0
-    for (let guard = 0; guard < 100; guard++) {
-      const page = await chatClient.fetchSession(session.id, seenSeq)
-      record = page.session
-      for (const envelope of page.events) {
-        if (envelope.seq > seenSeq) { applyEvent(model, envelope); seenSeq = envelope.seq }
+    try {
+      for (let guard = 0; guard < 100; guard++) {
+        const page = await chatClient.fetchSession(session.id, seenSeq)
+        if (destroyed || adopting !== pending) return
+        record = page.session
+        for (const envelope of page.events) applyEnvelope(envelope)
+        if (!page.truncated || !page.events.length) break
       }
-      if (!page.truncated || !page.events.length) break
+      // Another surface may still subscribe while history loads. Fold those
+      // live events after history so they cannot move its paging cursor.
+      for (const envelope of pending.sort((a, b) => a.seq - b.seq)) applyEnvelope(envelope)
+      chatClient.subscribe(session.id, seenSeq)
+      subscribed = session.id
+      setNotice(null)
+      state()
+      render()
+    } finally {
+      if (adopting === pending) adopting = null
     }
-    chatClient.subscribe(session.id, seenSeq)
-    setNotice(null)
-    state()
-    render()
   }
 
   async function ensureSession(draft?: ComposerDraft, skipLegacy = false): Promise<SessionRecord> {
@@ -522,12 +537,18 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     }
   }
 
-  function onEvent(envelope: ChatEnvelope): void {
-    if (destroyed || !record || envelope.sessionId !== record.id) return
-    if (envelope.seq > seenSeq) seenSeq = envelope.seq
+  function applyEnvelope(envelope: ChatEnvelope): void {
+    if (!record || envelope.seq <= seenSeq) return
+    seenSeq = envelope.seq
     if (envelope.event.type === 'session.updated') record = envelope.event.session
     else if (envelope.event.type === 'session.closed') record = { ...record, status: 'closed' }
     applyEvent(model, envelope)
+  }
+
+  function onEvent(envelope: ChatEnvelope): void {
+    if (destroyed || !record || envelope.sessionId !== record.id) return
+    if (adopting) { adopting.push(envelope); return }
+    applyEnvelope(envelope)
     state()
     render()
   }
@@ -549,7 +570,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
       destroyed = true
       clearInterval(tickTimer)
       offEvent()
-      if (record) chatClient.unsubscribe(record.id)
+      if (subscribed) chatClient.unsubscribe(subscribed)
       transcriptEl.removeEventListener('chat:rerender', render)
       queuePanel.el.remove()
       composer.destroy()
