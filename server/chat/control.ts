@@ -411,7 +411,11 @@ export class ChatControl {
       // separator, so the first half is the watched slice on both paths.
       const settledWatched = settled?.fingerprint.split(':')[0]
       const identical = settled !== undefined && (settled.fingerprint === bodyFingerprint || settled.fingerprint.endsWith(`:${bodyFingerprint}`))
-      if (settledWatched !== watched && !identical && (settled || initiallyActionable)) {
+      // A behavior observation wakes only while it holds actionable content:
+      // entries that merely disappear — a cleared error, a launch recovered
+      // to pending or clean — need no turn.
+      const actionableNow = actionable === undefined || (Array.isArray(actionable) && actionable.length > 0)
+      if (settledWatched !== watched && !identical && actionableNow && (settled || initiallyActionable)) {
         store.message(instance, binding.session, 'Poise work monitor', boundedNotice(body, { kind: data.kind, target: binding.target,
           head: data.head, failingCount: Array.isArray(data.failing) ? data.failing.length : undefined,
           detail: 'Inspect the complete current work state through Poise APIs or Caller before acting.', inspect: { operation: 'api', path: '/api/logging' } }),

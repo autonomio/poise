@@ -406,6 +406,24 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(prompts.get(parent.id)).toHaveLength(1)
   })
 
+  it('starts no new turn when a failed launch recovers to clean', async () => {
+    const parent = await manager()
+    await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/80' })
+    database.db.prepare(`INSERT INTO behavior_seen(key,target,seen_at,launch_repo,launch_pr,launch_behavior,launch_call_id,launch_error)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?)`).run('review-new-prs', 'acme/app#80:check', new Date().toISOString(), 'acme/app', 80, 'pr_review', 'c'.repeat(32), 'Review failed')
+    await control.tick()
+    await until(() => prompts.has(parent.id))
+    expect(prompts.get(parent.id)).toHaveLength(1)
+    finishes.get(parent.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(parent.id)?.status === 'idle')
+    database.db.prepare(`UPDATE behavior_seen SET launch_error = NULL, launch_outcome = 'clean', launch_action = 'reviewed_clean'
+      WHERE key = ? AND target = ?`).run('review-new-prs', 'acme/app#80:check')
+    await control.tick()
+    await control.tick()
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+    expect(prompts.get(parent.id)).toHaveLength(1)
+  })
+
   it('wakes a session once when a check fails on its pull request', async () => {
     const parent = await manager()
     await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/79' })
