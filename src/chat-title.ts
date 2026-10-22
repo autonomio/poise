@@ -24,7 +24,7 @@ const NAME = '[A-Za-z0-9_.-]+?'
  *  `owner/name` it belongs to. */
 export function parseIssueReference(text: string, repo?: string): IssueReference | null {
   const found: IssueReference[] = []
-  const url = new RegExp(`\\bgithub\\.com\\/(${OWNER})\\/(${NAME})\\/(issues|pull)\\/(\\d+)\\b`).exec(text)
+  const url = new RegExp(`\\b(?:https?:\\/\\/)?github\\.com\\/(${OWNER})\\/(${NAME})\\/(issues|pull)\\/(\\d+)\\b`).exec(text)
   if (url) {
     found.push({ owner: url[1], repo: url[2].replace(/\.+$/, ''), number: Number(url[4]),
       kind: url[3] === 'pull' ? 'pull' : 'issue', index: url.index, length: url[0].length })

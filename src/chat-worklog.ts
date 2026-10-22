@@ -56,10 +56,12 @@ export function compareWorklog(a: WorklogEntry, b: WorklogEntry): number {
   return (b.updatedAt || '').localeCompare(a.updatedAt || '') || (b.createdAt || '').localeCompare(a.createdAt || '')
 }
 
-/** Re-sort an id list in place order: pinned ids hold their slots while the
- *  rest take the comparator's order. Stable, so full ties keep their slots. */
-export function applyWorklogOrder(order: string[], isPinned: (id: string) => boolean, compare: (a: string, b: string) => number): string[] {
-  const flowing = order.filter((id) => !isPinned(id)).sort(compare)
+/** Leading ids take priority over pins; other pinned ids hold their slots
+ *  while the rest sort. Stable, so full ties keep their slots. */
+export function applyWorklogOrder(order: string[], isPinned: (id: string) => boolean, compare: (a: string, b: string) => number, isLeading: (id: string) => boolean = () => false): string[] {
+  const leading = order.filter(isLeading).sort(compare)
+  const rest = order.filter((id) => !isLeading(id))
+  const flowing = rest.filter((id) => !isPinned(id)).sort(compare)
   let next = 0
-  return order.map((id) => isPinned(id) ? id : flowing[next++]!)
+  return [...leading, ...rest.map((id) => isPinned(id) ? id : flowing[next++]!)]
 }

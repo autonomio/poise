@@ -80,4 +80,17 @@ describe('work log order', () => {
     expect(applyWorklogOrder(['c', 'b', 'a'], (id) => id === 'b', compare)).toEqual(['a', 'b', 'c'])
     expect(applyWorklogOrder(['a', 'b', 'c'], (id) => id !== 'c', compare)).toEqual(['a', 'b', 'c'])
   })
+
+  it('keeps the Manager and a pending session ahead of restored pins', () => {
+    const entries: Record<string, WorklogEntry> = {
+      pinned: entry('2026-10-21T16:00:00Z'), ordinary: entry('2026-10-21T17:00:00Z'),
+      manager: entry('2026-10-21T15:00:00Z', undefined, false, true),
+      pending: entry('2026-10-21T15:00:00Z', undefined, true),
+    }
+    expect(applyWorklogOrder(['pinned', 'ordinary', 'manager', 'pending'],
+      (id) => id === 'pinned' || id === 'manager',
+      (a, b) => compareWorklog(entries[a], entries[b]),
+      (id) => entries[id].pending || entries[id].manager))
+      .toEqual(['pending', 'manager', 'pinned', 'ordinary'])
+  })
 })

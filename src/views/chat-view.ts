@@ -196,7 +196,7 @@ try {
 let orderRestored = false
 function persistWorklog(): void {
   // Pins for sessions gone from the list are forgotten on the way out.
-  pins = new Set([...pins].filter((id) => sessions.has(id)))
+  pins = new Set([...pins].filter((id) => sessions.has(id) && sessions.get(id)!.record.role !== 'manager'))
   try {
     localStorage.setItem(PINS_KEY, JSON.stringify([...pins]))
     localStorage.setItem(ORDER_KEY, JSON.stringify(order))
@@ -559,7 +559,8 @@ function sortOrder(): void {
   // session has not been upserted yet must survive until it is seen.
   for (const id of sessions.keys()) if (!order.includes(id)) order.push(id)
   order = order.filter((id) => sessions.has(id))
-  order = applyWorklogOrder(order, (id) => pins.has(id), compareEntries)
+  order = applyWorklogOrder(order, (id) => pins.has(id), compareEntries,
+    (id) => sessions.get(id)!.pending || sessions.get(id)!.record.role === 'manager')
 }
 
 function upsertRecord(record: SessionRecord, opts: { pending?: boolean } = {}): SessionEntry {
@@ -669,8 +670,8 @@ function sidebarHtml(): string {
     const armed = armedDelete?.id === id && armedDelete.until > Date.now()
     const confirm = armed ? deleteConfirmCopy(s, records) : null
     const dot = sessionDot(s, now, zone)
-    const pinned = pins.has(id)
-    return `<div class="chat-session-item${id === activeId ? ' active' : ''}${e.pending ? ' pending' : ''}${pinned ? ' pinned' : ''}" role="listitem" data-id="${escapeHtml(id)}" tabindex="0" draggable="true">`
+    const pinned = pins.has(id) && s.role !== 'manager'
+    return `<div class="chat-session-item${id === activeId ? ' active' : ''}${e.pending ? ' pending' : ''}${pinned ? ' pinned' : ''}" role="listitem" data-id="${escapeHtml(id)}" tabindex="0" draggable="${s.role !== 'manager'}">`
       + `<div class="chat-session-title" title="${escapeHtml(sessionTitle(s))}">${escapeHtml(sessionTitle(s))}</div>`
       + (s.subject ? `<div class="chat-session-subject">From Current · ${escapeHtml(s.subject.label)}</div>` : '')
       + creatorHtml(s)
@@ -698,6 +699,7 @@ function unpinSession(id: string): void {
 /** Pin `id` at a visible slot: the row holds that position while automatic
  *  ordering re-sorts the rest around it. */
 function placePinned(id: string, slot: number): void {
+  if (sessions.get(id)?.record.role === 'manager') return
   const rest = order.filter((x) => x !== id)
   const restVisible = rest.filter(listed)
   const at = Math.max(0, Math.min(restVisible.length, slot))
@@ -791,7 +793,7 @@ function attachSidebar(): void {
   // dataTransfer payload is unreadable during dragover.
   listEl.addEventListener('dragstart', (e) => {
     const item = (e.target as HTMLElement).closest<HTMLElement>('.chat-session-item')
-    if (!item || (e.target as HTMLElement).closest('.chat-session-rename, button')) { e.preventDefault(); return }
+    if (!item || sessions.get(item.dataset.id!)?.record.role === 'manager' || (e.target as HTMLElement).closest('.chat-session-rename, button')) { e.preventDefault(); return }
     dragId = item.dataset.id!
     if (e.dataTransfer) { e.dataTransfer.setData('text/plain', dragId); e.dataTransfer.effectAllowed = 'move' }
     item.classList.add('dragging')

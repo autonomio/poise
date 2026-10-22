@@ -99,6 +99,44 @@ test('dragging a chat pins it, and a later status change does not move it', asyn
   await expect(page.locator('.chat-session-item').nth(0).locator('.chat-session-pin')).toBeVisible()
 })
 
+test('keeps the Manager above dragged, keyboard-moved and restored pins', async ({ page }) => {
+  const state = makeState([
+    session({ id: 'manager', title: 'Manager', role: 'manager' }),
+    session({ id: 's2', title: 'Second', updatedAt: '2026-09-18T10:00:00.000Z' }),
+    session(),
+  ])
+  await installRoutes(page, state)
+  await installSocket(page)
+  await page.goto('/')
+  const items = page.locator('.chat-session-item')
+  await expect(items).toHaveCount(3)
+  await expect(items.first()).toHaveAttribute('data-id', 'manager')
+  await page.evaluate(() => {
+    const manager = document.querySelector<HTMLElement>('.chat-session-item[data-id="manager"]')!
+    const ordinary = document.querySelector<HTMLElement>('.chat-session-item[data-id="s1"]')!
+    const dt = new DataTransfer()
+    ordinary.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    manager.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientY: manager.getBoundingClientRect().top + 2, dataTransfer: dt }))
+    manager.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    ordinary.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  })
+  await expect(items.first()).toHaveAttribute('data-id', 'manager')
+  await expect(items.nth(1)).toHaveAttribute('data-id', 's1')
+  await expect(items.nth(1).locator('.chat-session-pin')).toBeVisible()
+  await items.first().press('Alt+ArrowDown')
+  await expect(items.first()).toHaveAttribute('data-id', 'manager')
+  await expect(items.first()).toHaveAttribute('draggable', 'false')
+  await expect(items.first().locator('.chat-session-pin')).toHaveCount(0)
+  await page.evaluate(() => {
+    localStorage.setItem('poise-chat-pinned', JSON.stringify(['s1', 'manager']))
+    localStorage.setItem('poise-chat-sidebar-order', JSON.stringify(['s1', 's2', 'manager']))
+  })
+  await page.reload()
+  await expect(items.first()).toHaveAttribute('data-id', 'manager')
+  await expect(items.first().locator('.chat-session-pin')).toHaveCount(0)
+  await expect(items.nth(1)).toHaveAttribute('data-id', 's1')
+})
+
 test('the top bar shows how long the turn has run during a scripted long turn', async ({ page }) => {
   // Date is fixed while timers keep running, so the header's one-second tick runs on wall time.
   await page.clock.setFixedTime(new Date('2026-10-21T17:00:00Z'))

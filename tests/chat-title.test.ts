@@ -69,6 +69,15 @@ describe('title derivation', () => {
     expect(deriveSessionTitle('see https://example.com/spec for details')).toBe('see for details')
   })
 
+  it('removes the whole unresolved issue or PR URL from its fallback title', () => {
+    for (const reference of ['https://github.com/acme/app/issues/12', 'http://github.com/acme/app/pull/12', 'github.com/acme/app/issues/12']) {
+      expect(deriveSessionTitle(reference)).toBe('#12')
+      expect(deriveSessionTitle(`Task: continue (${reference})`)).toBe('#12')
+      const ref = parseIssueReference(reference)!
+      expect(reference.slice(ref.index, ref.index + ref.length)).toBe(reference)
+    }
+  })
+
   it('leaves an ordinary first line alone', () => {
     expect(deriveSessionTitle('hello there')).toBe('hello there')
     expect(deriveSessionTitle('Refactor the auth module')).toBe('Refactor the auth module')
