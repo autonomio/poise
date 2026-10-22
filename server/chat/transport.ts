@@ -315,6 +315,20 @@ export class ChatSocketServer {
       case 'revert':
         await runtime.revert(String(command.sessionId || ''), String(command.diffId || ''))
         return {}
+      case 'edit.decide': {
+        const decision = command.decision
+        if (decision !== 'applied' && decision !== 'declined' && decision !== 'conflict') {
+          throw new ChatError(400, 'decision must be applied, declined or conflict', 'invalid')
+        }
+        if (!Number.isSafeInteger(command.index) || command.index < 0) {
+          throw new ChatError(400, 'index must be a non-negative integer', 'invalid')
+        }
+        await runtime.decideEdit(String(command.sessionId || ''), {
+          turnId: String(command.turnId || ''), messageId: String(command.messageId || ''),
+          index: command.index, decision,
+        })
+        return {}
+      }
       case 'poise.change': {
         if (this.policy.service) throw new ChatError(409, SELF_UPDATE_OFF, SERVICE_MODE_CODE)
         // Only these three fields exist: the browser never names a
