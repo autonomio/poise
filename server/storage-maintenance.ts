@@ -10,7 +10,7 @@
 // simply leaves the rest for the next run — and dry-run classifies exactly
 // like a real run without deleting anything.
 
-import { lstat, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, readdir, readFile, rm } from 'node:fs/promises'
 import { statfs } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -27,7 +27,7 @@ import { poiseStateRoot } from './review-checkout'
 
 /** Closed sessions keep their workspace this long before it may be removed. */
 export const WORKSPACE_CLOSED_GRACE_MS = 24 * 60 * 60_000
-/** Open sessions idle longer than this lose only regenerable artifacts. */
+/** Idle artifacts need generator provenance before they may be pruned. */
 export const WORKSPACE_IDLE_PRUNE_MS = 3 * 24 * 60 * 60_000
 /** Incident snapshots expire after this unless pinned with a KEEP file. */
 export const INCIDENT_RECOVERY_RETENTION_MS = 30 * 24 * 60 * 60_000
@@ -53,13 +53,6 @@ export const CACHE_CAP_BYTES = {
   npm: 1024 ** 3,
   mirrors: 2 * 1024 ** 3,
 } as const
-
-/** Top-level workspace entries that an agent regenerates on demand. Source
- *  and git state are never in this list. */
-const REGENERABLE_ENTRIES = new Set([
-  'node_modules', 'dist', 'build', 'out', '.next', 'target',
-  '.venv', 'venv', '.tox', '.cache', '__pycache__',
-])
 
 const LAST_RUN_KEY = 'storage_maintenance_last'
 const PRESSURE_ALERT_KEY = 'workspace-storage-pressure'
@@ -249,30 +242,6 @@ async function listDirs(parent: string): Promise<string[]> {
   }
 }
 
-/** Prune regenerable top-level entries, leaving a marker so the next turn
- *  reinstalls. Returns the pruned entries with their sizes. */
-async function pruneWorkspace(checkout: string, home: string, dryRun: boolean): Promise<ReclaimedItem[]> {
-  const pruned: ReclaimedItem[] = []
-  const names: string[] = []
-  let entries
-  try {
-    entries = await readdir(checkout, { withFileTypes: true })
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return []
-    throw error
-  }
-  for (const entry of entries) {
-    if (!REGENERABLE_ENTRIES.has(entry.name) || entry.isSymbolicLink()) continue
-    const path = join(checkout, entry.name)
-    pruned.push({ path, bytes: await removePath(path, dryRun) })
-    names.push(entry.name)
-  }
-  if (names.length && !dryRun) {
-    await writeFile(join(home, PRUNE_MARKER), JSON.stringify({ prunedAt: new Date().toISOString(), pruned: names }) + '\n', { mode: 0o600 })
-  }
-  return pruned
-}
-
 async function gitTidy(checkout: string, errors: MaintenanceReport['errors']): Promise<void> {
   try {
     await runFile('git', ['gc', '--auto'], { cwd: checkout, timeoutMs: 120_000, maxOutputBytes: 1024 * 1024 })
@@ -284,13 +253,20 @@ async function gitTidy(checkout: string, errors: MaintenanceReport['errors']): P
 
 /** Compact the workspaces maintenance keeps. Best-effort: failures are
  *  recorded, never thrown, and a busy lease skips the workspace. */
-async function tidyWorkspace(checkout: string, id: string, errors: MaintenanceReport['errors']): Promise<void> {
+async function tidyWorkspace(checkout: string, id: string, claims: (checkout: string) => WorkspaceClaim[], report: MaintenanceReport): Promise<void> {
   const lease = new CheckoutLease(canonicalCheckout(checkout), {
     ownerKind: 'poise:chat', ownerId: `maintenance:tidy:${id}`, ownerLabel: `Storage maintenance tidying ${id}`, instance: 'storage-maintenance',
   })
-  if (!lease.tryAcquire().acquired) return
+  if (!lease.tryAcquire().acquired) {
+    report.held.push({ path: checkout, reason: 'the checkout lease is busy' })
+    return
+  }
   try {
-    await gitTidy(checkout, errors)
+    if (claims(checkout).some((claim) => claim.openTurn || claim.queued || ACTIVE_STATUSES.has(claim.status))) {
+      report.held.push({ path: checkout, reason: 'a turn started or queued while maintenance ran' })
+      return
+    }
+    await gitTidy(checkout, report.errors)
   } finally {
     if (lease.held) lease.release()
   }
@@ -331,19 +307,18 @@ async function maintainWorkspace(
   const closed = claims.every((claim) => claim.status === 'closed')
   if (!closed) {
     if (options.now! - latest >= WORKSPACE_IDLE_PRUNE_MS) {
-      for (const item of await pruneWorkspace(canonical, ref.home, options.dryRun ?? false)) {
-        report.pruned.push(item)
-        report.reclaimedBytes += item.bytes
-      }
+      // Agents can keep source and unique ignored files under any of these
+      // names. Neither a name nor Git's ignore rules prove regeneration.
+      report.held.push({ path: canonical, reason: 'idle artifacts have no recorded generator provenance; kept to protect user work' })
     } else {
       report.held.push({ path: canonical, reason: 'session open and recently active' })
     }
-    if (!(options.dryRun ?? false)) await tidyWorkspace(canonical, ref.id, report.errors)
+    if (!(options.dryRun ?? false)) await tidyWorkspace(canonical, ref.id, options.claims ?? claimsForCheckout, report)
     return
   }
   if (options.now! - latest < WORKSPACE_CLOSED_GRACE_MS) {
     report.held.push({ path: canonical, reason: `grace period ends ${new Date(latest + WORKSPACE_CLOSED_GRACE_MS).toISOString()}` })
-    if (!(options.dryRun ?? false)) await tidyWorkspace(canonical, ref.id, report.errors)
+    if (!(options.dryRun ?? false)) await tidyWorkspace(canonical, ref.id, options.claims ?? claimsForCheckout, report)
     return
   }
   const lease = new CheckoutLease(canonical, {

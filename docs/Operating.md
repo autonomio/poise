@@ -704,10 +704,13 @@ passes 80% used, and on demand from Settings → Storage, which shows the
 storage breakdown and the last run. A run removes a closed session's scratch
 workspace after 24 hours when its tree is clean and nothing is unpushed,
 requiring a remote-tracking ref to contain every local branch tip and any
-detached HEAD; remote-less committed work stays held,
-prunes only regenerable artifacts (`node_modules`, build output, virtualenvs,
-tool caches) from open sessions idle over 3 days and reinstalls them on the
-next turn, expires incident snapshots after 30 days unless pinned with a
+detached HEAD; remote-less committed work stays held. Open idle sessions keep
+their artifacts: directory names and Git ignore rules do not prove that an
+entry can be regenerated. Artifact pruning requires recorded generator
+provenance, which existing workspaces do not have. Any legacy prune marker
+still restores dependencies on the next turn. Maintenance takes the checkout
+lease and rechecks turn claims before tidying its Git data. It expires
+incident snapshots after 30 days unless pinned with a
 `KEEP` file, and caps the pip, uv, npm and GitHub-mirror caches with
 least-recently-used eviction. A workspace with uncommitted or unpushed work,
 or with a turn running or queued, is never touched; everything kept is listed

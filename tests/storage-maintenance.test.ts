@@ -157,7 +157,7 @@ describe('chat worker workspace retention', () => {
     await expect(lstat(checkout)).resolves.toBeDefined()
   })
 
-  it('prunes only regenerable artifacts from an open idle session', async () => {
+  it('keeps unproven artifacts and source in an open idle session', async () => {
     const id = '66666666-6666-6666-6666-666666666666'
     const checkout = await makeWorkspace(id)
     await mkdir(join(checkout, 'node_modules', 'left-pad'), { recursive: true })
@@ -172,14 +172,76 @@ describe('chat worker workspace retention', () => {
       claims: claimsFor('idle', new Date(Date.now() - 4 * DAY).toISOString()),
     })
     expect(report.removed).toHaveLength(0)
-    expect(report.pruned.map((item) => item.path).sort()).toEqual(
-      [join(checkout, 'dist'), join(checkout, 'node_modules')].sort())
-    await expect(lstat(join(checkout, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(lstat(join(checkout, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(report.pruned).toHaveLength(0)
+    expect(report.held.some((item) => /generator provenance/.test(item.reason))).toBe(true)
+    await expect(readFile(join(checkout, 'node_modules', 'left-pad', 'index.js'), 'utf8')).resolves.toBe('module.exports={}\n')
+    await expect(readFile(join(checkout, 'dist', 'app.js'), 'utf8')).resolves.toBe('bundle\n')
     await expect(readFile(join(checkout, 'src', 'keep.ts'), 'utf8')).resolves.toBe('export {}\n')
     await expect(lstat(join(checkout, '.git'))).resolves.toBeDefined()
-    const marker = JSON.parse(await readFile(join(chatRoot, 'workers', id, '.poise-maintenance.json'), 'utf8')) as { pruned: string[] }
-    expect(marker.pruned.sort()).toEqual(['dist', 'node_modules'])
+    await expect(lstat(join(chatRoot, 'workers', id, '.poise-maintenance.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it.each(['tracked', 'untracked', 'ignored'])('keeps %s source under artifact-shaped names', async (kind) => {
+    const checkout = await makeWorkspace('abababab-abab-abab-abab-abababababab')
+    for (const name of ['dist', 'build', 'out', '.venv']) {
+      await mkdir(join(checkout, name), { recursive: true })
+      await writeFile(join(checkout, name, 'unique.txt'), `only copy: ${kind}\n`)
+    }
+    if (kind === 'tracked') {
+      git(checkout, 'add', 'dist', 'build', 'out', '.venv')
+      git(checkout, 'commit', '--quiet', '--no-gpg-sign', '-m', 'source directories')
+      await writeFile(join(checkout, 'dist', 'unique.txt'), 'uncommitted source edit\n')
+    } else if (kind === 'ignored') {
+      await writeFile(join(checkout, '.git', 'info', 'exclude'), '.poise-workspace-owner\ndist/\nbuild/\nout/\n.venv/\n')
+    }
+    await age(checkout, 4 * DAY)
+    const report = await maintenance.runStorageMaintenance({
+      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      claims: claimsFor('idle', new Date(Date.now() - 4 * DAY).toISOString()),
+    })
+    expect(report.pruned).toEqual([])
+    for (const name of ['dist', 'build', 'out', '.venv']) {
+      await expect(readFile(join(checkout, name, 'unique.txt'), 'utf8')).resolves.toBe(
+        kind === 'tracked' && name === 'dist' ? 'uncommitted source edit\n' : `only copy: ${kind}\n`)
+    }
+  })
+
+  it('rechecks claims after taking the lease before tidying an idle workspace', async () => {
+    const checkout = await makeWorkspace('acacacac-acac-acac-acac-acacacacacac')
+    await age(checkout, 4 * DAY)
+    const process = await import('../server/process')
+    const run = vi.spyOn(process, 'runFile')
+    let reads = 0
+    const report = await maintenance.runStorageMaintenance({
+      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      claims: () => [{ sessionId: 'session-1', status: 'idle', updatedAt: new Date(Date.now() - 4 * DAY).toISOString(), openTurn: ++reads > 1, queued: false }],
+    })
+    expect(report.held.some((item) => /started or queued/.test(item.reason))).toBe(true)
+    expect(run.mock.calls.some(([command, args]) => command === 'git' && args[0] === 'gc')).toBe(false)
+    run.mockRestore()
+  })
+
+  it('keeps idle workspace artifacts while another writer holds its lease', async () => {
+    const checkout = await makeWorkspace('adadadad-adad-adad-adad-adadadadadad')
+    await mkdir(join(checkout, 'node_modules'), { recursive: true })
+    await writeFile(join(checkout, 'node_modules', 'unique.txt'), 'in use\n')
+    await age(checkout, 4 * DAY)
+    const { CheckoutLease, canonicalCheckout } = await import('../server/chat/checkout-lock')
+    const lease = new CheckoutLease(canonicalCheckout(checkout), {
+      ownerKind: 'poise:chat', ownerId: 'other-worker', ownerLabel: 'Other worker', instance: 'storage-test',
+    })
+    expect(lease.tryAcquire().acquired).toBe(true)
+    try {
+      const report = await maintenance.runStorageMaintenance({
+        now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+        claims: claimsFor('idle', new Date(Date.now() - 4 * DAY).toISOString()),
+      })
+      expect(report.pruned).toEqual([])
+      expect(report.held.some((item) => /lease is busy/.test(item.reason))).toBe(true)
+      await expect(readFile(join(checkout, 'node_modules', 'unique.txt'), 'utf8')).resolves.toBe('in use\n')
+    } finally {
+      lease.release()
+    }
   })
 
   it.each([
