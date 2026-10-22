@@ -23,6 +23,9 @@ interface Controls {
   hosts: AdapterHost[]
   starts: AdapterStartOptions[]
   failResumeWith?: string
+  failPromptTimes: number
+  failPromptError: string
+  failPromptWithTool: boolean
 }
 let controls: Controls
 
@@ -43,6 +46,11 @@ class FakeMuse implements Adapter {
   }
   async prompt(turnId: string, input: PromptInput) {
     this.inputs.push(input)
+    if (this.controls.failPromptTimes > 0) {
+      this.controls.failPromptTimes -= 1
+      if (this.controls.failPromptWithTool) this.host.emit({ type: 'tool.started', turnId, id: `${turnId}:tool1`, kind: 'execute', title: 'rm -rf /tmp/probe' })
+      return { stopReason: 'error' as const, error: this.controls.failPromptError }
+    }
     this.host.emit({ type: 'text.delta', turnId, messageId: `${turnId}:m1`, delta: `echo: ${input.text.slice(0, 200)}` })
     return { stopReason: 'end_turn' as const }
   }
@@ -66,6 +74,7 @@ async function until(check: () => boolean) {
   throw new Error('fixture state deadline')
 }
 const ofType = (events: ChatEnvelope[], id: string, type: string) => events.filter((e) => e.sessionId === id && e.event.type === type).map((e) => e.event as never as Record<string, never>)
+const restartNotes = (events: ChatEnvelope[], id: string) => ofType(events, id, 'error').filter((event) => String(event.message).includes('restarted') && String(event.message).includes("credentials changed"))
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'poise-muse-stale-'))
@@ -83,7 +92,7 @@ beforeEach(async () => {
   git('config', 'core.hooksPath', '/dev/null')
   git('commit', '--quiet', '--allow-empty', '-m', 'fixture')
   git('branch', 'topic')
-  controls = { adapters: [], hosts: [], starts: [] }
+  controls = { adapters: [], hosts: [], starts: [], failPromptTimes: 0, failPromptError: '', failPromptWithTool: false }
   runtime = new Runtime({
     instance: `muse-stale:${randomUUID()}`,
     instanceLabel: 'test',
@@ -97,13 +106,19 @@ beforeEach(async () => {
 afterEach(async () => { await runtime?.stop(); await pause(30) })
 afterAll(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
 
-async function createMuse() {
-  const record = await runtime.create({ agent: 'muse', model: MUSE_MODEL, repo: 'fixture/repo', branch: { existing: 'topic' } })
+async function createMuse(branch: { existing: string } | { new: string } = { existing: 'topic' }) {
+  const record = await runtime.create({ agent: 'muse', model: MUSE_MODEL, repo: 'fixture/repo', branch })
   await until(() => runtime.get(record.id)?.status === 'idle')
   return record.id
 }
 
-it('restarts a Muse chat on a fresh native session when its old reasoning was issued to another caller', async () => {
+async function firstTurn(events: ChatEnvelope[], id: string, text = 'first task about alpha') {
+  await runtime.prompt(id, { text, attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 1)
+  await until(() => runtime.get(id)?.status === 'idle')
+}
+
+it('restarts a Muse chat on a fresh native session when resume fails with the stale-caller 400', async () => {
   const events: ChatEnvelope[] = []
   runtime.on('event', (event) => events.push(event))
   const id = await createMuse()
@@ -112,9 +127,7 @@ it('restarts a Muse chat on a fresh native session when its old reasoning was is
   const checkoutBefore = before.checkout
   const branchBefore = before.branch.name
 
-  await runtime.prompt(id, { text: 'first task about alpha', attachments: [], mentions: [] })
-  await until(() => ofType(events, id, 'turn.finished').length === 1)
-  await until(() => runtime.get(id)?.status === 'idle')
+  await firstTurn(events, id)
 
   controls.failResumeWith = STALE_ERROR
   controls.adapters[0].alive = false
@@ -145,19 +158,123 @@ it('restarts a Muse chat on a fresh native session when its old reasoning was is
   expect(freshInput).toContain('Continue from here.')
 
   // The transcript shows the restart line once, and keeps its history.
-  const restartLines = ofType(events, id, 'error').filter((event) => String(event.message).includes('restarted') && String(event.message).includes("credentials changed"))
-  expect(restartLines).toHaveLength(1)
-  expect(String(restartLines[0].message)).toContain('Muse')
+  const notes = restartNotes(events, id)
+  expect(notes).toHaveLength(1)
+  expect(String(notes[0].message)).toContain('Muse')
   expect(ofType(events, id, 'text.delta').length).toBeGreaterThanOrEqual(2)
-})
+}, 60_000)
+
+it('recovers inside the turn when the resumed session fails with the stale-caller 400', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse({ new: 'stale-work' })
+  const before = runtime.get(id)!
+  const nativeBefore = before.nativeSessionId!
+  expect(before.branch).toMatchObject({ name: 'chat/stale-work', origin: 'new' })
+  expect(before.branch.baseSha).toBeTruthy()
+
+  await firstTurn(events, id)
+
+  controls.failPromptTimes = 1
+  controls.failPromptError = STALE_ERROR
+  controls.adapters[0].alive = false
+  await runtime.prompt(id, { text: 'second task about beta', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+  await until(() => runtime.get(id)?.status === 'idle')
+
+  // One turn: the retry reuses the turn id, so no second turn.started.
+  expect(ofType(events, id, 'turn.started')).toHaveLength(2)
+  const finished = ofType(events, id, 'turn.finished').at(-1) as unknown as { stopReason: string }
+  expect(finished.stopReason).toBe('end_turn')
+
+  // Resume succeeded; the failure came from the turn, then a fresh session ran the retry.
+  expect(controls.starts).toHaveLength(3)
+  expect(controls.starts[1]).toMatchObject({ resume: nativeBefore })
+  expect(controls.starts[2]).not.toHaveProperty('resume')
+  const after = runtime.get(id)!
+  expect(after.checkout).toBe(before.checkout)
+  expect(after.branch).toMatchObject({ name: 'chat/stale-work', origin: 'new', baseSha: before.branch.baseSha })
+  expect(after.nativeSessionId).toBeTruthy()
+  expect(after.nativeSessionId).not.toBe(nativeBefore)
+  expect(after.queuedHandoff).toBeUndefined()
+
+  const freshInput = controls.adapters[2].inputs[0].text
+  expect(freshInput).toContain('[Restarted Muse session')
+  expect(freshInput).toContain('[Current task]')
+  expect(freshInput).toContain('first task about alpha')
+  expect(freshInput).toContain('second task about beta')
+  expect(restartNotes(events, id)).toHaveLength(1)
+}, 60_000)
+
+it('recovers when a live Muse process hits the stale-caller 400 with no resume at all', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse()
+  const nativeBefore = runtime.get(id)!.nativeSessionId!
+
+  await firstTurn(events, id)
+
+  controls.failPromptTimes = 1
+  controls.failPromptError = STALE_ERROR
+  await runtime.prompt(id, { text: 'second task', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+  await until(() => runtime.get(id)?.status === 'idle')
+
+  const finished = ofType(events, id, 'turn.finished').at(-1) as unknown as { stopReason: string }
+  expect(finished.stopReason).toBe('end_turn')
+  expect(controls.starts).toHaveLength(2)
+  expect(controls.starts[1]).not.toHaveProperty('resume')
+  expect(runtime.get(id)!.nativeSessionId).not.toBe(nativeBefore)
+  expect(restartNotes(events, id)).toHaveLength(1)
+}, 60_000)
+
+it('does not re-run the prompt when the failed attempt had already run tools', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse()
+  await firstTurn(events, id)
+
+  controls.failPromptTimes = 1
+  controls.failPromptError = STALE_ERROR
+  controls.failPromptWithTool = true
+  controls.adapters[0].alive = false
+  await runtime.prompt(id, { text: 'second task', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+
+  const finished = ofType(events, id, 'turn.finished').at(-1) as unknown as { stopReason: string, error?: string }
+  expect(finished.stopReason).toBe('error')
+  expect(finished.error).toContain('not re-run')
+  // The session still restarted fresh for the next prompt, which keeps the summary.
+  expect(controls.starts).toHaveLength(3)
+  expect(controls.adapters[2].inputs).toHaveLength(0)
+  expect(runtime.get(id)!.queuedHandoff).toContain('[Restarted Muse session')
+  expect(restartNotes(events, id)).toHaveLength(1)
+}, 60_000)
+
+it('surfaces a second consecutive stale-caller failure instead of restarting again', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse()
+  await firstTurn(events, id)
+
+  controls.failPromptTimes = 2
+  controls.failPromptError = STALE_ERROR
+  controls.adapters[0].alive = false
+  await runtime.prompt(id, { text: 'second task', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+
+  const finished = ofType(events, id, 'turn.finished').at(-1) as unknown as { stopReason: string, error?: string }
+  expect(finished.stopReason).toBe('error')
+  expect(finished.error).toContain('encrypted_content')
+  expect(controls.starts).toHaveLength(3)
+  expect(restartNotes(events, id)).toHaveLength(1)
+}, 60_000)
 
 it('leaves any other Muse resume error to behave as before', async () => {
   const events: ChatEnvelope[] = []
   runtime.on('event', (event) => events.push(event))
   const id = await createMuse()
-  await runtime.prompt(id, { text: 'first task', attachments: [], mentions: [] })
-  await until(() => ofType(events, id, 'turn.finished').length === 1)
-  await until(() => runtime.get(id)?.status === 'idle')
+  await firstTurn(events, id, 'first task')
 
   controls.failResumeWith = 'Muse failed to start: session store unavailable'
   controls.adapters[0].alive = false
@@ -168,6 +285,26 @@ it('leaves any other Muse resume error to behave as before', async () => {
   expect(finished.stopReason).toBe('error')
   expect(finished.error).toContain('session store unavailable')
   expect(controls.starts).toHaveLength(2)
-  const restartLines = ofType(events, id, 'error').filter((event) => String(event.message).includes('restarted') && String(event.message).includes("credentials changed"))
-  expect(restartLines).toHaveLength(0)
-})
+  expect(restartNotes(events, id)).toHaveLength(0)
+}, 60_000)
+
+it('leaves any other Muse turn error to behave as before', async () => {
+  const events: ChatEnvelope[] = []
+  runtime.on('event', (event) => events.push(event))
+  const id = await createMuse()
+  const nativeBefore = runtime.get(id)!.nativeSessionId!
+  await firstTurn(events, id, 'first task')
+
+  controls.failPromptTimes = 1
+  controls.failPromptError = 'Muse: provider returned 503'
+  controls.adapters[0].alive = false
+  await runtime.prompt(id, { text: 'second task', attachments: [], mentions: [] })
+  await until(() => ofType(events, id, 'turn.finished').length === 2)
+
+  const finished = ofType(events, id, 'turn.finished').at(-1) as unknown as { stopReason: string, error?: string }
+  expect(finished.stopReason).toBe('error')
+  expect(finished.error).toContain('503')
+  expect(controls.starts).toHaveLength(2)
+  expect(runtime.get(id)!.nativeSessionId).toBe(nativeBefore)
+  expect(restartNotes(events, id)).toHaveLength(0)
+}, 60_000)

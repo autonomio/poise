@@ -72,7 +72,7 @@ import { createClaudeAdapter } from './adapters/claude'
 import { createCodexAdapter } from './adapters/codex'
 import { createGrokAdapter } from './adapters/grok'
 import { createMuseAdapter } from './adapters/muse'
-import type { Adapter, AdapterHost, PermissionRequest, QuestionAnswers, QuestionRequest } from './adapters/types'
+import type { Adapter, AdapterHost, PermissionRequest, QuestionAnswers, QuestionRequest, TurnResult } from './adapters/types'
 import { skippedNotice, type ResolvedServer, type Skipped } from '../extensions/types'
 import { SELF_UPDATE_REPOSITORY, SelfUpdateBridgeError, SelfUpdateUnavailableError, UUID_PATTERN, type SelfUpdateBridge } from '../self-update-bridge'
 import * as finishOutbox from '../self-update-outbox'
@@ -93,6 +93,9 @@ const PROVIDER_AGENT: Record<string, AgentId> = { claude: 'claude', codex: 'code
 const AGENT_COMMAND: Record<AgentId, string> = { claude: 'claude', codex: 'codex', grok: 'grok', muse: 'muse' }
 const AGENT_LABEL: Record<AgentId, string> = { claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build', muse: 'Muse' }
 const alertContext = (record: SessionRecord): ChatSessionAlertContext => ({ sessionId: record.id, agent: AGENT_LABEL[record.agent], title: record.title })
+/** Transcript note when a Muse native session is restarted fresh because its
+ *  reasoning was encrypted for a previous credential holder. */
+const MUSE_RESTART_NOTE = 'Muse agent session was restarted on a fresh native session because Muse\'s credentials changed; the conversation continues from a summary.'
 /** The Switchboard's own chat (docs/Switchboard.md); a fork of it is an ordinary chat. */
 const isSwitchboardChat = (record: SessionRecord): boolean => record.context?.kind === 'switchboard' && !record.forkedFrom
 
@@ -1012,12 +1015,7 @@ export class ChatRuntime extends EventEmitter {
         if (record.agent !== 'muse' || !('resume' in startOptions) || !isStaleMuseCaller(error) || signal.aborted) throw error
         try { await this.stopProcess(session) } catch { throw error }
         signal.throwIfAborted()
-        if (!record.queuedHandoff && storage.findEvent(record.id, (event) => event.type === 'text.delta')) {
-          record.queuedHandoff = this.restartSummary(record)
-        }
-        record.nativeSessionId = undefined
-        this.saveRecord(session)
-        this.emit_(record.id, { type: 'error', message: 'Muse agent session was restarted on a fresh native session because Muse\'s credentials changed; the conversation continues from a summary.', recoverable: true })
+        this.clearStaleMuseSession(session)
         adapter = this.adapters[record.agent](this.hostFor(session))
         session.adapter = adapter
         adapter.onExit((code, signal) => this.onAdapterExit(session, adapter, code, signal))
@@ -1374,7 +1372,7 @@ export class ChatRuntime extends EventEmitter {
     const files = new Set(recent.flatMap(turn => [...turn.files]))
     const lines = [
       `[Restarted ${AGENT_LABEL[record.agent]} session "${record.title}" in ${record.repo} on branch ${record.branch.name}]`,
-      'The previous native session could not be resumed because Muse\'s credentials changed. Nothing from it carried over except this summary.',
+      'The previous native session could not be used because Muse\'s credentials changed. Nothing from it carried over except this summary.',
       '',
       'Recent turns:',
       ...recent.map((t, i) => `${i + 1}. User: ${clip(t.prompt, 600)}\n   Agent: ${clip(t.text.trim(), 900)}`),
@@ -1382,6 +1380,48 @@ export class ChatRuntime extends EventEmitter {
     if (files.size) lines.push('', `Files the previous session changed: ${[...files].slice(0, 40).join(', ')}`)
     lines.push('', 'Continue from here.')
     return lines.join('\n')
+  }
+
+  /** Abandon a Muse native session whose reasoning was encrypted for a
+   *  previous credential holder: seed the restart summary, forget the native
+   *  id, and note the restart once in the transcript. Clearing the id cannot
+   *  retrigger branch creation: the branch was prepared by the earlier start
+   *  that produced the abandoned id. Returns the seeded summary, if any. */
+  private clearStaleMuseSession(session: LiveSession): string | undefined {
+    const record = session.record
+    const staleId = record.nativeSessionId
+    let summary: string | undefined
+    if (!record.queuedHandoff && storage.findEvent(record.id, (event) => event.type === 'text.delta')) {
+      summary = this.restartSummary(record)
+      record.queuedHandoff = summary
+    }
+    record.nativeSessionId = undefined
+    this.saveRecord(session)
+    this.emit_(record.id, { type: 'error', message: MUSE_RESTART_NOTE, recoverable: true })
+    this.emit('log', `[chat ${record.id.slice(0, 8)}] Muse native session ${staleId} abandoned (reasoning issued to another caller); restarting fresh`)
+    return summary
+  }
+
+  /** Recover a Muse turn that failed only because its native session is
+   *  unusable under the current credentials, inside this same turn: stop the
+   *  poisoned process, start fresh in the same checkout under the turn's
+   *  lease, and — when the failed attempt ran nothing — run the prompt there
+   *  once with the restart summary. Runs at most once per turn; a second
+   *  consecutive failure surfaces as an ordinary error. */
+  private async recoverStaleMuseTurn(session: LiveSession, turn: RunningTurn, lease: CheckoutLease, promptInput: PromptInput): Promise<TurnResult> {
+    await this.stopProcess(session)
+    turn.abort.signal.throwIfAborted()
+    const summary = this.clearStaleMuseSession(session)
+    await this.startSession(session, { lease })
+    turn.abort.signal.throwIfAborted()
+    // The failed attempt already ran tools, asked permissions or asked
+    // questions: re-running the prompt could repeat side effects, so the
+    // fresh session and its summary stand ready for the next prompt instead.
+    if (storage.findEvent(session.record.id, (event) => (event.type === 'tool.started' || event.type === 'permission.requested' || event.type === 'question.asked') && event.turnId === turn.id)) {
+      return { stopReason: 'error', error: 'The prompt was not re-run because the failed attempt had already run tools; the Muse session was restarted and the next prompt continues from a summary.' }
+    }
+    const retry = summary ? { ...promptInput, text: `${summary}\n\n[Current task]\n${promptInput.text}` } : promptInput
+    return session.adapter!.prompt(turn.id, retry, turn.abort.signal)
   }
 
   // ── Poise self-improvement ─────────────────────────────────────────────
@@ -2169,9 +2209,18 @@ export class ChatRuntime extends EventEmitter {
       // person's request — except a Switchboard relay, which is the person's
       // own answer.
       const personRelay = turn.source?.kind === 'poise' && turn.source.name === SWITCHBOARD_PERSON
-      const response = adapter.prompt(turn.id, withAutoMergeInstructions({ ...adapterInput, text: controlContext ? `${controlContext}\n\n[Request]\n${expanded}` : expanded, memories: readMemories().text }, record.autoMerge, turn.implementsChange, turn.source && !personRelay ? 'source' : 'person'), turn.abort.signal)
+      const promptInput = withAutoMergeInstructions({ ...adapterInput, text: controlContext ? `${controlContext}\n\n[Request]\n${expanded}` : expanded, memories: readMemories().text }, record.autoMerge, turn.implementsChange, turn.source && !personRelay ? 'source' : 'person')
+      const response = adapter.prompt(turn.id, promptInput, turn.abort.signal)
       turn.releasePrompt()
-      const result = await response
+      let result = await response
+      // A Muse turn that failed only because its native session's reasoning
+      // was encrypted for a previous credential holder restarts once, inside
+      // this same turn, on a fresh native session.
+      if (record.agent === 'muse' && result.stopReason === 'error' && result.error && isStaleMuseCaller(result.error)
+        && !turn.stopping && !turn.abort.signal.aborted && !turn.failure) {
+        result = await this.recoverStaleMuseTurn(session, turn, lease, promptInput)
+        adapter = session.adapter!
+      }
       agentSettled = true
       if (record.queuedHandoff && result.stopReason === 'end_turn') { record.queuedHandoff = undefined; this.saveRecord(session) }
       stopReason = turn.stopping || turn.abort.signal.aborted ? 'cancelled' : result.stopReason
