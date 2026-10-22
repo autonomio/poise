@@ -675,4 +675,132 @@ describe('the workspace Manager through the native control', () => {
       expect(context).toContain("are the person's. Do not use the api operation for them")
     }
   })
+
+  it('refuses padded IDs the same as the IDs themselves', async () => {
+    const boss = await workspaceManager()
+    const stranger = await manager('grok', 'Stranger')
+    const creator = await manager('grok', 'Creator')
+    const created = await command(creator.id, { operation: 'create', title: 'Worker', task: 'Wait' })
+    const worker = (created.session as { id: string }).id
+    await control.tick()
+    await until(() => prompts.has(worker))
+    for (const [self, operation, error, extra] of [
+      [stranger.id, 'steer', 'a chat cannot steer itself', { text: 'hi' }],
+      [stranger.id, 'answer', 'a chat cannot answer its own question', { questionId: randomUUID(), answers: {} }],
+      [stranger.id, 'stop', 'a chat cannot stop itself', {}],
+      [boss.id, 'steer', 'a chat cannot steer itself', { text: 'hi' }],
+      [boss.id, 'stop', 'a chat cannot stop itself', {}],
+    ] as const) {
+      for (const padded of [`${self} `, `\n${self}\n`]) {
+        const refused = await request(self, { operation, sessionId: padded, ...extra })
+        expect(refused.status).toBe(403)
+        expect((await refused.json() as { error: string }).error).toBe(error)
+      }
+    }
+    const started = await fetch(`${origin}/api/chat/switchboard/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: '{}' })
+    expect(started.status).toBe(200)
+    const board = ((await started.json()) as { sessionId: string }).sessionId
+    for (const operation of ['send', 'steer', 'answer', 'stop'] as const) {
+      const refused = await request(boss.id, { operation, sessionId: `${board} `, text: 'hi', questionId: randomUUID(), answers: {} })
+      expect(refused.status).toBe(403)
+      expect((await refused.json() as { error: string }).error).toBe('the Switchboard takes messages only from Poise')
+    }
+    const supervised = await request(boss.id, { operation: 'supervise', sessionIds: [` ${board}`], intervalMinutes: 10, instruction: 'Watch' })
+    expect(supervised.status).toBe(403)
+    expect((await supervised.json() as { error: string }).error).toBe('the Switchboard takes messages only from Poise')
+    // Padding a legitimate target still reaches it: the checks trim.
+    expect(await command(boss.id, { operation: 'steer', sessionId: `${worker} `, text: 'Hold on' })).toMatchObject({ steered: true })
+    expect(await command(creator.id, { operation: 'steer', sessionId: `\n${worker}`, text: 'Hold on' })).toMatchObject({ steered: true })
+  }, 60_000)
+
+  it('reports others completely past a 5,000-event transcript page', async () => {
+    const boss = await workspaceManager()
+    const creator = await manager('grok', 'Creator')
+    const created = await command(creator.id, { operation: 'create', title: 'Worker', task: 'Wait for decisions' })
+    const worker = (created.session as { id: string }).id
+    await control.tick()
+    await until(() => prompts.has(worker))
+    const notices = () => store.inbox(instance, creator.id).map(m => JSON.parse(m.body) as { kind: string, type?: string, others?: Array<{ type: string, by: string, seq: number }> })
+    const asked = hosts.get(worker)!.askQuestion({ questions: [{ id: 'a', question: 'First?', options: [], freeText: true, multiSelect: false }] })
+    void asked.catch(() => undefined)
+    await until(() => notices().some(n => n.kind === 'worker_event' && n.type === 'question.asked'))
+    for (let i = 0; i < 5100; i++) hosts.get(worker)!.emit({ type: 'text.delta', turnId: 'turn', messageId: 'message', delta: 'x' })
+    await command(boss.id, { operation: 'steer', sessionId: worker, text: 'Hold on' })
+    await command(boss.id, { operation: 'answer', sessionId: worker, questionId: questionIdOf(worker), answers: { a: 'left' } })
+    await expect(asked).resolves.toEqual({ a: 'left' })
+    finishes.get(worker)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(worker)?.status === 'idle')
+    await until(() => notices().some(n => n.kind === 'worker_event' && n.type === 'turn.finished'))
+    const finished = notices().filter(n => n.kind === 'worker_event' && n.type === 'turn.finished').at(-1)!
+    expect(finished.others!.map(o => [o.type, o.by])).toEqual([
+      ['steer.sent', 'the workspace Manager'],
+      ['question.answered', 'the workspace Manager'],
+      ['steer.sent', 'Poise'],
+    ])
+    // A Manager stop on the triggering turn itself is reported, however long
+    // the turn ran before it.
+    const seen = (prompts.get(worker) ?? []).length
+    runtime.prompt(worker, { text: 'Continue the authorized task', attachments: [], mentions: [] })
+    await until(() => (prompts.get(worker) ?? []).length > seen)
+    for (let i = 0; i < 5100; i++) hosts.get(worker)!.emit({ type: 'text.delta', turnId: 'turn', messageId: 'message', delta: 'x' })
+    await command(boss.id, { operation: 'stop', sessionId: worker })
+    await until(() => runtime.get(worker)?.status === 'idle')
+    await until(() => notices().filter(n => n.kind === 'worker_event' && n.type === 'turn.finished').length === 2)
+    const stopped = notices().filter(n => n.kind === 'worker_event' && n.type === 'turn.finished').at(-1)!
+    expect(stopped.others).toEqual([{ type: 'turn.finished', by: 'the workspace Manager', seq: expect.any(Number) }])
+  }, 120_000)
+
+  it('seeds the notice cursor from a full inbox instead of capping the scan', async () => {
+    const creator = await manager('grok', 'Creator')
+    const created = await command(creator.id, { operation: 'create', title: 'Worker', task: 'Wait for decisions' })
+    const worker = (created.session as { id: string }).id
+    await control.tick()
+    await until(() => prompts.has(worker))
+    store.pauseDelivery(instance, creator.id)
+    for (let i = 0; i < 10000; i++) store.message(instance, creator.id, worker, `filler ${i}`, `filler:${i}`)
+    // The filler buries the notices past one inbox page, so readiness polls
+    // the row count and the rows are paged once at the end.
+    const rows = () => (database.db.prepare('SELECT COUNT(*) AS n FROM chat_control_inbox WHERE instance = ? AND recipient = ?').get(instance, creator.id) as { n: number }).n
+    const notices = () => {
+      const parsed: Array<{ kind: string, type?: string, others?: Array<{ type: string, by: string, seq: number }> }> = []
+      let after = 0
+      for (;;) {
+        const page = store.inbox(instance, creator.id, after)
+        if (!page.length) break
+        for (const row of page) {
+          after = row.seq
+          try {
+            const body = JSON.parse(row.body) as { kind: string, type?: string, others?: Array<{ type: string, by: string, seq: number }> }
+            if (body.kind === 'worker_event') parsed.push(body)
+          } catch { /* filler */ }
+        }
+        if (page.length < 100) break
+      }
+      return parsed
+    }
+    const first = hosts.get(worker)!.askQuestion({ questions: [{ id: 'a', question: 'First?', options: [], freeText: true, multiSelect: false }] })
+    void first.catch(() => undefined)
+    await until(() => rows() === 10001)
+    const [firstId] = runtime.get(worker)!.pendingRequests
+    runtime.answerQuestion(worker, firstId, { a: 'person says left' })
+    await expect(first).resolves.toEqual({ a: 'person says left' })
+    const second = hosts.get(worker)!.askQuestion({ questions: [{ id: 'b', question: 'Second?', options: [], freeText: true, multiSelect: false }] })
+    void second.catch(() => undefined)
+    await until(() => rows() === 10002)
+    const [secondId] = runtime.get(worker)!.pendingRequests
+    runtime.answerQuestion(worker, secondId, { b: 'person says right' })
+    await expect(second).resolves.toEqual({ b: 'person says right' })
+    finishes.get(worker)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(worker)?.status === 'idle')
+    await until(() => rows() === 10003)
+    // The second question's notice already reported the first answer; the
+    // turn's notice carries only the second one, not both again.
+    const seen = notices()
+    const asked = seen.filter(n => n.type === 'question.asked')
+    expect(asked).toHaveLength(2)
+    expect(asked[0].others).toEqual([])
+    expect(asked[1].others!.map(o => [o.type, o.by])).toEqual([['question.answered', 'the person']])
+    const answered = runtime.events(worker, 0).events.find(e => e.event.type === 'question.answered' && e.event.id === secondId)!
+    expect(seen.find(n => n.type === 'turn.finished')!.others).toEqual([{ type: 'question.answered', by: 'the person', seq: answered.seq }])
+  }, 120_000)
 })

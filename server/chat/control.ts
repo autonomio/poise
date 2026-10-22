@@ -86,6 +86,11 @@ function text(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `${name} is required`)
   return value.trim()
 }
+/** The session ID execute() will resolve: trimmed like text(), but never
+ *  throws, so malformed input still falls through to execute's validation. */
+function targetId(value: unknown): string | undefined {
+  return typeof value === 'string' ? value.trim() : undefined
+}
 function sequence(value: unknown): number {
   if (value === undefined) return 0
   if (!Number.isSafeInteger(value) || Number(value) < 0) throw new HttpError(400, 'afterSeq must be a nonnegative integer')
@@ -167,32 +172,62 @@ export class ChatControl {
       // turn: what anyone but the creating chat did since its previous
       // notice for this worker, at most 20, then `more`.
       const previous = this.lastForwardedSeq(parent.manager, envelope.sessionId)
-      const actions = this.runtime.events(envelope.sessionId, previous).events
-        .flatMap(action => { const other = otherAction(action, parent.manager); return other ? [other] : [] })
+      const actions = this.workerActions(envelope.sessionId, parent.manager, previous, envelope.seq)
       store.message(this.runtime.instance, parent.manager, envelope.sessionId,
         JSON.stringify({ kind: 'worker_event', sessionId: envelope.sessionId, seq: envelope.seq, type: event.type,
           detail: JSON.stringify(event).slice(0, 8192), read: 'Use read with afterSeq before this event for the complete transcript.',
           others: actions.slice(0, 20), ...(actions.length > 20 ? { more: actions.length - 20 } : {}) }), `worker:${envelope.sessionId}:${envelope.seq}`,
         worker ? actorOf(worker) : undefined)
+      this.forwardedSeq.set(`${parent.manager}:${envelope.sessionId}`, Math.max(previous, envelope.seq))
     }
   }
 
-  /** The newest worker_event seq for one worker in its creating chat's inbox. */
+  /** Other actors' actions in one notice window: every qualifying event after
+   *  the previous notice, up to and including the triggering event. Pages
+   *  past the 5,000-event transcript page, so a long turn cannot silently
+   *  truncate the notice. */
+  private workerActions(worker: string, creator: string, previous: number, throughSeq: number): Array<{ type: string, by: string, seq: number }> {
+    const actions: Array<{ type: string, by: string, seq: number }> = []
+    let cursor = previous
+    for (;;) {
+      const page = this.runtime.events(worker, cursor)
+      if (!page.events.length) break
+      for (const action of page.events) {
+        if (action.seq > throughSeq) return actions
+        cursor = action.seq
+        const other = otherAction(action, creator)
+        if (other) actions.push(other)
+      }
+      if (!page.truncated) break
+    }
+    return actions
+  }
+
+  /** The newest worker_event seq per creating chat and worker. The inbox
+   *  seeds it on first use after a restart; every forward then moves it, so
+   *  a large inbox is scanned once instead of capped per notice. */
+  private readonly forwardedSeq = new Map<string, number>()
   private lastForwardedSeq(creator: string, worker: string): number {
-    let seq = 0, after = 0
-    for (let guard = 0; guard < 100; guard++) {
+    const key = `${creator}:${worker}`
+    const known = this.forwardedSeq.get(key)
+    if (known !== undefined) return known
+    let after = 0
+    for (;;) {
       const page = store.inbox(this.runtime.instance, creator, after)
       if (!page.length) break
       for (const row of page) {
         after = row.seq
         try {
           const body = JSON.parse(row.body) as { kind?: unknown, sessionId?: unknown, seq?: unknown }
-          if (body.kind === 'worker_event' && body.sessionId === worker && typeof body.seq === 'number') seq = Math.max(seq, body.seq)
+          if (body.kind === 'worker_event' && typeof body.sessionId === 'string' && typeof body.seq === 'number') {
+            const seen = `${creator}:${body.sessionId}`
+            this.forwardedSeq.set(seen, Math.max(this.forwardedSeq.get(seen) ?? 0, body.seq))
+          }
         } catch { /* not a worker notice */ }
       }
       if (page.length < 100) break
     }
-    return seq
+    return this.forwardedSeq.get(key) ?? 0
   }
   private readonly onDeleted = (id: string) => {
     for (const { child, manager } of store.children(this.runtime.instance)) {
@@ -333,9 +368,13 @@ export class ChatControl {
    *  Switchboard observes and reports; only it reports. */
   private authorize(id: string, operation: string, command: Record<string, unknown>): void {
     if (operation === 'create' && command.role !== undefined) throw new HttpError(403, 'A Manager is created by the person in the New session dialog.')
-    if (['steer', 'answer', 'stop'].includes(operation) && typeof command.sessionId === 'string') {
+    // Every comparison below uses the trimmed ID execute() will resolve, so
+    // padding an ID with whitespace cannot dodge the self, authority or
+    // Switchboard checks.
+    const target = targetId(command.sessionId)
+    if (['steer', 'answer', 'stop'].includes(operation) && target !== undefined) {
       // The self-target check runs before the authority check.
-      if (command.sessionId === id) {
+      if (target === id) {
         if (operation === 'steer') throw new HttpError(403, 'a chat cannot steer itself')
         if (operation === 'answer') throw new HttpError(403, 'a chat cannot answer its own question')
         throw new HttpError(403, 'a chat cannot stop itself')
@@ -344,7 +383,7 @@ export class ChatControl {
       // its own workers. An unknown target refuses the same way: acting on
       // it is outside the caller's reach either way.
       const manager = this.runtime.get(id)?.role === 'manager'
-      const own = store.children(this.runtime.instance).some(c => c.child === command.sessionId && c.manager === id)
+      const own = store.children(this.runtime.instance).some(c => c.child === target && c.manager === id)
       if (!manager && !own) {
         if (operation === 'steer') throw new HttpError(403, 'only the workspace Manager or the chat that created this chat can steer it')
         if (operation === 'answer') throw new HttpError(403, 'only the workspace Manager or the chat that created this chat can answer its questions')
@@ -357,8 +396,8 @@ export class ChatControl {
       if (!switchboard.isSwitchboard(id)) throw new HttpError(403, 'only the Switchboard chat can use switchboard operations')
     } else if (switchboard.isSwitchboard(id) && !SWITCHBOARD_READS.has(operation)) {
       throw new HttpError(403, `the Switchboard observes and reports; it cannot use ${operation}`)
-    } else if ((['send', 'steer', 'answer', 'stop'].includes(operation) && typeof command.sessionId === 'string' && switchboard.isSwitchboard(command.sessionId))
-      || (operation === 'supervise' && Array.isArray(command.sessionIds) && command.sessionIds.some(target => typeof target === 'string' && switchboard.isSwitchboard(target)))) {
+    } else if ((['send', 'steer', 'answer', 'stop'].includes(operation) && target !== undefined && switchboard.isSwitchboard(target))
+      || (operation === 'supervise' && Array.isArray(command.sessionIds) && command.sessionIds.some(sessionId => { const supervised = targetId(sessionId); return supervised !== undefined && switchboard.isSwitchboard(supervised) }))) {
       throw new HttpError(403, 'the Switchboard takes messages only from Poise')
     }
   }
