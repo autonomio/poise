@@ -244,8 +244,8 @@ describe('one session per subject', () => {
   it('keeps the subject and clears the transcript on /reset', async () => {
     const chat = await import('../server/chat')
     vi.mocked(chat.listChatHistory).mockResolvedValueOnce([
-      { id: 'a'.repeat(32), session_id: 'poise.card.7', prompt: 'first question', started_at: '2026-10-20T10:00:00.000Z', status: 'completed', response: null, behavior: 'chat', error: '' },
-      { id: 'b'.repeat(32), session_id: 'poise.card.7', prompt: 'second question', started_at: '2026-10-20T10:05:00.000Z', status: 'completed', response: null, behavior: 'chat', error: '' },
+      { id: 'a'.repeat(32), session_id: 'poise.card.7', prompt: 'first question', started_at: '2026-10-20T10:00:00.000Z', status: 'completed', response: 'abcd1234', behavior: 'chat', error: '' },
+      { id: 'b'.repeat(32), session_id: 'poise.card.7', prompt: 'second question', started_at: '2026-10-20T10:05:00.000Z', status: 'completed', response: 'abcd1234', behavior: 'chat', error: '' },
     ])
     const { session } = await runtime.createForSubject({ agent: 'grok', model: 'grok-4.6-xhigh', subject: card() })
     expect(session.importedFrom).toBe('poise.card.7')
