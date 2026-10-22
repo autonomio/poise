@@ -3,7 +3,7 @@
 // holding their slots. Kept free of runtime imports beyond the clock, which
 // has none, so it can be tested under the node environment.
 
-import type { SessionStatus } from '../server/chat/protocol'
+import type { SessionStatus, StopReason } from '../server/chat/protocol'
 import { shortTime } from './clock'
 
 /** The five dot states: working, finished, failed, needs the person, queued. */
@@ -16,9 +16,11 @@ export interface WorklogDot {
 }
 
 /** A chat's dot from its session record: ongoing states read "since" their
- *  latest change, settled ones read the change's time. */
+ *  latest change, settled ones read the change's time. A live adapter idles
+ *  the chat after a failed turn, so an idle chat whose latest turn failed,
+ *  stopped or was cut still shows Error. */
 export function sessionDot(
-  s: { status: SessionStatus, updatedAt: string, pendingRequests?: string[] },
+  s: { status: SessionStatus, updatedAt: string, pendingRequests?: string[], lastStopReason?: StopReason },
   now: number,
   timeZone: string,
 ): WorklogDot {
@@ -31,6 +33,9 @@ export function sessionDot(
     return { state: 'error', label: moment(s.status === 'interrupted' ? 'Interrupted' : 'Error') }
   }
   if (s.status === 'running' || s.status === 'stopping' || s.status === 'starting') return { state: 'working', label: since('Working') }
+  if (s.status === 'idle' && (s.lastStopReason === 'error' || s.lastStopReason === 'cancelled' || s.lastStopReason === 'interrupted')) {
+    return { state: 'error', label: moment(s.lastStopReason === 'cancelled' ? 'Stopped' : s.lastStopReason === 'interrupted' ? 'Interrupted' : 'Error') }
+  }
   return { state: 'completed', label: moment(s.status === 'closed' ? 'Closed' : 'Completed') }
 }
 

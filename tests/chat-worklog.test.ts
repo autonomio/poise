@@ -3,14 +3,14 @@
 // pinned chats holding their slots.
 
 import { describe, expect, it } from 'vitest'
-import type { SessionStatus } from '../server/chat/protocol'
+import type { SessionStatus, StopReason } from '../server/chat/protocol'
 import { applyWorklogOrder, compareWorklog, sessionDot, type WorklogEntry } from '../src/chat-worklog'
 
 const NOW = Date.parse('2026-10-21T17:00:00Z')
 
 describe('status dots', () => {
-  const dot = (status: SessionStatus, updatedAt = '2026-10-21T16:02:00.000Z', pendingRequests: string[] = []) =>
-    sessionDot({ status, updatedAt, pendingRequests }, NOW, 'Europe/Helsinki')
+  const dot = (status: SessionStatus, updatedAt = '2026-10-21T16:02:00.000Z', pendingRequests: string[] = [], lastStopReason?: StopReason) =>
+    sessionDot({ status, updatedAt, pendingRequests, lastStopReason }, NOW, 'Europe/Helsinki')
 
   it('maps all five states with text labels, never colour alone', () => {
     expect(dot('running')).toEqual({ state: 'working', label: 'Working · since 19:02' })
@@ -29,6 +29,21 @@ describe('status dots', () => {
   it('names interruptions and closed chats for what they are', () => {
     expect(dot('interrupted')).toEqual({ state: 'error', label: 'Interrupted · 19:02' })
     expect(dot('closed')).toEqual({ state: 'completed', label: 'Closed · 19:02' })
+  })
+
+  it('shows Error for an idle chat whose latest turn failed, stopped or was cut', () => {
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'error')).toEqual({ state: 'error', label: 'Error · 19:02' })
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'cancelled')).toEqual({ state: 'error', label: 'Stopped · 19:02' })
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'interrupted')).toEqual({ state: 'error', label: 'Interrupted · 19:02' })
+  })
+
+  it('completes other endings, and lets live states win over a stale failure', () => {
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'end_turn').state).toBe('completed')
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'max_tokens').state).toBe('completed')
+    expect(dot('idle', '2026-10-21T16:02:00.000Z', [], 'refusal').state).toBe('completed')
+    expect(dot('closed', '2026-10-21T16:02:00.000Z', [], 'error')).toEqual({ state: 'completed', label: 'Closed · 19:02' })
+    expect(dot('running', '2026-10-21T16:02:00.000Z', [], 'error').state).toBe('working')
+    expect(dot('waiting', '2026-10-21T16:02:00.000Z', [], 'error').state).toBe('attention')
   })
 
   it('labels the state alone when the change time is not a time', () => {

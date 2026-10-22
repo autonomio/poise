@@ -195,6 +195,8 @@ try {
 } catch { /* the server list still orders the pane */ }
 let orderRestored = false
 function persistWorklog(): void {
+  // Pins for sessions gone from the list are forgotten on the way out.
+  pins = new Set([...pins].filter((id) => sessions.has(id)))
   try {
     localStorage.setItem(PINS_KEY, JSON.stringify([...pins]))
     localStorage.setItem(ORDER_KEY, JSON.stringify(order))
@@ -552,9 +554,10 @@ function compareEntries(a: string, b: string): number {
 function sortOrder(): void {
   // New sessions join the end, deleted ones leave; a restored order keeps its
   // slots, so pins survive a reload, while unpinned chats take change order.
+  // Pins are not pruned here: records arrive one at a time, and a pin whose
+  // session has not been upserted yet must survive until it is seen.
   for (const id of sessions.keys()) if (!order.includes(id)) order.push(id)
   order = order.filter((id) => sessions.has(id))
-  pins = new Set([...pins].filter((id) => sessions.has(id)))
   order = applyWorklogOrder(order, (id) => pins.has(id), compareEntries)
 }
 
@@ -601,6 +604,7 @@ async function readSessions(): Promise<void> {
       if (!seen.has(id) && !e.pending && discoveryAtRequest === discoveryRevision) {
         sessions.delete(id)
         order = order.filter((x) => x !== id)
+        pins.delete(id)
         if (activeId === id) activeId = null
       }
     }
@@ -885,6 +889,7 @@ async function deleteSession(id: string): Promise<void> {
     chatClient.unsubscribe(id)
     sessions.delete(id)
     order = order.filter((x) => x !== id)
+    pins.delete(id)
     if (activeId === id) {
       // Nothing is on screen now; selecting the next session must treat it
       // as a switch (fresh transcript, its own draft), not a no-op.
@@ -1890,7 +1895,8 @@ let lastHeaderHtml = ''
 function renderHeader(): void {
   const html = headerHtml()
   // The live "since" text ticks in place; it must not rebuild the controls.
-  const memo = html.replace(/<span class="chat-h-since" data-since="[^"]*">.*?<\/span>/, '<span class="chat-h-since">')
+  // The anchor stays in the memo, so loading history re-anchors the label.
+  const memo = html.replace(/(<span class="chat-h-since" data-since="[^"]*">).*?(<\/span>)/, '$1$2')
   if (memo === lastHeaderHtml) { updateSinceLabel(); return }
   lastHeaderHtml = memo
   headerEl.hidden = !html

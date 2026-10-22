@@ -437,6 +437,7 @@ export class ChatRuntime extends EventEmitter {
       const interrupted = terminal.stopReason === 'interrupted'
       if (interrupted) record.interruptedTurnId = open.turnId
       record.status = interrupted || terminal.stopReason === 'error' ? 'interrupted' : 'idle'
+      record.lastStopReason = terminal.stopReason
       record.lastSeq = envelope.seq
       storage.saveSession(record)
       this.emit('event', envelope)
@@ -2028,9 +2029,12 @@ export class ChatRuntime extends EventEmitter {
       if (shouldAutoName(record, isFirst, internalTurn(turn.id))) {
         const ref = parseIssueReference(input.text.split('\n')[0] ?? '', record.repo)
         const issueTitle = ref ? await resolveIssueTitle(ref).catch(() => null) : null
-        record.title = deriveSessionTitle(input.text, { repo: record.repo, issueTitle }).slice(0, TITLE_CHARS) || record.title
-        this.saveRecord(session)
-        this.emit_(record.id, { type: 'session.updated', session: record })
+        // A rename that landed during the lookup wins over the derived title.
+        if (shouldAutoName(record, isFirst, internalTurn(turn.id))) {
+          record.title = deriveSessionTitle(input.text, { repo: record.repo, issueTitle }).slice(0, TITLE_CHARS) || record.title
+          this.saveRecord(session)
+          this.emit_(record.id, { type: 'session.updated', session: record })
+        }
       }
       // The Caller row first, so its id is part of the durable turn record.
       if (this.caller) {
@@ -2235,6 +2239,8 @@ export class ChatRuntime extends EventEmitter {
         this.saveRecord(session)
       }
       await this.refreshWorkspace(session).catch(() => undefined)
+      // A failed turn shows an Error dot even though a live adapter idles the chat.
+      record.lastStopReason = stopReason
       if (record.status !== 'closed') {
         if (!freed) this.setStatus(session, 'error', record.orphanNotice || 'the agent process could not be stopped')
         else if (session.adapter?.alive) this.setStatus(session, 'idle')

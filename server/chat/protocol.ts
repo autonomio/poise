@@ -133,6 +133,8 @@ export interface SessionRecord {
   title: string
   /** The person named this chat by hand; automatic titling never overwrites it. */
   titleManual?: boolean
+  /** How the latest turn ended; the work-log dot reads a failed turn from it. */
+  lastStopReason?: StopReason
   createdAt: string
   updatedAt: string
   status: SessionStatus
