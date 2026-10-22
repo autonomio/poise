@@ -205,6 +205,10 @@ describe('chat worker workspace retention', () => {
   it('removes a deleted session workspace past the grace period', async () => {
     const id = '88888888-8888-8888-8888-888888888888'
     const checkout = await makeWorkspace(id)
+    const remote = join(root, 'remote.git')
+    git(root, 'init', '--quiet', '--bare', remote)
+    git(checkout, 'remote', 'add', 'origin', remote)
+    git(checkout, 'push', '--quiet', '-u', 'origin', 'main')
     await age(checkout, 2 * DAY)
     const report = await maintenance.runStorageMaintenance({
       now: Date.now(), chatRoot, stateRoot, home, trim: async () => null, claims: () => [],
@@ -225,8 +229,8 @@ describe('chat worker workspace retention', () => {
 
   it('reports unpushed branches: ahead, merged, and remote-less', async () => {
     const dir = await makeWorkspace('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
-    // No remote: committed scratch has nothing unpushed.
-    expect(await maintenance.unpushedBranches(dir)).toEqual([])
+    // The local commit is the only copy until a remote has it.
+    expect(await maintenance.unpushedBranches(dir)).toEqual(['main'])
     const remote = join(root, 'remote.git')
     git(root, 'init', '--quiet', '--bare', remote)
     git(dir, 'remote', 'add', 'origin', remote)
@@ -238,11 +242,50 @@ describe('chat worker workspace retention', () => {
     expect(await maintenance.unpushedBranches(dir)).toEqual(['main'])
   })
 
+  it.each(['closed', 'deleted'])('holds committed remote-less work after its session is %s', async (status) => {
+    const checkout = await makeWorkspace('dddddddd-dddd-dddd-dddd-dddddddddddd')
+    await age(checkout, 2 * DAY)
+    const report = await maintenance.runStorageMaintenance({
+      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      claims: status === 'deleted' ? () => [] : claimsFor('closed', new Date(Date.now() - 2 * DAY).toISOString()),
+    })
+    expect(report.removed).toHaveLength(0)
+    expect(report.held[0].reason).toMatch(/unpushed commits on main/)
+    await expect(readFile(join(checkout, 'note.txt'), 'utf8')).resolves.toBe('hello\n')
+  })
+
+  it.each(['gone upstream', 'detached HEAD'])('holds an unpublished branch with %s', async (mode) => {
+    const checkout = await makeWorkspace('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')
+    const remote = join(root, 'remote.git')
+    git(root, 'init', '--quiet', '--bare', remote)
+    git(checkout, 'remote', 'add', 'origin', remote)
+    git(checkout, 'push', '--quiet', '-u', 'origin', 'main')
+    git(checkout, 'checkout', '--quiet', '-b', 'feature')
+    git(checkout, 'push', '--quiet', '-u', 'origin', 'feature')
+    await writeFile(join(checkout, 'local.txt'), 'only here\n')
+    git(checkout, 'add', 'local.txt')
+    git(checkout, 'commit', '--quiet', '--no-gpg-sign', '-m', 'local work')
+    if (mode === 'gone upstream') git(checkout, 'push', '--quiet', 'origin', '--delete', 'feature')
+    else git(checkout, 'checkout', '--quiet', '--detach', 'origin/main')
+    await age(checkout, 2 * DAY)
+    const report = await maintenance.runStorageMaintenance({
+      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      claims: claimsFor('closed', new Date(Date.now() - 2 * DAY).toISOString()),
+    })
+    expect(report.removed).toHaveLength(0)
+    expect(report.held[0].reason).toMatch(/unpushed commits on feature/)
+    expect(git(checkout, 'show', 'feature:local.txt')).toBe('only here')
+  })
+
   it('a dry run classifies like the real run without deleting', async () => {
     const gone = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
     const held = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
     const goneCheckout = await makeWorkspace(gone)
     const heldCheckout = await makeWorkspace(held)
+    const remote = join(root, 'remote.git')
+    git(root, 'init', '--quiet', '--bare', remote)
+    git(goneCheckout, 'remote', 'add', 'origin', remote)
+    git(goneCheckout, 'push', '--quiet', '-u', 'origin', 'main')
     await writeFile(join(heldCheckout, 'draft.txt'), 'unsaved\n')
     await age(goneCheckout, 2 * DAY)
     await age(heldCheckout, 2 * DAY)

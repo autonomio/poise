@@ -703,6 +703,8 @@ Each workspace also cleans itself: every 6 hours, whenever its own disk
 passes 80% used, and on demand from Settings → Storage, which shows the
 storage breakdown and the last run. A run removes a closed session's scratch
 workspace after 24 hours when its tree is clean and nothing is unpushed,
+requiring a remote-tracking ref to contain every local branch tip and any
+detached HEAD; remote-less committed work stays held,
 prunes only regenerable artifacts (`node_modules`, build output, virtualenvs,
 tool caches) from open sessions idle over 3 days and reinstalls them on the
 next turn, expires incident snapshots after 30 days unless pinned with a

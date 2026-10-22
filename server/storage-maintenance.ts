@@ -19,7 +19,7 @@ import { diagnostic } from './logging'
 import { runFile } from './process'
 import { raiseAlert, resolveAlert } from './alerts/store'
 import { canonicalCheckout, CheckoutLease } from './chat/checkout-lock'
-import { defaultBranch, inspectCheckout } from './chat/git'
+import { inspectCheckout } from './chat/git'
 import { LOCAL_CHAT_ROOT, workerWorkspaceRef, workspaceMarkerValid } from './chat/local-workspace'
 import { getOpenTurn, sessionsForCheckout } from './chat/storage'
 import { queueOwner, readQueue } from './chat/message-queue'
@@ -214,43 +214,23 @@ async function gitOut(checkout: string, args: string[]): Promise<string> {
   return result.stdout
 }
 
-/** Local branches holding commits no remote has: ahead of their upstream, or
- *  without one while a remote exists and the tip is not merged into the
- *  default branch. A repository with no remote has nothing unpushed. */
+/** Every local tip needs a remote-tracking ref containing it. A local
+ *  default branch, missing upstream or remote-less repository is no copy. */
 export async function unpushedBranches(checkout: string): Promise<string[]> {
-  const refs = await gitOut(checkout, ['for-each-ref', '--format=%(refname:short)|%(objectname)|%(upstream:short)|%(upstream:track)', 'refs/heads'])
+  const refs = await gitOut(checkout, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
   const branches = refs.split('\n').map((line) => line.trim()).filter(Boolean)
-  if (!branches.length) return []
-  const remotes = (await gitOut(checkout, ['remote']).catch(() => '')).trim()
-  if (!remotes) return []
   const unpushed: string[] = []
-  let defaultRef: string | null = null
   for (const line of branches) {
-    const [name, sha, upstream, track] = line.split('|')
-    const ahead = /ahead (\d+)/.exec(track ?? '')?.[1]
-    if (ahead && Number(ahead) > 0) {
-      unpushed.push(name)
-      continue
-    }
-    if (!upstream) {
-      // No upstream: merged into the default branch counts as preserved.
-      defaultRef ??= await defaultBranch(checkout).catch(() => 'main')
-      const merged = await runFile('git', ['merge-base', '--is-ancestor', sha, defaultRef], { cwd: checkout, timeoutMs: 60_000 })
-        .then(() => true, () => false)
-      if (!merged) unpushed.push(name)
-    }
+    const [name, sha] = line.split('|')
+    if (!(await commitPreserved(checkout, sha))) unpushed.push(name)
   }
   return unpushed
 }
 
-/** A detached tip survives removal only when a remote already has it or the
- *  default branch contains it. */
-async function detachedTipPreserved(checkout: string, sha: string): Promise<boolean> {
-  if (!sha) return true
-  const onRemote = (await gitOut(checkout, ['branch', '-r', '--contains', sha]).catch(() => '')).trim()
-  if (onRemote) return true
-  const def = await defaultBranch(checkout).catch(() => 'main')
-  return runFile('git', ['merge-base', '--is-ancestor', sha, def], { cwd: checkout, timeoutMs: 60_000 }).then(() => true, () => false)
+/** A local reference does not preserve a commit outside the checkout. */
+async function commitPreserved(checkout: string, sha: string): Promise<boolean> {
+  if (!sha) return false
+  return (await gitOut(checkout, ['for-each-ref', '--format=%(refname)', '--contains', sha, 'refs/remotes'])).trim().length > 0
 }
 
 async function removePath(path: string, dryRun: boolean): Promise<number> {
@@ -386,16 +366,15 @@ async function maintainWorkspace(
       if (!(options.dryRun ?? false)) await gitTidy(canonical, report.errors)
       return
     }
+    const unpushed = await unpushedBranches(canonical)
+    if (unpushed.length) {
+      report.held.push({ path: canonical, reason: `unpushed commits on ${unpushed.join(', ')}` })
+      if (!(options.dryRun ?? false)) await gitTidy(canonical, report.errors)
+      return
+    }
     if (state.detached) {
-      if (!(await detachedTipPreserved(canonical, state.headSha))) {
+      if (!(await commitPreserved(canonical, state.headSha))) {
         report.held.push({ path: canonical, reason: 'unpushed commits on a detached HEAD' })
-        if (!(options.dryRun ?? false)) await gitTidy(canonical, report.errors)
-        return
-      }
-    } else {
-      const unpushed = await unpushedBranches(canonical)
-      if (unpushed.length) {
-        report.held.push({ path: canonical, reason: `unpushed commits on ${unpushed.join(', ')}` })
         if (!(options.dryRun ?? false)) await gitTidy(canonical, report.errors)
         return
       }
