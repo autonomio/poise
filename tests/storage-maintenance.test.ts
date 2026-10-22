@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -44,7 +44,7 @@ function claimsFor(status: string, updatedAt: string, extra: Partial<{ openTurn:
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'poise-storage-maintenance-'))
+  root = await realpath(await mkdtemp(join(tmpdir(), 'poise-storage-maintenance-')))
   chatRoot = join(root, 'chat')
   stateRoot = join(root, 'state')
   home = join(root, 'home')
