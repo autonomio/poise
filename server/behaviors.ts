@@ -2792,6 +2792,10 @@ async function fireApprove(
   if (!isEnabled('approve-prs')) return false
   if (claude) await waitForBehavior(claudeAuth.requireReady())
   if (!isEnabled('approve-prs') || behaviorAborted()) return false
+  // Provider preparation keeps the operation deadline and its accounting; the
+  // launch below runs under the lifecycle signal so an expired sweep deadline
+  // does not discard it. Only shutdown or disable discards prepared work.
+  return underLifecycleSignal(async () => {
   const currentHead = await currentHeadSha(pr.repo, pr.number, actor)
   // The head-SHA lookup above is a subprocess with a 30s timeout, so the user
   // has a real window to turn the behaviour off while it is out. Nothing
@@ -2856,6 +2860,7 @@ async function fireApprove(
   }
   markClaimLaunched(claimId)
   return true
+  })
   })
 }
 
