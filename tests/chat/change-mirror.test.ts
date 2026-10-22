@@ -254,6 +254,22 @@ describe('turn-level checkout change mirror', () => {
     expect(changes).toEqual([])
   })
 
+  it('still warns when a binary file replaces a pre-existing directory', async () => {
+    await mkdir(join(repo, 'docs'))
+    await writeFile(join(repo, 'docs', 'notes.md'), 'existing notes\n')
+    const before = await captureCheckoutSnapshot(repo)
+    await rm(join(repo, 'docs'), { recursive: true })
+    await writeFile(join(repo, 'docs'), Buffer.from([0, 1, 2]))
+    const { changes, warnings } = compareCheckoutSnapshots(before, await after(before))
+    expect(warnings).toEqual(['docs: binary or non-UTF-8 file'])
+    expect(changes).toEqual([{ path: 'docs/notes.md', oldText: 'existing notes\n', newText: '', oldExists: true, newExists: false }])
+    const events: ChatEvent[] = []
+    await emitCheckoutChanges(repo, 'turn-id', before, event => events.push(event))
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ recoverable: true, message: expect.stringContaining('docs: binary or non-UTF-8 file') }),
+    ])
+  })
+
   it('still reports a binary file changed or removed during the turn, once each', async () => {
     await writeFile(join(repo, 'binary.dat'), Buffer.from([0, 1, 2]))
     await writeFile(join(repo, 'gone.dat'), Buffer.from([0, 7, 8]))

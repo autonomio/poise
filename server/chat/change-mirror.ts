@@ -147,7 +147,7 @@ export function compareCheckoutSnapshots(before: CheckoutSnapshot, after: Checko
     // A binary file created during the turn reverts by deletion, like any
     // other new file, so its creation stays quiet; removal or modification
     // still warns because the lost bytes cannot be restored.
-    if (!old.exists && isBinaryVersion(next)) continue
+    if (!old.exists && isBinaryVersion(next) && ![...before.files.keys()].some(key => key.startsWith(`${path}/`))) continue
     if (old.text === undefined || next.text === undefined) {
       warnings.push(`${path}: ${old.reason || next.reason || 'a trustworthy before/after image is unavailable'}`)
       continue
