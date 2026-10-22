@@ -18,7 +18,7 @@ let appended: FakeElement[] = []
 let listeners: Record<string, Array<() => void>> = {}
 let sessionStore: Record<string, string> = {}
 const reload = vi.fn()
-const fetchMock = vi.fn<(input: unknown) => Promise<Response>>()
+const fetchMock = vi.fn<(input: unknown, init?: unknown) => Promise<Response>>()
 const updating = () => new Response('{"error":"workspace_updating"}', { status: 503, headers: { 'x-poise-updating': '1' } })
 const ok = () => new Response('{"mode":"service"}', { status: 200 })
 const gone = () => new Response('{"error":"not found"}', { status: 404 })
