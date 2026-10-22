@@ -61,7 +61,7 @@ def redact_cause(text: str) -> str:
                       "[redacted header]", text)
     redacted = re.sub(r"(?i)\b(?:basic|bearer|token)\s+[^\s,;\"']+", "[redacted credential]", redacted)
     redacted = re.sub(r"(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)", "[redacted]", redacted)
-    redacted = re.sub(r"(https?://)[^\s/@]+@", r"\1[redacted]@", redacted)
+    redacted = re.sub(r"(?i)(https?://)[^\s/@]+@", r"\1[redacted]@", redacted)
     return re.sub(r"(?i)([?&](?:token|key|secret|password|auth|signature)=)[^\s&#]+", r"\1[redacted]", redacted)
 
 

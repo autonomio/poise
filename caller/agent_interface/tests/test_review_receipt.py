@@ -590,8 +590,9 @@ class TestDuplicatePrevention(TestCase):
 
     def test_recent_uncertain_sibling_run_is_never_blamed_on_this_run(self):
         with sqlite3.connect(api.DB) as conn:
-            conn.execute("insert into calls (id, behavior, repo, pr_id, status, error_code, started_at, ended_at)"
-                         " values ('sibling', 'pr_review', 'o/r', '1', 'failed', 'review_submission_failed', 50, 100)")
+            conn.execute("update calls set actor = 'bit-mis' where id = 'me'")
+            conn.execute("insert into calls (id, behavior, repo, pr_id, actor, status, error_code, started_at, ended_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'BIT-MIS', 'failed', 'review_submission_failed', 50, 100)")
         after = facts([CHANGES, CLEAN])
         result = api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
                                       receipt=receipt("reviewed_clean", 92), call_id="me")
@@ -599,12 +600,28 @@ class TestDuplicatePrevention(TestCase):
 
     def test_running_sibling_run_is_never_blamed_on_this_run(self):
         with sqlite3.connect(api.DB) as conn:
-            conn.execute("insert into calls (id, behavior, repo, pr_id, status, started_at)"
-                         " values ('sibling', 'pr_review', 'o/r', '1', 'running', 50)")
+            conn.execute("update calls set actor = 'bit-mis' where id = 'me'")
+            conn.execute("insert into calls (id, behavior, repo, pr_id, actor, status, started_at)"
+                         " values ('sibling', 'pr_review', 'o/r', '1', 'BIT-MIS', 'running', 50)")
         after = facts([CHANGES, CLEAN])
         result = api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
                                       receipt=receipt("reviewed_clean", 92), call_id="me")
         self.assertEqual(result["outcome"], "clean")
+
+    def test_another_or_unknown_actor_cannot_shield_a_duplicate(self):
+        after = facts([CHANGES, CLEAN])
+        for actor in ("other-reviewer", None):
+            for status in ("running", "failed"):
+                with self.subTest(actor=actor, status=status):
+                    with sqlite3.connect(api.DB) as conn:
+                        conn.execute("update calls set actor = 'bit-mis' where id = 'me'")
+                        conn.execute("insert or replace into calls "
+                                     "(id, behavior, repo, pr_id, actor, status, error_code, started_at, ended_at) "
+                                     "values ('sibling', 'pr_review', 'o/r', '1', ?, ?, 'review_submission_failed', 50, 100)",
+                                     (actor, status))
+                    with self.assertRaisesRegex(budget.ReviewLimitError, "duplicate"):
+                        api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                             receipt=receipt("reviewed_clean", 92), call_id="me")
 
     def test_long_finished_uncertain_sibling_does_not_shield_a_duplicate(self):
         with sqlite3.connect(api.DB) as conn:

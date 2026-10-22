@@ -429,6 +429,19 @@ class TestOtherProviderVerdicts(TestCase):
             self.assertNotIn("ghp_abc123", field)
             self.assertLessEqual(len(field), 501)
 
+    def test_provider_cause_redacts_url_credentials_regardless_of_scheme_case(self):
+        for scheme in ("http", "HTTP", "https", "HTTPS", "hTtPs"):
+            with self.subTest(scheme=scheme):
+                message = ("API error: Grok Build usage balance exhausted via "
+                           f"{scheme}://test-user:private-password@proxy.example/failure")
+                with self.assertRaises(atoms.AgentPreflightError) as failure:
+                    structured_review.provider_failure(message, provider="grok")
+                self.assertEqual(failure.exception.code, "review_provider_blocked")
+                for field in (str(failure.exception), failure.exception.diagnostic["stderr"]):
+                    self.assertIn(f"{scheme}://[redacted]@proxy.example/failure", field)
+                    self.assertNotIn("test-user", field)
+                    self.assertNotIn("private-password", field)
+
     def test_muse_isolates_its_tool_roster_and_keeps_sign_in(self):
         with tempfile.TemporaryDirectory() as work:
             original = Path(work) / "original" / "muse"
