@@ -272,6 +272,7 @@ workspace_handles() {
   if [ -e "$workspace_proof_file" ]; then
     [ -f "$workspace_proof_file" ] || die "the pending workspace proof must be a regular file."
     retained=$(cat "$workspace_proof_file") || die "cannot read the pending workspace proof at $workspace_proof_file."
+    [[ $retained =~ ^[a-z0-9[:space:]-]*$ ]] || die "the pending workspace proof contains an invalid workspace handle."
     for handle in $retained; do
       [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "the pending workspace proof contains an invalid workspace handle."
       handles="$handles$handle "

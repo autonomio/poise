@@ -314,6 +314,9 @@ class VerifyTest(LibTest):
         bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
         for name, args in [('install.sh', []), ('upgrade.sh', ['--no-pull'])]:
             with self.subTest(script=name):
+                proof = self.state + '.proof'
+                if os.path.exists(proof):
+                    os.unlink(proof)
                 target = os.path.join(directory, name)
                 with open(os.path.join(ROOT, 'deploy', name)) as source, open(target, 'w') as output:
                     output.write(source.read())
