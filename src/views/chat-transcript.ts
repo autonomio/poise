@@ -572,6 +572,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
   } catch { /* malformed or unavailable draft storage does not affect rendering */ }
   const texts = new Map<string, string>()
   let lastCtxKey = ''
+  let lastChatsKey = ''
   let renderedDay = ''
 
   function ensure(parent: HTMLElement, key: string, before: HTMLElement | null, cls: string): { el: HTMLElement, fresh: boolean } {
@@ -859,7 +860,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     }
   }
 
-  function renderTurn(el: HTMLElement, turn: TurnModel, ctx: RenderContext, clock: Clock, focused: PermissionItem | QuestionItem | null, isLast: boolean): void {
+  function renderTurn(el: HTMLElement, turn: TurnModel, ctx: RenderContext, clock: Clock, focused: PermissionItem | QuestionItem | null, isLast: boolean, repaintActors: boolean): void {
     let head = el.querySelector<HTMLElement>(':scope > .chat-turn-head')
     let items = el.querySelector<HTMLElement>(':scope > .chat-turn-items')
     let foot = el.querySelector<HTMLElement>(':scope > .chat-turn-foot')
@@ -885,7 +886,11 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
       // would erase a partially typed answer.
       const uiRev = (ui.get(item.key)?.expanded ? 1 : 0)
       const rev = item.rev * 4 + uiRev + (item === final ? 2 : 0)
-      if (setRev(item.key, rev) || (item.kind === 'tool' && node.childElementCount === 0)) {
+      // Actor labels follow the session list: a rename, delete or reload
+      // repaints the items that carry one. Drafts survive: questions
+      // remember and restore theirs around the repaint.
+      const actorItem = (item.kind === 'steer' && !!item.source) || (item.kind === 'question' && item.answered?.by === 'chat')
+      if ((repaintActors && actorItem) || setRev(item.key, rev) || (item.kind === 'tool' && node.childElementCount === 0)) {
         const paint = () => {
         switch (item.kind) {
           case 'text': patchContent(node, textHtml(item, item === final)); break
@@ -949,6 +954,8 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     const ctxKey = `${ctx.running ? 1 : 0}:${ctx.interruptedTurnId || ''}:${focused?.id || ''}:${ctx.showActivity !== false}:${ctx.showReasoning === true}:${ctx.agent || ''}:${renderedDay}:${chatsKey}`
     const ctxChanged = ctxKey !== lastCtxKey
     lastCtxKey = ctxKey
+    const chatsChanged = chatsKey !== lastChatsKey
+    lastChatsKey = chatsKey
     const keep = new Set<string>()
     let cursor = container.firstElementChild as HTMLElement | null
     let lastTurnKey = ''
@@ -961,7 +968,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
         // and the turn holding the request; both sit in the item revisions,
         // so a turn renders when its rev moved or the context did.
         const isLast = b.key === lastTurnKey
-        if (setRev(b.key, b.turn.rev) || ctxChanged || isLast) renderTurn(el, b.turn, b.turn.agent ? { ...ctx, agent: b.turn.agent } : ctx, clock, focused, isLast)
+        if (setRev(b.key, b.turn.rev) || ctxChanged || isLast) renderTurn(el, b.turn, b.turn.agent ? { ...ctx, agent: b.turn.agent } : ctx, clock, focused, isLast, chatsChanged)
       } else if (setRev(b.key, b.rev)) {
         el.innerHTML = b.kind === 'error'
           ? `<div class="chat-msg chat-msg-agent chat-msg-error"><div class="chat-msg-body">${escapeHtml(b.message)}</div></div>`
@@ -979,6 +986,7 @@ export function createTranscriptView(container: HTMLElement, handlers: Transcrip
     nodes.clear()
     texts.clear()
     lastCtxKey = ''
+    lastChatsKey = ''
     renderedDay = ''
   }
 

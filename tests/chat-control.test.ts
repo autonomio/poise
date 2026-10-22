@@ -350,6 +350,15 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await stopping
     await until(() => runtime.get(child)?.status === 'idle')
     expect(finishes()[1]).toMatchObject({ stopReason: 'cancelled', stoppedBy: { kind: 'chat', sessionId: parent.id } })
+    // A chat stop that arrives while the person's stop is settling is redundant and attributes nothing.
+    runtime.prompt(child, { text: 'Another task', attachments: [], mentions: [] })
+    await until(() => (prompts.get(child) ?? []).length === 3)
+    const personStopping = runtime.cancel(child)
+    await runtime.cancel(child, { kind: 'chat', sessionId: parent.id, title: 'Release lead' })
+    await personStopping
+    await until(() => runtime.get(child)?.status === 'idle')
+    expect(finishes()[2]).toMatchObject({ stopReason: 'cancelled' })
+    expect(finishes()[2]).not.toHaveProperty('stoppedBy')
     // Attribution is frozen: a rename changes nothing already recorded, and a
     // creating chat without a role is never the Manager.
     await runtime.rename(parent.id, 'New name')

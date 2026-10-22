@@ -132,7 +132,8 @@ interface RunningTurn {
   /** What started the turn, when the person did not: every turn.started of
    *  this turn carries it, and its text is composed as source data. */
   source?: TurnSource
-  /** The first chat that stopped this turn; a later cancel never relabels it. */
+  /** The chat that stopped this turn: set only by a stop that arrives before
+   *  the turn is stopping, so a redundant cancel never relabels it. */
   stoppedBy?: ChatActor
   /** Set when the turn must end as an error (mirror failure, lost lease, forced stop). */
   failure?: string
@@ -2262,7 +2263,9 @@ export class ChatRuntime extends EventEmitter {
         while (session.startup && Date.now() < deadline) await delay(25)
         return { settled: !session.startup }
       }
-      if (actor) turn.stoppedBy ??= actor
+      // A stop for an already-stopping turn is redundant: the person or chat
+      // that stopped it first keeps the attribution.
+      if (actor && !turn.stopping) turn.stoppedBy ??= actor
       turn.stopping = true
       this.settlePending(session, 'cancelled')
       turn.abort.abort()

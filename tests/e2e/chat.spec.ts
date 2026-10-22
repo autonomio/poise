@@ -508,6 +508,9 @@ test('labels steers, messages and stops from other chats and Poise, escapes titl
   await expect(page.locator('.chat-turn-stop')).toContainText('Stopped by Manager')
   await expect(page.locator(`button[data-chat-session="${leadId}"]`).first()).toHaveAttribute('title', /22222222/)
   await expect(page.locator(`button[data-chat-session="${evilId}"]`).first()).toHaveAttribute('title', /11111111/)
+  state.history.s1.push(sock.push('s1', { type: 'steer.sent', turnId: 't2', text: 'Lead steer', source: { kind: 'chat', sessionId: leadId, title: 'Release lead' } }))
+  const leadSteer = page.locator('.chat-msg-chat', { hasText: 'Lead steer' })
+  await expect(leadSteer.locator(`button[data-chat-session="${leadId}"]`)).toBeVisible()
   const gonePush = sock.push('s1', { type: 'steer.sent', turnId: 't2', text: 'Gone note', source: { kind: 'chat', sessionId: goneId, title: 'Gone chat' } })
   state.history.s1.push(gonePush)
   const gone = page.locator('.chat-msg-chat', { hasText: 'Gone note' })
@@ -521,6 +524,8 @@ test('labels steers, messages and stops from other chats and Poise, escapes titl
   await expect(page.locator(`.chat-session-item[data-id="${leadId}"]`)).toHaveCount(0)
   await expect(message).toContainText('(deleted)')
   await expect(message.locator('button[data-chat-session]')).toHaveCount(0)
+  await expect(leadSteer).toContainText('(deleted)')
+  await expect(leadSteer.locator('button[data-chat-session]')).toHaveCount(0)
   // The up-arrow history holds none of these items.
   await input(page).press('ArrowUp')
   await expect(historyRows(page)).toHaveCount(2)
