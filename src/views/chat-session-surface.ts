@@ -49,6 +49,31 @@ export interface SessionSurface {
   pendingRequests(): string[]
 }
 
+interface EditRetry {
+  turnId: string
+  messageId: string
+  index: number
+  decision: EditDecision
+  edit: EditProposal
+  error: string
+}
+
+interface EditState {
+  deciding: Set<string>
+  applied: Set<string>
+  retries: Map<string, EditRetry>
+  listeners: Set<(key?: string, decision?: EditDecision) => void>
+  revision: number
+}
+
+// A saved edit awaiting its decision acknowledgement must survive surface
+// teardown. Session + turn/message/index identify it until the server records it.
+const pendingEdits = new Map<string, EditState>()
+
+function newEditState(): EditState {
+  return { deciding: new Set(), applied: new Set(), retries: new Map(), listeners: new Set(), revision: 0 }
+}
+
 interface ModelPlaceAnswer {
   places: Array<{ key: string, default?: string }>
   catalog: { models: Array<{ identity: string, provider: string }> }
@@ -76,9 +101,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   let agents: AgentsResponse | null = null
   /** Text highlighted in the document, sent as a quote with the next message. */
   let highlight: string | null = null
-  const decidingEdits = new Set<string>()
-  const appliedEdits = new Set<string>()
-  let editsRevision = 0
+  let editState = newEditState()
 
   container.classList.add('chat-surface')
   container.innerHTML = '<div class="chat-surface-notice" hidden></div>'
@@ -195,18 +218,38 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     return `${quote}\n\n${text}`
   }
 
+  function showEditRetry(): void {
+    const retry = [...editState.retries].find(([key]) => !editState.deciding.has(key))?.[1]
+    if (retry) setNotice(`Decision failed — ${retry.error}`, [{ label: 'Retry', run: () => {
+      void decideEdit(retry.turnId, retry.messageId, retry.index, retry.decision, retry.edit)
+    } }])
+  }
+
+  function editStateChanged(key?: string, decision?: EditDecision): void {
+    if (key && decision) { model.decisions.set(key, decision); setNotice(null) }
+    render()
+    showEditRetry()
+  }
+
+  function notifyEditState(state: EditState, sessionId: string, key?: string, decision?: EditDecision): void {
+    state.revision++
+    for (const listener of state.listeners) listener(key, decision)
+    if (!state.deciding.size && !state.applied.size && !state.retries.size) pendingEdits.delete(sessionId)
+  }
+
   async function decideEdit(turnId: string, messageId: string, index: number, decision: EditDecision, edit: EditProposal): Promise<void> {
     if (!record || !options.edits) return
     const sessionId = record.id
     const key = `${turnId}:${messageId}:${index}`
-    if (decidingEdits.has(key)) return
-    decidingEdits.add(key)
-    editsRevision++
-    render()
+    const state = editState
+    if (state.deciding.has(key)) return
+    state.deciding.add(key)
+    pendingEdits.set(sessionId, state)
+    notifyEditState(state, sessionId)
     try {
       // Saving and recording the decision are separate operations. Once the
       // document was saved, a retry only records it, even for pure insertions.
-      if (appliedEdits.has(key)) decision = 'applied'
+      if (state.applied.has(key)) decision = 'applied'
       else if (decision === 'applied') {
         let outcome: 'applied' | 'conflict' | 'failed'
         try {
@@ -218,18 +261,20 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
         // A failed save records nothing; the Editor showed the save error.
         if (outcome === 'failed') return
         decision = outcome
-        if (outcome === 'applied') appliedEdits.add(key)
+        if (outcome === 'applied') state.applied.add(key)
       }
       try {
         await chatClient.send({ type: 'edit.decide', sessionId, turnId, messageId, index, decision })
+        state.applied.delete(key)
+        state.retries.delete(key)
+        notifyEditState(state, sessionId, key, decision)
         setNotice(null)
       } catch (err) {
-        setNotice(`Decision failed — ${(err as Error).message}`, [{ label: 'Retry', run: () => { void decideEdit(turnId, messageId, index, decision, edit) } }])
+        state.retries.set(key, { turnId, messageId, index, decision, edit, error: (err as Error).message })
       }
     } finally {
-      decidingEdits.delete(key)
-      editsRevision++
-      render()
+      state.deciding.delete(key)
+      notifyEditState(state, sessionId)
     }
   }
 
@@ -252,7 +297,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     transcript.render(model, {
       running: !!record && isRunning(record.status),
       sessionId: record?.id,
-      ...(subject.surface === 'current' ? {} : { edits: { surface: subject.surface, readOnly: false, deciding: decidingEdits, applied: appliedEdits, revision: editsRevision } }),
+      ...(subject.surface === 'current' ? {} : { edits: { surface: subject.surface, readOnly: false, deciding: editState.deciding, applied: editState.applied, revision: editState.revision } }),
     })
     composer.setCommands(record?.commands || [], { model: true, modes: false, fork: false, poise: false, create: false })
     queuePanel.render(record?.id ?? null, record?.queue, agents?.agents || [], !!record && isRunning(record.status), new Set())
@@ -310,6 +355,9 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     const pending: ChatEnvelope[] = []
     adopting = pending
     record = session
+    editState.listeners.delete(editStateChanged)
+    editState = pendingEdits.get(session.id) ?? newEditState()
+    editState.listeners.add(editStateChanged)
     earlierEl.hidden = true
     earlierEl.innerHTML = ''
     transcript.clear()
@@ -331,6 +379,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
       setNotice(null)
       state()
       render()
+      showEditRetry()
     } finally {
       if (adopting === pending) adopting = null
     }
@@ -563,6 +612,12 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     seenSeq = envelope.seq
     if (envelope.event.type === 'session.updated') record = envelope.event.session
     else if (envelope.event.type === 'session.closed') record = { ...record, status: 'closed' }
+    else if (envelope.event.type === 'edit.decided') {
+      const event = envelope.event
+      const key = `${event.turnId}:${event.messageId}:${event.index}`
+      editState.applied.delete(key)
+      editState.retries.delete(key)
+    }
     applyEvent(model, envelope)
   }
 
@@ -609,6 +664,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     destroy: () => {
       if (destroyed) return
       destroyed = true
+      editState.listeners.delete(editStateChanged)
       clearInterval(tickTimer)
       offEvent()
       if (subscribed) chatClient.unsubscribe(subscribed)
