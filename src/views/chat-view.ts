@@ -1884,6 +1884,8 @@ function toggleTimers(): void {
   }
   timersOpenFor = e.record.id
   timersJson = ''
+  timersPaneEl.dataset.timersSession = e.record.id
+  timersPaneEl.innerHTML = '<div class="chat-timers"><div class="st-help" role="status">Loading timers…</div></div>'
   timersPaneEl.hidden = false
   if (timersRefresh) clearInterval(timersRefresh)
   timersRefresh = setInterval(() => { void refreshTimersPane() }, 30_000)

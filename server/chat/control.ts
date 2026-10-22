@@ -179,7 +179,7 @@ function summaryOf(timer: TimerView): TimerSummary {
   return { ...timer, message: undefined } as TimerSummary
 }
 
-/** The firing's due time from its event key, `timer:<id>:<dueMs>`. */
+/** Due time is the event key's last field; legacy keys have no firing id. */
 function timerDueAt(eventKey: string, fallback: number): number {
   const due = Number(eventKey.slice(eventKey.lastIndexOf(':') + 1))
   return Number.isSafeInteger(due) && due > 0 ? due : fallback

@@ -51,6 +51,7 @@ function statusText(timer: TimerView, session: SessionRecord, zone: string, now:
 }
 
 export function renderTimersPane(container: HTMLElement, session: SessionRecord, data: TimersData, actions: TimerPaneActions): void {
+  container.dataset.timersSession = session.id
   const zone = effectiveTimezone()
   const now = Date.now()
   const hold = data.holds.find(h => h.sessionId === session.id) ?? null
@@ -96,8 +97,16 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
   messageEl.value = draft.message
   kindEl.value = draft.kind === 'once' ? 'once' : 'every'
   minutesEl.value = draft.minutes
-  const alert = container.querySelector<HTMLElement>('.chat-timers-error')!
   const showError = (error: unknown): void => {
+    if (container.dataset.timersSession !== session.id) return
+    let alert = container.querySelector<HTMLElement>('.chat-timers-error')
+    if (!alert) {
+      if (!error) return
+      alert = document.createElement('div')
+      alert.className = 'chat-timers-error'
+      alert.setAttribute('role', 'alert')
+      container.append(alert)
+    }
     alert.hidden = !error
     alert.textContent = error ? (error as Error).message || String(error) : ''
   }
@@ -123,6 +132,7 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
     const input: TimerInput = { sessionId: session.id, label: labelEl.value, message: messageEl.value,
       ...(kindEl.value === 'once' ? { delayMinutes: minutes } : { everyMinutes: minutes }) }
     void actions.add(input).then(() => {
+      if (container.dataset.timersSession !== session.id) return
       // add() refetches and replaces the form. Clear its current copy only
       // if the person has not started a different draft while it was pending.
       const label = container.querySelector<HTMLInputElement>('.chat-timers-label')

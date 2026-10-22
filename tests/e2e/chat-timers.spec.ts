@@ -153,6 +153,64 @@ test('keeps a new timer draft typed while the previous add is pending', async ({
   await expect(pane.locator('.chat-timers-minutes')).toHaveValue('30')
 })
 
+test("replaces another chat's timer controls while its new pane is loading", async ({ page }) => {
+  const old = timerView({ id: 'old', sessionId: 's1', label: 'Old chat timer' })
+  const next = timerView({ id: 'next', sessionId: 's2', label: 'Next chat timer' })
+  const state = makeState([session({ id: 's1' }), session({ id: 's2', title: 'Next chat' })])
+  state.timers = { s1: timersData({ timers: [old] }), s2: timersData({ timers: [next] }) }
+  await installRoutes(page, state)
+  let release!: () => void
+  let entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const requested = new Promise<void>(resolve => { entered = resolve })
+  await page.route('**/api/chat/sessions/s2/timers', async route => { entered(); await held; await route.fallback() })
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await page.locator('.chat-session-item[data-id="s1"]').click()
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  const pane = page.locator('#chat-timers-pane')
+  await expect(pane.locator('.chat-timer-label')).toHaveText('Old chat timer')
+  sock.autoAck = false
+  await pane.getByRole('button', { name: 'Cancel timer Old chat timer' }).click()
+  await expect.poll(() => sock.framesOf('timer.cancel').length).toBe(1)
+  await page.locator('.chat-session-item[data-id="s2"]').click()
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  await requested
+  try {
+    await expect(pane.locator('.chat-timer')).toHaveCount(0)
+    await expect(pane.locator('.chat-timers-add')).toHaveCount(0)
+    await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveCount(0)
+  } finally { release() }
+  await expect(pane.locator('.chat-timer-label')).toHaveText('Next chat timer')
+  sock.ack(sock.framesOf('timer.cancel')[0], false, 'Old chat cancellation failed')
+  sock.push('s2', { type: 'session.updated', session: { ...state.sessions.find(item => item.id === 's2')!, status: 'running' } })
+  await expect(page.locator('.chat-h-status')).toHaveText('running')
+  await expect(pane.getByRole('alert')).toBeHidden()
+  expect(sock.framesOf('timer.create')).toHaveLength(0)
+  expect(sock.framesOf('chat.hold')).toHaveLength(0)
+})
+
+test('shows a pending timer action failure in the pane after a refetch rerenders it', async ({ page }) => {
+  const one = timerView({ id: 'one', sessionId: 's1', label: 'Check CI' })
+  const state = makeState([session({ id: 's1' })])
+  state.timers = { s1: timersData({ timers: [one] }) }
+  await installRoutes(page, state)
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  const pane = page.locator('#chat-timers-pane')
+  await expect(pane.locator('.chat-timer')).toHaveCount(1)
+  sock.autoAck = false
+  await pane.getByRole('button', { name: 'Cancel timer Check CI' }).click()
+  await expect.poll(() => sock.framesOf('timer.cancel').length).toBe(1)
+  state.timers!.s1.scheduler = { running: false, lastTickAt: null, error: 'scheduler changed while cancelling' }
+  sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'held' })
+  await expect(pane.locator('.chat-timers-down')).toContainText('scheduler changed while cancelling')
+  sock.ack(sock.framesOf('timer.cancel')[0], false, 'Cancellation refused')
+  await expect(pane.locator('.chat-timers-error')).toHaveText('Cancellation refused')
+  await expect(pane.locator('.chat-timers-error')).toBeVisible()
+})
+
 test('recovers timer controls after a failed refetch returns unchanged data', async ({ page }) => {
   const one = timerView({ id: 'timer-1', label: 'Check CI' })
   const state = makeState([session({ id: 's1' })])

@@ -246,6 +246,29 @@ describe('durable timers that wake chats', () => {
     expect(store.timerById(instance, created.id)!.nextAt).toBe(new Date(clock + 5 * 60_000).toISOString())
   }, 60_000)
 
+  it('admits a new firing when a backward clock clamp revisits an admitted due time', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const created = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Pulse', message: 'Ping', everyMinutes: 5 })).timer as { id: string }
+    clock += 5 * 60_000
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === 1)
+    const first = starts(p.id).at(-1)!.source as Extract<TurnSource, { kind: 'timer' }>
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    clock -= 5 * 60_000
+    await control.tick()
+    expect(store.timerById(instance, created.id)!.nextAt).toBe(first.dueAt)
+    clock += 5 * 60_000
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === 2)
+    const second = starts(p.id).at(-1)!.source as Extract<TurnSource, { kind: 'timer' }>
+    expect(second).toMatchObject({ timerId: created.id, dueAt: first.dueAt, missed: 0 })
+    expect(second.seq).not.toBe(first.seq)
+    expect(store.timerById(instance, created.id)!.nextAt).toBe(new Date(clock + 5 * 60_000).toISOString())
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 60_000)
+
   it('backs off twice, then trips with a note and a warning while ordinary delivery continues', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const created = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Flaky', message: 'Ping', everyMinutes: 30 })).timer as { id: string }

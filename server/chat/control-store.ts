@@ -465,17 +465,21 @@ export const fireTimer = db.transaction((instance: string, id: string, now: numb
   const due = occurrencesDue(row.kind, row.interval_ms, row.next_at, now)
   if (!due) return null
   db.prepare('UPDATE chat_control_timers SET next_at = ?, updated_at = ? WHERE id = ?').run(due.next, now, id)
+  // A backward clock clamp can revisit an admitted due timestamp. The
+  // transaction owns admission; a fresh firing identity must not collide
+  // with that earlier occurrence's retained row. Keep due time last.
+  const eventKey = `timer:${id}:${randomUUID()}:${due.latestDue}`
   const sender = row.set_by_kind === 'chat' && row.set_by_session ? row.set_by_session : 'Poise timer'
   const existing = timerPendingRow(instance, id)
   if (existing) {
     db.prepare(`UPDATE chat_control_inbox SET timer_missed = timer_missed + ?, event_key = ? WHERE seq = ?`)
-      .run(due.count, `timer:${id}:${due.latestDue}`, existing.seq)
+      .run(due.count, eventKey, existing.seq)
     return { seq: existing.seq, missed: existing.timer_missed + due.count, dueAt: due.latestDue }
   }
   const inserted = db.prepare(`INSERT INTO chat_control_inbox(instance, recipient, sender, event_key, body, created_at,
       sender_title, sender_role, timer_id, timer_missed)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(instance, row.target, sender, `timer:${id}:${due.latestDue}`, row.message, now,
+    .run(instance, row.target, sender, eventKey, row.message, now,
       row.set_by_kind === 'chat' ? row.set_by_title : null, row.set_by_role === 'manager' ? 'manager' : null, id, due.count - 1)
   return { seq: Number(inserted.lastInsertRowid), missed: due.count - 1, dueAt: due.latestDue }
 })
