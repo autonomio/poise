@@ -21,6 +21,7 @@ import { initSnippetsView } from './views/snippets-view'
 import { initEditorView, stopEditorRefresh } from './views/editor-view'
 import { toggle as toggleChat, close as closeChatPane } from './views/chat-pane'
 import { chatSidePane } from './views/chat-side-pane'
+import { inlineThreadSessionInView } from './views/editor-inline-thread'
 import { loadSettings, startRefreshTicker, applyTheme, getTheme, effectiveTimezone, unknownSavedTimezone } from './config'
 import { initClaudeAuth } from './claude-auth'
 import { getSelectedOrganization, setSelectedOrganization } from './organizations'
@@ -187,7 +188,7 @@ function openNotice(target: NoticeTarget): void {
   else window.open(target.pullRequest, '_blank', 'noopener,noreferrer')
 }
 // A Chat session on screen already shows what its notice would say.
-const notificationRail = mountNotificationRail(notices, { open: openNotice, inView: (target) => 'chat' in target && (chatSessionInView() === target.chat || chatSidePane.sessionInView() === target.chat) })
+const notificationRail = mountNotificationRail(notices, { open: openNotice, inView: (target) => 'chat' in target && (chatSessionInView() === target.chat || chatSidePane.sessionInView() === target.chat || inlineThreadSessionInView() === target.chat) })
 window.addEventListener('poise:notifications-changed', () => { void notices.refresh() })
 
 // A saved time zone this browser does not know would break every time Poise

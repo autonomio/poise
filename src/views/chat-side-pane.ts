@@ -111,12 +111,14 @@ function closePane(): void {
   if (!panelEl) return
   if (panelEl.contains(document.activeElement)) (document.activeElement as HTMLElement | null)?.blur()
   teardownSurface()
+  const was = current
   current = null
   prefill = undefined
   back = undefined
   panelEl.classList.remove('open')
   panelEl.setAttribute('inert', '')
   panelEl.setAttribute('aria-hidden', 'true')
+  if (was) window.dispatchEvent(new CustomEvent('chat:side-pane-closed', { detail: { subject: was } }))
 }
 
 export const chatSidePane = {
@@ -137,5 +139,8 @@ export const chatSidePane = {
   },
   setHighlight(text: string | null): void {
     surface?.setHighlight(text)
+  },
+  takeDraft(): ComposerDraft | null {
+    return surface?.takeDraft() ?? null
   },
 }
