@@ -33,11 +33,15 @@ interface Editor {
 }
 
 async function editor(page: Page, content = TEXT): Promise<Editor> {
-  await workspace(page)
   const state = makeState([], {})
   state.models = modelsState()
-  await installRoutes(page, state)
+  // The socket route must exist before navigation: registered after, the
+  // WebSocket connects to the real server instead of the fixture.
   const sock = await installSocket(page, state)
+  await workspace(page)
+  // REST routes resolve last-registered-wins, so these go after the
+  // workspace catch-all.
+  await installRoutes(page, state)
   const saves: string[] = []
   const holdSaves = { on: false, release: [] as Array<() => void> }
   const failSaves = { on: false }

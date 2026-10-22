@@ -14,7 +14,6 @@ const review = (): ArticleReview => ({
 })
 
 async function editorWithReviews(page: Page, initial: ArticleReview[] = [review()]) {
-  await workspace(page)
   const state = makeState([], {})
   state.models = {
     catalog: { models: [{ identity: 'opus-5-max', selector: 'claude-opus-5', effort: 'max', provider: 'claude' }], review_providers: [], path: '' },
@@ -23,8 +22,13 @@ async function editorWithReviews(page: Page, initial: ArticleReview[] = [review(
     refresh: null,
   }
   state.forbidLegacyChat = true
-  await installRoutes(page, state)
+  // The socket route must exist before navigation: registered after, the
+  // WebSocket connects to the real server instead of the fixture.
   const sock = await installSocket(page, state)
+  await workspace(page)
+  // REST routes resolve last-registered-wins, so these go after the
+  // workspace catch-all.
+  await installRoutes(page, state)
   const data: ArticleReviews = { reviews: initial, checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [] }
   const calls: Array<{ path: string, body: Record<string, unknown> }> = []
   let content = TEXT

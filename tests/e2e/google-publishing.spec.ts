@@ -170,11 +170,20 @@ test('OAuth return opens Accounts and displays the result without depending on w
   expect(await page.evaluate(() => sessionStorage.getItem('poise-google-login-secret'))).toBeNull()
 })
 test('import freezes typing and agent edits before draining pending annotation saves', async ({ page }) => {
-  const actions = await setup(page), google = page.locator('.google-documents')
-  // The document chat holds one pending agent edit while the import runs.
+  // The socket route must exist before setup navigates: registered after,
+  // the WebSocket connects to the real server instead of the fixture.
   const state = makeState([], {})
-  await installRoutes(page, state)
+  state.models = {
+    catalog: { models: [{ identity: 'opus-5-max', selector: 'claude-opus-5', effort: 'max', provider: 'claude' }], review_providers: [], path: '' },
+    places: [{ key: 'editor', default: 'opus-5-max' }],
+    fixed: [],
+    refresh: null,
+  }
   const sock = await installSocket(page, state)
+  const actions = await setup(page), google = page.locator('.google-documents')
+  // REST routes resolve last-registered-wins, so these go after setup.
+  await installRoutes(page, state)
+  // The document chat holds one pending agent edit while the import runs.
   await page.locator('.editor-chat-btn').click()
   await expect(page.locator('#chat-side-pane')).toBeVisible()
   const paneInput = page.locator('#chat-side-pane .chat-input')
@@ -205,7 +214,7 @@ test('import freezes typing and agent edits before draining pending annotation s
     document.dispatchEvent(new Event('selectionchange'))
   })
   await page.locator('#editor-comment-btn').click()
-  await page.getByRole('textbox', { name: 'Add a comment…', exact: true }).fill('Keep this annotation during import.')
+  await page.locator('.editor-inline-thread .editor-annotation-text').fill('Keep this annotation during import.')
   await google.getByRole('button', { name: 'Import Google version', exact: true }).click()
   await pending
   await expect(page.locator('#editor-doc')).toHaveAttribute('contenteditable', 'false')
@@ -446,7 +455,7 @@ test('pending annotations must be acknowledged before leaving for Google', async
     document.dispatchEvent(new Event('selectionchange'))
   })
   await page.locator('#editor-comment-btn').click()
-  await page.getByRole('textbox', { name: 'Add a comment…', exact: true }).fill('Keep this annotation before connecting.')
+  await page.locator('.editor-inline-thread .editor-annotation-text').fill('Keep this annotation before connecting.')
   await page.getByRole('button', { name: 'Publish', exact: true }).click()
   await page.getByRole('dialog', { name: 'Publish', exact: true }).getByRole('button', { name: 'Add Google account', exact: true }).click()
   await pending
