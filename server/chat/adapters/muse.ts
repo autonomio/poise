@@ -497,12 +497,20 @@ export function createMuseAdapter(host: AdapterHost, options: { steerSettleMs?: 
     steerSettleTimer.unref()
   }
   function deferUnsettled(turn: ActiveTurn) {
-    // A sibling successor may still be running the turn's work, with this
-    // steer queued behind it: look again once that work lands instead of
-    // cutting its transcript off.
-    if (turn.nativeIds.some(id => !turn.endedNativeIds.has(id))) { armSteerSettle(turn); return }
+    // A successor that launched (it left the steer set at turn/started)
+    // may still be running the turn's work: look again once it lands
+    // instead of cutting its transcript off. An id still in the steer
+    // set never launched, even if its queued input was shown.
+    if (turn.nativeIds.some(id => !turn.endedNativeIds.has(id) && !turn.steers.has(id))) { armSteerSettle(turn); return }
     const unrun = [...turn.steers.values()].filter((id): id is string => !!id)
     turn.steers.clear()
+    if (turn.terminalError || turn.interruptRequested) {
+      // A failed or stopped turn drops its unrun steers and reports its
+      // real outcome; only a normally finished turn defers them.
+      host.log(`${LABEL}: a steered message never ran and the turn did not finish normally, so the steer was dropped`)
+      finish(turn, turn.terminalError ? { stopReason: 'error', error: turn.terminalError } : { stopReason: 'cancelled' })
+      return
+    }
     host.log(`${LABEL}: a steered message did not run within the settle window; the turn completes and the steer is queued as the next prompt`)
     finish(turn, { stopReason: 'end_turn', ...(unrun.length ? { unrunSteers: unrun } : {}) })
   }

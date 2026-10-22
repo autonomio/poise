@@ -244,8 +244,10 @@ queued turns through the native queue interface or interrupts their exact
 IDs if launch won the race. A steer the agent never ran does not fail the
 turn: the turn completes normally, the process is kept, and the steer's
 original text runs as the next prompt through the durable queue, headed by
-a note that it arrived after the turn. A forced protocol close asks the
-runtime to verify worker termination before releasing the checkout.
+a note that it arrived after the turn. A turn that fails or is stopped
+drops its unrun steers and reports its real outcome instead. A forced
+protocol close asks the runtime to verify worker termination before
+releasing the checkout.
 
 ## Files, attachments and Editor
 

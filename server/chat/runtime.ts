@@ -1709,6 +1709,7 @@ export class ChatRuntime extends EventEmitter {
     turn.abort.signal.addEventListener('abort', releasePrompt, { once: true })
     storage.reserveQueueTurn(session.record.id, turn.id, queueItem?.id, internalMessageSeq)
     if (queueItem) turn.queueItem = queueItem
+    if (queueItem?.source) turn.source = { ...queueItem.source }
     session.turn = turn
     if (session.idleTimer) { clearTimeout(session.idleTimer); session.idleTimer = null }
     return turn
@@ -2303,7 +2304,9 @@ export class ChatRuntime extends EventEmitter {
       // normally finished turn defers: a stopped or failed turn drops them.
       if (stopReason === 'end_turn' && unrunSteers?.length) {
         try { this.deferUnrunSteers(session, turn, unrunSteers) } catch (failure) {
-          this.emit('log', `[chat] unrun steers could not be queued: ${failure instanceof Error ? failure.message : String(failure)}`)
+          const reason = failure instanceof Error ? failure.message : String(failure)
+          this.emit('log', `[chat] unrun steers could not be queued: ${reason}`)
+          try { this.emit_(record.id, { type: 'error', message: `A steered message never ran and could not be queued as a follow-up (${reason}). Send it again as a new message.`, recoverable: true }) } catch { /* mirror */ }
         }
       }
       let terminalRecorded = false
@@ -2524,7 +2527,8 @@ export class ChatRuntime extends EventEmitter {
       if (!pending) { this.emit('log', `[chat] untracked steer ${id} was not queued`); continue }
       items.push({ id: randomUUID(), sourceSessionId: record.id,
         prompt: { text: `${UNRUN_STEER_NOTE}\n\n${pending.text}`, attachments: pending.attachments, mentions: pending.mentions },
-        agent: record.agent, model: record.model, effort: record.effort, createdAt: new Date().toISOString(), state: 'waiting' })
+        agent: record.agent, model: record.model, effort: record.effort, createdAt: new Date().toISOString(), state: 'waiting',
+        ...(pending.actor ? { source: pending.actor } : {}) })
     }
     if (!items.length) return
     this.mutateQueue(session, () => {

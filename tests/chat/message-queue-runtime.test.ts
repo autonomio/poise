@@ -119,7 +119,7 @@ describe('deferred message execution', () => {
   it('queues a Muse steer the agent never ran as the next prompt instead of failing the turn', async () => {
     const w = await world({ auto: false })
     w.c.dropSteers = true
-    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun', branch: { new: randomUUID() } })
+    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun', branch: { new: randomUUID() }, autoMerge: true })
     await until(() => w.runtime.get(s.id)?.status === 'idle')
     w.runtime.prompt(s.id, input('Long task'))
     await until(() => w.c.calls.length === 1)
@@ -133,11 +133,54 @@ describe('deferred message execution', () => {
     expect(finished().map(e => e.event)).toMatchObject([{ stopReason: 'end_turn' }, { stopReason: 'end_turn' }])
     expect(w.c.calls[1].input.text).toContain('scope note')
     expect(w.c.calls[1].input.text).toContain('arrived after the previous turn')
+    expect(w.c.calls[1].input.text).toContain('[User request]')
     expect(w.c.adapters.find(adapter => adapter.agent === 'muse')!.alive).toBe(true)
     expect(w.runtime.get(s.id)?.queue?.items).toEqual([])
     await pause(150)
     expect(w.c.calls).toHaveLength(2)
   })
+
+  it('dispatches a deferred chat steer as source data under its actor, not the person', async () => {
+    const w = await world({ auto: false })
+    w.c.dropSteers = true
+    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun-actor', branch: { new: randomUUID() }, autoMerge: true })
+    await until(() => w.runtime.get(s.id)?.status === 'idle')
+    w.runtime.prompt(s.id, input('Long task'))
+    await until(() => w.c.calls.length === 1)
+    await w.runtime.steer(s.id, 'scope note', { attachments: [], mentions: [] }, { kind: 'chat', sessionId: w.s.id, title: 'Manager' })
+    w.finish()
+    await until(() => w.c.calls.length === 2)
+    w.finish()
+    const finished = () => w.runtime.events(s.id, 0).events.filter(e => e.event.type === 'turn.finished')
+    await until(() => finished().length === 2)
+    await until(() => w.runtime.get(s.id)?.status === 'idle')
+    expect(w.c.calls[1].input.text).toContain('[Poise steer from')
+    expect(w.c.calls[1].input.text).not.toContain('[User request]')
+    const started = w.runtime.events(s.id, 0).events.filter(e => e.event.type === 'turn.started')
+    expect(started[1].event).toMatchObject({ source: { kind: 'chat', sessionId: w.s.id } })
+    await pause(150)
+    expect(w.c.calls).toHaveLength(2)
+  })
+
+  it('reports a visible error when an unrun steer cannot be queued', async () => {
+    const w = await world({ auto: false })
+    w.c.dropSteers = true
+    const s = await w.runtime.create({ agent: 'muse', model: 'muse-spark-1.3-contributor-max', repo: 'test/queue-unrun-full', branch: { new: randomUUID() } })
+    await until(() => w.runtime.get(s.id)?.status === 'idle')
+    for (let i = 0; i < 8; i++) await w.runtime.enqueue(s.id, randomUUID(), input(`filler ${i} ${'x'.repeat(240_000)}`))
+    w.runtime.prompt(s.id, input('Long task'))
+    await until(() => w.c.calls.length === 1)
+    await w.runtime.steer(s.id, `scope note ${'y'.repeat(250_000)}`)
+    w.finish()
+    const finished = () => w.runtime.events(s.id, 0).events.filter(e => e.event.type === 'turn.finished')
+    await until(() => finished().length === 1)
+    expect(finished()[0].event).toMatchObject({ stopReason: 'end_turn' })
+    const errors = w.runtime.events(s.id, 0).events.filter(e => e.event.type === 'error')
+    expect(errors.map(e => e.event)).toMatchObject([{ message: expect.stringContaining('could not be queued') }])
+    // The queue still advances normally past the failed deferral.
+    await until(() => w.c.calls.length === 2)
+    expect(w.runtime.get(s.id)?.queue?.items).toHaveLength(8)
+  }, 60_000)
 
   it('enqueues during an active turn without steering it and waits through real pending questions', async () => {
     const w = await world({ auto: false })

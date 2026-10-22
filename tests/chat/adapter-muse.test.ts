@@ -285,6 +285,56 @@ describe('Muse adapter', () => {
     expect(adapter.alive).toBe(true)
   })
 
+  it('settles a shown-but-never-launched steer instead of waiting for it forever', async () => {
+    const host = createFakeHost(FAKE, ['--abandon-steer'])
+    const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
+    hosts.push(host)
+    adapters.push(adapter)
+    await adapter.start(MODEL)
+    const turn = adapter.prompt('turn-1', prompt('steer'), new AbortController().signal)
+    await host.waitFor((event) => event.type === 'text.delta')
+    await adapter.steer('go left', { correlationId: 'steer-1' })
+    const result = await turn
+    expect(result.stopReason).toBe('end_turn')
+    expect(result).toMatchObject({ unrunSteers: ['steer-1'] })
+    expect(adapter.alive).toBe(true)
+  })
+
+  it('drops unrun steers and reports the failure when the native turn fails', async () => {
+    const host = createFakeHost(FAKE, ['--drop-steer', '--fail-steer-turn'])
+    const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
+    hosts.push(host)
+    adapters.push(adapter)
+    await adapter.start(MODEL)
+    const turn = adapter.prompt('turn-1', prompt('steer'), new AbortController().signal)
+    await host.waitFor((event) => event.type === 'text.delta')
+    await adapter.steer('go left', { correlationId: 'steer-1' })
+    const result = await turn
+    expect(result.stopReason).toBe('error')
+    expect(result.error).toBe('Muse: provider returned 503')
+    expect(result.unrunSteers).toBeUndefined()
+    expect(adapter.alive).toBe(true)
+  })
+
+  it('drops unrun steers when the turn is stopped before the settle window fires', async () => {
+    const host = createFakeHost(FAKE, ['--drop-steer'])
+    const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
+    hosts.push(host)
+    adapters.push(adapter)
+    await adapter.start(MODEL)
+    const turn = adapter.prompt('turn-1', prompt('steer'), new AbortController().signal)
+    await host.waitFor((event) => event.type === 'text.delta')
+    await adapter.steer('go left', { correlationId: 'steer-1' })
+    // The native turn completes within milliseconds of the steer; stop
+    // after that but before the 500 ms settle window fires.
+    await sleep(200)
+    await adapter.cancel()
+    const result = await turn
+    expect(result.stopReason).toBe('cancelled')
+    expect(result.unrunSteers).toBeUndefined()
+    expect(adapter.alive).toBe(true)
+  })
+
   it('counts a steer absorbed into the running turn as run', async () => {
     const host = createFakeHost(FAKE, ['--absorb-steer'])
     const adapter = createMuseAdapter(host, { steerSettleMs: 500 })
@@ -308,7 +358,9 @@ describe('Muse adapter', () => {
     await host.waitFor(event => event.type === 'text.delta')
     await adapter.steer('must not execute')
     await adapter.cancel()
-    expect(await pending).toMatchObject({ stopReason: 'cancelled' })
+    const result = await pending
+    expect(result.stopReason).toBe('cancelled')
+    expect(result.unrunSteers).toBeUndefined()
     await sleep(60)
     expect(host.ofType('text.delta').map(event => event.delta).join('')).not.toContain('steered:')
     await expect(adapter.steer('too late')).rejects.toBeInstanceOf(AdapterError)
@@ -321,7 +373,9 @@ describe('Muse adapter', () => {
     await host.waitFor(event => event.type === 'text.delta')
     await adapter.steer('must be stopped')
     await adapter.cancel()
-    expect(await pending).toMatchObject({ stopReason: 'cancelled' })
+    const result = await pending
+    expect(result.stopReason).toBe('cancelled')
+    expect(result.unrunSteers).toBeUndefined()
     expect(host.ofType('text.delta').map(event => event.delta).join('')).toContain('queued turn stopped')
     expect(host.ofType('text.delta').map(event => event.delta).join('')).not.toContain('queued turn escaped')
   })
