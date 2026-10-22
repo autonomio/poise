@@ -3361,7 +3361,11 @@ async function tickMergePrs(): Promise<void> {
         continue
       }
       if (!candidate.ready || candidate.author?.toLowerCase() !== author.toLowerCase()) {
-        if (candidate.behind && candidate.author?.toLowerCase() === author.toLowerCase()) behind.push(candidate)
+        if (candidate.behind && candidate.author?.toLowerCase() === author.toLowerCase()) {
+          // A failed update keeps its failure record so retries back off like merges.
+          behind.push(candidate)
+          continue
+        }
         clearBehaviorFailure('merge-prs', target)
         continue
       }

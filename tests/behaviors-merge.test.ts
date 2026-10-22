@@ -256,6 +256,19 @@ describe('Merge Pull Requests', () => {
     expect(updateCalls().map(([, args]) => args[1])).toEqual(['#8', '#7'])
     expect(mergeCalls()).toEqual([])
   })
+  it('backs off a persistently failing branch update instead of retrying every scan', async () => {
+    enable(); readyNumbers = new Set(); behindNumbers = new Set([7]); error = new Error('GitHub unavailable')
+    vi.useFakeTimers()
+    await runtime.runEnabledBehaviorsOnce()
+    expect(updateCalls()).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(runtime.BEHAVIOR_RETRY_BASE_MS)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(updateCalls()).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(runtime.BEHAVIOR_RETRY_BASE_MS)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(updateCalls()).toHaveLength(2)
+    expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([expect.objectContaining({ target: `${REPO}#7` })])
+  })
   it('refuses a malformed update receipt', async () => {
     enable(); readyNumbers = new Set(); behindNumbers = new Set([7]); response = { outcome: 'unknown' }
     await runtime.runEnabledBehaviorsOnce()
