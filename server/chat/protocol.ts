@@ -131,6 +131,8 @@ export interface SessionRecord {
   safeModePending?: boolean
   branch: BranchBinding
   title: string
+  /** The person named this chat by hand; automatic titling never overwrites it. */
+  titleManual?: boolean
   createdAt: string
   updatedAt: string
   status: SessionStatus
