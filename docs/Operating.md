@@ -558,8 +558,10 @@ Both scripts capture workspace handles before building or retagging the image,
 then retain that inventory and add any workspaces observed during verification.
 A removed container stays pending until its replacement is verified; another
 healthy workspace cannot hide a missing one.
-If a listed container vanishes before inspection, verification waits for a
-complete inventory instead of treating partial results as proof of success.
+Each poll retains the workspace labels from its container listing before
+inspection. If a listed container vanishes before inspection, verification
+still requires that workspace across later polls and retries; it waits for
+a complete inventory instead of treating partial results as proof of success.
 The private `deploy/.env.workspace-proof` retains unfinished obligations across
 failed deploys and retries, and is cleared after successful verification.
 It proves handles captured by these scripts; a workspace already absent before

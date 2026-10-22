@@ -349,7 +349,7 @@ pending_line() {
 verify_workspaces() {
   [ $# -eq 3 ] || die "verify_workspaces needs the workspace handles captured before building the image."
   local sha=$1 image=$2 expected=$3
-  local image_id ids lines pending waiting serving deadline announced observed
+  local image_id inventory ids lines pending waiting serving deadline announced observed
   local handle id running name health active desired installed has_installed since
   if [ -z "$sha" ]; then
     say "This is a development build, which reports no release; skipping workspace verification."
@@ -365,7 +365,22 @@ verify_workspaces() {
     serving=''
     observed=''
     # The gateway replaces containers as it recreates them, so list them anew every poll.
-    ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
+    inventory=$(docker ps --all --filter label=poise.managed=true --format '{{.ID}} {{.Label "poise.workspace"}}') \
+      || die "cannot list the managed workspaces."
+    ids=''
+    if [ -n "$inventory" ]; then
+      while read -r id handle; do
+        [ -n "$handle" ] || die "managed container $id has no poise.workspace label."
+        [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "managed container $id has an invalid workspace handle."
+        # Retain the identity from this listing before inspection can race
+        # with removal. A later empty poll must still require its replacement.
+        if [[ " $expected" != *" $handle "* ]]; then
+          expected="$expected$handle "
+          save_workspace_proof "$expected"
+        fi
+        ids="$ids$id "
+      done <<<"$inventory"
+    fi
     if [ -n "$ids" ]; then
       # A container removed since docker ps is its replacement's business, not
       # a failed deploy: inspect still prints the containers it found, and the

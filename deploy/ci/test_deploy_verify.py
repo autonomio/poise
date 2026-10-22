@@ -285,6 +285,42 @@ class VerifyTest(LibTest):
         self.assertIn(f'Every workspace serves {NEW}: alice.', result.stdout)
         self.assertGreaterEqual(sum(call.startswith('inspect ') for call in self.calls()), 2)
 
+    def test_uninspectable_new_workspace_remains_required_after_the_next_empty_poll(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        result = self.verify({'inventories': [[], [alice], []], 'inspect_fail_times': 99},
+                             timeout=30, expire_after_poll=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('alice: missing (waiting for its replacement)', result.stderr)
+        self.assertNotIn('No workspace exists yet.', result.stdout)
+        self.assertNotIn('Every workspace serves', result.stdout)
+        with open(self.state + '.proof') as file:
+            self.assertIn('alice', file.read())
+
+    def test_uninspectable_new_workspace_cannot_disappear_behind_a_healthy_one_next_poll(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice], [alice, bob], [alice]],
+                              'health': {'poise-ws-alice': [health(NEW)]},
+                              'inspect_missing': [1], 'inspect_missing_times': 1},
+                             timeout=30, expire_after_poll=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing (waiting for its replacement)', result.stderr)
+        self.assertNotIn('Every workspace serves', result.stdout)
+        with open(self.state + '.proof') as file:
+            self.assertIn('bob', file.read())
+        result = self.verify({'containers': [alice], 'health': {'poise-ws-alice': [health(NEW)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing (waiting for its replacement)', result.stderr)
+
+    def test_uninspectable_new_workspace_recovers_after_a_replacement_gap(self):
+        alice = f'alice {OLD_IMAGE_ID} true /poise-ws-alice'
+        replacement = f'alice {IMAGE_ID} true /poise-ws-alice'
+        result = self.verify({'inventories': [[], [alice], [], [replacement]], 'inspect_fail_times': 1,
+                              'health': {'poise-ws-alice': [health(NEW)]}}, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'Every workspace serves {NEW}: alice.', result.stdout)
+        self.assertFalse(os.path.exists(self.state + '.proof'))
+
     def test_all_workspaces_missing_before_first_poll_remain_pending(self):
         result = self.verify({'inventories': [[f'alice {IMAGE_ID} true /poise-ws-alice',
                                                 f'bob {IMAGE_ID} true /poise-ws-bob'], []]})
