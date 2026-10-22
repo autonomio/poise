@@ -191,8 +191,9 @@ class TestReceiptRecording(TestCase):
             return SimpleNamespace(returncode=0, stdout=json.dumps({"stopReason": "end_turn", "num_turns": 1,
                                    "structuredOutput": {"action": "reviewed_clean", "comments": []}}), stderr="")
         with patch.object(structured_review.subprocess, "run", side_effect=process), patch.object(ReviewWatch, "run", side_effect=process):
-            structured_review.run("/repo", "system", "packet", CATALOG.resolve("grok-4.6-xhigh"), "pr_review",
-                                  "https://github.com/o/r/pull/12", "bit-mis", HEAD, 60)
+            with self.assertRaises(review_receipt.SubmissionError):
+                structured_review.run("/repo", "system", "packet", CATALOG.resolve("grok-4.6-xhigh"), "pr_review",
+                                      "https://github.com/o/r/pull/12", "bit-mis", HEAD, 60)
         self.assertEqual(review_receipt.failure(), "error: GitHub 500:")
         self.assertIsNone(review_receipt.get())
         self.assertIsNone(self.stored())
@@ -460,3 +461,98 @@ class TestRecoveryWithSiblings(TestCase):
         self.assertEqual(row["status"], "failed")
         self.assertIn("exactly one", row["error"])
         self.assertIsNone(row["review_id"])
+
+
+class TestDuplicatePrevention(TestCase):
+    """#236: a second unclaimed review is a contract violation, never adopted."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(patch.stopall)
+        patch.object(api, "DB", Path(self.directory.name) / "calls.sqlite3").start()
+        patch.object(api, "RESPONSES", Path(self.directory.name) / "responses").start()
+        patch.object(api, "sleep").start()
+        api.init_db()
+        review_receipt.bind(api.DB, "me")
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, started_at) values ('me', 'pr_review', 'o/r', '1', 0)")
+
+    def test_second_unclaimed_review_with_receipt_is_a_violation(self):
+        after = facts([CHANGES, CLEAN])
+        with self.assertRaisesRegex(budget.ReviewLimitError, "duplicate"):
+            api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                 receipt=receipt("reviewed_clean", 92), call_id="me")
+        row_code = None
+        try:
+            api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                 receipt=receipt("reviewed_clean", 92), call_id="me")
+        except budget.ReviewLimitError as failure:
+            row_code = failure.code
+        self.assertEqual(row_code, "review_contract_violation")
+
+    def test_sibling_claimed_extra_review_is_not_a_duplicate(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, review_id, started_at) values ('sibling', 'pr_review', 'o/r', '1', '91', 0)")
+        after = facts([CHANGES, CLEAN])
+        result = api.behavior_outcome(object(), "pr_review", "1", "/tmp", "bit-mis", HEAD, facts(), after,
+                                      receipt=receipt("reviewed_clean", 92), call_id="me")
+        self.assertEqual(result["outcome"], "clean")
+
+    def test_failed_recovery_does_not_adopt_a_siblings_review(self):
+        with sqlite3.connect(api.DB) as conn:
+            conn.execute("insert into calls (id, behavior, repo, pr_id, review_id, started_at) values ('sibling', 'pr_review', 'o/r', '1', '92', 0)")
+        mod = SimpleNamespace(pr_number=lambda _: "1", repo_name=lambda *_: "o/r", run=Mock())
+        steps = iter([budget.ReviewLimitError("output token maximum"),
+                      budget.ReviewLimitError("review behavior must produce exactly one atomic clean or change-request review",
+                                              "review_contract_violation")])
+
+        def dispatch(*args, **kwargs):
+            step = next(steps)
+            if isinstance(step, BaseException):
+                raise step
+            return step
+        mod.run.side_effect = dispatch
+        with patch.object(api, "review_facts", side_effect=[facts(), facts(), facts([CLEAN])]), \
+                redirect_stdout(io.StringIO()):
+            try:
+                api.run_governed_behavior(mod, "pr_review", "https://github.com/o/r/pull/1", "bit-mis", HEAD,
+                                          "poise:review-new-prs", uuid4().hex, pwd=self.directory.name)
+            except SystemExit:
+                pass
+        row = api.logs()[-1]
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_code"], "review_recovery_failed")
+        self.assertIsNone(row["review_id"])
+        self.assertIsNone(row["action"])
+
+    def test_bash_guard_blocks_a_second_terminal_submission(self):
+        import sys as _sys
+        gate = Path(self.directory.name) / "gate.lock"
+        gate.touch()
+        path = str(Path(self.directory.name) / "receipt.json")
+        reply = json.dumps({"action": "reviewed_clean", "review_id": 92, "head_sha": HEAD})
+        command = "github-interface --reviewed-clean #1 --expected-head a --token-user bit-mis"
+        env = {"AGENT_INTERFACE_BASH_ALLOW": json.dumps(["github-interface *"]),
+               "AGENT_INTERFACE_REVIEW_GATE": str(gate), "AGENT_INTERFACE_REVIEW_RECEIPT": path}
+        with patch.dict("os.environ", env), \
+                patch.object(_sys, "argv", ["bash_guard.py", command]), \
+                patch.object(bash_guard.subprocess, "run",
+                             return_value=SimpleNamespace(returncode=0, stdout=reply, stderr="")):
+            with self.assertRaises(SystemExit) as first:
+                bash_guard.main()
+            self.assertEqual(first.exception.code, 0)
+            with self.assertRaisesRegex(RuntimeError, "duplicate submission blocked"):
+                bash_guard.main()
+        self.assertEqual(json.loads(Path(path).read_text())["review_id"], 92)
+
+    def test_finish_is_first_writer_wins(self):
+        call_id = api.track("opus-5-high", "", "1", "o/r", "bit-mis", "pr_review")
+        first = api.finish(call_id, "failed", error="Stopped by user", error_code="stopped")
+        with redirect_stderr(io.StringIO()):
+            second = api.finish(call_id, "completed", response="late", outcome="clean", action="reviewed_clean")
+        self.assertEqual(first, second)
+        row = [entry for entry in api.logs() if entry["id"] == call_id][0]
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["error_code"], "stopped")
+        self.assertIsNone(row["outcome"])

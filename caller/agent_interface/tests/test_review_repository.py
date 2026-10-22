@@ -146,7 +146,7 @@ class TestStructuredInspection(TestCase):
                     self.assertEqual(response["results"][1]["lines"], [{"line": 1, "text": "old_contract()"}])
                     return done
                 submissions.append(args)
-                return SimpleNamespace(returncode=0, stdout="submitted", stderr="")
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"action": "requested_changes", "review_id": 91, "head_sha": HEAD}), stderr="")
 
             def ask(*args):
                 rounds.append(args[3])
@@ -190,7 +190,7 @@ class TestStructuredInspection(TestCase):
                             next_requests.append({**request, "start_line": result["next_line"]})
                     return done
                 submissions.append(args)
-                return SimpleNamespace(returncode=0, stdout="submitted", stderr="")
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"action": "requested_changes", "review_id": 91, "head_sha": HEAD}), stderr="")
 
             def ask(*args):
                 rounds.append(args[3])
@@ -224,7 +224,7 @@ class TestStructuredInspection(TestCase):
             model = CATALOG.resolve(identity)
             with self.subTest(model=identity), patch.dict(sr.ASK, {model.provider: ask}), \
                     patch.object(repo, "inspect", return_value=result) as inspect, \
-                    patch.object(sr.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="submitted", stderr="")) as submit:
+                    patch.object(sr.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps({"action": "requested_changes", "review_id": 91, "head_sha": HEAD}), stderr="")) as submit:
                 sr.run("/repo", "system", "packet", model, "pr_review", PR, "bot", HEAD, 60, repository=repo)
                 inspect.assert_called_once_with([REQUEST])
                 submit.assert_called_once()
