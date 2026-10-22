@@ -504,6 +504,56 @@ describe('agent log snapshot sharing', () => {
     await fetchAgentLogSnapshot()
     expect(mocks.runFile).toHaveBeenCalledTimes(2)
   })
+
+  it('spawns every shared read under its own diagnostic identity', async () => {
+    const { diagnosticIdentity, withNoticeDiagnosticIdentity } = await import('../server/logging-context')
+    const seen: Array<{ correlationId: string }> = []
+    const releases: Array<(value: { stdout: string, stderr: string }) => void> = []
+    mocks.runFile.mockImplementation(() => new Promise((resolve) => {
+      seen.push(diagnosticIdentity() as { correlationId: string })
+      releases.push(resolve)
+    }))
+    const outer = { correlationId: 'outer', behavior: 'review-new-prs', repository: 'o/r', target: 'o/r#1', account: 'a' }
+    const first = withNoticeDiagnosticIdentity(outer, () => fetchAgentLogSnapshot())
+    const second = withNoticeDiagnosticIdentity(outer, () => fetchAgentLogSnapshot())
+    releases[0]!({ stdout: JSON.stringify([logRow()]), stderr: '' })
+    await first
+    // The queued read starts inside the first read's settle callback.
+    expect(mocks.runFile).toHaveBeenCalledTimes(2)
+    releases[1]!({ stdout: JSON.stringify([logRow()]), stderr: '' })
+    await second
+    expect(seen).toHaveLength(2)
+    for (const identity of seen) {
+      expect(identity).toMatchObject({ behavior: 'agent-logs', repository: '', target: '', account: null })
+      expect(identity.correlationId).not.toBe('outer')
+    }
+    expect(seen[0]!.correlationId).not.toBe(seen[1]!.correlationId)
+  })
+
+  it('gives each waiter its own error object when a shared read fails', async () => {
+    const shared = Object.assign(new Error('Caller is down'), { code: 1, killed: false, signal: null, stdout: '', stderr: 'boom' })
+    mocks.runFile.mockRejectedValue(shared)
+    const first = fetchAgentLogSnapshot()
+    const second = fetchAgentLogSnapshot()
+    const third = fetchAgentLogSnapshot()
+    const failures = await Promise.all([
+      first.catch((error) => error),
+      second.catch((error) => error),
+      third.catch((error) => error),
+    ])
+    // Second and third co-wait on the queued read: distinct objects.
+    expect(failures[0]).not.toBe(failures[1])
+    expect(failures[1]).not.toBe(failures[2])
+    expect(failures[0]).not.toBe(shared)
+    for (const failure of failures) {
+      expect(failure).toBeInstanceOf(Error)
+      expect(failure.message).toBe('Caller is down')
+      expect(failure.name).toBe('Error')
+      expect(failure.code).toBe(1)
+      expect(failure.stderr).toBe('boom')
+      expect(failure.cause).toBe(shared)
+    }
+  })
 })
 
 describe('manual review model selection', () => {

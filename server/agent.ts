@@ -19,6 +19,7 @@ import { claudeAuth } from './claude-auth'
 import { HttpError } from './http'
 import { needsClaude, reviewChoice } from './review-model'
 import { claudeSubscriptionEnvironment, runFile, spawnDetached } from './process'
+import { withNoticeDiagnosticIdentity } from './logging-context'
 import { requireAgentAccount } from './settings'
 
 const CLI = 'agent-interface'
@@ -319,18 +320,44 @@ function settleAgentLogRead(read: AgentLogRead, outcome: { snapshot: AgentLogSna
     // matching a directly linked child.
     waiter.signal?.removeEventListener('abort', waiter.onAbort)
     if ('snapshot' in outcome) waiter.resolve(outcome.snapshot)
-    else waiter.reject(outcome.error)
+    else waiter.reject(copyAgentLogError(outcome.error))
   }
   promoteQueuedAgentLogRead()
 }
 
+// Each waiter gets its own error object, as if it had spawned its own
+// child: sharing one object would attribute it to whichever waiter's
+// diagnostic context logged it last.
+function copyAgentLogError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error
+  const copy = new Error(error.message, { cause: error })
+  copy.name = error.name
+  copy.stack = error.stack
+  const source = error as unknown as Record<string, unknown>
+  const target = copy as unknown as Record<string, unknown>
+  for (const field of ['code', 'killed', 'signal', 'stdout', 'stderr']) {
+    if (source[field] !== undefined) target[field] = source[field]
+  }
+  return copy
+}
+
 async function readAgentLogSnapshot(signal: AbortSignal): Promise<AgentLogSnapshot> {
-  const { stdout } = await runFile(CLI, ['--logs'], {
+  // The child serves every waiter, so it runs under the shared read's own
+  // diagnostic identity — never the AsyncLocalStorage context of whoever
+  // started the preceding read, whose correlationId would otherwise own
+  // this read's timeouts.
+  const { stdout } = await withNoticeDiagnosticIdentity({
+    correlationId: randomUUID(),
+    behavior: 'agent-logs',
+    repository: '',
+    target: '',
+    account: null,
+  }, () => runFile(CLI, ['--logs'], {
     cwd: agentCwd(),
     timeoutMs: 30_000,
     maxOutputBytes: 32 * 1024 * 1024,
     signal,
-  })
+  }))
   const trimmed = stdout.trim()
   if (!trimmed) throw new Error('agent-interface --logs returned empty output')
   // agent-interface returns oldest-first (`order by started_at`).
