@@ -85,6 +85,36 @@ describe('approve-prs change gate', () => {
     expect(cliCalls('--requested-changes-addressed')).toHaveLength(2)
   })
 
+  it('checks again while a launch for the PR is still in flight', async () => {
+    arrangeCli(false)
+    const { db, runtime } = await startApproving()
+
+    await runtime.runEnabledBehaviorsOnce()
+    expect(cliCalls('--requested-changes-addressed')).toHaveLength(1)
+    // A review launch starts after the no-op watermark. Its completion
+    // lands in the snapshot's local inputs, so the gate must not treat
+    // the in-flight launch as steady state.
+    const target = `${pr.repo}#${pr.number}`
+    const claimId = db.claimSeenOwned('review-new-prs', target)
+    expect(claimId).not.toBeNull()
+    const marked = db.markBehaviorLaunchIntentOwned({
+      key: 'review-new-prs',
+      target,
+      claimId: claimId!,
+      launchBehavior: 'pr_review',
+      repo: pr.repo,
+      pr: pr.number,
+      requestedAt: new Date().toISOString(),
+      expectedHead: HEAD_SHA,
+      actor: 'review-bot',
+      source: 'poise:review-new-prs',
+      correlationId: claimId!,
+    })
+    expect(marked).toBe(true)
+    await runtime.runEnabledBehaviorsOnce()
+    expect(cliCalls('--requested-changes-addressed')).toHaveLength(2)
+  })
+
   it('never gates a launched check or a deferred one', async () => {
     arrangeCli(true)
     mocks.spawnDetached.mockResolvedValue(undefined)

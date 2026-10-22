@@ -3111,8 +3111,14 @@ async function tickApprovePrs(): Promise<void> {
       const checkTarget = `${prTarget}:check`
       if (!behaviorRetryDue('approve-prs', checkTarget)) return
       // A held failure retries on its own clock even when nothing changed.
+      // An in-flight launch settles into the snapshot's local inputs, and
+      // review's reconciliation commits concurrently with this tick: only
+      // skip once nothing for this PR is still in flight, so a completing
+      // review can never be gated out by a snapshot taken a moment early.
       const snapshot = approveCheckSnapshot(pr.repo, pr.number, reviewer)
-      if (readBehaviorFailure('approve-prs', checkTarget) === null && approveCheckFresh(pr, snapshot)) return
+      if (readBehaviorFailure('approve-prs', checkTarget) === null
+        && !hasActiveAgentLaunchForPr(pr.repo, pr.number)
+        && approveCheckFresh(pr, snapshot)) return
       let operationId: string | null = null
       let launched = false
       let checked = false
