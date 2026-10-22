@@ -342,6 +342,96 @@ test('moves a passage chat to the side pane and back with its draft', async ({ p
   await expect(threadInput(page)).toHaveValue('An unsent thought, edited')
 })
 
+for (const leave of ['closing the pane', 'switching to the document chat', 'going back to the passage'] as const) {
+  for (const latest of ['Latest pane draft', '']) {
+    test(`keeps ${latest ? 'the latest draft' : 'an explicitly cleared draft'} after ${leave}`, async ({ page }) => {
+      await editor(page, [annotation({ id: 'ann-1', comment: 'Keep this annotation' })])
+      await openThreadForMark(page, 'ann-1')
+      await threadInput(page).fill('Older inline draft')
+      await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+      await expect(pane(page).locator('.chat-input')).toHaveValue('Older inline draft')
+      await pane(page).locator('.chat-input').fill(latest)
+      if (leave === 'going back to the passage') {
+        await pane(page).getByRole('button', { name: 'Back to the passage', exact: true }).click()
+      } else {
+        if (leave === 'closing the pane') await pane(page).locator('.chat-close').click()
+        else {
+          await page.locator('.editor-chat-btn').click()
+          await expect(pane(page).locator('.chat-title')).toHaveText('A question')
+        }
+        await openThreadForMark(page, 'ann-1')
+      }
+      await expect(threadInput(page)).toHaveValue(latest)
+    })
+  }
+}
+
+test('does not mark a pane reply already shown but marks a later background reply', async ({ page }) => {
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'First question')
+  const earlier = await finishReply(sock, id, 'First question', 'First reply.')
+  state.history[id] = earlier
+  const created = state.sessions.find((s) => s.id === id)!
+  Object.assign(created, { status: 'idle' })
+  sock.push(id, { type: 'session.updated', session: { ...created } })
+  await expect(threadTranscript(page)).toContainText('First reply.')
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await expect(pane(page).locator('.chat-surface-transcript')).toContainText('First reply.')
+  const shown = await finishReply(sock, id, 'Second question', 'Read in the pane.', 't2')
+  state.history[id] = [...earlier, ...shown]
+  sock.push(id, { type: 'session.updated', session: { ...created, status: 'idle' } })
+  await expect(pane(page).locator('.chat-surface-transcript')).toContainText('Read in the pane.')
+  await expect(pane(page).locator('.chat-pane-state')).toHaveText('')
+  await pane(page).locator('.chat-close').click()
+  await expect(marker(page, 'New reply')).toHaveCount(0)
+  await expect(markerCount(page)).toHaveCount(0)
+  sock.push(id, { type: 'turn.finished', turnId: 't3', stopReason: 'end_turn' })
+  await expect(marker(page, 'New reply')).toBeVisible()
+})
+
+test('keeps a buffered pane reply marked new when closed before history is shown', async ({ page }) => {
+  await page.addInitScript(() => {
+    const parse = JSON.parse
+    JSON.parse = (text, reviver) => {
+      const frame: unknown = parse(text, reviver)
+      if (frame && typeof frame === 'object' && 'kind' in frame && frame.kind === 'event' && 'envelope' in frame) {
+        const envelope = frame.envelope
+        if (envelope && typeof envelope === 'object' && 'seq' in envelope) Reflect.set(window, 'lastChatSequence', envelope.seq)
+      }
+      return frame
+    }
+  })
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  await openThreadForMark(page, 'ann-1')
+  const id = await sendThreadMessage(page, sock, 'First question')
+  const earlier = await finishReply(sock, id, 'First question', 'Earlier reply.')
+  state.history[id] = earlier
+  const created = state.sessions.find((s) => s.id === id)!
+  Object.assign(created, { status: 'idle' })
+  sock.push(id, { type: 'session.updated', session: { ...created } })
+  await expect(threadTranscript(page)).toContainText('Earlier reply.')
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const requested = new Promise<void>((resolve) => { started = resolve })
+  await page.route(`**/api/chat/sessions/${id}?after=0`, async (route) => {
+    started()
+    await held
+    await route.fulfill({ json: { session: created, events: earlier } })
+  })
+  try {
+    await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+    await requested
+    await finishReply(sock, id, 'Second question', 'Not yet shown.', 't2')
+    const idle = sock.push(id, { type: 'session.updated', session: { ...created } })
+    await expect.poll(() => page.evaluate(() => Reflect.get(window, 'lastChatSequence'))).toBe(idle.seq)
+    await expect(pane(page).locator('.chat-surface-transcript')).not.toContainText('Not yet shown.')
+    await pane(page).locator('.chat-close').click()
+    await expect(marker(page, 'New reply')).toBeVisible()
+  } finally { release() }
+})
+
 test('keeps history and live replies when moving a passage chat while its history request is pending', async ({ page }) => {
   await page.addInitScript(() => {
     const parse = JSON.parse

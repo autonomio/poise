@@ -79,8 +79,8 @@ const drafts = new Map<string, ComposerDraft>()
  *  chat is tracked from close until its thread reopens: later activity grows
  *  a marker, and the Editor's overlay pass moves it with its passage. */
 const tracked = new Map<string, Tracked>()
-/** A turn finished since the thread was last open. */
-const unseenReply = new Set<string>()
+/** Latest finish not yet acknowledged by a surface's read cursor. */
+const unseenReply = new Map<string, number>()
 /** The chat is open in the side pane. */
 const inPane = new Set<string>()
 /** The passage can no longer be located. */
@@ -273,7 +273,7 @@ function track(subject: ChatSubject, sessionId: string | null, page: HTMLElement
       const event = envelope.event
       const live = tracked.get(key)
       if (!live) return
-      if (event.type === 'turn.finished') unseenReply.add(key)
+      if (event.type === 'turn.finished') unseenReply.set(key, Math.max(unseenReply.get(key) ?? 0, envelope.seq))
       else if (event.type === 'permission.requested' || event.type === 'question.asked') live.pendingRequests.add(event.id)
       else if (event.type === 'permission.resolved' || event.type === 'question.answered') live.pendingRequests.delete(event.id)
       else if (event.type === 'session.updated') live.status = event.session.status
@@ -524,10 +524,17 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
   if (!paneCloseWatched && typeof window !== 'undefined') {
     paneCloseWatched = true
     window.addEventListener('chat:side-pane-closed', (event) => {
-      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number, pendingRequests?: string[] }>).detail
+      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number, pendingRequests?: string[], draft: ComposerDraft | null }>).detail
       const subject = detail?.subject
       if (!subject) return
       const closedKey = subjectKey(subject)
+      // The pane owns the newest composer snapshot, including an explicit
+      // empty draft, even if navigation already cleared its tracking.
+      if (subject.surface === 'editor-passage' || subject.surface === 'editor-review') keepThreadDraft(subject, detail.draft)
+      // A retained tracker also hears replies the pane displayed. Clear only
+      // those the surface actually applied; buffered or later replies stay new.
+      const finishedSeq = unseenReply.get(closedKey)
+      if (finishedSeq !== undefined && finishedSeq <= (detail.afterSeq ?? 0)) unseenReply.delete(closedKey)
       if (!inPane.has(closedKey)) return
       inPane.delete(closedKey)
       const entry = tracked.get(closedKey)
