@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CATALOG } from './model-catalog-fixture'
+import { markReleaseSwitch } from '../server/release-background'
 import type { Adapter, AdapterHost, TurnResult } from '../server/chat/adapters/types'
 import type { CheckoutLeaseOptions } from '../server/chat/checkout-lock'
 import type { Capabilities, ChatEvent, PromptInput, SessionRecord, TurnSource } from '../server/chat/protocol'
@@ -61,6 +62,14 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 30000
   while (Date.now() < deadline) { if (check()) return; await new Promise(done => setTimeout(done, 15)) }
   throw new Error('timer fixture readiness deadline')
+}
+/** Hold timer fire and admission with the release switch while the callback
+ *  runs, so the control's background second-ticks cannot admit a pending
+ *  firing between a turn's finish and the test's next step. The callback
+ *  must need no timer admission of its own; ordinary delivery is unaffected. */
+async function holdingTimers<T>(run: () => Promise<T>): Promise<T> {
+  markReleaseSwitch(true)
+  try { return await run() } finally { markReleaseSwitch(false) }
 }
 async function command(id: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const context = await control.context(id)
@@ -393,10 +402,12 @@ describe('durable timers that wake chats', () => {
     await until(() => runtime.get(worker.id)?.status === 'waiting')
     clock += 10 * 60_000
     await control.tick()
-    await command(m.id, { operation: 'stop', sessionId: worker.id })
-    await until(() => runtime.get(worker.id)?.status === 'idle')
-    expect(store.holds(instance)).toHaveLength(0)
-    expect(store.timerPendingRow(instance, createdTimer.id)).toBeDefined()
+    await holdingTimers(async () => {
+      await command(m.id, { operation: 'stop', sessionId: worker.id })
+      await until(() => runtime.get(worker.id)?.status === 'idle')
+      expect(store.holds(instance)).toHaveLength(0)
+      expect(store.timerPendingRow(instance, createdTimer.id)).toBeDefined()
+    })
   }, 120_000)
 
   it('enforces timer bounds and caps without touching person-set timers', async () => {
@@ -552,11 +563,13 @@ describe('durable timers that wake chats', () => {
     await control.tick()
     const listed = (await command(m.id, { operation: 'timers', sessionId: p.id })).timers as Array<{ id: string, pending?: { waitingFor?: string } }>
     expect(listed.find(t => t.id === created.id)?.pending?.waitingFor).toBe('running')
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => (prompts.get(p.id) ?? []).length === 2)
-    expect(prompts.get(p.id)![1].text).toContain('Queued task')
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => (prompts.get(p.id) ?? []).length === 2)
+      expect(prompts.get(p.id)![1].text).toContain('Queued task')
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     await control.tick()
     await until(() => (prompts.get(p.id) ?? []).length === 3)
     expect(prompts.get(p.id)![2].text).toContain('[Poise timer')
@@ -614,8 +627,10 @@ describe('durable timers that wake chats', () => {
     await until(() => prompts.has(p.id))
     prompts.delete(p.id)
     await control.tick()
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     // The reset flags maintenance synchronously; the read below runs before
     // anything can clear it.
     const resetting = runtime.reset(p.id)
@@ -664,11 +679,12 @@ describe('durable timers that wake chats', () => {
       release.markReleaseSwitch(true)
       await control.tick()
       expect(await waitsFor()).toBe('update')
-      release.markReleaseSwitch(false)
+      // The switch stays on through the idle wait so no background tick admits the row first.
       finishes.get(p.id)!({ stopReason: 'end_turn' })
       await until(() => runtime.get(p.id)?.status === 'idle')
       prompts.delete(p.id)
       clock += 61_000
+      release.markReleaseSwitch(false)
       await control.tick()
       await until(() => prompts.has(p.id))
       finishes.get(p.id)!({ stopReason: 'end_turn' })
@@ -751,8 +767,10 @@ describe('durable timers that wake chats', () => {
     await until(() => prompts.has(p.id))
     expect(prompts.get(p.id)).toHaveLength(1)
     expect(prompts.get(p.id)![0].text).toContain('Ordinary first')
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     prompts.delete(p.id)
     clock += 61_000
     await control.tick()
@@ -862,8 +880,10 @@ describe('durable timers that wake chats', () => {
     expect(() => database.db.prepare(`INSERT INTO chat_control_inbox(instance, recipient, sender, event_key, body, created_at, timer_id)
       VALUES(?, ?, ?, ?, ?, ?, ?)`).run(instance, p.id, 'Poise timer', `timer:${created.id}:2`, 'Ping', clock, created.id))
       .toThrow('UNIQUE constraint failed: chat_control_inbox.instance, chat_control_inbox.timer_id')
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
   }, 60_000)
 
   it('marks timer turns for the finished-turn alert and leaves person turns unmarked', async () => {
@@ -948,8 +968,10 @@ describe('durable timers that wake chats', () => {
     expect(failed()).toHaveLength(1)
     await control.tick()
     expect(failed()).toHaveLength(1)
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
     // An hour-long wait warns once with its cause.
     prompts.delete(p.id)
     runtime.prompt(p.id, { text: 'Busy for an hour', attachments: [], mentions: [] })

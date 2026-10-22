@@ -33,6 +33,7 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   await installRoutes(page, state)
   const sock = await installSocket(page, state)
   await page.goto('/')
+  await page.locator('.chat-session-item[data-id="s1"]').click()
 
   const timersButton = page.getByRole('button', { name: 'Timers' })
   await expect(timersButton).toContainText('Timers 2')
@@ -41,7 +42,7 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
   await expect(pane).toBeVisible()
   await expect(pane.locator('.chat-timer')).toHaveCount(2)
   await expect(pane.locator('.chat-timer[data-timer="timer-1"] .chat-timer-meta')).toHaveText('every 30 min · set by Manager')
-  await expect(pane.locator('.chat-timer[data-timer="timer-1"] .chat-timer-status')).toHaveText('next 14:35')
+  await expect(pane.locator('.chat-timer[data-timer="timer-1"] .chat-timer-status')).toHaveText('next 18 Sept 14:35')
 
   await pane.locator('.chat-timers-label').fill('Heartbeat')
   await pane.locator('.chat-timers-message').fill('Are we green?')
@@ -82,10 +83,12 @@ test('opens the Timers pane, adds and cancels a timer, and holds and resumes the
 
   // An interrupted chat's placeholder names its earliest wake.
   await page.locator('.chat-session-item[data-id="s2"]').click()
-  await expect(input(page)).toHaveAttribute('placeholder', 'Interrupted — Resume to continue, or /reset to start fresh · Timer "Early" wakes it at 13:05')
+  await expect(input(page)).toHaveAttribute('placeholder', 'Interrupted — Resume to continue, or /reset to start fresh · Timer "Early" wakes it at 18 Sept 13:05')
 })
 
 test('holds and resumes all timers, shows scheduler outages, and refetches every 30 seconds', async ({ page }) => {
+  // The 30-second refetch needs longer than the default test timeout.
+  test.setTimeout(90_000)
   const one = timerView({ id: 'timer-1', label: 'Check CI' })
   const state = makeState([session({ id: 's1' })])
   state.settings.timezone = 'UTC'
@@ -173,6 +176,6 @@ test('renders timer turns, timer changes and every wait cause with escaped label
   await expect(status('w-model')).toContainText('waiting: choose a model for the Manager')
   await expect(status('w-person')).toContainText('waiting: you were just here')
   await expect(status('w-update')).toContainText('waiting: Poise is updating')
-  await expect(status('w-backoff')).toContainText('waiting: retry after 14:50')
+  await expect(status('w-backoff')).toContainText('waiting: retry after 18 Sept 14:50')
   for (const w of waits) await expect(status(w.id)).toContainText('waiting since')
 })
