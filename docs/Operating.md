@@ -558,6 +558,10 @@ Both scripts capture workspace handles before building or retagging the image,
 then retain that inventory and add any workspaces observed during verification.
 A removed container stays pending until its replacement is verified; another
 healthy workspace cannot hide a missing one.
+The private `deploy/.workspace-proof` retains unfinished obligations across
+failed deploys and retries, and is cleared after successful verification.
+It proves handles captured by these scripts; a workspace already absent before
+the first captured inventory cannot be inferred from that inventory.
 
 The gateway upgrades those workspaces by itself, when it starts and every
 five minutes. Most upgrades change Poise but not the system it runs on, and
@@ -670,6 +674,8 @@ checks the archives against `SHA256SUMS`, then creates each volume anew and
 fills it, keeping owners and permissions. It never overwrites a volume: if
 one already exists it stops before touching anything, and if it fails it
 removes the volumes it created.
+A successful restore also clears any unfinished host deployment proof: restored
+home volumes intentionally wait for their owner's next visit to create a container.
 
 **On a new server**, for example after losing the old one:
 

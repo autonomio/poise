@@ -4,9 +4,11 @@ once every workspace serves the deployed commit, else pending with its age.
     python3 -m unittest discover --start-directory deploy/ci --pattern 'test_*.py'
 """
 
+import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -67,6 +69,16 @@ elif args[:1] == ['exec']:
 elif args[:1] == ['build']:
     state['containers'] = state['after_build']
     save()
+elif args[:2] == ['volume', 'inspect']:
+    sys.exit(0 if args[-1] in state.get('volumes', []) else 1)
+elif args[:2] == ['volume', 'create']:
+    state.setdefault('volumes', []).append(args[-1])
+    save()
+elif args[:2] == ['volume', 'rm']:
+    state['volumes'] = [volume for volume in state.get('volumes', []) if volume not in args[2:]]
+    save()
+elif args[:1] == ['run']:
+    sys.exit(0 if state.get('restore_ok', True) else 1)
 else:
     sys.exit(2)
 '''
@@ -101,7 +113,7 @@ class LibTest(unittest.TestCase):
                 json.dump({**state, 'calls': []}, file)
         env = {name: value for name, value in os.environ.items() if not name.startswith(('POISE_', 'COMPOSE_'))}
         env.update(PATH=f'{self.bin}{os.pathsep}{env["PATH"]}', FAKE_DOCKER_STATE=self.state)
-        return subprocess.run(['bash', '-c', f'. "$0"; {script}', LIB],
+        return subprocess.run(['bash', '-c', f'. "$0"; workspace_proof_file="$FAKE_DOCKER_STATE.proof"; {script}', LIB],
                               capture_output=True, text=True, env=env)
 
     def calls(self):
@@ -224,6 +236,63 @@ class VerifyTest(LibTest):
         self.assertNotIn('No workspace exists yet.', result.stdout)
         self.assertNotIn('Every workspace serves', result.stdout)
 
+    def test_failed_attempt_retains_private_obligations_until_a_verified_retry(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice, bob], [alice]],
+                              'health': {'poise-ws-alice': [health(NEW)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        proof = self.state + '.proof'
+        self.assertEqual(os.stat(proof).st_mode & 0o777, 0o600)
+        # Bob is already absent before the retry's initial snapshot.
+        result = self.verify({'containers': [alice], 'health': {'poise-ws-alice': [health(NEW)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing', result.stderr)
+        result = self.verify({'containers': [alice, bob],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(NEW)]}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(os.path.exists(proof))
+
+    def test_newly_observed_workspace_survives_a_failed_poll_into_the_next_attempt(self):
+        alice = f'alice {IMAGE_ID} true /poise-ws-alice'
+        bob = f'bob {OLD_IMAGE_ID} true /poise-ws-bob'
+        result = self.verify({'inventories': [[alice], [alice, bob]],
+                              'health': {'poise-ws-alice': [health(NEW)], 'poise-ws-bob': [health(OLD)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        result = self.verify({'containers': [alice], 'health': {'poise-ws-alice': [health(NEW)]}})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('bob: missing', result.stderr)
+
+    def test_development_build_does_not_clear_an_unproved_workspace(self):
+        proof = self.state + '.proof'
+        with open(proof, 'w') as file:
+            file.write('bob ')
+        result = self.verify({}, sha='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(proof) as file:
+            self.assertEqual(file.read().strip(), 'bob')
+
+    def test_corrupt_or_nonregular_pending_inventory_fails_loud(self):
+        proof = self.state + '.proof'
+        with open(proof, 'w') as file:
+            file.write('bob --all')
+        result = self.verify({})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('invalid workspace handle', result.stderr)
+        self.assertEqual(self.calls(), [])
+        os.unlink(proof)
+        os.mkdir(proof)
+        result = self.verify({})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('regular file', result.stderr)
+        self.assertEqual(self.calls(), [])
+        os.rmdir(proof)
+        os.symlink(self.state, proof)
+        result = self.verify({})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('symbolic link', result.stderr)
+        self.assertEqual(self.calls(), [])
+
     def test_operator_scripts_capture_workspaces_before_build_can_remove_them(self):
         # Execute the real entrypoints. Building retags the image, which can
         # trigger even the old gateway before compose replaces that gateway.
@@ -231,6 +300,7 @@ class VerifyTest(LibTest):
         os.mkdir(directory)
         with open(os.path.join(directory, 'lib.sh'), 'w') as file:
             file.write(f'. {shlex.quote(LIB)}\n'
+                       'workspace_proof_file="$FAKE_DOCKER_STATE.proof"\n'
                        'require_linux() { :; }\nrequire_docker() { :; }\n'
                        'require_env_file() { require_free_ports() { :; }; }\n'
                        'env_value() { :; }\nproxy_listen() { :; }\n'
@@ -300,6 +370,56 @@ class VerifyTest(LibTest):
         result = self.verify({'ps_ok': False})
         self.assertEqual(result.returncode, 1)
         self.assertIn('cannot list the managed workspaces', result.stderr)
+
+
+class RestoreProofTest(LibTest):
+    def restore(self, succeeds):
+        directory = os.path.join(self.work.name, 'operator')
+        os.mkdir(directory)
+        with open(os.path.join(directory, 'lib.sh'), 'w') as file:
+            file.write(f'. {shlex.quote(LIB)}\n'
+                       'workspace_proof_file="$FAKE_DOCKER_STATE.proof"\n'
+                       'require_linux() { :; }\nrequire_docker() { :; }\nrequire_env_file() { :; }\n'
+                       'runtime_image() { printf %s poise-runtime:latest; }\n')
+        target = os.path.join(directory, 'restore.sh')
+        with open(os.path.join(ROOT, 'deploy/restore.sh')) as source, open(target, 'w') as output:
+            output.write(source.read())
+        backup = os.path.join(self.work.name, 'backup')
+        os.mkdir(backup)
+        archive = 'poise-home-alice.tar.gz'
+        payload = b'fixture volume archive consumed by fake Docker'
+        with open(os.path.join(backup, archive), 'wb') as file:
+            file.write(payload)
+        with open(os.path.join(backup, 'SHA256SUMS'), 'w') as file:
+            file.write(f'{hashlib.sha256(payload).hexdigest()}  {archive}\n')
+        # macOS calls its real SHA-256 checker shasum; the deployment uses
+        # GNU sha256sum on Linux. Both check the actual fixture bytes.
+        if not shutil.which('sha256sum'):
+            with open(os.path.join(self.bin, 'sha256sum'), 'w') as file:
+                file.write(f'#!/bin/sh\nexec {shlex.quote(shutil.which("shasum"))} -a 256 "$@"\n')
+            os.chmod(os.path.join(self.bin, 'sha256sum'), 0o755)
+        with open(self.state + '.proof', 'w') as file:
+            file.write('bob ')
+        with open(self.state, 'w') as file:
+            json.dump({'image_id': IMAGE_ID, 'containers': [], 'health': {},
+                       'restore_ok': succeeds, 'calls': []}, file)
+        env = {key: value for key, value in os.environ.items() if not key.startswith(('POISE_', 'COMPOSE_'))}
+        env.update(PATH=f'{self.bin}{os.pathsep}{env["PATH"]}', FAKE_DOCKER_STATE=self.state)
+        return subprocess.run(['bash', target, backup], capture_output=True, text=True, env=env)
+
+    def test_completed_restore_clears_old_host_proof_and_keeps_lazy_container_creation(self):
+        result = self.restore(True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(os.path.exists(self.state + '.proof'))
+        result = self.lib(f'expected=$(workspace_handles); verify_workspaces {NEW} poise-runtime:latest "$expected"')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('No workspace exists yet.', result.stdout)
+
+    def test_failed_archive_restore_retains_previous_pending_proof(self):
+        result = self.restore(False)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        with open(self.state + '.proof') as file:
+            self.assertEqual(file.read(), 'bob ')
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'pending ages read ISO times with GNU date, as on the Linux server')

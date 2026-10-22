@@ -53,4 +53,5 @@ for volume in "${volumes[@]}"; do
     --numeric-owner --same-owner --same-permissions
 done
 created=()
+clear_workspace_proof
 say "Restored ${#volumes[@]} volumes from $backup. Start Poise with deploy/install.sh."

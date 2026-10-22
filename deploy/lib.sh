@@ -245,20 +245,48 @@ wait_for_gateway() {
 # commit before it reports what is still pending instead of success.
 verify_timeout_seconds=600
 verify_poll_seconds=10
+workspace_proof_file=$deploy/.workspace-proof
+
+# Keep an unfinished deploy's obligations across process failure and retry.
+# The checkout survives operator deploys; backups intentionally contain only
+# volumes, and a successful restore starts a different inventory lifecycle.
+save_workspace_proof() {
+  local handles=$1 temporary
+  temporary=$(mktemp "$workspace_proof_file.XXXXXX") || die "cannot create the workspace proof beside $workspace_proof_file."
+  if ! printf '%s\n' "$handles" >"$temporary" || ! chmod 600 "$temporary" || ! mv "$temporary" "$workspace_proof_file"; then
+    rm -f "$temporary"
+    die "cannot retain the workspace proof at $workspace_proof_file."
+  fi
+}
+
+clear_workspace_proof() {
+  rm -f "$workspace_proof_file" || die "cannot clear the completed workspace proof at $workspace_proof_file."
+}
 
 # Capture the expected handles before building/retagging the runtime image:
 # even the old gateway can notice that tag and start replacing containers.
 # Container IDs change during replacement; these workspace labels do not.
 workspace_handles() {
-  local lines container handle handles=''
+  local lines container handle retained='' handles=''
+  [ ! -L "$workspace_proof_file" ] || die "the pending workspace proof must be a regular file, not a symbolic link."
+  if [ -e "$workspace_proof_file" ]; then
+    [ -f "$workspace_proof_file" ] || die "the pending workspace proof must be a regular file."
+    retained=$(cat "$workspace_proof_file") || die "cannot read the pending workspace proof at $workspace_proof_file."
+    for handle in $retained; do
+      [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "the pending workspace proof contains an invalid workspace handle."
+      handles="$handles$handle "
+    done
+  fi
   lines=$(docker ps --all --filter label=poise.managed=true --format '{{.ID}} {{.Label "poise.workspace"}}') \
     || die "cannot list the managed workspaces."
   if [ -n "$lines" ]; then
     while read -r container handle; do
       [ -n "$handle" ] || die "managed container $container has no poise.workspace label."
-      handles="$handles$handle "
+      [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "managed container $container has an invalid workspace handle."
+      if [[ " $handles" != *" $handle "* ]]; then handles="$handles$handle "; fi
     done <<<"$lines"
   fi
+  save_workspace_proof "$handles"
   printf '%s' "$handles"
 }
 
@@ -344,10 +372,14 @@ verify_workspaces() {
       while read -r handle id running name; do
         name=${name#/}
         [ -n "$handle" ] || die "managed container $name has no poise.workspace label."
+        [[ $handle =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "managed container $name has an invalid workspace handle."
         observed="$observed$handle "
         # New workspaces join the obligation; a disappearing container never
         # removes one captured before the upgrade or seen in an earlier poll.
-        if [[ " $expected" != *" $handle "* ]]; then expected="$expected$handle "; fi
+        if [[ " $expected" != *" $handle "* ]]; then
+          expected="$expected$handle "
+          save_workspace_proof "$expected"
+        fi
         if [ "$running" = true ]; then
           if health=$(docker exec "$name" curl -fsS --max-time 10 http://127.0.0.1:5555/api/service/health 2>/dev/null); then
             active=$(health_field "$health" release)
@@ -380,10 +412,12 @@ verify_workspaces() {
       fi
     done
     if [ -z "$expected" ]; then
+      clear_workspace_proof
       say "No workspace exists yet."
       return 0
     fi
     if [ -z "$pending" ]; then
+      clear_workspace_proof
       say "Every workspace serves $sha: ${serving% }."
       return 0
     fi
