@@ -519,6 +519,18 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(prompts.has(parent.id)).toBe(false)
   })
 
+  it('starts no turn for a held grey-CI recovery error when its PR is merged', async () => {
+    const parent = await manager()
+    await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/103' })
+    targetStatus.mockResolvedValue('merged')
+    database.db.prepare(`INSERT INTO behavior_seen(key,target,seen_at,launch_repo,launch_pr,launch_call_id,launch_error)
+      VALUES(?, ?, ?, ?, ?, ?, ?)`).run('grey-ci-recovery', 'acme/app#103:grey', new Date().toISOString(), 'acme/app', 103, 'g'.repeat(32), 'Rerun held: no confirmed receipt')
+    await control.tick()
+    await control.tick()
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
+    expect(prompts.has(parent.id)).toBe(false)
+  })
+
   it('wakes once for a human comment on a closed PR', async () => {
     const parent = await manager()
     await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/102' })

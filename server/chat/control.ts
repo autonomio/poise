@@ -17,7 +17,7 @@ import { countReceiptsSince, executeCommandOnce, hasReceipt } from './command-re
 import { actorOf, nativeName } from './actors'
 import type { ChatActor, ChatEnvelope, Question, SessionRecord, TurnSource } from './protocol'
 import { ChatError, type ChatRuntime } from './runtime'
-import { getEnabledMap, getBehaviorsRuntimeHealth } from '../behaviors'
+import { GREY_CI_INTENT_KEY, getEnabledMap, getBehaviorsRuntimeHealth } from '../behaviors'
 import * as store from './control-store'
 import { SWITCHBOARD_LOOKUPS, SWITCHBOARD_OPERATIONS, SWITCHBOARD_PERSON, SWITCHBOARD_READS, type SwitchboardControl } from './switchboard'
 import { BEHAVIOR_KEYS } from '../../src/behavior-types'
@@ -205,10 +205,11 @@ export async function readWorkTargetStatus(target: store.WorkTarget): Promise<Wo
   }
 }
 
-/** Automation's own keys; anything else in behavior_seen is human activity
- *  and still wakes a closed target. Panel slots share their behavior's key
- *  before the colon, so they stay automation. */
-const AUTOMATION_KEYS = new Set<string>(BEHAVIOR_KEYS as readonly string[])
+/** Automation's own keys: the behaviors plus the grey-CI recovery intents,
+ *  which carry launch state outside any behavior key. Anything else in
+ *  behavior_seen is human activity and still wakes a closed target. Panel
+ *  slots share their behavior's key before the colon, so they stay automation. */
+const AUTOMATION_KEYS = new Set<string>([...(BEHAVIOR_KEYS as readonly string[]), GREY_CI_INTENT_KEY])
 function humanOnly(actionable: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return actionable.filter(row => !AUTOMATION_KEYS.has(String(row.key ?? '').split(':')[0]))
 }
