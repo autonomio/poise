@@ -147,6 +147,21 @@ class TestMirrorCache(TestCase):
         self.assertEqual((checkout / "unique").read_text(), "user source\n")
         self.assertTrue((flat / "HEAD").exists())
 
+    def test_bare_proof_uses_anchored_metadata_without_external_config_includes(self) -> None:
+        mirror = self.mirror()
+        external = self.work / "external-config"
+        external.write_text("[core]\n bare = true\n")
+        git(mirror, "config", "core.bare", "false")
+        git(mirror, "config", "include.path", str(external))
+        age_tree(mirror)
+        report = self.prune()
+        self.assertEqual(report["removed"], [])
+        self.assertTrue(any("not a bare Git mirror" in item["reason"] for item in report["held"]))
+        git(mirror, "config", "--no-includes", "core.bare", "true")
+        (mirror / "HEAD").write_text("ref: refs/heads/../../outside\n")
+        age_tree(mirror)
+        self.assertEqual(self.prune()["removed"], [])
+
     def test_never_follows_owner_mirror_lock_or_descendant_symlinks(self) -> None:
         external = self.work / "outside"
         external.mkdir()

@@ -25,14 +25,39 @@ def _measure(descriptor: int) -> tuple[int, float]:
     return size, modified
 
 
+def _read(descriptor: int, name: str) -> bytes:
+    child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    with os.fdopen(child, "rb") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ValueError("mirror metadata is not a regular file")
+        data = file.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
+            raise ValueError("mirror metadata is too large to verify")
+        return data
+
+
 def _bare(descriptor: int) -> bool:
-    # Anchor Git's read to the opened directory, including if an owner path
-    # is renamed meanwhile. No refresh, credentials or network are involved.
+    # Git cannot use directory /dev/fd aliases on macOS. Read anchored bytes
+    # instead; Git parses only that config, without following include paths.
+    try:
+        head = _read(descriptor, "HEAD").strip()
+        config = _read(descriptor, "config")
+        for name in ("objects", "refs"):
+            os.close(os.open(name, DIRECTORY_FLAGS, dir_fd=descriptor))
+        if head.startswith(b"ref: "):
+            ref = head[5:].decode("utf-8")
+            checked = subprocess.run(["git", "check-ref-format", ref], capture_output=True, check=False)
+            if checked.returncode != 0:
+                return False
+        elif not re.fullmatch(rb"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", head):
+            return False
+    except (OSError, ValueError):
+        return False
     result = subprocess.run(
-        ["git", f"--git-dir=/dev/fd/{descriptor}", "rev-parse", "--is-bare-repository"],
-        pass_fds=(descriptor,), capture_output=True, text=True, check=False,
+        ["git", "config", "--no-includes", "--file", "-", "--type", "bool", "--get", "core.bare"],
+        input=config, capture_output=True, check=False,
     )
-    return result.returncode == 0 and result.stdout.strip() == "true"
+    return result.returncode == 0 and result.stdout.strip() == b"true"
 
 
 def prune_mirrors(root: Path, cap_bytes: int, now_ms: int, fresh_ms: int, dry_run: bool = False) -> dict[str, object]:
