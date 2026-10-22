@@ -547,6 +547,14 @@ gateway if they changed, and lists the workspaces that run an older image.
 A fork that deploys itself does this at every push to its main
 ([Run your own Poise from a fork](#run-your-own-poise-from-a-fork)).
 
+It then proves the deploy landed: for up to ten minutes it waits for every
+workspace to serve the new commit — a running one through its health check,
+a stopped one by its new image — and only then reports success. Past that it
+reports which workspaces are still pending, with the release each runs, the
+one it waits for and how long it has waited, and fails: a deploy run is
+green only once the workspaces run what it deployed. `deploy/install.sh`
+proves the same after it starts the gateway.
+
 The gateway upgrades those workspaces by itself, when it starts and every
 five minutes. Most upgrades change Poise but not the system it runs on, and
 those happen in place: the gateway installs the new release into each

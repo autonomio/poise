@@ -76,5 +76,6 @@ say "Recreating what changed."
 compose up --detach --build
 wait_for_gateway
 check_gateway_networks
+verify_workspaces "$sha" "$image"
 prune_docker_storage "$image"
 say "$plan"

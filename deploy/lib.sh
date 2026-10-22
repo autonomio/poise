@@ -240,3 +240,140 @@ wait_for_gateway() {
     sleep 2
   done
 }
+
+# How long verify_workspaces waits for every workspace to serve the deployed
+# commit before it reports what is still pending instead of success.
+verify_timeout_seconds=600
+verify_poll_seconds=10
+
+# The string value of KEY in the flat JSON OBJECT, or empty when null or
+# absent. Health answers hold only release names, ISO times and nulls under
+# these keys, so no value carries a quote.
+health_field() {
+  printf '%s' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p"
+}
+
+# SECONDS as a person reads a wait: 45s, 12m05s, 3h04m, 2d05h.
+format_age() {
+  local total=$1 days hours minutes seconds
+  days=$((total / 86400))
+  hours=$(((total % 86400) / 3600))
+  minutes=$(((total % 3600) / 60))
+  seconds=$((total % 60))
+  if [ "$days" -gt 0 ]; then printf '%dd%02dh' "$days" "$hours"
+  elif [ "$hours" -gt 0 ]; then printf '%dh%02dm' "$hours" "$minutes"
+  elif [ "$minutes" -gt 0 ]; then printf '%dm%02ds' "$minutes" "$seconds"
+  else printf '%ds' "$seconds"
+  fi
+}
+
+# How long ago the ISO time was, as format_age reads it, or 'unknown' when it
+# cannot be told (a workspace that predates pending tracking).
+pending_age() {
+  local since=$1 epoch now
+  [ -n "$since" ] || {
+    printf 'unknown'
+    return
+  }
+  epoch=$(date -d "$since" +%s 2>/dev/null) || {
+    printf 'unknown'
+    return
+  }
+  now=$(date +%s)
+  if [ "$epoch" -gt "$now" ]; then printf '0s'; else format_age $((now - epoch)); fi
+}
+
+# One workspace that does not serve the deployed commit yet, as the pending
+# report shows it: its desired and active release, whether the desired one is
+# installed, and how long the switch has been pending.
+pending_line() {
+  local handle=$1 active=$2 desired=$3 installed=$4 has_installed=$5 since=$6 line
+  line="  $handle: pending ${desired:-(unknown)} (active ${active:-(unknown)}"
+  if [ "$has_installed" = yes ] && [ -n "$desired" ] && [ "$installed" != "$desired" ]; then
+    line="$line, not installed"
+  fi
+  printf '%s, pending %s)\n' "$line" "$(pending_age "$since")"
+}
+
+# Proves every managed workspace serves the deployed commit SHA: a running one
+# answers its health check with that active release, a stopped one is on the
+# new image and serves it on its next start. Waits up to
+# verify_timeout_seconds for the gateway's upgrade to land; past that it
+# reports what is still pending, with its age, instead of success. A
+# development build (no SHA) has no release to prove.
+verify_workspaces() {
+  local sha=$1 image=$2
+  local image_id ids lines pending waiting serving deadline announced seen
+  local handle id running name health active desired installed has_installed since
+  if [ -z "$sha" ]; then
+    say "This is a development build, which reports no release; skipping workspace verification."
+    return 0
+  fi
+  image_id=$(docker image inspect --format '{{.Id}}' "$image") || die "cannot read the workspace image $image."
+  ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
+  if [ -z "$ids" ]; then
+    say "No workspace exists yet."
+    return 0
+  fi
+  say "Waiting for every workspace to serve $sha."
+  deadline=$((SECONDS + verify_timeout_seconds))
+  announced=$SECONDS
+  while :; do
+    pending=''
+    waiting=''
+    serving=''
+    seen=0
+    # The gateway replaces containers as it recreates them, so list them anew every poll.
+    ids=$(docker ps --all --quiet --filter label=poise.managed=true) || die "cannot list the managed workspaces."
+    if [ -n "$ids" ]; then
+      # shellcheck disable=SC2086 # one argument per container ID
+      lines=$(docker inspect --format '{{index .Config.Labels "poise.workspace"}} {{.Image}} {{.State.Running}} {{.Name}}' $ids) \
+        || die "cannot inspect the managed workspaces."
+      while read -r handle id running name; do
+        name=${name#/}
+        handle=${handle:-$name}
+        seen=$((seen + 1))
+        if [ "$running" = true ]; then
+          if health=$(docker exec "$name" curl -fsS --max-time 10 http://127.0.0.1:5555/api/service/health 2>/dev/null); then
+            active=$(health_field "$health" release)
+            if [ "$active" = "$sha" ]; then
+              serving="$serving$handle "
+              continue
+            fi
+            desired=$(health_field "$health" desiredRelease)
+            if [ -z "$desired" ]; then desired=$(health_field "$health" switching); fi
+            installed=$(health_field "$health" installedRelease)
+            has_installed=no
+            if [[ $health == *'"installedRelease"'* ]]; then has_installed=yes; fi
+            since=$(health_field "$health" pendingSince)
+            pending="$pending$(pending_line "$handle" "$active" "$desired" "$installed" "$has_installed" "$since")\n"
+          else
+            pending="$pending  $handle: unreachable (its health check did not answer)\n"
+          fi
+        elif [ "$id" = "$image_id" ]; then
+          serving="$serving$handle (stopped) "
+        else
+          pending="$pending  $handle: stopped, still on an older image\n"
+        fi
+        waiting="$waiting$handle "
+      done <<<"$lines"
+    fi
+    # No containers at all is a recreate in flight, not a converged deploy.
+    if [ -z "$pending" ] && [ "$seen" -gt 0 ]; then
+      say "Every workspace serves $sha: ${serving% }."
+      return 0
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      if [ "$seen" -eq 0 ]; then
+        die "the deploy of $sha is still pending after ${verify_timeout_seconds}s: no managed workspace exists."
+      fi
+      die "the deploy of $sha is still pending after ${verify_timeout_seconds}s: these workspaces do not serve it yet:
+$(printf '%b' "$pending")"
+    fi
+    if [ -n "$waiting" ] && [ $((SECONDS - announced)) -ge 60 ]; then
+      say "Still waiting for: ${waiting% }."
+      announced=$SECONDS
+    fi
+    sleep "$verify_poll_seconds"
+  done
+}
