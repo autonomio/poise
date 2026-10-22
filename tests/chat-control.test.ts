@@ -65,6 +65,12 @@ async function until(check: () => boolean) {
   while (Date.now() < deadline) { if (check()) return; await new Promise(done => setTimeout(done, 15)) }
   throw new Error('control fixture readiness deadline')
 }
+async function observeCi(target: string): Promise<void> {
+  await control.tick()
+  // The tick admits an independent background pass; wait for its persisted
+  // result before changing the next mocked response or reading the inbox.
+  await until(() => store.observation(runtime.instance, `ci:${target}`)?.checked_at === clock)
+}
 async function config(id: string) {
   const context = await control.context(id)
   const path = /"([^"\n]+\.json)"/.exec(context)?.[1]
@@ -260,19 +266,20 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const failed = { head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] }
     ci.mockResolvedValue(failed)
     await Promise.all([control.tick(), control.tick()])
+    await until(() => store.observation(runtime.instance, `ci:${target}`)?.checked_at === clock)
     expect(ci).toHaveBeenCalledTimes(1)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(ci).toHaveBeenCalledTimes(2)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     ci.mockResolvedValue(failed)
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(3)
   })
 
@@ -282,18 +289,18 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await command(parent.id, { operation: 'bind', target })
     const h1 = 'a'.repeat(40), h2 = 'b'.repeat(40)
     ci.mockResolvedValue({ head: h1, failing: [] })
-    await control.tick()
+    await observeCi(target)
     ci.mockResolvedValue({ head: h2, failing: [], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     ci.mockResolvedValue({ head: h2, failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     expect(prompts.has(parent.id)).toBe(false)
     ci.mockResolvedValue({ head: h2, failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: h2, failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
   })
 
@@ -304,17 +311,17 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const first = { name: 'First', state: 'completed', conclusion: 'failure' }
     const second = { name: 'Second', state: 'completed', conclusion: 'failure' }
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [first, second] })
-    await control.tick()
+    await observeCi(target)
     const settled = store.observation(runtime.instance, `ci:${target}`)!.fingerprint
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     expect(store.observation(runtime.instance, `ci:${target}`)!.fingerprint).toBe(settled)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
     expect(JSON.parse(store.inbox(runtime.instance, parent.id)[1].body).failing).toEqual([second])
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
   })
 
@@ -324,15 +331,15 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await command(parent.id, { operation: 'bind', target })
     const failing = failed ? [{ name: 'First', state: 'completed', conclusion: 'failure' }] : []
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing, pending: true })
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     await restart()
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(failed ? 1 : 0)
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(failed ? 1 : 0)
   })
 
