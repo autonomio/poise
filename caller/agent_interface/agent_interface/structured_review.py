@@ -18,7 +18,7 @@ from uuid import UUID
 from pathlib import Path
 from time import monotonic
 
-from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, actor, expected_head, pr_ref, provider_blocked
+from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, actor, bounded_cause, expected_head, pr_ref, provider_blocked
 from .model_catalog import Model
 from .review_watch import ReviewWatch
 from . import progress, review_budget, review_receipt
@@ -49,17 +49,15 @@ def provider_failure(message: str, *, provider: str = "provider", phase: str = "
                      exit_code=None, signal=None) -> None:
     cause = message.strip()
     if provider_blocked(cause):
-        raise AgentPreflightError(cause[:500] or f"{provider} refused the review",
-                                  "review_provider_blocked",
-                                  _diagnostic(provider, phase, exit_code=exit_code, signal=signal, cause=cause))
-    from .atoms import bounded_cause
+        bounded = bounded_cause(cause or f"{provider} refused the review")
+        raise AgentPreflightError(bounded, "review_provider_blocked",
+                                  _diagnostic(provider, phase, exit_code=exit_code, signal=signal, cause=bounded))
     bounded = bounded_cause(cause or f"{provider} exited {exit_code}")
     raise AgentPreflightError(f"{provider} review failed: {bounded}", "review_provider_exit",
                               _diagnostic(provider, phase, exit_code=exit_code, signal=signal, cause=bounded))
 
 
 def provider_error(provider: str, message: str, *, phase: str = "provider_execution") -> None:
-    from .atoms import bounded_cause
     bounded = bounded_cause(message)
     raise AgentPreflightError(f"{provider} review failed: {bounded}", "review_provider_error",
                               _diagnostic(provider, phase, cause=bounded))
@@ -245,7 +243,6 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
     except subprocess.TimeoutExpired as error:
         raise review_budget.ReviewLimitError("Review reached its total time limit; needs attention", "review_budget_exhausted") from error
     except (ValueError, OSError) as error:
-        from .atoms import bounded_cause
         code = ("review_packet_too_large" if "Input exceeds the maximum length" in str(error)
                 else "review_contract_violation" if isinstance(error, (InvalidVerdict, json.JSONDecodeError))
                 else "review_provider_error")
@@ -272,7 +269,6 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
         transient = review_receipt.record_failure(done.stderr or done.stdout)
         if transient is not None:
             raise review_receipt.SubmissionError(transient)
-        from .atoms import bounded_cause
         cause = bounded_cause((done.stderr or done.stdout).strip() or f"github-interface exited {done.returncode}")
         raise review_budget.ReviewLimitError(
             f"review submission rejected: {cause}", "review_contract_violation",
@@ -285,7 +281,6 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
         except ValueError:
             reply = None
         if isinstance(reply, dict) and reply.get("action") == "no_review":
-            from .atoms import bounded_cause
             cause = bounded_cause(json.dumps(reply.get("skipped", [])) or "no review submitted")
             raise review_budget.ReviewLimitError(
                 f"review submission was a no-op: {cause}", "review_contract_violation",

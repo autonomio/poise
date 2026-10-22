@@ -751,6 +751,37 @@ class TestVerifiedResultsOrExplicitFailures(IssueReviewCase):
                 self.assertIsNone(exported["receipts"])
                 self.assertNotIn("--comment-issue", [call[0] for call in github.calls])
 
+    def test_failed_provider_run_is_typed_with_provider_phase_and_artifact(self):
+        review = {"comments": [{"issue": f"{REPO}#452", "body": "looks fine"}]}
+        cases = (
+            (1, "", "review_provider_exit", "claim-1", "provider failed"),
+            (0, json.dumps({"type": "turn.failed", "message": "boom"}) + "\n", "review_provider_error",
+             "claim-2", "boom"),
+        )
+        for code, stdout, expected_code, claim, expected_error in cases:
+            with self.subTest(expected_code=expected_code):
+                github = FakeGitHub()
+                supervise = agent_writes(review, code=code, stdout=stdout)
+                with patch.object(issue_review, "interface", github), \
+                        patch.object(issue_review, "supervise", supervise), \
+                        redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        agent_interface.run_issue_review(f"{REPO}#452", "bit-mis", "poise:review-new-issues", claim,
+                                                         "gpt-6-astra-max", None, note="")
+                with agent_interface.db() as conn:
+                    row = conn.execute("select * from calls where correlation_id=?", (claim,)).fetchone()
+                exported = self.exported(row)
+                self.assertEqual(exported["status"], "failed")
+                self.assertEqual(exported["error_code"], expected_code)
+                self.assertIn(expected_error, exported["error"])
+                diagnostic = exported["diagnostic"]
+                self.assertEqual(diagnostic["provider"], "codex")
+                self.assertEqual(diagnostic["phase"], "provider_execution")
+                self.assertEqual(diagnostic["submission"], "none")
+                self.assertTrue(diagnostic["artifact"]["present"])
+                self.assertIsNone(exported["receipts"])
+                self.assertNotIn("--comment-issue", [call[0] for call in github.calls])
+
     def test_posting_timeout_reconciles_through_the_call_marker(self):
         review = {"comments": [{"issue": f"{REPO}#452", "body": "hello"}]}
         github = FakeGitHub()

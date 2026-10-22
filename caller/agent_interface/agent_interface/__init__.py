@@ -697,6 +697,8 @@ def run_issue_review(
                 fail(e, e.code, preflight=True)
             except issue_review.InvalidReview as e:
                 fail(e, e.code)
+            except issue_review.ProviderFailure as e:
+                fail(e, e.code)
             except subprocess.TimeoutExpired as e:
                 fail(review_budget.ReviewLimitError(
                     "Issue review reached its time limit; needs attention",

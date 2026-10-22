@@ -416,6 +416,19 @@ class TestOtherProviderVerdicts(TestCase):
         self.assertEqual(failure.exception.code, "review_provider_exit")
         self.assertEqual(failure.exception.diagnostic["submission"], "none")
 
+    def test_blocked_provider_causes_are_redacted_and_bounded(self):
+        message = ("API error: Grok Build usage balance exhausted; "
+                   "proxy-authorization: Basic dGVzdA== token=secret-value ghp_abc123")
+        with self.assertRaises(atoms.AgentPreflightError) as failure:
+            structured_review.provider_failure(message, provider="grok")
+        self.assertEqual(failure.exception.code, "review_provider_blocked")
+        self.assertIn("Grok Build usage balance exhausted", str(failure.exception))
+        for field in (str(failure.exception), failure.exception.diagnostic["stderr"]):
+            self.assertNotIn("dGVzdA==", field)
+            self.assertNotIn("secret-value", field)
+            self.assertNotIn("ghp_abc123", field)
+            self.assertLessEqual(len(field), 501)
+
     def test_muse_isolates_its_tool_roster_and_keeps_sign_in(self):
         with tempfile.TemporaryDirectory() as work:
             original = Path(work) / "original" / "muse"

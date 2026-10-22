@@ -27,7 +27,7 @@ from time import monotonic, sleep, time
 from typing import Callable
 
 from . import progress, review_budget
-from .atoms import AgentPreflightError, provider_blocked
+from .atoms import AgentPreflightError, bounded_cause, provider_blocked
 from .model_catalog import Model
 from .provider_progress import ProviderStream, claude_error
 from .review_watch import _interrupted, _stop_process_group
@@ -56,6 +56,16 @@ class InvalidReview(RuntimeError):
 
     def __init__(self, message: str, diagnostic: dict | None = None):
         super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+class ProviderFailure(RuntimeError):
+    """The issue-review provider ran and failed: an exit or signal, or an
+    error terminal despite a zero exit. Nothing was posted."""
+
+    def __init__(self, message: str, code: str, diagnostic: dict | None = None):
+        super().__init__(message)
+        self.code = code
         self.diagnostic = diagnostic
 
 
@@ -525,7 +535,6 @@ def _terminal_failure(provider: str, stdout: str) -> str | None:
 
 def review(model: Model, repo: str, number: int, data: dict, actor: str, note: str, work: Path) -> tuple[list[dict], list[str]]:
     """One full-power agent run in its own fresh checkout."""
-    from .atoms import bounded_cause
     work.mkdir(parents=True)
     checkout = work / "repo"
     progress.stage("checking_out", f"Preparing a fresh checkout of {repo}", timeout=review_budget.timeout(1800))
@@ -568,7 +577,8 @@ def review(model: Model, repo: str, number: int, data: dict, actor: str, note: s
         # Held for a person, as a PR review is: relaunching cannot succeed until the account is fixed.
         if provider_blocked(error):
             raise AgentPreflightError(error, "review_provider_blocked", diagnostic)
-        raise RuntimeError(error)
+        code = "review_provider_error" if terminal and not done.returncode else "review_provider_exit"
+        raise ProviderFailure(error, code, diagnostic)
     progress.stage("validating", "Validating review comments")
     try:
         return comments(output, allowed(data), repo)
