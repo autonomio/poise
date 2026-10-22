@@ -28,6 +28,20 @@ describe('stripMarkdownForTitle', () => {
       .toBe('the prep_each_round contract')
   })
 
+  it('unwraps italic, keeping the words', () => {
+    expect(stripMarkdownForTitle('*Hello*')).toBe('Hello')
+    expect(stripMarkdownForTitle('_Hello_')).toBe('Hello')
+    expect(stripMarkdownForTitle('*Hello* world')).toBe('Hello world')
+    // Word-edge rule, as in the editor: identifiers stay literal.
+    expect(stripMarkdownForTitle('some_variable_name')).toBe('some_variable_name')
+  })
+
+  it('unwraps links, dropping the URL', () => {
+    expect(stripMarkdownForTitle('[My Doc](https://example.com/x)')).toBe('My Doc')
+    expect(stripMarkdownForTitle('[not a link]')).toBe('[not a link]')
+    expect(stripMarkdownForTitle('[empty]()')).toBe('[empty]()')
+  })
+
   it('handles the malformed bold that older documents already contain', () => {
     // Written by the pre-fix Cmd+B: the space migrated inside the closer.
     expect(stripMarkdownForTitle("**Portfolio **is the entirety of Velocin's patents."))
