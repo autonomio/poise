@@ -716,6 +716,27 @@ export async function getOrCreateChatSession(slug: string): Promise<ChatSessionF
   })
 }
 
+// Read the chat session id for `slug` without minting one. A missing or
+// unusable side-car reads as no legacy conversation: the caller imports
+// nothing. Unexpected read errors still surface.
+export async function peekChatSession(slug: string): Promise<string | null> {
+  await editorReady
+  const path = chatSessionFileFor(slug)
+  let raw: string
+  try {
+    raw = (await readUtf8Limited(path, CHAT_SESSION_MAX_BYTES, 'chat session')).content
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return null
+    throw err
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<ChatSessionFile>
+    return parsed && typeof parsed.session_id === 'string' && parsed.session_id ? parsed.session_id : null
+  } catch {
+    return null
+  }
+}
+
 // Reverse-lookup: given a session_id minted by getOrCreateChatSession,
 // return the doc slug it belongs to. Returns null for session_ids that
 // aren't ours (card-chat sessions, /content sessions, anything bare).
