@@ -38,6 +38,6 @@ test('settings shows the storage breakdown and runs maintenance', async ({ page 
   await expect(page.locator('.st-storage-status')).toContainText('15 GB free of 100 GB')
   await expect(page.locator('.st-storage-status')).toContainText('Last maintenance')
   await page.locator('.st-storage-dry-run').click()
-  await expect(page.locator('.st-storage-status')).toContainText('Dry run reclaimed 1 GB')
+  await expect(page.locator('.st-storage-status')).toContainText('Dry run reclaimed 1.0 GB')
   await expect(rows).toHaveCount(2)
 })
