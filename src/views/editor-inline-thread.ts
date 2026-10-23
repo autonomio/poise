@@ -85,7 +85,41 @@ const unseenReply = new Map<string, number>()
 const inPane = new Set<string>()
 /** The passage can no longer be located. */
 const passageChanged = new Set<string>()
-let paneCloseWatched = false
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('chat:side-pane-closed', (event) => {
+    const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number, pendingRequests?: string[], draft: ComposerDraft | null }>).detail
+    const subject = detail?.subject
+    if (!subject) return
+    const closedKey = subjectKey(subject)
+    // The pane owns the newest composer snapshot, including an explicit
+    // empty draft, even if navigation already cleared its tracking.
+    if (subject.surface === 'editor-passage' || subject.surface === 'editor-review') keepThreadDraft(subject, detail.draft)
+    // A retained tracker also hears replies the pane displayed. Clear only
+    // those the surface actually applied; buffered or later replies stay new.
+    const finishedSeq = unseenReply.get(closedKey)
+    if (finishedSeq !== undefined && finishedSeq <= (detail.afterSeq ?? 0)) unseenReply.delete(closedKey)
+    if (!inPane.has(closedKey)) return
+    inPane.delete(closedKey)
+    const entry = tracked.get(closedKey)
+    if (!entry) return
+    // A chat moved to the pane before its first message has no sessionId
+    // yet; adopt the pane's session so a running or finished reply still
+    // marks. A chat that never got a session leaves nothing to track.
+    if (!entry.sessionId) {
+      const sessionId = detail?.sessionId ?? null
+      if (!sessionId) {
+        untrack(closedKey)
+        layoutMarkers(entry.page)
+        return
+      }
+      track(subject, sessionId, entry.page, entry.first, detail?.status ?? null, detail?.afterSeq ?? 0, detail.pendingRequests)
+      return
+    }
+    if (detail.pendingRequests) entry.pendingRequests = new Set(detail.pendingRequests)
+    renderMarker(closedKey)
+  })
+}
 
 function ensureLayer(page: HTMLElement): HTMLElement {
   let layer = page.querySelector<HTMLElement>(':scope > .editor-inline-threads')
@@ -521,41 +555,6 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
     },
   }
   open = state
-  if (!paneCloseWatched && typeof window !== 'undefined') {
-    paneCloseWatched = true
-    window.addEventListener('chat:side-pane-closed', (event) => {
-      const detail = (event as CustomEvent<{ subject: ChatSubject, sessionId?: string | null, status?: string | null, afterSeq?: number, pendingRequests?: string[], draft: ComposerDraft | null }>).detail
-      const subject = detail?.subject
-      if (!subject) return
-      const closedKey = subjectKey(subject)
-      // The pane owns the newest composer snapshot, including an explicit
-      // empty draft, even if navigation already cleared its tracking.
-      if (subject.surface === 'editor-passage' || subject.surface === 'editor-review') keepThreadDraft(subject, detail.draft)
-      // A retained tracker also hears replies the pane displayed. Clear only
-      // those the surface actually applied; buffered or later replies stay new.
-      const finishedSeq = unseenReply.get(closedKey)
-      if (finishedSeq !== undefined && finishedSeq <= (detail.afterSeq ?? 0)) unseenReply.delete(closedKey)
-      if (!inPane.has(closedKey)) return
-      inPane.delete(closedKey)
-      const entry = tracked.get(closedKey)
-      if (!entry) return
-      // A chat moved to the pane before its first message has no sessionId
-      // yet; adopt the pane's session so a running or finished reply still
-      // marks. A chat that never got a session leaves nothing to track.
-      if (!entry.sessionId) {
-        const sessionId = detail?.sessionId ?? null
-        if (!sessionId) {
-          untrack(closedKey)
-          layoutMarkers(entry.page)
-          return
-        }
-        track(subject, sessionId, entry.page, entry.first, detail?.status ?? null, detail?.afterSeq ?? 0, detail.pendingRequests)
-        return
-      }
-      if (detail.pendingRequests) entry.pendingRequests = new Set(detail.pendingRequests)
-      renderMarker(closedKey)
-    })
-  }
   if (!inFlow) {
     observeThread(state)
     layoutThread(state)

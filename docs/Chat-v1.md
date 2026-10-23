@@ -46,9 +46,11 @@ clear a later saved edit. Markers use separate card keys, so an unrelated
 decision in another tab cannot erase them. A late applied receipt withdraws its
 Retry control and makes even a queued click on that old control harmless. This retains a known successful save, not an atomic
 transaction between the server save and the client recovery write. Closing or moving
-a passage chat preserves its outstanding permission and question requests;
+a passage chat preserves its session and outstanding permission and question requests
+even while its initial history is loading;
 the Needs you marker remains until every request has been answered. Moving a
-thread transfers the latest composer, including an explicit empty draft. Back
+thread transfers the latest composer, including an explicit empty draft. Closing a
+passage or review pane opened from Chat retains its draft for the inline thread. Back
 loads the thread's own document before reopening its passage or review.
 
 ## Fresh console and split pane

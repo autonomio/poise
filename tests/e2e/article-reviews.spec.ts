@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import type { ArticleReview, ArticleReviews } from '../../src/publishing-review'
 import { REVIEW_INTERVAL_MS } from '../../src/publishing-review'
 import { workspace } from './fixtures/workspace'
-import { installRoutes, installSocket, makeState } from './fixtures/chat'
+import { installRoutes, installSocket, makeState, session } from './fixtures/chat'
 type ChatSocket = Awaited<ReturnType<typeof installSocket>>
 
 const VERSION = 'a'.repeat(64)
@@ -258,6 +258,21 @@ async function finishReply(sock: ChatSocket, id: string, text: string, reply: st
     sock.push(id, { type: 'turn.finished', turnId, stopReason: 'end_turn' }),
   ]
 }
+
+test('keeps the draft of a review opened from Chat before any inline thread', async ({ page }) => {
+  const { state, calls } = await editorWithReviews(page)
+  const existing = session({ id: 's-review', subject: { surface: 'editor-review', key: 'draft:thread-1', label: 'Review · Site #7' }, status: 'idle' })
+  state.sessions.unshift(existing)
+  state.history[existing.id] = []
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft', session: 's-review' } })))
+  const pane = page.locator('#chat-side-pane')
+  await expect(pane.locator('.chat-input')).toBeVisible()
+  await pane.locator('.chat-input').fill('Fresh private review draft')
+  await pane.locator('.chat-close').click()
+  await page.locator('.editor-review-mark').first().click()
+  await expect(threadInput(page)).toHaveValue('Fresh private review draft')
+  expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+})
 
 test("opens a review thread inline with its GitHub conversation and a private agent chat", async ({ page }) => {
   const { state, sock } = await editorWithReviews(page)

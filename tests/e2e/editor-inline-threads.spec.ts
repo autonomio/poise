@@ -363,6 +363,50 @@ test("opens a passage session from Chat's Open in Editor instead of the document
   expect(state.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(0)
 })
 
+test('keeps the draft of a passage opened from Chat before any inline thread', async ({ page }) => {
+  const { state } = await editor(page, [annotation({ id: 'ann-1' })])
+  const passage = session({ id: 's-passage', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' })
+  state.sessions.unshift(passage)
+  state.history[passage.id] = []
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft', session: 's-passage' } })))
+  await expect(pane(page).locator('.chat-input')).toBeVisible()
+  await pane(page).locator('.chat-input').fill('Fresh passage draft')
+  await pane(page).locator('.chat-close').click()
+  await openThreadForMark(page, 'ann-1')
+  await expect(threadInput(page)).toHaveValue('Fresh passage draft')
+})
+
+test('tracks replies and every request when closed during initial history loading', async ({ page }) => {
+  const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])
+  const passage = session({ id: 's-passage', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' })
+  state.sessions.unshift(passage)
+  state.history[passage.id] = []
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const requested = new Promise<void>((resolve) => { started = resolve })
+  await page.route(`**/api/chat/sessions/${passage.id}?after=0`, async (route) => {
+    started()
+    await held
+    await route.fulfill({ json: { session: passage, events: [] } })
+  })
+  try {
+    await openThreadForMark(page, 'ann-1')
+    await requested
+    await thread(page).getByRole('button', { name: 'Close', exact: true }).click()
+    await sock.subscribed(passage.id)
+    sock.push(passage.id, { type: 'turn.finished', turnId: 't1', stopReason: 'end_turn' })
+    await expect(marker(page, 'New reply')).toBeVisible()
+    sock.push(passage.id, { type: 'permission.requested', id: 'p1', turnId: 't2', title: 'Run tests?', options: [{ id: 'yes', name: 'Yes', kind: 'allow_once' }] })
+    sock.push(passage.id, { type: 'question.asked', id: 'q1', turnId: 't2', questions: [{ id: 'target', question: 'Which target?', options: [], multiSelect: false, freeText: true }] })
+    await expect(marker(page, 'Needs you')).toBeVisible()
+    sock.push(passage.id, { type: 'permission.resolved', id: 'p1', optionId: 'yes', by: 'user' })
+    await expect(marker(page, 'Needs you')).toBeVisible()
+    sock.push(passage.id, { type: 'question.answered', id: 'q1', answers: { target: 'local' }, by: 'user' })
+    await expect(marker(page, 'New reply')).toBeVisible()
+  } finally { release() }
+})
+
 test('moves a passage chat to the side pane and back with its draft', async ({ page }) => {
   await editor(page, [annotation({ id: 'ann-1' })])
   await openThreadForMark(page, 'ann-1')

@@ -450,6 +450,8 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     transcript.clear()
     model = createModel()
     seenSeq = 0
+    // Owners must retain the session even if they close while history loads.
+    state()
     try {
       for (let guard = 0; guard < 100; guard++) {
         const page = await chatClient.fetchSession(session.id, seenSeq)
