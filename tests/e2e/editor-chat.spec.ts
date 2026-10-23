@@ -294,9 +294,9 @@ for (const reopen of ['remount', 'reload'] as const) {
     await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
     sock.ack(sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
     await expect(pane(page).locator('.chat-surface-notice')).toContainText('Decision unavailable')
-    const recoveryKey = `poise:editor-applied:v1:${state.sessions.find(s => s.id === id)!.instance}:${id}`
+    const recoveryKey = `poise:editor-applied:v2:${encodeURIComponent(state.sessions.find(s => s.id === id)!.instance)}:${encodeURIComponent(id)}:${encodeURIComponent(JSON.stringify(['t1', 'reply-1', 0]))}`
     const marker = await page.evaluate(key => localStorage.getItem(key), recoveryKey)
-    expect(JSON.parse(marker!)).toEqual([{ turnId: 't1', messageId: 'reply-1', index: 0, afterSeq: state.history[id].at(-1)!.seq }])
+    expect(JSON.parse(marker!)).toEqual({ afterSeq: state.history[id].at(-1)!.seq, operationId: expect.any(String) })
     expect(marker).not.toContain('Opening paragraph')
     expect(marker).not.toContain('Added once')
     if (reopen === 'reload') {
@@ -326,6 +326,78 @@ for (const reopen of ['remount', 'reload'] as const) {
     expect(saves).toHaveLength(1)
   })
 }
+
+test('withdraws a failed decision Retry when the applied receipt arrives later', async ({ page }) => {
+  const { state, sock, saves } = await editor(page)
+  await openDocChat(page)
+  const id = await sendPaneMessage(page, sock, 'Add one sentence')
+  await finishReply(sock, id, 'Add one sentence', INSERTION)
+  sock.autoAck = false
+  const card = paneTranscript(page).locator('.chat-edit-card').first()
+  await card.getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect.poll(() => sock.framesOf('edit.decide').length).toBe(1)
+  sock.ack(sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
+  const retry = pane(page).getByRole('button', { name: 'Retry', exact: true })
+  await expect(retry).toBeVisible()
+  const stale = await retry.elementHandle()
+  sock.push(id, { type: 'edit.decided', turnId: 't1', messageId: 'reply-1', index: 0, decision: 'applied' })
+  await expect(retry).toHaveCount(0)
+  // A queued click on the removed control must also remain harmless.
+  await stale!.evaluate((button: HTMLButtonElement) => button.click())
+  sock.push(id, { type: 'session.updated', session: { ...state.sessions.find(item => item.id === id)!, status: 'running' } })
+  await expect(pane(page).locator('.chat-pane-state')).toHaveText('running')
+  await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+  expect(sock.framesOf('edit.decide')).toHaveLength(1)
+  expect(saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+})
+
+test('keeps an unacknowledged saved insertion when another tab declines a different card', async ({ page }) => {
+  const first = await editor(page, TEXT, { preserveOnReload: true })
+  await openDocChat(page)
+  const id = await sendPaneMessage(page, first.sock, 'Add one sentence')
+  first.state.history[id] = await finishReply(first.sock, id, 'Add one sentence', JSON.stringify({
+    chat: 'Two edits.', edits: [{ old: '', new: ' Added once.', context_before: 'Opening paragraph.' },
+      { old: 'A final thought.', new: 'A revised final thought.' }],
+  }))
+  const other = await page.context().newPage()
+  try {
+    // Both fixture installers normally clear storage once per tab. Preserve
+    // the shared origin here so this exercises real cross-tab marker writes.
+    await other.addInitScript(() => {
+      sessionStorage.setItem('poise-workspace-initialized', '1')
+      sessionStorage.setItem('chat-fixture-initialized', '1')
+      localStorage.setItem('poise-view', 'current')
+    })
+    const second = await editor(other, TEXT, { preserveOnReload: true })
+    second.state.sessions.push({ ...first.state.sessions.find(item => item.id === id)! })
+    second.state.history[id] = [...first.state.history[id]]
+    second.sock.seq = first.sock.seq
+    await openDocChat(other)
+    await expect(paneTranscript(other).locator('.chat-edit-card')).toHaveCount(2)
+    first.sock.autoAck = false
+    await paneTranscript(page).locator('.chat-edit-card').first().getByRole('button', { name: 'Accept', exact: true }).click()
+    await expect.poll(() => first.sock.framesOf('edit.decide').length).toBe(1)
+    first.sock.ack(first.sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
+    await expect(pane(page).getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+    const markers = () => page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith('poise:editor-applied:v2:')))
+    const before = await markers()
+    expect(before).toHaveLength(1)
+    await paneTranscript(other).locator('.chat-edit-card').nth(1).getByRole('button', { name: 'Decline', exact: true }).click()
+    await expect(paneTranscript(other).locator('.chat-edit-card-badge-declined')).toHaveText('Declined')
+    expect(await markers()).toEqual(before)
+    await page.reload()
+    await expect(page.locator('#editor-doc')).toContainText('Opening paragraph. Added once.')
+    await openDocChat(page)
+    const card = paneTranscript(page).locator('.chat-edit-card').first()
+    await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    await expect(card.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
+    first.sock.autoAck = true
+    await pane(page).getByRole('button', { name: 'Retry', exact: true }).click()
+    await expect.poll(() => first.sock.framesOf('edit.decide').length).toBe(2)
+    expect(first.sock.framesOf('edit.decide')[1].command).toMatchObject({ index: 0, decision: 'applied' })
+    expect(first.saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+  } finally { await other.close() }
+})
 
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
   const { sock } = await editor(page)

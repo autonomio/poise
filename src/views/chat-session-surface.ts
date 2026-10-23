@@ -63,6 +63,7 @@ interface SavedEdit {
   messageId: string
   index: number
   afterSeq: number
+  operationId: string
 }
 
 interface EditState {
@@ -71,7 +72,8 @@ interface EditState {
   confirmed: Set<string>
   baselines: Map<string, number>
   saved: Map<string, SavedEdit>
-  storageKey: string | null
+  storagePrefix: string | null
+  persisted: Map<string, SavedEdit>
   storageError: string | null
   retries: Map<string, EditRetry>
   listeners: Set<(key?: string, decision?: EditDecision) => void>
@@ -84,7 +86,7 @@ const pendingEdits = new Map<string, EditState>()
 
 function newEditState(): EditState {
   return { deciding: new Set(), applied: new Set(), confirmed: new Set(), baselines: new Map(), saved: new Map(),
-    storageKey: null, storageError: null, retries: new Map(), listeners: new Set(), revision: 0 }
+    storagePrefix: null, persisted: new Map(), storageError: null, retries: new Map(), listeners: new Set(), revision: 0 }
 }
 
 // localStorage is origin-scoped; the instance and session namespace prevents
@@ -94,35 +96,48 @@ function restoreEditState(session: SessionRecord): EditState {
   const pending = pendingEdits.get(session.id)
   if (pending) return pending
   const state = newEditState()
-  state.storageKey = `poise:editor-applied:v1:${session.instance}:${session.id}`
-  const raw = localStorage.getItem(state.storageKey)
-  if (!raw) return state
-  const saved: unknown = JSON.parse(raw)
-  if (!Array.isArray(saved)) throw new Error('Saved edit recovery markers are invalid')
-  for (const value of saved) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved edit recovery marker is invalid')
+  state.storagePrefix = `poise:editor-applied:v2:${encodeURIComponent(session.instance)}:${encodeURIComponent(session.id)}:`
+  for (const storageKey of Object.keys(localStorage)) {
+    if (!storageKey.startsWith(state.storagePrefix)) continue
+    const raw = localStorage.getItem(storageKey)
+    if (raw === null) continue // Another tab acknowledged this marker.
+    const identity: unknown = JSON.parse(decodeURIComponent(storageKey.slice(state.storagePrefix.length)))
+    const value: unknown = JSON.parse(raw)
+    if (!Array.isArray(identity) || identity.length !== 3 || typeof identity[0] !== 'string' || typeof identity[1] !== 'string'
+      || typeof identity[2] !== 'number' || !Number.isSafeInteger(identity[2]) || identity[2] < 0
+      || !value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved edit recovery identity is invalid')
     const item = value as Record<string, unknown>
-    if (typeof item.turnId !== 'string' || typeof item.messageId !== 'string' || typeof item.index !== 'number'
-      || !Number.isSafeInteger(item.index) || item.index < 0 || typeof item.afterSeq !== 'number'
-      || !Number.isSafeInteger(item.afterSeq) || item.afterSeq < 0) throw new Error('Saved edit recovery identity is invalid')
-    const marker: SavedEdit = { turnId: item.turnId, messageId: item.messageId, index: item.index, afterSeq: item.afterSeq }
+    if (typeof item.afterSeq !== 'number' || !Number.isSafeInteger(item.afterSeq) || item.afterSeq < 0
+      || typeof item.operationId !== 'string' || !item.operationId) throw new Error('Saved edit recovery cursor is invalid')
+    const marker: SavedEdit = { turnId: identity[0], messageId: identity[1], index: identity[2], afterSeq: item.afterSeq, operationId: item.operationId }
     const key = `${marker.turnId}:${marker.messageId}:${marker.index}`
     state.applied.add(key)
     state.baselines.set(key, marker.afterSeq)
     state.saved.set(key, marker)
+    state.persisted.set(key, marker)
     state.retries.set(key, { ...marker, decision: 'applied', error: 'The saved edit decision has not been acknowledged' })
   }
   return state
 }
 
 function persistEditState(state: EditState): void {
-  if (!state.storageKey) return
+  if (!state.storagePrefix) return
+  const storageKey = (marker: SavedEdit) => `${state.storagePrefix}${encodeURIComponent(JSON.stringify([marker.turnId, marker.messageId, marker.index]))}`
+  const value = (marker: SavedEdit) => JSON.stringify({ afterSeq: marker.afterSeq, operationId: marker.operationId })
   try {
-    if (state.saved.size) {
-      const raw = JSON.stringify([...state.saved.values()])
-      localStorage.setItem(state.storageKey, raw)
-      if (localStorage.getItem(state.storageKey) !== raw) throw new Error('Recovery marker write was not retained')
-    } else localStorage.removeItem(state.storageKey)
+    for (const [key, marker] of state.saved) {
+      if (state.persisted.get(key)?.operationId === marker.operationId) continue
+      const raw = value(marker)
+      localStorage.setItem(storageKey(marker), raw)
+      if (localStorage.getItem(storageKey(marker)) !== raw) throw new Error('Recovery marker write was not retained')
+      state.persisted.set(key, marker)
+    }
+    for (const [key, marker] of state.persisted) {
+      if (state.saved.has(key)) continue
+      // Never remove another tab's newer operation or a different card.
+      if (localStorage.getItem(storageKey(marker)) === value(marker)) localStorage.removeItem(storageKey(marker))
+      state.persisted.delete(key)
+    }
     state.storageError = null
   } catch (error) {
     state.storageError = `Edit recovery could not be saved — ${(error as Error).message}. Keep this page open until the decision is recorded.`
@@ -274,11 +289,14 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
   }
 
   function showEditRetry(): void {
-    const retry = [...editState.retries].find(([key]) => !editState.deciding.has(key))?.[1]
-    if (retry) setNotice(`Decision failed — ${retry.error}${editState.storageError ? `. ${editState.storageError}` : ''}`, [{ label: 'Retry', run: () => {
-      void decideEdit(retry.turnId, retry.messageId, retry.index, retry.decision, retry.edit)
-    } }])
-    else if (editState.storageError) setNotice(editState.storageError)
+    const pending = [...editState.retries].find(([key]) => !editState.deciding.has(key))
+    if (pending) {
+      const [key, retry] = pending
+      setNotice(`Decision failed — ${retry.error}${editState.storageError ? `. ${editState.storageError}` : ''}`, [{ label: 'Retry', run: () => {
+        if (editState.retries.get(key) !== retry) return
+        void decideEdit(retry.turnId, retry.messageId, retry.index, retry.decision, retry.edit)
+      } }])
+    } else if (editState.storageError) setNotice(editState.storageError)
   }
 
   function editStateChanged(key?: string, decision?: EditDecision): void {
@@ -322,7 +340,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
         decision = outcome
         if (outcome === 'applied') {
           state.applied.add(key)
-          state.saved.set(key, { turnId, messageId, index, afterSeq: state.baselines.get(key)! })
+          state.saved.set(key, { turnId, messageId, index, afterSeq: state.baselines.get(key)!, operationId: crypto.randomUUID() })
           state.retries.set(key, { turnId, messageId, index, decision, edit, error: 'The saved edit decision has not been acknowledged' })
           notifyEditState(state, sessionId)
         }
@@ -691,7 +709,7 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
         editState.saved.delete(key)
         editState.retries.delete(key)
         if (!editState.deciding.has(key)) editState.baselines.delete(key)
-        persistEditState(editState)
+        notifyEditState(editState, record.id, key, event.decision)
       }
     }
     applyEvent(model, envelope)

@@ -40,9 +40,11 @@ Editor edit cards disable Accept and Decline while saving and recording a
 decision. Failed saves allow another Accept; retrying a failed decision after
 a successful save records it without applying the edit again, across pane
 remounts and page reloads. Origin-local recovery markers contain only the
-workspace/session/card identity and the operation's transcript cursor; a later
+workspace/session/card identity, operation generation and transcript cursor; a later
 authoritative decision or acknowledgement removes them. Older decisions cannot
-clear a later saved edit. This retains a known successful save, not an atomic
+clear a later saved edit. Markers use separate card keys, so an unrelated
+decision in another tab cannot erase them. A late applied receipt withdraws its
+Retry control and makes even a queued click on that old control harmless. This retains a known successful save, not an atomic
 transaction between the server save and the client recovery write. Closing or moving
 a passage chat preserves its outstanding permission and question requests;
 the Needs you marker remains until every request has been answered.
