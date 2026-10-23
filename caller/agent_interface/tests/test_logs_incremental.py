@@ -2,9 +2,8 @@
 
 Whole-log `--logs` dumps (14.2 MB, ~8 s) saturated Poise's main thread and
 timed behaviors out. Current queries must stay flat as history grows: the
-running-only read is indexed, history walks back in bounded pages behind a
-stable cursor, one kind's rows page on their own, and exact ids resolve
-behind a single call.
+running-only read is indexed, and history walks back in bounded pages behind
+a stable cursor.
 """
 import json
 import subprocess
@@ -37,17 +36,11 @@ class LogsIncrementalCase(TestCase):
             self.addCleanup(target.stop)
         agent_interface.init_db()
 
-    KINDS = (
-        ("pr_review", "poise:review-new-prs"),
-        ("pr_approve", "poise:approve-prs"),
-        ("chat", "poise:chat"),
-    )
-
     def seed(self, count, running=0):
         with agent_interface.db() as conn:
             conn.executemany(
-                "insert into calls (id, model, prompt, started_at, ended_at, status, behavior, source)"
-                " values (?,?,?,?,?,?,?,?)",
+                "insert into calls (id, model, prompt, started_at, ended_at, status)"
+                " values (?,?,?,?,?,?)",
                 [
                     (
                         f"{n:032x}",
@@ -56,8 +49,6 @@ class LogsIncrementalCase(TestCase):
                         1761000000.0 + n,
                         None if n >= count - running else 1761000060.0 + n,
                         "running" if n >= count - running else "completed",
-                        self.KINDS[n % len(self.KINDS)][0],
-                        self.KINDS[n % len(self.KINDS)][1],
                     )
                     for n in range(count)
                 ],
@@ -85,7 +76,7 @@ class LogsIncrementalCase(TestCase):
         self.assertEqual((done.returncode, done.stderr), (0, ""), done.stderr)
         self.assertEqual(json.loads(done.stdout), rows)
 
-    def test_current_reads_use_indexes_not_scans(self):
+    def test_running_and_paged_reads_use_indexes_not_scans(self):
         self.seed(10, running=1)
         with agent_interface.db() as conn:
             running = conn.execute(
@@ -94,27 +85,14 @@ class LogsIncrementalCase(TestCase):
             ).fetchall()
             page = conn.execute(
                 "explain query plan select rowid from calls"
-                " where started_at < 1761000005.0"
-                " order by started_at desc, rowid desc limit 3"
+                " where rowid < 9 order by rowid desc limit 3"
             ).fetchall()
-            kind = conn.execute(
-                "explain query plan select rowid from calls"
-                " where behavior='pr_review' and source='poise:review-new-prs'"
-                " order by started_at desc, rowid desc limit 3"
-            ).fetchall()
-            point = conn.execute(
-                "explain query plan select id from calls where id in ('a','b')"
-            ).fetchall()
-        for plan, index in (
-            (running, "calls_status_started"),
-            (page, "calls_started"),
-            (kind, "calls_behavior_source_started"),
-            (point, "sqlite_autoindex_calls_1"),
-        ):
-            self.assertTrue(any(index in r[3] for r in plan), plan)
-            self.assertFalse(any("SCAN" in r[3] for r in plan), plan)
+        self.assertTrue(any("calls_status_started" in r[3] for r in running), running)
+        self.assertFalse(any("SCAN" in r[3] for r in running), running)
+        self.assertTrue(any("INTEGER PRIMARY KEY" in r[3] for r in page), page)
+        self.assertFalse(any("SCAN" in r[3] for r in page), page)
 
-    def test_current_reads_stay_flat_at_ten_x_history(self):
+    def test_running_and_paged_reads_stay_flat_at_ten_x_history(self):
         self.seed(TEN_X_ROWS, running=5)
         started = time.monotonic()
         rows = agent_interface.logs(status="running")
@@ -126,16 +104,6 @@ class LogsIncrementalCase(TestCase):
         page_elapsed = time.monotonic() - started
         self.assertEqual(len(page["rows"]), 500)
         self.assertLess(page_elapsed, 2, f"paged read took {page_elapsed:.2f}s")
-        started = time.monotonic()
-        kind = agent_interface.logs_page(500, behavior="pr_review", source="poise:review-new-prs")
-        kind_elapsed = time.monotonic() - started
-        self.assertEqual(len(kind["rows"]), 500)
-        self.assertLess(kind_elapsed, 2, f"kind read took {kind_elapsed:.2f}s")
-        started = time.monotonic()
-        point = agent_interface.logs_rows([f"{0:032x}", f"{TEN_X_ROWS - 1:032x}"])
-        point_elapsed = time.monotonic() - started
-        self.assertEqual(len(point["rows"]), 2)
-        self.assertLess(point_elapsed, 2, f"point read took {point_elapsed:.2f}s")
 
     def test_pages_walk_newest_first_with_a_stable_cursor(self):
         self.seed(5)
@@ -153,7 +121,7 @@ class LogsIncrementalCase(TestCase):
         self.assertEqual(sorted(seen), sorted(r["id"] for r in full))
         self.assertEqual(len(seen), len(set(seen)), "every row is visited exactly once")
         # A cursor past the oldest row ends the walk without an empty page.
-        empty = agent_interface.logs_page(2, "1761000000.0|1")
+        empty = agent_interface.logs_page(2, "1")
         self.assertEqual((empty["rows"], empty["nextCursor"]), ([], None))
 
     def test_appends_during_a_walk_do_not_shift_older_pages(self):
@@ -176,76 +144,24 @@ class LogsIncrementalCase(TestCase):
         self.assertEqual((done.returncode, done.stderr), (0, ""), done.stderr)
         page = json.loads(done.stdout)
         self.assertEqual([r["prompt"] for r in page["rows"]], ["prompt 1", "prompt 2"])
-        self.assertEqual(page["nextCursor"], "1761000001.0|2")
+        self.assertEqual(page["nextCursor"], "2")
         followed = self.cli("--logs", "--limit", "2", "--cursor", page["nextCursor"])
         self.assertEqual((followed.returncode, followed.stderr), (0, ""), followed.stderr)
         tail = json.loads(followed.stdout)
         self.assertEqual([r["prompt"] for r in tail["rows"]], ["prompt 0"])
         self.assertIsNone(tail["nextCursor"])
 
-    def test_pages_follow_start_time_not_insertion_order(self):
-        self.seed(3)
-        with agent_interface.db() as conn:
-            conn.execute(
-                "insert into calls (id, model, prompt, started_at, ended_at, status, behavior, source)"
-                " values (?,?,?,?,?,?,?,?)",
-                ("e" * 32, "opus-5-max", "prompt late", 1761000000.5, 1761000060.5, "completed",
-                 "pr_review", "poise:review-new-prs"),
-            )
-        newest_first: list[str] = []
-        cursor = None
-        while True:
-            page = agent_interface.logs_page(2, cursor)
-            newest_first.extend(r["prompt"] for r in reversed(page["rows"]))
-            cursor = page["nextCursor"]
-            if cursor is None:
-                break
-        # The late insert started between prompts 0 and 1: recency order,
-        # not rowid order, decides what the first match is.
-        self.assertEqual(newest_first, ["prompt 2", "prompt 1", "prompt late", "prompt 0"])
-
-    def test_kind_pages_narrow_to_one_behavior_and_source(self):
-        self.seed(6)
-        page = agent_interface.logs_page(10, behavior="pr_review", source="poise:review-new-prs")
-        self.assertEqual([r["prompt"] for r in page["rows"]], ["prompt 0", "prompt 3"])
-        self.assertIsNone(page["nextCursor"])
-        only_behavior = agent_interface.logs_page(10, behavior="chat")
-        self.assertEqual([r["prompt"] for r in only_behavior["rows"]], ["prompt 2", "prompt 5"])
-        # A kind that never ran proves its absence with one empty page.
-        missing = agent_interface.logs_page(10, behavior="issue_review", source="poise:review-new-issues")
-        self.assertEqual((missing["rows"], missing["nextCursor"]), ([], None))
-        done = self.cli("--logs", "--limit", "10", "--behavior", "pr_review", "--source", "poise:review-new-prs")
-        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stderr)
-        self.assertEqual(json.loads(done.stdout), page)
-
-    def test_ids_returns_exact_rows_and_skips_missing(self):
-        self.seed(3)
-        point = agent_interface.logs_rows([f"{2:032x}", "a" * 32, f"{0:032x}"])
-        self.assertEqual([r["prompt"] for r in point["rows"]], ["prompt 0", "prompt 2"])
-        self.assertIsNone(point["nextCursor"])
-        done = self.cli("--logs", "--ids", f"{2:032x}," + "f" * 32)
-        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stderr)
-        cli_page = json.loads(done.stdout)
-        self.assertEqual([r["prompt"] for r in cli_page["rows"]], ["prompt 2"])
-        self.assertIsNone(cli_page["nextCursor"])
-
     def test_logs_rejects_bad_filters_and_limits(self):
         self.seed(2)
         for args, message in (
             (("--logs", "--status", "completed"), "--status must be running"),
             (("--logs", "--status", "running", "--limit", "2"), "--status running cannot combine"),
-            (("--logs", "--status", "running", "--behavior", "chat"), "--status running cannot combine"),
             (("--logs", "--cursor", "2"), "--cursor requires --limit"),
-            (("--logs", "--behavior", "chat"), "--behavior and --source require --limit"),
-            (("--logs", "--ids", "a" * 32, "--limit", "2"), "--ids cannot combine with other flags"),
             (("--logs", "--limit", "0"), "logs page limit must be 1..1000"),
             (("--logs", "--limit", "1001"), "logs page limit must be 1..1000"),
             (("--logs", "--limit", "many"), "--limit must be an integer"),
             (("--logs", "--limit", "2", "--cursor", "oldest"), "logs page cursor is invalid"),
-            (("--logs", "--limit", "2", "--cursor", "2"), "logs page cursor is invalid"),
-            (("--logs", "--limit", "2", "--behavior", "chat room"), "logs page behavior is invalid"),
-            (("--logs", "--ids", "xyz"), "logs row id is invalid"),
-            (("--logs", "--ids", ""), "logs row id is invalid"),
+            (("--logs", "--limit", "2", "--cursor", "0"), "logs page cursor is invalid"),
         ):
             done = self.cli(*args)
             self.assertEqual(done.returncode, 2, args)
@@ -261,9 +177,67 @@ class LogsIncrementalCase(TestCase):
             agent_interface.logs_page(1001)
         with self.assertRaises(ValueError):
             agent_interface.logs_page(2, cursor="oldest")
-        with self.assertRaises(ValueError):
-            agent_interface.logs_page(2, behavior="chat room")
-        with self.assertRaises(ValueError):
-            agent_interface.logs_rows([])
-        with self.assertRaises(ValueError):
-            agent_interface.logs_rows(["xyz"])
+
+    def test_latest_selection_proves_missing_kinds_and_old_ids_without_history_pages(self):
+        self.seed(TEN_X_ROWS)
+        with agent_interface.db() as conn:
+            # The later insertion has an older timestamp; rowid is not recency.
+            conn.execute("update calls set behavior='pr_review', source='poise:review-new-prs', repo='OWNER/repo', pr_id='1' where id=?",
+                         (f"{TEN_X_ROWS - 1:032x}",))
+            conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,source,repo,pr_id) values(?,?,?,?,?,?,?,?,?)",
+                         ("f" * 32, "opus-5-max", "late insertion, older call", 1761000000.0, "completed",
+                          "pr_review", "poise:review-new-prs", "owner/repo", "2"))
+            plan = conn.execute("explain query plan " + agent_interface.LOGS_LATEST_QUERY,
+                                ("pr_review", "poise:review-new-prs", "owner")).fetchall()
+        details = " ".join(row[3] for row in plan)
+        self.assertIn("calls_behavior_owner_started", details)
+        self.assertNotIn("SCAN", details)
+        self.assertNotIn("TEMP B-TREE", details)
+        selection = {"latest": [
+            {"behavior": "pr_review", "source": "poise:review-new-prs", "owner": "owner"},
+            {"behavior": "issue_review", "source": "poise:review-new-issues", "owner": "owner"},
+            {"behavior": "pr_review", "source": "poise:review-new-prs", "owner": "absent"},
+        ], "ids": ["0" * 32]}
+        rows = agent_interface.logs_selected(selection)
+        self.assertEqual([row["id"] for row in rows], ["0" * 32, f"{TEN_X_ROWS - 1:032x}"])
+        selected = self.cli("--logs", "--select", json.dumps(selection))
+        self.assertEqual((selected.returncode, selected.stderr), (0, ""))
+        self.assertEqual(json.loads(selected.stdout), rows)
+
+    def test_launch_selection_includes_terminal_calls_and_retains_ambiguity(self):
+        self.seed(2)
+        before = agent_interface.logs_watermark()
+        self.assertEqual(before, "2")
+        watermark = self.cli("--logs", "--watermark")
+        self.assertEqual((watermark.returncode, json.loads(watermark.stdout)), (0, {"cursor": before}))
+        with agent_interface.db() as conn:
+            for id_, session, prompt, status in [
+                ("a" * 32, "session", "--topic", "completed"),
+                ("b" * 32, "other", "--topic", "completed"),
+                ("c" * 32, "session", "other topic", "completed"),
+            ]:
+                conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,session_id) values(?,?,?,?,?,?,?)",
+                             (id_, "opus-5-max", prompt, 1761000000.0, status, "author_content", session))
+            plan = conn.execute("explain query plan select id from calls where session_id=? and behavior=? and rowid>? and prompt=? order by rowid limit 2",
+                                ("session", "author_content", int(before), "--topic")).fetchall()
+        self.assertIn("calls_session_behavior", " ".join(row[3] for row in plan))
+        self.assertEqual([row["id"] for row in agent_interface.logs_session_since(before, "session", "author_content", "--topic")], ["a" * 32])
+        with agent_interface.db() as conn:
+            conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,session_id) values(?,?,?,?,?,?,?)",
+                         ("d" * 32, "opus-5-max", "--topic", 1761000001.0, "failed", "author_content", "session"))
+        selected = self.cli("--logs", "--after", before, "--session", "session", "--behavior", "author_content", "--prompt", "--topic")
+        self.assertEqual((selected.returncode, selected.stderr), (0, ""))
+        self.assertEqual([row["status"] for row in json.loads(selected.stdout)], ["completed", "failed"])
+        self.assertEqual(agent_interface.logs_session_since(agent_interface.logs_watermark(), "session", "author_content", "--topic"), [])
+
+    def test_selected_reads_fail_loud_on_malformed_or_oversized_needles(self):
+        for selection in [None, {}, {"latest": [], "ids": ["partial"]},
+                          {"latest": [{"behavior": "pr_review"}], "ids": []},
+                          {"latest": [], "ids": ["a" * 32] * 1001}]:
+            with self.assertRaises(ValueError):
+                agent_interface.logs_selected(selection)
+            done = self.cli("--logs", "--select", json.dumps(selection))
+            self.assertEqual(done.returncode, 2, done.stdout)
+        for after in ["-1", "01", "unknown", str(2**63)]:
+            with self.assertRaises(ValueError):
+                agent_interface.logs_session_since(after, "session", "author_content", "topic")

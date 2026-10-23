@@ -67,11 +67,6 @@ async function cli(command: string, args: string[], options: RunFileOptions) {
   if (command === 'agent-interface' && args[0] === '--logs' && args.includes('--limit')) {
     return { stdout: JSON.stringify({ rows: behaviorLogs, nextCursor: null }), stderr: '' }
   }
-  if (command === 'agent-interface' && args[0] === '--logs' && args.includes('--ids')) {
-    const wanted = new Set(args[args.indexOf('--ids') + 1].split(','))
-    const rows = behaviorLogs.filter((row) => wanted.has((row as { id?: unknown }).id))
-    return { stdout: JSON.stringify({ rows, nextCursor: null }), stderr: '' }
-  }
   if (command === 'agent-interface' && args[0] === '--logs') return { stdout: JSON.stringify(behaviorLogs), stderr: '' }
   if (command === 'github-interface' && args[0] === '--view-repos') {
     return { stdout: JSON.stringify({ repos: [{ full_name: `${args[1]}/same-repo` }] }), stderr: '' }
@@ -486,6 +481,7 @@ describe('global behavior settings API', () => {
     expect(response.diagnostics.deadLetters).toContainEqual(expect.objectContaining({ callId,
       diagnostic: { severity: 'info', code: 'head_changed' } }))
     behaviorLogs = []
+    await resetLogCache()
     const unread = await (await fetch(`${base}/api/behaviors`)).json()
     expect(unread.diagnostics.deadLetters).toContainEqual(expect.objectContaining({ callId,
       diagnostic: { severity: 'warning', code: 'held_result' } }))
@@ -502,6 +498,7 @@ describe('global behavior settings API', () => {
       correlation_id: secondId, started_at: '2026-10-13T14:09:00Z', completed_at: '2026-10-13T14:09:04Z',
       status: 'failed', action: 'not_started', outcome: 'preflight_failed', expected_head: 'b'.repeat(40),
       head_sha: null, review_id: null, receipts: null, error }]
+    await resetLogCache()
     const separate = await (await fetch(`${base}/api/behaviors`)).json()
     expect(separate.diagnostics.deadLetters).toEqual(expect.arrayContaining([
       expect.objectContaining({ callId, diagnostic: { severity: 'error', code: 'invalid_agent_result' } }),
@@ -524,55 +521,6 @@ describe('global behavior settings API', () => {
         at: '2026-10-01T12:01:00Z', target: 'beta/same-repo#1',
       })
     }
-  })
-
-  // A kind that never ran must not send the dashboard to the end of history:
-  // each behavior reads its own kind's pages, and an empty first page proves
-  // absence. The pr_review match sits on page two here, so the walk also
-  // threads a cursor; nothing reads the whole log.
-  it('bounds behavior reads when a trigger kind never ran, across pages', async () => {
-    mocks.runFile.mockImplementation(async (command: string, args: string[], options: RunFileOptions) => {
-      if (command === 'agent-interface' && args[0] === '--logs' && args.includes('--limit')) {
-        const limit = Number(args[args.indexOf('--limit') + 1])
-        const offset = args.includes('--cursor') ? Number(args[args.indexOf('--cursor') + 1]) : 0
-        const behavior = args.includes('--behavior') ? args[args.indexOf('--behavior') + 1] : undefined
-        const source = args.includes('--source') ? args[args.indexOf('--source') + 1] : undefined
-        const rows = (behaviorLogs as Array<Record<string, unknown>>).filter((row) =>
-          (behavior === undefined || row.behavior === behavior) && (source === undefined || row.source === source))
-        const slice = rows.slice(offset, offset + limit)
-        const end = offset + slice.length
-        return { stdout: JSON.stringify({ rows: slice, nextCursor: end < rows.length ? String(end) : null }), stderr: '' }
-      }
-      return cli(command, args, options)
-    })
-    const base = {
-      source: 'poise:review-new-prs', repo: 'Legacy/same-repo',
-      started_at: '2026-09-01T00:00:00Z', completed_at: '2026-09-01T00:00:01Z', status: 'completed',
-      actor: 'review-bot', expected_head: 'a'.repeat(40), head_sha: 'a'.repeat(40),
-      action: 'reviewed_clean', outcome: 'clean', model: 'test', prompt: '', time_elapsed: '1s',
-    }
-    behaviorLogs = [
-      ...Array.from({ length: 600 }, (_, index) => ({
-        ...base, id: index.toString(16).padStart(32, '0'), behavior: 'pr_review', pr_id: '9',
-        repo: 'elsewhere/other', correlation_id: `fill-${index}`,
-      })),
-      { ...base, id: 'f'.repeat(32), behavior: 'pr_review', pr_id: '7', correlation_id: 'match',
-        started_at: '2026-10-01T12:00:00Z', completed_at: '2026-10-01T12:00:01Z' },
-      ...Array.from({ length: 3 }, (_, index) => ({
-        ...base, id: `e${index}`.padEnd(32, '0'), behavior: 'pr_approve', source: 'poise:approve-prs',
-        pr_id: '3', correlation_id: `approve-${index}`,
-        started_at: `2026-10-01T11:0${index}:00Z`, completed_at: `2026-10-01T11:0${index}:01Z`,
-      })),
-    ]
-    const data = await state()
-    expect(data['review-new-prs']!.lastTriggered).toEqual({ at: '2026-10-01T12:00:00Z', target: 'Legacy/same-repo#7' })
-    expect(data['approve-prs']!.lastTriggered).toEqual({ at: '2026-10-01T11:02:00Z', target: 'Legacy/same-repo#3' })
-    expect(data['review-new-issues']!.lastTriggered).toBeNull()
-    expect((data.diagnostics as { agentLogsError: unknown }).agentLogsError).toBeNull()
-    const logsCalls = mocks.runFile.mock.calls.filter(([command, args]) => command === 'agent-interface' && args[0] === '--logs')
-    // Two pr_review pages, one pr_approve page, one empty issue_review page.
-    expect(logsCalls).toHaveLength(4)
-    for (const [, args] of logsCalls) expect(args.includes('--limit') || args.includes('--ids')).toBe(true)
   })
 
   // A held whole-log read must not slow the dashboard or health: behaviors

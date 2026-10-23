@@ -24,7 +24,7 @@ import { parseBounds, parseWindow, readAnalytics, readAnalyticsHistory } from '.
 import { checkGithubQuota, readGithubQuota, startGithubQuotaRuntime, stopGithubQuotaRuntime } from './github-quota'
 import { handleGhBody, listOrgRepos, listOrganizationsRepos, selectOrganizations, repoBelongsTo, requireConfiguredRepository } from './gh'
 import { getOrganizations, readyOrganizations, addOrganization, retryOrganization, startOrganizationsRuntime, stopOrganizationsRuntime } from './organizations'
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, fetchLatestAgentLogEntry, fetchAgentLogRows, fetchRunningAgentLogSnapshot, freezeAgentLogSnapshot, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, fetchSelectedAgentLogSnapshot, fetchRunningAgentLogSnapshot, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
 import { readBehaviorMetrics } from './behavior-metrics'
 import { listChatHistory, sendChat, saveAttachment, runDebate } from './chat'
 import { listDocs, readDoc, writeDoc, deleteDoc, newSlug, readAnnotations, writeAnnotations, getOrCreateChatSession, MAX_DOC_BYTES, MAX_ANNOTATIONS_BYTES, EditorConflictError } from './editor'
@@ -224,7 +224,7 @@ export function startPoiseRuntime(opts: CachePluginOptions = {}): void {
     chatControl = new ChatControl(chatRuntime, { switchboard: chatSwitchboard })
     addDiagnosticSecrets(secretValues)
     chatRuntime.on('log', (line: string) => console.log(redactSecrets(line)))
-    chatSockets = new ChatSocketServer(chatRuntime, { allowedHosts: opts.allowedHosts, service }, chatSwitchboard)
+    chatSockets = new ChatSocketServer(chatRuntime, { allowedHosts: opts.allowedHosts, service }, chatSwitchboard, chatControl)
     terminalSockets = new TerminalSocketServer({ allowedHosts: opts.allowedHosts, service }, { command: opts.terminalCommand })
     // A login may have just changed an account. Claude's sign-in also gates
     // Claude-backed work, so it is verified now instead of at the next poll.
@@ -248,6 +248,7 @@ export function startPoiseRuntime(opts: CachePluginOptions = {}): void {
     }
     void chatRuntime.recover().then(() => { chatControl?.start(); chatSwitchboard?.start() }).catch((error: unknown) => {
       console.error('[chat] startup reconciliation failed:', error)
+      chatControl?.failStart(error)
     })
   }
   if (!linkApi) linkApi = new LinkApi({ service })
@@ -685,11 +686,8 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           const enabled = getEnabledMap()
           const settings = getSettingMap()
           const scratch = getScratchpadMap()
-          // The dashboard needs the newest trigger per behavior plus the
-          // dead letters' exact rows: one bounded kind walk per behavior
-          // plus one point read for the needles, not the whole log.
-          // Unenriched incidents name their rows up front, so these reads
-          // resolve every row this response displays.
+          // Indexed latest-trigger and exact incident lookups also prove
+          // absence: a never-run kind cannot cause a whole-history walk.
           const accounts = getOrganizations()
           const triggers: Array<[string, string]> = [
             ['pr_review', 'poise:review-new-prs'],
@@ -709,28 +707,17 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           let snapshot: Awaited<ReturnType<typeof fetchAgentLogSnapshot>> | null = null
           let agentLogsError: string | null = null
           try {
-            const [kinds, needles] = await Promise.all([
-              Promise.all(triggers.map(([cliBehavior, source]) =>
-                fetchLatestAgentLogEntry({ behavior: cliBehavior, source, match: (entry) => triggered(entry, cliBehavior, source) }))),
-              fetchAgentLogRows([...pending]),
-            ])
-            const latest = kinds.flatMap((kind) => kind.entry === null ? [] : [kind.entry])
-            // A dead letter's row can also be its behavior's latest trigger:
-            // incident enrichment matches rows by id, so it must appear once.
-            const latestIds = new Set(latest.map((entry) => entry.id))
-            snapshot = freezeAgentLogSnapshot({
-              entries: [...latest, ...needles.entries.filter((entry) => !latestIds.has(entry.id))],
-              quarantined: [...kinds.flatMap((kind) => kind.quarantined), ...needles.quarantined],
+            snapshot = await fetchSelectedAgentLogSnapshot({
+              latest: triggers.flatMap(([behavior, source]) => accounts.map(account => ({ behavior, source, owner: account.login }))),
+              ids: [...pending].sort(),
             })
             logs = snapshot.entries
             if (snapshot.quarantined.length > 0) agentLogsError = `${snapshot.quarantined.length} unreadable worker log row(s) quarantined`
           } catch (error) {
             agentLogsError = error instanceof Error ? error.message : String(error)
           }
-          // Each kind walk returns that behavior's newest matching row, so
-          // .find() over the latest rows picks the most recent trigger. We
-          // only consider rows that have both a repo and pr_id so the link
-          // to Swarm works.
+          // Selection is ordered by started_at, not insertion rowid: calls
+          // can register out of timestamp order on concurrent connections.
           const lastFor = (cliBehavior: string, source: string) => {
             const r = logs.find((e) => triggered(e, cliBehavior, source))
             return r ? {
@@ -989,7 +976,7 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
         // Handled before the legacy per-card chat below, whose matchers use
         // the exact `/api/chat` path or the `/api/chat-…` prefixes.
         if (url.startsWith('/api/chat/') && chatRuntime) {
-          if (await handleChatApi(req, res, url, chatRuntime, chatSwitchboard ?? undefined, speaksForPerson(req, !!service, authority))) return
+          if (await handleChatApi(req, res, url, chatRuntime, chatSwitchboard ?? undefined, speaksForPerson(req, !!service, authority), chatControl ?? undefined)) return
         }
 
         // ── /api/chat — per-card long-lived chats via agent-interface ──
@@ -1187,7 +1174,7 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
               // Stopping a chat turn is the person's action, as on the chat
               // routes. Stopping agent-interface jobs below is unchanged.
               if (!speaksForPerson(req, !!service, authority)) return json(res, 403, { error: 'This is the person\'s action, taken in the browser. Chats use the control operations.', code: 'invalid' })
-              const { settled } = await chatRuntime!.cancel(chatTurn.sessionId)
+              const { settled } = await chatRuntime!.cancel(chatTurn.sessionId, { kind: 'person' })
               return json(res, 200, { id, stopped: settled, status: settled ? 'cancelled' : 'stopping', error_code: 'stopped' })
             }
             if (/^[0-9a-f]{32}$/.test(id)) {

@@ -5,9 +5,7 @@ import { captureBehaviorAdmission, captureBehaviorOutcome, observeAgentSnapshot 
 // Log reads:
 //   --logs                        → JSON array of all calls, oldest first
 //   --logs --status running        → the running calls only, indexed
-//   --logs --limit N [--cursor C]  → one bounded newest-first page,
-//     [--behavior B] [--source S]    optionally narrowed to one kind
-//   --logs --ids ID,...           → the exact rows for call ids
+//   --logs --limit N [--cursor C]  → one bounded newest-first page
 //   --read-response <id>          → response body, looked up by the full
 //                                   call id field
 //
@@ -28,9 +26,9 @@ import { claudeSubscriptionEnvironment, runFile, spawnDetached } from './process
 import { withNoticeDiagnosticIdentity } from './logging-context'
 import { diagnostic } from './logging'
 import { requireAgentAccount } from './settings'
-import { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, parseAgentLogPage, parseAgentLogStdout, scopedAgentLogs } from './agent-log-parse'
+import { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, parseAgentLogStdout, scopedAgentLogs } from './agent-log-parse'
 import type { AgentLogParseReply, AgentLogParseRequest } from './agent-log-worker'
-import type { AgentLogIdentity, AgentLogSnapshot, LogEntry, QuarantinedAgentLog } from './agent-log-parse'
+import type { AgentLogIdentity, AgentLogSnapshot, LogEntry } from './agent-log-parse'
 
 export { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, quarantinedLogMayMatch, scopedAgentLogs } from './agent-log-parse'
 export type {
@@ -115,15 +113,17 @@ const runningAgentLogLane: AgentLogLane = {
   args: ['--logs', '--status', 'running'], source: 'agent-interface --logs --status running',
   running: null, queued: null, cached: null,
 }
+const selectedAgentLogLanes = new Map<string, AgentLogLane>()
 
 // Test lifecycle: drop both lanes' cached snapshots so the next read spawns.
-// Production never calls it; in-flight lane reads are untouched. Joined
-// page reads evaporate on their own, but clearing them keeps a stuck test
-// double from pinning later reads to its promise.
+// Production never calls it; in-flight reads are untouched.
 export function resetAgentLogCache(): void {
   historyAgentLogLane.cached = null
   runningAgentLogLane.cached = null
-  agentLogPageReads.clear()
+  for (const [key, lane] of selectedAgentLogLanes) {
+    lane.cached = null
+    if (!lane.running && !lane.queued) selectedAgentLogLanes.delete(key)
+  }
 }
 
 // Shaped like runFile's own abort rejection, minus the child-kill fields:
@@ -302,8 +302,8 @@ function callerUpdateError(args: readonly string[], error: unknown): Error | nul
   if (args.length < 2) return null
   const stderr = (error as { stderr?: unknown } | null)?.stderr
   if (typeof stderr !== 'string' || !stderr.includes('usage:')) return null
-  if (args.includes('--ids')) return new Error('Update Caller: log reads by id are unavailable', { cause: error })
-  const feature = args.includes('--status') ? 'running-only' : 'paged'
+  const feature = args.includes('--status') ? 'running-only'
+    : args.includes('--limit') ? 'paged' : 'selected'
   return new Error(`Update Caller: ${feature} log reads are unavailable`, { cause: error })
 }
 
@@ -384,111 +384,59 @@ async function agentLogWorkerAssetUrl(): Promise<URL> {
   return agentLogWorkerAsset
 }
 
-// One bounded history page, newest first: each read costs its own page,
-// never the retained history. Behavior/source narrow the page to one
-// kind, so an empty first page proves the kind never ran. Concurrent
-// readers of identical argv join the in-flight read; joins evaporate on
-// settle, so they share work but never serve stale results.
-const AGENT_LOG_PAGE_SIZE = 500
-
-const agentLogPageReads = new Map<string, Promise<unknown>>()
-
-async function joinAgentLogRead<T>(args: readonly string[], signal: AbortSignal | undefined, read: () => Promise<T>): Promise<T> {
-  signal?.throwIfAborted()
-  const key = JSON.stringify(args)
-  let inFlight = agentLogPageReads.get(key) as Promise<T> | undefined
-  if (!inFlight) {
-    inFlight = read()
-    agentLogPageReads.set(key, inFlight)
-    const settled = () => { if (agentLogPageReads.get(key) === inFlight) agentLogPageReads.delete(key) }
-    void inFlight.then(settled, settled)
-  }
-  try {
-    const result = await inFlight
-    signal?.throwIfAborted()
-    return result
-  } catch (error) {
-    signal?.throwIfAborted()
-    // Every waiter gets its own error object, like the snapshot lanes.
-    throw copyAgentLogError(error)
-  }
+export interface AgentLogSelection {
+  latest: Array<{ behavior: string, source: string, owner: string }>
+  ids: string[]
 }
 
-async function readAgentLogPage(args: readonly string[], source: string): Promise<AgentLogSnapshot & { nextCursor: string | null }> {
+export async function fetchSelectedAgentLogSnapshot(
+  selection: AgentLogSelection,
+  options: { signal?: AbortSignal, fresh?: boolean } = {},
+): Promise<AgentLogSnapshot> {
+  return selectedAgentLogSnapshot(['--logs', '--select', JSON.stringify(selection)], options)
+}
+
+export async function fetchAgentLogsSince(
+  after: string,
+  selection: { session: string, behavior: string, prompt: string },
+  options: { signal?: AbortSignal, fresh?: boolean } = {},
+): Promise<AgentLogSnapshot> {
+  return selectedAgentLogSnapshot(['--logs', '--after', after, '--session', selection.session,
+    '--behavior', selection.behavior, '--prompt', selection.prompt], options)
+}
+
+export async function fetchAgentLogWatermark(): Promise<string> {
+  const args = ['--logs', '--watermark']
   let stdout: string
-  try {
-    // The child is shared by joined waiters, so it runs without any one
-    // waiter's signal; waiters gate on theirs before and after instead.
-    ({ stdout } = await spawnAgentLogRead(args, undefined))
-  } catch (error) {
-    throw callerUpdateError(args, error) ?? error
+  try { ({ stdout } = await spawnAgentLogRead(args, undefined)) }
+  catch (error) { throw callerUpdateError(args, error) ?? error }
+  const value = JSON.parse(stdout) as { cursor?: unknown } | null
+  if (!value || typeof value.cursor !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value.cursor)) {
+    throw new Error('agent-interface --logs --watermark returned an invalid insertion boundary')
   }
-  return parseAgentLogPage(stdout, source)
+  return value.cursor
 }
 
-export async function fetchAgentLogPage(options: {
-  signal?: AbortSignal
-  limit?: number
-  cursor?: string
-  behavior?: string
-  source?: string
-}): Promise<AgentLogSnapshot & { nextCursor: string | null }> {
-  const limit = Math.min(Math.max(Math.floor(options.limit ?? AGENT_LOG_PAGE_SIZE), 1), 1000)
-  const args = ['--logs', '--limit', String(limit)]
-  if (options.cursor !== undefined) args.push('--cursor', options.cursor)
-  if (options.behavior !== undefined) args.push('--behavior', options.behavior)
-  if (options.source !== undefined) args.push('--source', options.source)
-  return joinAgentLogRead(args, options.signal,
-    () => readAgentLogPage(args, 'agent-interface --logs --limit'))
-}
-
-// The newest row of one kind matching the caller, or proof there is none:
-// kind pages walk newest-first by start time, so the first match is the
-// latest run however track() calls interleaved. maxPages bounds the walk;
-// exceeding it throws instead of silently reporting absence — the caller
-// surfaces the error, never a false "never ran".
-const AGENT_LOG_KIND_WALK_MAX_PAGES = 10
-
-export async function fetchLatestAgentLogEntry(options: {
-  signal?: AbortSignal
-  behavior: string
-  source?: string
-  match?: (entry: LogEntry) => boolean
-  pageSize?: number
-  maxPages?: number
-}): Promise<{ entry: LogEntry | null, quarantined: QuarantinedAgentLog[] }> {
-  const pageSize = Math.min(Math.max(Math.floor(options.pageSize ?? AGENT_LOG_PAGE_SIZE), 1), 1000)
-  const maxPages = Math.min(Math.max(Math.floor(options.maxPages ?? AGENT_LOG_KIND_WALK_MAX_PAGES), 1), 100)
-  const match = options.match ?? (() => true)
-  const quarantined: QuarantinedAgentLog[] = []
-  let cursor: string | undefined
-  for (let pages = 0; pages < maxPages; pages++) {
-    const page = await fetchAgentLogPage({
-      signal: options.signal, limit: pageSize, cursor,
-      behavior: options.behavior, source: options.source,
-    })
-    quarantined.push(...page.quarantined)
-    const entry = page.entries.find(match)
-    if (entry) return { entry, quarantined }
-    if (page.nextCursor === null) return { entry: null, quarantined }
-    cursor = page.nextCursor
+async function selectedAgentLogSnapshot(
+  args: readonly string[], options: { signal?: AbortSignal, fresh?: boolean },
+): Promise<AgentLogSnapshot> {
+  const key = JSON.stringify(args)
+  let lane = selectedAgentLogLanes.get(key)
+  if (!lane) {
+    for (const [oldKey, old] of selectedAgentLogLanes) {
+      if (!old.running && !old.queued && (!old.cached || Date.now() >= old.cached.expiresAt || selectedAgentLogLanes.size >= 32)) selectedAgentLogLanes.delete(oldKey)
+    }
+    if (selectedAgentLogLanes.size >= 32) throw new Error('agent log selection capacity is full; retry after current reads settle')
+    lane = { args, source: 'agent-interface --logs selected read', running: null, queued: null, cached: null }
+    selectedAgentLogLanes.set(key, lane)
   }
-  const kind = options.source ? `${options.behavior}/${options.source}` : options.behavior
-  throw new Error(`agent log walk incomplete: newest ${kind} row unresolved after ${maxPages} pages`)
-}
-
-// The exact rows for call ids behind one read. Unknown ids stay absent
-// instead of failing the batch, so one stale needle never breaks the
-// response it enriches.
-const AGENT_LOG_ROWS_ID_PATTERN = /^[0-9a-fA-F]{32}$/
-
-export async function fetchAgentLogRows(ids: readonly string[], options: { signal?: AbortSignal } = {}): Promise<AgentLogSnapshot> {
-  const valid = ids.filter((id) => AGENT_LOG_ROWS_ID_PATTERN.test(id))
-  if (valid.length === 0) return freezeAgentLogSnapshot({ entries: [], quarantined: [] })
-  const args = ['--logs', '--ids', valid.join(',')]
-  const page = await joinAgentLogRead(args, options.signal,
-    () => readAgentLogPage(args, 'agent-interface --logs --ids'))
-  return freezeAgentLogSnapshot({ entries: page.entries, quarantined: page.quarantined })
+  const source = lane.source
+  return laneAgentLogSnapshot(lane, options, async signal => {
+    let stdout: string
+    try { ({ stdout } = await spawnAgentLogRead(args, signal)) }
+    catch (error) { throw callerUpdateError(args, error) ?? error }
+    return decodeAgentLogSnapshot(stdout, source, signal)
+  })
 }
 
 function warnAgentLogCap(stdout: string, rows: number): void {

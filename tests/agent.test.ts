@@ -43,7 +43,7 @@ vi.mock('../server/gh', () => ({
   localCheckoutPath: vi.fn(),
 }))
 
-import { fetchAgentLogs, fetchAgentLogPage, fetchAgentLogRows, fetchAgentLogSnapshot, fetchAgentReasoning, fetchLatestAgentLogEntry, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentReasoning, fetchSelectedAgentLogSnapshot, fetchAgentLogsSince, fetchAgentLogWatermark, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 
 function logRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -978,133 +978,62 @@ describe('running agent-log lane', () => {
   })
 })
 
-describe('bounded agent-log pages', () => {
-  beforeEach(() => { mocks.runFile.mockReset(); resetAgentLogCache() })
+describe('selected agent-log reads', () => {
+  beforeEach(() => { mocks.runFile.mockReset() })
+  const selection = { latest: [
+    { behavior: 'pr_review', source: 'poise:review-new-prs', owner: 'owner' },
+    { behavior: 'issue_review', source: 'poise:review-new-issues', owner: 'owner' },
+  ], ids: ['a'.repeat(32)] }
 
-  function page(rows: unknown[], nextCursor: string | null) {
-    return { stdout: JSON.stringify({ rows, nextCursor }), stderr: '' }
-  }
-
-  it('walks one kind until the first match, threading the cursor', async () => {
-    const old = logRow({ id: 'a'.repeat(32) })
-    const mid = logRow({ id: 'b'.repeat(32) })
-    const fresh = logRow({ id: 'c'.repeat(32) })
-    mocks.runFile
-      .mockResolvedValueOnce(page([mid, fresh], '9|2'))
-      .mockResolvedValueOnce(page([old], null))
-    const { entry, quarantined } = await fetchLatestAgentLogEntry({
-      behavior: 'pr_review', source: 'poise:review-new-prs',
-      match: (row) => row.id === 'a'.repeat(32),
-    })
-    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
-      ['--logs', '--limit', '500', '--behavior', 'pr_review', '--source', 'poise:review-new-prs'],
-      ['--logs', '--limit', '500', '--cursor', '9|2', '--behavior', 'pr_review', '--source', 'poise:review-new-prs'],
-    ])
-    expect(entry?.id).toBe('a'.repeat(32))
-    expect(quarantined).toEqual([])
-  })
-
-  it('proves a missing kind with one empty page', async () => {
-    mocks.runFile.mockResolvedValue(page([], null))
-    const { entry, quarantined } = await fetchLatestAgentLogEntry({
-      behavior: 'issue_review', source: 'poise:review-new-issues', match: () => true,
-    })
+  it('shares and caches one bounded selection with a missing kind and an old incident', async () => {
+    let answer!: (value: { stdout: string, stderr: string }) => void
+    mocks.runFile.mockImplementation(() => new Promise(resolve => { answer = resolve }))
+    const first = fetchSelectedAgentLogSnapshot(selection)
+    const concurrent = fetchSelectedAgentLogSnapshot(selection)
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
-    expect(entry).toBeNull()
-    expect(quarantined).toEqual([])
-  })
-
-  it('throws instead of walking past maxPages', async () => {
-    mocks.runFile.mockResolvedValue(page([logRow({ id: 'b'.repeat(32) })], '9|2'))
-    await expect(fetchLatestAgentLogEntry({ behavior: 'pr_review', match: () => false, maxPages: 3 }))
-      .rejects.toThrow('agent log walk incomplete: newest pr_review row unresolved after 3 pages')
-    expect(mocks.runFile).toHaveBeenCalledTimes(3)
-  })
-
-  it('collects quarantined rows from walked pages', async () => {
-    mocks.runFile.mockResolvedValue(page(['not-a-row', logRow({ id: 'c'.repeat(32) })], null))
-    const { entry, quarantined } = await fetchLatestAgentLogEntry({ behavior: 'pr_review' })
-    expect(entry?.id).toBe('c'.repeat(32))
-    expect(quarantined).toHaveLength(1)
-  })
-
-  it('rejects a bare row array as a page', async () => {
-    mocks.runFile.mockResolvedValue({ stdout: JSON.stringify([logRow()]), stderr: '' })
-    await expect(fetchAgentLogPage({})).rejects.toThrow('returned an invalid page')
-  })
-
-  it('aborts between pages', async () => {
-    const controller = new AbortController()
-    mocks.runFile.mockImplementation(async () => {
-      controller.abort()
-      return page([logRow()], '9|2')
-    })
-    await expect(fetchLatestAgentLogEntry({ behavior: 'pr_review', signal: controller.signal, match: () => false }))
-      .rejects.toThrow('This operation was aborted')
+    expect(mocks.runFile.mock.calls[0][1]).toEqual(['--logs', '--select', JSON.stringify(selection)])
+    answer({ stdout: JSON.stringify([logRow()]), stderr: '' })
+    const snapshot = await first
+    expect(await concurrent).toBe(snapshot)
+    expect(await fetchSelectedAgentLogSnapshot(selection)).toBe(snapshot)
+    expect(snapshot.entries.map(row => row.id)).toEqual(['a'.repeat(32)])
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
-  })
-
-  it('names an older Caller instead of its usage text', async () => {
-    mocks.runFile.mockRejectedValue(Object.assign(new Error('Command failed (2): agent-interface'),
-      { code: 2, stdout: '', stderr: 'usage: agent-interface BEHAVIOR ...\n' }))
-    await expect(fetchAgentLogPage({})).rejects.toThrow('Update Caller: paged log reads are unavailable')
-  })
-
-  it('fetches exact rows by id behind one read, skipping unknown ids', async () => {
-    const first = logRow({ id: 'a'.repeat(32) })
-    const second = logRow({ id: 'b'.repeat(32) })
-    mocks.runFile.mockResolvedValue(page([first, second], null))
-    const snapshot = await fetchAgentLogRows(['b'.repeat(32), 'not-an-id', 'a'.repeat(32)])
-    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
-      ['--logs', '--ids', `${'b'.repeat(32)},${'a'.repeat(32)}`],
-    ])
-    expect(snapshot.entries.map((row) => row.id)).toEqual(['b'.repeat(32), 'a'.repeat(32)])
     expect(Object.isFrozen(snapshot)).toBe(true)
   })
 
-  it('reads nothing when no id is valid', async () => {
-    const snapshot = await fetchAgentLogRows(['not-an-id'])
-    expect(mocks.runFile).not.toHaveBeenCalled()
-    expect(snapshot.entries).toEqual([])
+  it('keeps large selections on the same off-thread decoder as history', async () => {
+    const rows = Array.from({ length: 1000 }, (_, index) => logRow({
+      id: index.toString(16).padStart(32, '0'), prompt: 'x'.repeat(4000),
+    }))
+    mocks.runFile.mockResolvedValue({ stdout: JSON.stringify(rows), stderr: '' })
+    const selected = await fetchSelectedAgentLogSnapshot({ latest: [], ids: rows.map(row => String(row.id)) })
+    expect(selected.entries).toHaveLength(1000)
+    expect(selected.entries[0]!.id).toBe((999).toString(16).padStart(32, '0'))
+    expect(Object.isFrozen(selected.entries[0])).toBe(true)
+  }, 30_000)
+
+  it('includes terminal candidates after the exact pre-launch insertion boundary', async () => {
+    mocks.runFile.mockResolvedValueOnce({ stdout: JSON.stringify({ cursor: '42' }), stderr: '' })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([logRow({ behavior: 'author_content', session_id: 'session', status: 'completed' })]), stderr: '' })
+    const before = await fetchAgentLogWatermark()
+    const snapshot = await fetchAgentLogsSince(before, { session: 'session', behavior: 'author_content', prompt: '--topic' }, { fresh: true })
+    expect(snapshot.entries[0]!.status).toBe('completed')
+    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
+      ['--logs', '--watermark'],
+      ['--logs', '--after', '42', '--session', 'session', '--behavior', 'author_content', '--prompt', '--topic'],
+    ])
   })
 
-  it('names an older Caller for reads by id', async () => {
+  it.each(['[]', '{"cursor":-1}', '{"cursor":"bad"}'])('rejects a malformed insertion boundary %s', async stdout => {
+    mocks.runFile.mockResolvedValue({ stdout, stderr: '' })
+    await expect(fetchAgentLogWatermark()).rejects.toThrow('invalid insertion boundary')
+  })
+
+  it('names unsupported Caller selection instead of reporting absent history', async () => {
     mocks.runFile.mockRejectedValue(Object.assign(new Error('Command failed (2): agent-interface'),
       { code: 2, stdout: '', stderr: 'usage: agent-interface BEHAVIOR ...\n' }))
-    await expect(fetchAgentLogRows(['a'.repeat(32)])).rejects.toThrow('Update Caller: log reads by id are unavailable')
-  })
-
-  it('joins concurrent identical reads into one child', async () => {
-    let release!: (value: { stdout: string, stderr: string }) => void
-    mocks.runFile.mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
-    const first = fetchAgentLogPage({ behavior: 'chat' })
-    const second = fetchAgentLogPage({ behavior: 'chat' })
-    release(page([logRow({ id: 'c'.repeat(32) })], null))
-    const [one, two] = await Promise.all([first, second])
-    expect(mocks.runFile).toHaveBeenCalledTimes(1)
-    expect(one).toBe(two)
-  })
-
-  it('reads separately for different argv', async () => {
-    mocks.runFile.mockResolvedValue(page([logRow()], null))
-    await Promise.all([
-      fetchAgentLogPage({ behavior: 'chat' }),
-      fetchAgentLogPage({ behavior: 'pr_review' }),
-    ])
-    expect(mocks.runFile).toHaveBeenCalledTimes(2)
-  })
-
-  it('gives each joined waiter its own error object', async () => {
-    let release!: (value: { stdout: string, stderr: string }) => void
-    mocks.runFile.mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
-    const first = fetchAgentLogPage({ behavior: 'chat' }).catch((error) => error)
-    const second = fetchAgentLogPage({ behavior: 'chat' }).catch((error) => error)
-    release({ stdout: '[broken', stderr: '' })
-    const [one, two] = await Promise.all([first, second])
-    expect(mocks.runFile).toHaveBeenCalledTimes(1)
-    expect(one.message).toContain('returned invalid JSON')
-    expect(two.message).toContain('returned invalid JSON')
-    expect(one).not.toBe(two)
+    await expect(fetchSelectedAgentLogSnapshot(selection)).rejects.toThrow('Update Caller: selected log reads are unavailable')
+    await expect(fetchAgentLogWatermark()).rejects.toThrow('Update Caller: selected log reads are unavailable')
   })
 })
 
