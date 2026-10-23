@@ -171,11 +171,11 @@ describe('GitHub client', () => {
     const { api, calls } = client((url, init) => {
       const { query } = JSON.parse(init.body)
       return response(200, { data: query.startsWith('query') ? { repository: { pullRequest: {
-        id: 'PR_12', headRefOid: HEAD, isMergeQueueEnabled: true,
+        id: 'PR_12', headRefOid: HEAD, isMergeQueueEnabled: true, merged: false, state: 'OPEN',
         mergeQueue: { configuration: { mergeMethod: 'MERGE' } }, mergeQueueEntry: null,
       } } } : { enqueuePullRequest: { mergeQueueEntry: { id: 'QUEUE_12', state: 'QUEUED' } } } })
     })
-    expect(await api.getMergeQueue(12)).toMatchObject({ enabled: true, headSha: HEAD, mergeMethod: 'MERGE', entry: null })
+    expect(await api.getMergeQueue(12)).toMatchObject({ enabled: true, headSha: HEAD, mergeMethod: 'MERGE', entry: null, merged: false, state: 'OPEN' })
     expect(await api.enqueuePullRequest('PR_12', { sha: HEAD })).toEqual({ id: 'QUEUE_12', state: 'QUEUED' })
     expect(calls[1].url).toBe('https://api.github.com/graphql')
     expect(JSON.parse(calls[1].init.body).variables.input).toEqual({ pullRequestId: 'PR_12', expectedHeadOid: HEAD })

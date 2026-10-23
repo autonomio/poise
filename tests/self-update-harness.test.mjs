@@ -169,6 +169,7 @@ export function fakeGitHub(model, git) {
       return {
         enabled: model.queueEnabled ?? false, mergeMethod: model.queueMethod ?? 'MERGE',
         pullRequestId: `PR_${number}`, headSha: model.prHeadOverride ?? pulls[number].head.sha,
+        merged: pulls[number].merged, state: pulls[number].merged ? 'MERGED' : pulls[number].state.toUpperCase(),
         entry: model.queueEntries?.[number] ?? null,
       }
     },

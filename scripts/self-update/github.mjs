@@ -115,7 +115,7 @@ export function createGitHubClient({
       const [owner, name] = repository.split('/')
       const data = await graphql(`query($owner: String!, $name: String!, $number: Int!) {
         repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-          id headRefOid isMergeQueueEnabled
+          id headRefOid isMergeQueueEnabled merged state
           mergeQueue { configuration { mergeMethod } }
           mergeQueueEntry { id state }
         } }
@@ -124,6 +124,7 @@ export function createGitHubClient({
       if (!pull?.id || typeof pull.isMergeQueueEnabled !== 'boolean') throw new GitHubError('GitHub did not report merge queue configuration')
       return {
         pullRequestId: pull.id, headSha: pull.headRefOid, enabled: pull.isMergeQueueEnabled,
+        merged: pull.merged, state: pull.state,
         mergeMethod: pull.mergeQueue?.configuration?.mergeMethod ?? null,
         entry: pull.mergeQueueEntry ?? null,
       }

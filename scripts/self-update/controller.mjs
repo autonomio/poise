@@ -494,12 +494,22 @@ export function createController({
     if (attempt?.mode === 'queue') {
       const queue = await github.getMergeQueue(prNumber)
       if (queue.headSha !== headSha) throw new Error('PR head moved while queued')
+      if (!queue.entry) {
+        // The merge can finish between the REST and GraphQL reads. Re-observe
+        // before treating a disappearing queue entry as rejection.
+        const current = await github.getPullRequest(prNumber)
+        assertPullRequestIdentity(current, { branch, headSha })
+        if (current.merged || queue.merged || queue.state === 'MERGED') return { pending: true }
+        if (queue.merged !== false || current.merged !== false) return { pending: true }
+        if (current.state === 'closed' && queue.state === 'CLOSED') throw new Error(`pull request #${prNumber} closed without merging`)
+        if (current.state !== 'open' || queue.state !== 'OPEN') return { pending: true }
+        if (attempt.queued) throw new Error(`pull request #${prNumber} was removed from the merge queue without merging`)
+      }
       if (!queue.enabled || queue.mergeMethod !== 'MERGE') throw new Error('merge queue configuration changed while awaiting merge')
       if (queue.entry) {
         if (!attempt.queued) await recordAttempt({ ...attempt, queued: true })
         return { pending: true }
       }
-      if (attempt.queued) throw new Error(`pull request #${prNumber} was removed from the merge queue without merging`)
     }
     const gate = await gateCi({ headSha, branch, prNumber })
     if (gate.status !== 'success') throw new Error(`refusing to merge: ${gate.reason}`)

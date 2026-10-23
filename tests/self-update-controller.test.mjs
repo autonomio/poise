@@ -337,6 +337,31 @@ describe('CI gate and merge', () => {
     expect(h.github.log.filter(entry => entry[0] === 'enqueue')).toEqual([])
   })
 
+  it.each(['merged', 'stale'])('re-observes a queue merge between REST reads when the queue packet is %s', async packet => {
+    const h = await harness({ model: { queueEnabled: true } })
+    await runToAwaitingCi(h)
+    await tickUntil(h, () => changeOf(h).merge?.queued)
+    const readQueue = h.github.getMergeQueue.bind(h.github)
+    let mergeSha
+    h.github.getMergeQueue = async number => {
+      mergeSha = h.github.performMerge(number, HEAD)
+      delete h.model.queueEntries[number]
+      h.github.getMergeQueue = readQueue
+      const queue = await readQueue(number)
+      return packet === 'stale' ? { ...queue, merged: false, state: 'OPEN' } : queue
+    }
+    await h.controller.tick()
+    expect(changeOf(h).state).toBe('merging')
+    expect(h.store.state.hold).toBeNull()
+    expect(h.releases.log).toHaveLength(1)
+    const workflowRuns = h.github.listWorkflowRuns.bind(h.github)
+    h.github.listWorkflowRuns = async sha => (await workflowRuns(sha)).map(run => ({ ...run, event: sha === mergeSha ? 'merge_group' : 'pull_request' }))
+    await tickUntil(h, () => changeOf(h).state === 'live')
+    expect(changeOf(h).mergeSha).toBe(mergeSha)
+    expect(h.store.state.hold).toBeNull()
+    expect(h.github.log.filter(entry => entry[0] === 'enqueue')).toHaveLength(1)
+  })
+
   it('waits for CI, fails on a red aggregate, and fails when main drifts under the branch', async () => {
     const pending = await harness({ model: { ci: { [HEAD]: 'pending' } } })
     await runToAwaitingCi(pending)
@@ -822,10 +847,10 @@ describe('source revert reconciliation', () => {
     await rolledBack(h)
     h.model.queueEnabled = true
     await tickUntil(h, () => changeOf(h).revert.attempt?.queued)
-    expect(changeOf(h).sourceRevert.state).toBe('merging')
+    expect(changeOf(h).revert.phase).toBe('merging')
     expect(h.store.state.hold).not.toBeNull()
     await h.controller.tick()
-    expect(changeOf(h).sourceRevert.state).toBe('merging')
+    expect(changeOf(h).revert.phase).toBe('merging')
     const mergeSha = h.github.performMerge(101, changeOf(h).revert.headSha)
     const workflowRuns = h.github.listWorkflowRuns.bind(h.github)
     h.github.listWorkflowRuns = async sha => (await workflowRuns(sha)).map(run => ({ ...run, event: sha === mergeSha ? 'merge_group' : 'pull_request' }))
