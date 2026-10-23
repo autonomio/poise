@@ -3654,6 +3654,8 @@ async function tickMergePrs(): Promise<void> {
         if (result.action !== 'merge_if_ready' || result.repository !== pr.repo
           || result.pull_number !== pr.number || result.head_sha !== expectedHead
           || !['merged', 'already_merged', 'not_ready', 'superseded', 'enqueued', 'in_queue'].includes(String(result.outcome))
+          || (['enqueued', 'in_queue'].includes(String(result.outcome))
+            && (typeof result.queue_entry_id !== 'string' || !result.queue_entry_id.trim()))
           || (result.outcome === 'merged' && (typeof result.merge_sha !== 'string' || !SHA_PATTERN.test(result.merge_sha)))) {
           throw new Error('github-interface --merge-if-ready returned malformed state')
         }
