@@ -82,7 +82,7 @@ function teardownSurface(): void {
   if (surfaceEl) surfaceEl.innerHTML = ''
 }
 
-function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft, onBack?: () => void): void {
+function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft | null, onBack?: () => void): void {
   ensureShell()
   if (surface && current && subjectKey(current) !== subjectKey(next)) closePane()
   current = next
@@ -99,7 +99,7 @@ function openPane(next: ChatSubject, cardPrefill?: string, draft?: ComposerDraft
   panelEl!.removeAttribute('inert')
   panelEl!.removeAttribute('aria-hidden')
   if (!surface && surfaceEl) {
-    const kept = draft || drafts.get(subjectKey(next))
+    const kept = draft === undefined ? drafts.get(subjectKey(next)) : draft
     const editor = next.surface === 'current' ? null : editorSurfaceFor?.(next)
     surface = mountSessionSurface(surfaceEl, {
       subject: next,
@@ -131,7 +131,7 @@ function closePane(): void {
 }
 
 export const chatSidePane = {
-  toggle(target: { subject: ChatSubject, prefill?: string, draft?: ComposerDraft, back?: () => void }): void {
+  toggle(target: { subject: ChatSubject, prefill?: string, draft?: ComposerDraft | null, back?: () => void }): void {
     ensureShell()
     if (isOpen() && current && subjectKey(current) === subjectKey(target.subject)) closePane()
     else openPane(target.subject, target.prefill, target.draft, target.back)

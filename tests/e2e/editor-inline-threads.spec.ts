@@ -272,6 +272,42 @@ test('keeps already visible permission and question requests marked through clos
   await expect(markerCount(page)).toHaveCount(0)
 })
 
+test('keeps an inline-cleared composer empty when moving back to the pane', async ({ page }) => {
+  await editor(page, [annotation({ id: 'ann-1', comment: 'Keep this annotation' })])
+  await openThreadForMark(page, 'ann-1')
+  await threadInput(page).fill('An older pane draft')
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await expect(pane(page).locator('.chat-input')).toHaveValue('An older pane draft')
+  await pane(page).getByRole('button', { name: 'Back to the passage', exact: true }).click()
+  await threadInput(page).fill('')
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await expect(pane(page).locator('.chat-input')).toHaveValue('')
+  await pane(page).getByRole('button', { name: 'Back to the passage', exact: true }).click()
+  await expect(threadInput(page)).toHaveValue('')
+})
+
+test('returns a moved passage to its original document after switching documents', async ({ page }) => {
+  const { state } = await editor(page, [annotation({ id: 'ann-1', comment: 'Original annotation' })])
+  await page.route('**/api/editor/doc/other', route => route.fulfill({ json: {
+    slug: 'other', title: 'Other document', content: '# Other document\n\nOpening paragraph.', updated_at: AT, version: VERSION,
+  } }))
+  await page.route('**/api/editor/doc/other/annotations', route => route.fulfill({ json: {
+    annotations: [annotation({ id: 'ann-1', comment: 'Other annotation with the same ID' })], version: VERSION,
+  } }))
+  await openThreadForMark(page, 'ann-1')
+  await threadInput(page).fill('Draft for the original passage')
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+  await expect(page.locator('#editor-doc')).toContainText('Other document')
+  await expect(pane(page).locator('.chat-input')).toHaveValue('Draft for the original passage')
+  await pane(page).getByRole('button', { name: 'Back to the passage', exact: true }).click()
+  await expect(page.locator('#editor-doc')).toContainText('A question')
+  await expect(thread(page).getByLabel('Note', { exact: true })).toHaveValue('Original annotation')
+  await expect(threadInput(page)).toHaveValue('Draft for the original passage')
+  await expect(pane(page)).not.toHaveClass(/open/)
+  expect(state.calls.filter(c => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(0)
+})
+
 for (const leave of ['closing the pane', 'switching to the document chat'] as const) {
   test(`keeps already visible permission and question requests marked after ${leave}`, async ({ page }) => {
     const { state, sock } = await editor(page, [annotation({ id: 'ann-1' })])

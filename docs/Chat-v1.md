@@ -47,7 +47,9 @@ decision in another tab cannot erase them. A late applied receipt withdraws its
 Retry control and makes even a queued click on that old control harmless. This retains a known successful save, not an atomic
 transaction between the server save and the client recovery write. Closing or moving
 a passage chat preserves its outstanding permission and question requests;
-the Needs you marker remains until every request has been answered.
+the Needs you marker remains until every request has been answered. Moving a
+thread transfers the latest composer, including an explicit empty draft. Back
+loads the thread's own document before reopening its passage or review.
 
 ## Fresh console and split pane
 

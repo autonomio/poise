@@ -502,7 +502,7 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       if (open !== state) return
       open = null
       const draft = state.surface.takeDraft()
-      if (draft) drafts.set(key, draft)
+      keepThreadDraft(state.subject, draft)
       const sessionId = state.sessionId
       const status = state.status
       const subject = state.subject
@@ -515,7 +515,7 @@ export function openInlineThread(options: InlineThreadOptions): { close(returnCa
       inPane.add(key)
       track(subject, sessionId, page, line, status, afterSeq, pendingRequests)
       chatSidePane.close()
-      chatSidePane.toggle({ subject, ...(draft ? { draft } : {}), back: () => {
+      chatSidePane.toggle({ subject, draft, back: () => {
         window.dispatchEvent(new CustomEvent('editor:inline-thread-back', { detail: { subject } }))
       } })
     },

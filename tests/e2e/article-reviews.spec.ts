@@ -383,3 +383,31 @@ test("keeps the private chat's draft while the review re-renders", async ({ page
   await expect(threadInput(page)).toHaveValue('An unsent private thought')
   await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('An unfinished reply.')
 })
+
+
+test('returns a moved review to its original document after switching documents', async ({ page }) => {
+  await editorWithReviews(page)
+  await page.route('**/api/editor/doc/other', route => route.fulfill({ json: {
+    slug: 'other', title: 'Other document', content: '# Other document\n\nOpening paragraph.', updated_at: '2026-10-18T08:00:00Z', version: VERSION,
+  } }))
+  const other = { ...review(), messages: [{ ...review().messages[0], body: 'Feedback on the other document.' }] }
+  await page.route('**/api/editor/doc/other/reviews', route => route.fulfill({ json: {
+    reviews: [other], checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [],
+  } }))
+  await page.route('**/api/editor/doc/other/reviews/sync', route => route.fulfill({ json: {
+    reviews: [other], checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [],
+  } }))
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await panel.locator('.chat-input').fill('Draft for the original review')
+  await panel.getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+  await expect(page.locator('#editor-doc')).toContainText('Other document')
+  await expect(page.locator('.editor-review-mark').first()).toBeVisible()
+  await page.locator('#chat-side-pane').getByRole('button', { name: 'Back to the review', exact: true }).click()
+  await expect(page.locator('#editor-doc')).toContainText('A question')
+  await expect(panel).toContainText('Please clarify this passage.')
+  await expect(panel).not.toContainText('Feedback on the other document.')
+  await expect(panel.locator('.chat-input')).toHaveValue('Draft for the original review')
+  await expect(page.locator('#chat-side-pane')).not.toHaveClass(/open/)
+})

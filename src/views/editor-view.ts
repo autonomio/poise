@@ -3754,9 +3754,22 @@ function openThreadForAnnotation(id: string): void {
 
 // Open the thread for a subject from a marker or the side pane's Back
 // button. The pane's draft moves back with it.
-function openThreadForSubject(subject: ChatSubject): void {
+async function openThreadForSubject(subject: ChatSubject): Promise<void> {
   const at = subject.key.indexOf(':')
   if (at < 0) return
+  const slug = subject.key.slice(0, at)
+  if (slug !== currentSlug) {
+    await loadDoc(slug)
+    if (currentSlug !== slug || viewEl.hidden) return
+    // The review lookup must wait for this document's data, not the previous
+    // document's review ID or an independent in-flight discovery request.
+    if (subject.surface === 'editor-review') {
+      await articleReviews?.load(slug)
+      if (currentSlug !== slug || viewEl.hidden) return
+      await articleReviews?.synchronize()
+    }
+  }
+  if (currentSlug !== slug || viewEl.hidden) return
   if (subject.surface === 'editor-passage') openThreadForAnnotation(subject.key.slice(at + 1))
   else if (subject.surface === 'editor-review') articleReviews?.open(subject.key.slice(at + 1))
 }
@@ -4689,11 +4702,11 @@ export async function initEditorView() {
     window.addEventListener('editor:inline-thread-closed', onInlineThreadClosed)
     window.addEventListener('editor:inline-thread-open', (ev) => {
       const subject = (ev as CustomEvent<{ subject: ChatSubject }>).detail?.subject
-      if (subject) openThreadForSubject(subject)
+      if (subject) void openThreadForSubject(subject)
     })
     window.addEventListener('editor:inline-thread-back', (ev) => {
       const subject = (ev as CustomEvent<{ subject: ChatSubject }>).detail?.subject
-      if (subject) openThreadForSubject(subject)
+      if (subject) void openThreadForSubject(subject)
     })
     window.addEventListener('editor:inline-thread-moved', () => renderAnnotationOverlay())
     articleReviews = new EditorReviews({
