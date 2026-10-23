@@ -210,11 +210,11 @@ async function gitOut(checkout: string, args: string[]): Promise<string> {
 /** Every local tip needs a remote-tracking ref containing it. A local
  *  default branch, missing upstream or remote-less repository is no copy. */
 export async function unpushedBranches(checkout: string): Promise<string[]> {
-  const refs = await gitOut(checkout, ['for-each-ref', '--format=%(refname:short)|%(objectname)', 'refs/heads'])
+  const refs = await gitOut(checkout, ['for-each-ref', '--format=%(refname:short)%00%(objectname)', 'refs/heads'])
   const branches = refs.split('\n').map((line) => line.trim()).filter(Boolean)
   const unpushed: string[] = []
   for (const line of branches) {
-    const [name, sha] = line.split('|')
+    const [name, sha] = line.split('\0')
     if (!(await commitPreserved(checkout, sha))) unpushed.push(name)
   }
   return unpushed

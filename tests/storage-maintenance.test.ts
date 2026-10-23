@@ -324,6 +324,28 @@ describe('chat worker workspace retention', () => {
     await expect(readFile(join(checkout, 'note.txt'), 'utf8')).resolves.toBe('hello\n')
   })
 
+  it('holds unpublished work on a valid branch whose name contains a pipe', async () => {
+    const checkout = await makeWorkspace('12121212-1212-1212-1212-121212121212')
+    const remote = join(root, 'remote.git')
+    git(root, 'init', '--quiet', '--bare', remote)
+    git(checkout, 'remote', 'add', 'origin', remote)
+    git(checkout, 'push', '--quiet', '-u', 'origin', 'main')
+    git(checkout, 'checkout', '--quiet', '-b', 'work|main')
+    await writeFile(join(checkout, 'local.txt'), 'only on the pipe branch\n')
+    git(checkout, 'add', 'local.txt')
+    git(checkout, 'commit', '--quiet', '--no-gpg-sign', '-m', 'local work')
+    git(checkout, 'checkout', '--quiet', 'main')
+    expect(await maintenance.unpushedBranches(checkout)).toEqual(['work|main'])
+    await age(checkout, 2 * DAY)
+    const report = await maintenance.runStorageMaintenance({
+      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      claims: claimsFor('closed', new Date(Date.now() - 2 * DAY).toISOString()),
+    })
+    expect(report.removed).toHaveLength(0)
+    expect(report.held[0].reason).toContain('unpushed commits on work|main')
+    expect(git(checkout, 'show', 'work|main:local.txt')).toBe('only on the pipe branch')
+  })
+
   it.each(['gone upstream', 'detached HEAD'])('holds an unpublished branch with %s', async (mode) => {
     const checkout = await makeWorkspace('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')
     const remote = join(root, 'remote.git')
