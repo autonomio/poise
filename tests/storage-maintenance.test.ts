@@ -434,7 +434,7 @@ describe('bounded caches', () => {
     await expect(lstat(join(pip, 'hot'))).resolves.toBeDefined()
   })
 
-  it('uses Caller to cap actual owner/repo.git mirrors while preserving owner and lock files', async () => {
+  it.each([false, true])('delegates mirror eviction and reports to its configured Caller (dryRun=%s)', async (dryRun) => {
     const mirrors = join(home, 'mirrors')
     const owner = join(mirrors, 'owner')
     await mkdir(owner, { recursive: true })
@@ -449,13 +449,35 @@ describe('bounded caches', () => {
     const lock = join(owner, 'stale.lock')
     await writeFile(lock, 'original lock inode\n')
     const inode = (await lstat(lock)).ino
+    const bin = join(root, 'caller-bin')
+    const argumentsPath = join(root, 'caller-arguments.json')
+    await mkdir(bin)
+    const callerReport = {
+      removed: [{ path: stale, bytes: 100 }],
+      held: [{ path: fresh, reason: 'mirror was recently written' }],
+    }
+    // The Node suite isolates Caller. Its Python suite proves actual locked
+    // eviction; this boundary proves that Node delegates and only reports.
+    await writeFile(join(bin, 'github-interface'), `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.writeFileSync(${JSON.stringify(argumentsPath)}, JSON.stringify(process.argv.slice(2)))
+process.stdout.write(${JSON.stringify(JSON.stringify(callerReport))})
+`, { mode: 0o700 })
+    vi.stubEnv('CALLER_BIN_ROOT', bin)
+    const now = Date.now()
     const report = await maintenance.runStorageMaintenance({
-      now: Date.now(), chatRoot, stateRoot, home, trim: async () => null,
+      now, dryRun, chatRoot, stateRoot, home, trim: async () => null,
       claims: () => [], caps: { pip: 1, uv: 1, npm: 1, mirrors: 1 },
     })
     expect(report.errors).toEqual([])
+    expect(JSON.parse(await readFile(argumentsPath, 'utf8'))).toEqual([
+      '--prune-mirrors', mirrors, '--cap-bytes', '1', '--now-ms', String(now), '--fresh-ms', '300000',
+      ...(dryRun ? ['--dry-run'] : []),
+    ])
     expect(report.caches.map((item) => item.path)).toEqual([stale])
-    await expect(lstat(stale)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(report.reclaimedBytes).toBe(100)
+    expect(report.held).toContainEqual(callerReport.held[0])
+    await expect(lstat(stale)).resolves.toBeDefined()
     await expect(readFile(join(fresh, 'objects', 'pack', 'recent'), 'utf8')).resolves.toBe('active fetch\n')
     expect((await lstat(lock)).ino).toBe(inode)
     await expect(readFile(lock, 'utf8')).resolves.toBe('original lock inode\n')
