@@ -850,7 +850,13 @@ describe('durable timers that wake chats', () => {
     expect(store.inbox(instance, p.id).find(row => row.seq === ordinary.seq)?.state).toBe('pending')
     expect(runtime.get(p.id)!.queue).toEqual(queue)
     finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
+    await until(() => store.timerById(instance, timer.id)?.state === 'done')
+    if (state === 'paused') {
+      // Completing the admitted turn arms the waiting task queue normally.
+      await until(() => (prompts.get(p.id) ?? []).length === count + 2)
+      expect(prompts.get(p.id)!.at(-1)!.text).toBe('Paused task')
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+    }
   }, 60_000)
 
   it('lets ordinary messages and another timer pass an older firing in backoff', async () => {
