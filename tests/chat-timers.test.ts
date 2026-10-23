@@ -793,7 +793,7 @@ describe('durable timers that wake chats', () => {
     await until(() => runtime.get(p.id)?.status === 'idle')
   }, 60_000)
 
-  it.each([99, 100])('keeps both delivery candidates at the %i-chat page boundary during a release switch', async (bulkCount) => {
+  it.each([99, 100])('keeps both delivery candidates at the page boundary with %i bulk chats during a release switch', async (bulkCount) => {
     const m = await workspaceManager(), p = await manager('Worker')
     const timer = await heartbeat(m, p)
     await holdingTimers(async () => {
@@ -801,7 +801,7 @@ describe('durable timers that wake chats', () => {
       // Store-only recipients need no native work: every timer is waiting
       // for the update, while the real last recipient has an ordinary row.
       for (let i = 0; i < bulkCount; i++) {
-        const id = `!page-${String(i).padStart(3, '0')}`
+        const id = `!page-${instance}-${String(i).padStart(3, '0')}`
         const record = { ...p, id }
         database.db.prepare(`INSERT INTO chat_sessions(id, record, agent, repo, checkout, branch, status, title, instance, created_at, updated_at)
           VALUES(?, ?, 'grok', '', '', '', 'idle', 'Bulk', ?, ?, ?)`)
