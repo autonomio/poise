@@ -100,10 +100,13 @@ export function bindingIsCurrent(instance: string, binding: Binding): boolean {
 }
 /** The sender every work-monitor notice carries. */
 export const WORK_MONITOR_SENDER = 'Poise work monitor'
+/** Event-key prefixes the work monitor's notices carry, one per watched facet. */
+const NOTICE_PREFIXES = ['ci:', 'behavior:', 'merge:', 'reviews:', 'ci-degraded:']
 /** One observation key per watched facet of a bound target, plus the
- *  degraded-read marker. A new owner starts from no baseline on all of
- *  them, so current blockers wake it even when the old owner saw them. */
-const OBSERVATION_PREFIXES = ['ci:', 'behavior:', 'merge:', 'reviews:', 'ci-degraded:']
+ *  degraded-read marker and the reviews seen-set sidecar, which carries
+ *  no notices. A new owner starts from no baseline on all of them, so
+ *  current blockers wake it even when the old owner saw them. */
+const OBSERVATION_PREFIXES = [...NOTICE_PREFIXES, 'reviews-seen:']
 function resetTargetObservations(instance: string, url: string): void {
   db.prepare(`DELETE FROM chat_control_observations WHERE instance = ? AND target IN (${OBSERVATION_PREFIXES.map(() => '?').join(', ')})`)
     .run(instance, ...OBSERVATION_PREFIXES.map(prefix => `${prefix}${url}`))
@@ -138,7 +141,7 @@ export const moveBindings = db.transaction((instance: string, from: string, to: 
     // The colon after the URL keeps `…/pull/1` from matching `…/pull/12`;
     // LIKE wildcards in the URL itself are escaped.
     const escaped = binding.target.replace(/[\\%_]/g, ch => `\\${ch}`)
-    for (const prefix of OBSERVATION_PREFIXES) {
+    for (const prefix of NOTICE_PREFIXES) {
       db.prepare(`DELETE FROM chat_control_inbox WHERE instance = ? AND recipient = ? AND sender = ? AND state = 'pending'
         AND event_key LIKE ? ESCAPE '\\'`).run(instance, from, WORK_MONITOR_SENDER, `${prefix}${escaped}:%`)
     }

@@ -934,6 +934,28 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
   })
 
+  it('stays silent when a resolution leaves other threads open, and wakes on the next new reply', async () => {
+    database.setMeta('agentAccount', 'fixture-agent')
+    const parent = await manager()
+    const target = 'https://github.com/acme/app/pull/71'
+    await command(parent.id, { operation: 'bind', target })
+    const threads = (resolved: boolean, extra: Array<{ id: string, author: string }> = []) => [
+      { thread: 'T_1', resolved, outdated: false, comments: [{ id: 'C_1', author: 'reviewer' }] },
+      { thread: 'T_2', resolved: false, outdated: false, comments: [{ id: 'C_2', author: 'reviewer' }, ...extra] },
+    ]
+    reviews.mockResolvedValue({ found: true, truncated: false, reviews: [], threads: threads(false) })
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+    reviews.mockResolvedValue({ found: true, truncated: false, reviews: [], threads: threads(true) })
+    clock += 5 * 60_000
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+    reviews.mockResolvedValue({ found: true, truncated: false, reviews: [], threads: threads(true, [{ id: 'C_3', author: 'reviewer' }]) })
+    clock += 5 * 60_000
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
+  })
+
   it('reads bound-PR reviews from the local datastore and never throws on malformed rows', async () => {
     const processModule = await import('../server/process')
     const { readWorkReviews } = await import('../server/chat/control')

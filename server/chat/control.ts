@@ -330,6 +330,18 @@ function reviewWatched(reviews: ReviewsObservation, self: string): Array<Record<
   return watched.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
 }
 
+/** The reviews facet's last-observed watched slice, stored as plain JSON.
+ *  Missing or malformed reads as nothing seen, so the next pass wakes on
+ *  whatever it finds — including once after this sidecar rolls out. */
+function parseReviewsSeen(fingerprint: string | undefined): Array<Record<string, unknown>> {
+  if (!fingerprint) return []
+  try {
+    const value: unknown = JSON.parse(fingerprint)
+    return Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> =>
+      !!entry && typeof entry === 'object' && !Array.isArray(entry)) : []
+  } catch { return [] }
+}
+
 /** Whether merge-prs will update this behind branch itself, in which case
  *  the bound chat is not woken for behind: one updater, no churn. Unknown
  *  author or draft flag reads as automation-owned by nobody, so behind
@@ -1379,16 +1391,24 @@ export class ChatControl {
     // Outdated-ness is display detail, not watched state: the agent's own
     // push flips it without any new review or reply, and must not wake it.
     const fingerprinted = watched.map(({ outdated: _outdated, ...rest }) => rest)
+    // Only previously-unseen entries wake: resolving a thread drops it from
+    // the slice, and that removal alone — the agent's own resolution —
+    // advances the baseline silently. New reviews, replies and reopened
+    // threads still wake.
+    const seenKey = `reviews-seen:${target.url}`
+    const seenBefore = parseReviewsSeen(store.observation(instance, seenKey)?.fingerprint)
+    const hasNew = fingerprinted.some(entry => !seenBefore.some(known => JSON.stringify(known) === JSON.stringify(entry)))
     const data = { kind: 'reviews', target: target.url,
       reviews: reviews.reviews.map(review => ({ id: review.id, author: review.author, state: review.state })),
       threads: reviews.threads.map(thread => ({ thread: thread.thread, resolved: thread.resolved, outdated: thread.outdated,
         comments: thread.comments.map(comment => comment.id),
         authors: [...new Set(thread.comments.map(comment => comment.author))] })),
       blockers, done: WORK_DONE }
-    this.observe(binding, key, data, now, blockers.length > 0, false, fingerprinted)
+    this.observe(binding, key, data, now, blockers.length > 0, false, fingerprinted, hasNew)
+    store.saveObservation(instance, seenKey, JSON.stringify(fingerprinted), now)
   }
 
-  private observe(binding: store.Binding, key: string, data: Record<string, unknown>, now: number, initiallyActionable: boolean, pending = false, actionable?: unknown): void {
+  private observe(binding: store.Binding, key: string, data: Record<string, unknown>, now: number, initiallyActionable: boolean, pending = false, actionable?: unknown, shouldWake = true): void {
     const instance = this.runtime.instance
     const body = JSON.stringify(data)
     const bodyFingerprint = createHash('sha256').update(body).digest('hex')
@@ -1419,9 +1439,11 @@ export class ChatControl {
       // A behavior observation wakes only while it holds actionable content:
       // entries that merely disappear — a cleared error, a launch recovered
       // to pending or clean — need no turn. A CI observation wakes on any
-      // change to its watched slice, including a recovery to green.
+      // change to its watched slice, including a recovery to green. Facets
+      // that track finer-grained novelty pass shouldWake=false for changes
+      // carrying no new actionable information; the baseline still advances.
       const actionableNow = actionable === undefined || data.kind === 'ci' || (Array.isArray(actionable) && actionable.length > 0)
-      if (settledWatched !== watched && !identical && actionableNow && (settled || initiallyActionable)) {
+      if (settledWatched !== watched && !identical && actionableNow && shouldWake && (settled || initiallyActionable)) {
         store.message(instance, binding.session, store.WORK_MONITOR_SENDER, boundedNotice(body, { kind: data.kind, target: binding.target,
           head: data.head, failingCount: Array.isArray(data.failing) ? data.failing.length : undefined,
           detail: 'Inspect the complete current work state through Poise APIs or Caller before acting.', inspect: { operation: 'api', path: '/api/logging' } }),

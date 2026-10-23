@@ -296,7 +296,9 @@ Bound chats receive local behavior ledger changes for their exact repository,
 target number and issue/PR kind. PR owners also receive observed-head CI
 failures and recovery, merge conflicts, behind-main branches that merge-prs
 will not update itself, review feedback with unresolved threads, and
-dismissed approvals that leave author-actionable threads. Conflict, behind
+dismissed approvals that leave author-actionable threads. Resolving a
+thread never wakes by itself; only new reviews, replies and reopened
+threads do. Conflict, behind
 and authorship ride the monitor's existing `--list-failing-ci` read; reviews
 and threads come from the local datastore sync. No facet adds a GitHub
 request: the monitor still calls the one existing primitive once per bound PR
