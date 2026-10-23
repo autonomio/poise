@@ -190,10 +190,14 @@ test("replaces another chat's timer controls while its new pane is loading", asy
   await page.getByRole('button', { name: 'Timers', exact: true }).click()
   const pane = page.locator('#chat-timers-pane')
   await expect(pane.locator('.chat-timer-label')).toHaveText('Old chat timer')
+  await sock.subscribed('s1')
   sock.autoAck = false
   await pane.getByRole('button', { name: 'Cancel timer Old chat timer' }).click()
   await expect.poll(() => sock.framesOf('timer.cancel').length).toBe(1)
   await page.locator('.chat-session-item[data-id="s2"]').click()
+  await expect(page.locator('.chat-session-item[data-id="s2"]')).toHaveClass(/active/)
+  await sock.subscribed('s2')
+  await expect(pane).toBeHidden()
   await page.getByRole('button', { name: 'Timers', exact: true }).click()
   await requested
   try {
