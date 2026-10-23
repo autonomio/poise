@@ -1055,8 +1055,8 @@ export class ChatControl {
   /** A turn the person started ended less than a minute ago, so they can
    *  reply first. Inbox-started turns are not the person's. */
   private personGraceActive(sessionId: string, now: number): boolean {
-    const finished = findEvent(sessionId, event => event.type === 'turn.finished')
-    if (!finished || finished.event.type !== 'turn.finished' || store.internalTurn(finished.event.turnId)) return false
+    const finished = findEvent(sessionId, event => event.type === 'turn.finished' && !store.internalTurn(event.turnId))
+    if (!finished) return false
     return now - Date.parse(finished.at) < store.TIMER_LIMITS.personGraceMs
   }
 

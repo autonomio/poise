@@ -832,20 +832,28 @@ describe('durable timers that wake chats', () => {
     clock += 10 * 60_000
     await control.tick()
     expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+    let personFinishedAt = 0
     await holdingTimers(async () => {
       finishes.get(p.id)!({ stopReason: 'end_turn' })
       await until(() => runtime.get(p.id)?.status === 'idle')
       const finished = runtime.events(p.id, 0).events.filter(e => e.event.type === 'turn.finished').at(-1)!
-      clock = Date.parse(finished.at) + 30_000
+      personFinishedAt = Date.parse(finished.at)
+      clock = personFinishedAt + 30_000
     })
     store.message(instance, p.id, m.id, 'Ordinary during grace', `grace:${randomUUID()}`)
     await control.tick()
     await until(() => (prompts.get(p.id) ?? []).length === 2)
     expect(prompts.get(p.id)![1].text).toContain('Ordinary during grace')
     expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
-    finishes.get(p.id)!({ stopReason: 'end_turn' })
-    await until(() => runtime.get(p.id)?.status === 'idle')
-    clock += 61_000
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      clock = personFinishedAt + 59_999
+    })
+    await control.tick()
+    expect(prompts.get(p.id)).toHaveLength(2)
+    expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+    clock = personFinishedAt + 60_000
     await control.tick()
     await until(() => (prompts.get(p.id) ?? []).length === 3)
     expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: timer.id })

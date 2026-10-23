@@ -81,7 +81,9 @@ or the answering chat); a cancelled question keeps "no longer pending".
 
 The workspace Manager and the person can set durable timers on any chat,
 including the Manager itself, from the control operations or the browser's
-Timers pane. Each firing starts one turn whose text is the timer message
+Timers pane. The pane admits one create per chat until its pending request settles;
+refetching or switching chats cannot resubmit it. Each firing starts one turn
+whose text is the timer message
 under a `[Poise timer …]` header; the transcript shows the message with its
 timer, setter and collapsed firings, and timer changes land as notes. A
 timer survives restarts: missed occurrences collapse into the next delivery
@@ -92,7 +94,9 @@ failed or paused task queue cannot block an otherwise ready timer. A timer
 still reopens a closed chat before admission. Each scheduler page rotates over
 100 recipients and keeps both candidates for every selected recipient.
 
-The person stays in charge. Their Stop holds the chat, skipping its timers'
+The person stays in charge. Timers wait 60 seconds after their latest turn
+finishes; an intervening internal message turn does not end that reply window.
+Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold
 until Resume. Releasing a hold skips occurrences through that release instant,
 including those since the last scheduler tick. A timer whose turns fail backs

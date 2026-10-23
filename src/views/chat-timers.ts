@@ -18,6 +18,8 @@ export interface TimerPaneActions {
 }
 
 type TimersData = Awaited<ReturnType<ChatClient['timers']>>
+// Pending creates outlive a refetch or a visit to another chat's pane.
+const pendingAdds = new WeakMap<HTMLElement, Set<string>>()
 
 function scheduleText(timer: TimerView): string {
   return timer.schedule.kind === 'every' ? `every ${timer.schedule.minutes} min` : `once in ${timer.schedule.delayMinutes} min`
@@ -52,6 +54,14 @@ function statusText(timer: TimerView, session: SessionRecord, zone: string, now:
 
 export function renderTimersPane(container: HTMLElement, session: SessionRecord, data: TimersData, actions: TimerPaneActions): void {
   container.dataset.timersSession = session.id
+  let adding = pendingAdds.get(container)
+  if (!adding) { adding = new Set(); pendingAdds.set(container, adding) }
+  const pending = adding
+  const updateSubmit = (): void => {
+    if (container.dataset.timersSession !== session.id) return
+    const submit = container.querySelector<HTMLButtonElement>('.chat-timers-submit')
+    if (submit) submit.disabled = pending.has(session.id)
+  }
   const zone = effectiveTimezone()
   const now = Date.now()
   const hold = data.holds.find(h => h.sessionId === session.id) ?? null
@@ -97,6 +107,7 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
   messageEl.value = draft.message
   kindEl.value = draft.kind === 'once' ? 'once' : 'every'
   minutesEl.value = draft.minutes
+  updateSubmit()
   const showError = (error: unknown): void => {
     if (container.dataset.timersSession !== session.id) return
     let alert = container.querySelector<HTMLElement>('.chat-timers-error')
@@ -127,6 +138,9 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
   }
   container.querySelector('.chat-timers-add')!.addEventListener('submit', (event) => {
     event.preventDefault()
+    if (pending.has(session.id)) return
+    pending.add(session.id)
+    updateSubmit()
     const submitted = { label: labelEl.value, message: messageEl.value, minutes: minutesEl.value, kind: kindEl.value }
     const minutes = Number(minutesEl.value)
     const input: TimerInput = { sessionId: session.id, label: labelEl.value, message: messageEl.value,
@@ -144,6 +158,9 @@ export function renderTimersPane(container: HTMLElement, session: SessionRecord,
         label.value = ''; message.value = ''; minutes.value = ''
       }
       showError(null)
-    }).catch(showError)
+    }).catch(showError).finally(() => {
+      pending.delete(session.id)
+      updateSubmit()
+    })
   })
 }
