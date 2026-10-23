@@ -104,6 +104,7 @@ let initialized = false
 let docs: DocSummary[] = []
 let currentSlug: string | null = null
 let loadRequestId = 0
+let externalOpenRequestId = 0
 let deletingSlug: string | null = null
 let docEl: HTMLElement | null = null
 let triggerEl: HTMLButtonElement | null = null
@@ -4647,24 +4648,28 @@ if (typeof window !== 'undefined') {
   window.addEventListener('poise:editor-load-doc', (ev) => {
     const detail = (ev as CustomEvent<{ slug: string, session?: string }>).detail
     if (!detail?.slug) return
+    const requestId = ++externalOpenRequestId
     void (async () => {
       if (!initialized) {
         // initEditorView hasn't run yet — main.ts switchTo('editor')
         // triggers it. Wait one tick.
         await new Promise((r) => setTimeout(r, 100))
       }
+      if (requestId !== externalOpenRequestId || !viewEl || viewEl.hidden) return
       void fetchDocs({ fresh: true })
       await loadDoc(detail.slug)
       // Chat's read-only edit cards carry their session: open the side pane
       // on the session they came from (falling back to the document chat
       // when it cannot be read).
-      if (detail.session && currentSlug === detail.slug) {
+      if (detail.session && requestId === externalOpenRequestId && currentSlug === detail.slug && !viewEl.hidden) {
+        const documentRequestId = loadRequestId
         const d = currentDoc()
         let subject: ChatSubject = { surface: 'editor-document', key: detail.slug, label: d?.title || detail.slug }
         try {
           const found = await chatClient.fetchSession(detail.session, 0)
           if (found.session.subject) subject = found.session.subject
         } catch { /* fall through to the document chat */ }
+        if (requestId !== externalOpenRequestId || documentRequestId !== loadRequestId || currentSlug !== detail.slug || viewEl.hidden) return
         chatSidePane.toggle({ subject })
       }
     })()
@@ -4764,6 +4769,7 @@ async function openInitialDocument(): Promise<void> {
 }
 
 export function stopEditorRefresh() {
+  externalOpenRequestId++
   if (!currentSlug) {
     loadRequestId++
     editorInitialization = null

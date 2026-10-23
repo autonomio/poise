@@ -407,6 +407,53 @@ test('tracks replies and every request when closed during initial history loadin
   } finally { release() }
 })
 
+for (const destination of ['another view', 'the Editor again', 'another document'] as const) {
+  test(`ignores a session lookup completed after navigating to ${destination}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const json = Response.prototype.json
+      Response.prototype.json = async function () {
+        const value: unknown = await json.call(this)
+        if (new URL(this.url).pathname === '/api/chat/sessions/s-passage') Reflect.set(window, 'sessionLookupRead', true)
+        return value
+      }
+    })
+    const { state } = await editor(page, [annotation({ id: 'ann-1' })])
+    const passage = session({ id: 's-passage', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' })
+    state.sessions.unshift(passage)
+    let release!: () => void
+    let started!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const requested = new Promise<void>((resolve) => { started = resolve })
+    await page.route('**/api/chat/sessions/s-passage?after=0', async route => {
+      started()
+      await held
+      await route.fulfill({ json: { session: passage, events: [] } })
+    })
+    try {
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft', session: 's-passage' } })))
+      await requested
+      if (destination === 'another document') {
+        await page.route('**/api/editor/doc/other', route => route.fulfill({ json: { slug: 'other', title: 'Other document', content: '# Other document', version: VERSION } }))
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+        await expect(page.locator('#editor-doc')).toContainText('Other document')
+      } else {
+        await page.getByRole('button', { name: 'Current', exact: true }).click()
+        await expect(page.locator('#view-editor')).toBeHidden()
+        if (destination === 'the Editor again') {
+          await page.getByRole('button', { name: 'Editor', exact: true }).click()
+          await expect(page.locator('#editor-doc')).toBeVisible()
+        }
+      }
+      release()
+      await expect.poll(() => page.evaluate(() => Reflect.get(window, 'sessionLookupRead'))).toBe(true)
+      await expect(pane(page)).not.toHaveClass(/open/)
+      await expect(page.locator('#chat-side-pane .chat-input')).not.toBeFocused()
+      if (destination === 'another view') await expect(page.locator('#view-editor')).toBeHidden()
+      else await expect(page.locator('#editor-doc')).toContainText(destination === 'another document' ? 'Other document' : 'Opening paragraph.')
+    } finally { release() }
+  })
+}
+
 test('moves a passage chat to the side pane and back with its draft', async ({ page }) => {
   await editor(page, [annotation({ id: 'ann-1' })])
   await openThreadForMark(page, 'ann-1')

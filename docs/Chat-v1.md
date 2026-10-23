@@ -54,7 +54,8 @@ passage or review pane opened from Chat retains its draft for the inline thread.
 loads the thread's own document before reopening its passage or review. Suggested
 review replies stay with their document and review across document switches.
 Reply-only review cards in Chat also offer Open in Editor, where Use as reply
-fills the GitHub composer without posting.
+fills the GitHub composer without posting. Leaving Editor, switching documents,
+or opening another external target cancels a pending conversation handoff.
 
 ## Fresh console and split pane
 
