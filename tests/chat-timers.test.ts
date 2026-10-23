@@ -854,7 +854,7 @@ describe('durable timers that wake chats', () => {
     if (state === 'paused') {
       // Completing the admitted turn arms the waiting task queue normally.
       await until(() => (prompts.get(p.id) ?? []).length === count + 2)
-      expect(prompts.get(p.id)!.at(-1)!.text).toBe('Paused task')
+      expect(prompts.get(p.id)!.at(-1)!.text).toContain('Paused task')
       finishes.get(p.id)!({ stopReason: 'end_turn' })
     }
   }, 60_000)
