@@ -308,8 +308,9 @@ export function mergePrsOwnsBehind(target: store.WorkTarget, ci: CiObservation, 
   if (pullRequestRefusal(policy, target.repo, target.number,
     { repo: target.repo, number: target.number, status, draft: ci.draft, author: ci.author, updated_at: '' })) return false
   const prefix = `${target.repo}#${target.number}`
+  // Failure targets keep the datastore's repo case; the bound target is lowercase.
   return !getBehaviorsRuntimeHealth().failures.some(failure => failure.behavior === 'merge-prs' && !!failure.target
-    && (failure.target === prefix || failure.target.startsWith(`${prefix}:`)))
+    && (failure.target.toLowerCase() === prefix || failure.target.toLowerCase().startsWith(`${prefix}:`)))
 }
 
 /** What "done" means on every PR-state notice: the same criteria the

@@ -750,12 +750,12 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
         expect(mergePrsOwnsBehind(target, { ...ciState, author: 'other' }, 'open')).toBe(false)
         expect(mergePrsOwnsBehind(target, { ...ciState, draft: true }, 'open')).toBe(false)
         expect(mergePrsOwnsBehind(target, { ...ciState, author: undefined }, 'open')).toBe(false)
-        database.setMeta('behavior_merge_prs_failure:acme/app#64', JSON.stringify(
+        database.setMeta('behavior_merge_prs_failure:Acme/App#64', JSON.stringify(
           { kind: 'operation', consecutiveFailures: 1, lastFailureAtMs: 1, nextRetryAtMs: 2 }))
         try {
           expect(mergePrsOwnsBehind(target, ciState, 'open')).toBe(false)
         } finally {
-          database.setMeta('behavior_merge_prs_failure:acme/app#64', '')
+          database.setMeta('behavior_merge_prs_failure:Acme/App#64', '')
         }
       } finally {
         database.setMeta('me', '')
