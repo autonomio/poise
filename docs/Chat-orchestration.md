@@ -91,11 +91,13 @@ with their count, and the schedule keeps its phase. Delivery orders admissible
 inbox candidates by sequence: a timer waiting for the person's grace period or
 an update cannot block an ordinary message; an ordinary message blocked by a
 failed or paused task queue cannot block an otherwise ready timer. A timer
-still reopens a closed chat before admission. Each scheduler page rotates over
-100 recipients and keeps both candidates for every selected recipient.
+still reopens a closed chat before admission; a completed reopen releases its
+in-flight guard even when that firing was cancelled. Each scheduler page rotates
+over 100 recipients and keeps both candidates for every selected recipient.
 
 The person stays in charge. Timers wait 60 seconds after their latest turn
 finishes; an intervening internal message turn does not end that reply window.
+A backward clock jump does not extend grace until a future finish timestamp.
 Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold
 until Resume. Releasing a hold skips occurrences through that release instant,

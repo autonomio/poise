@@ -269,6 +269,28 @@ describe('durable timers that wake chats', () => {
     await until(() => runtime.get(p.id)?.status === 'idle')
   }, 60_000)
 
+  it('does not extend person grace across a backward clock clamp', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const timer = await heartbeat(m, p, { everyMinutes: 5, delayMinutes: undefined })
+    runtime.prompt(p.id, { text: 'Person task', attachments: [], mentions: [] })
+    await until(() => prompts.has(p.id))
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      const finished = runtime.events(p.id, 0).events.filter(e => e.event.type === 'turn.finished').at(-1)!
+      clock = Date.parse(finished.at) - 2 * 3_600_000
+    })
+    await control.tick()
+    expect(store.timerById(instance, timer.id)!.nextAt).toBe(new Date(clock + 5 * 60_000).toISOString())
+    clock += 5 * 60_000
+    await control.tick()
+    expect(control.timersOf(p.id).timers.find(item => item.id === timer.id)?.pending?.waitingFor).not.toBe('person')
+    await until(() => (prompts.get(p.id) ?? []).length === 2)
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: timer.id })
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 60_000)
+
   it('backs off twice, then trips with a note and a warning while ordinary delivery continues', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const created = (await command(m.id, { operation: 'timer', sessionId: p.id, label: 'Flaky', message: 'Ping', everyMinutes: 30 })).timer as { id: string }
@@ -621,6 +643,46 @@ describe('durable timers that wake chats', () => {
     finishes.get(p.id)!({ stopReason: 'end_turn' })
     await until(() => runtime.get(p.id)?.status === 'idle')
     expect(store.timerById(instance, created.id)!.failures).toBe(0)
+  }, 60_000)
+
+  it('reopens again after a cancelled firing finishes reopening and its chat closes again', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const first = await heartbeat(m, p, { delayMinutes: 1 })
+    await runtime.close(p.id)
+    const resume = runtime.resume.bind(runtime)
+    let opened!: () => void
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { opened = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    let firstResume: Promise<SessionRecord> | undefined
+    const attempts = vi.spyOn(runtime, 'resume').mockImplementation(id => {
+      const current = resume(id)
+      if (id !== p.id || firstResume) return current
+      firstResume = current.then(async record => { opened(); await held; return record })
+      return firstResume
+    })
+    try {
+      clock += 60_000
+      await control.tick()
+      await ready
+      expect(attempts).toHaveBeenCalledTimes(1)
+      let second!: { id: string }
+      await holdingTimers(async () => {
+        await command(m.id, { operation: 'cancelTimer', timerId: first.id })
+        await runtime.close(p.id)
+        release()
+        await firstResume
+        second = await heartbeat(m, p, { delayMinutes: 1 })
+        clock += 60_000
+      })
+      await control.tick()
+      expect(attempts).toHaveBeenCalledTimes(2)
+      await until(() => prompts.has(p.id))
+      expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: second.id })
+      expect(store.timerById(instance, first.id)!.state).toBe('cancelled')
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    } finally { release() }
   }, 60_000)
 
   it('waits through maintenance, reopening, model choice and release switches', async () => {

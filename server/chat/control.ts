@@ -1032,7 +1032,6 @@ export class ChatControl {
     if (releaseSwitchPending()) return 'update'
     const session = this.runtime.get(recipient)
     if (!session) { this.reopening.delete(recipient); return null }
-    if (session.status !== 'closed') this.reopening.delete(recipient)
     if (['starting', 'queued', 'running', 'stopping'].includes(session.status)) return session.status as store.WaitingFor
     if (session.status === 'waiting') return 'waiting'
     if (session.contextResetting || session.contextCompacting) return 'maintenance'
@@ -1041,11 +1040,13 @@ export class ChatControl {
     if (session.role === 'manager' && session.retiredModel) return 'model'
     if (this.personGraceActive(recipient, now)) return 'person'
     if (session.status === 'closed') {
-      // Closed through the API is not crossed out: reopen once for the row,
-      // without awaiting it, and admit on a later tick.
+      // Keep one reopen in flight per chat, independent of the firing's
+      // lifetime. A cancelled firing must not leave a completed reopen locked.
       if (reopen && !this.reopening.has(recipient)) {
         this.reopening.add(recipient)
-        void this.runtime.resume(recipient).catch((error: unknown) => this.runtime.emit('log', `[chat control] timer reopen failed: ${String(error)}`))
+        void this.runtime.resume(recipient)
+          .catch((error: unknown) => this.runtime.emit('log', `[chat control] timer reopen failed: ${String(error)}`))
+          .finally(() => { this.reopening.delete(recipient) })
       }
       return 'reopening'
     }
@@ -1057,7 +1058,8 @@ export class ChatControl {
   private personGraceActive(sessionId: string, now: number): boolean {
     const finished = findEvent(sessionId, event => event.type === 'turn.finished' && !store.internalTurn(event.turnId))
     if (!finished) return false
-    return now - Date.parse(finished.at) < store.TIMER_LIMITS.personGraceMs
+    const age = now - Date.parse(finished.at)
+    return age >= 0 && age < store.TIMER_LIMITS.personGraceMs
   }
 
   private readonly reopening = new Set<string>()
