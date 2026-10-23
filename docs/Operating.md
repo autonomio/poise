@@ -720,6 +720,10 @@ GitHub mirrors are evicted through Caller's local `--prune-mirrors` behavior,
 which shares checkout's per-repository lock and keeps owner directories and
 lock files. A recent descendant write, a busy lock or uncertain bare-mirror
 identity holds the mirror; symlinks are never followed for deletion.
+Resuming a removed managed workspace creates only its empty private path
+before constructing the canonical lease. Ownership/Git initialization and
+the post-wait existence check run under that same held lease. Foreign
+markers are refused; an unsettled initializer worker keeps its lease.
 
 ### Giving space back on a VM host
 
