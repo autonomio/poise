@@ -68,7 +68,7 @@ import { actorOf, nativeName } from './actors'
 // person's own answer and keeps the person's composition.
 import { SWITCHBOARD_PERSON } from './switchboard'
 import * as storage from './storage'
-import { internalTurn } from './control-store'
+import { internalTurn, moveBindings, releaseBindings } from './control-store'
 import { pgidAlive, pidAlive, signalGroup, spawnWorker, workerIdentityMatches, type WorkerHandle } from './worker'
 import { createClaudeAdapter } from './adapters/claude'
 import { createCodexAdapter } from './adapters/codex'
@@ -1177,6 +1177,9 @@ export class ChatRuntime extends EventEmitter {
         this.setStatus(session, 'closed')
         this.emit_(id, { type: 'session.closed', reason: 'closed by user' })
       })
+      // The close committed: a closed chat never receives monitor notices,
+      // so its bindings become claimable by the replacement chat.
+      releaseBindings(this.instance, id)
       return session.record
     })
   }
@@ -1319,6 +1322,9 @@ export class ChatRuntime extends EventEmitter {
       context: { kind: 'handoff', title: source.record.title, body: summary, fromSession: source.record.id },
     })
     const live = this.requireLive(created.id)
+    // The conversation continues in the target: its work bindings move with
+    // it, so the next monitor tick wakes the target, never the source.
+    moveBindings(this.instance, source.record.id, live.record.id)
     if (source.record.subject) {
       // The subject moves once the target exists and before its summary
       // turn is scheduled. Until now it still opened the source.
