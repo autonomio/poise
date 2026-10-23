@@ -24,7 +24,7 @@ import { parseBounds, parseWindow, readAnalytics, readAnalyticsHistory } from '.
 import { checkGithubQuota, readGithubQuota, startGithubQuotaRuntime, stopGithubQuotaRuntime } from './github-quota'
 import { handleGhBody, listOrgRepos, listOrganizationsRepos, selectOrganizations, repoBelongsTo, requireConfiguredRepository } from './gh'
 import { getOrganizations, readyOrganizations, addOrganization, retryOrganization, startOrganizationsRuntime, stopOrganizationsRuntime } from './organizations'
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, fetchSelectedAgentLogSnapshot, fetchRunningAgentLogSnapshot, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
 import { readBehaviorMetrics } from './behavior-metrics'
 import { runDebate } from './chat'
 import { listDocs, readDoc, writeDoc, deleteDoc, newSlug, readAnnotations, writeAnnotations, MAX_DOC_BYTES, MAX_ANNOTATIONS_BYTES, EditorConflictError } from './editor'
@@ -40,6 +40,7 @@ import { validateGoogleEnvironment } from './google/accounts'
 import { getBehaviorDiagnosticIncidents } from './behaviors'
 import { setEnabled as setBehaviorEnabled, setSetting as setBehaviorSetting, setScratchpad as setBehaviorScratchpad, setReviewers as setBehaviorReviewers, getEnabledMap, getSettingMap, getScratchpadMap, getReviewers, getBehaviorsRuntimeHealth, isValidSetting, isValidReviewers, isPanelBehavior, getIssueRepositories, setIssueRepositories, isValidRepository, getIssueAuthors, setIssueAuthors, isValidAuthorList, isSkippableBehavior, isValidRepositoryList, getRepositorySkips, setRepositorySkips, MAX_SKIPPED_REPOSITORIES, admitReplay, ReplayRefusedError, startBehaviorsRuntime, stopBehaviorsRuntime, getResolveUnblockingLastFired, getMergePrsLastFired, getGreyCiLastFired, getGreyCiLastSucceeded, BEHAVIOR_KEYS, type BehaviorKey } from './behaviors'
 import { startReviewCheckoutPruning, stopReviewCheckoutPruning } from './review-checkout'
+import { maintenanceRunning, runStorageMaintenanceOnce, startStorageMaintenanceRuntime, stopStorageMaintenanceRuntime, storageStatus } from './storage-maintenance'
 import { ContentLaunchPendingError, contentLaunchIdForCall, getContentJobResponse, getContentLaunchResponse, launchAndEnqueueContentJob, startContentFinalizer, stopContentFinalizer } from './content-jobs'
 import { ProcessLockError } from './process-lock'
 import { retryFailedPrReviews } from './behaviors'
@@ -195,6 +196,7 @@ export function startPoiseRuntime(opts: CachePluginOptions = {}): void {
   startGithubQuotaRuntime()
   if (service) startTemporaryStorageRuntime()
   startReviewCheckoutPruning()
+  startStorageMaintenanceRuntime()
   startContentFinalizer()
   if (!chatRuntime) {
     const label = opts.instanceLabel ?? 'dev'
@@ -282,7 +284,7 @@ export async function stopPoiseRuntime(): Promise<void> {
   serviceControl = null
   dailyModelRefresh = null
   linkApi = null
-  await Promise.all([stopOrganizationsRuntime(), stopBehaviorsRuntime(), stopNoticesRuntime(), stopGithubQuotaRuntime(), stopTemporaryStorageRuntime(), stopReviewCheckoutPruning(), stopContentFinalizer(), stopJev(), controlStop, switchboardStop, chatStop, socketStop, terminalStop, ...authStops])
+  await Promise.all([stopOrganizationsRuntime(), stopBehaviorsRuntime(), stopNoticesRuntime(), stopGithubQuotaRuntime(), stopTemporaryStorageRuntime(), stopReviewCheckoutPruning(), stopStorageMaintenanceRuntime(), stopContentFinalizer(), stopJev(), controlStop, switchboardStop, chatStop, socketStop, terminalStop, ...authStops])
   await stopBehaviorLedger()
   await stopLoggingApi()
   await stopLogging()
@@ -500,6 +502,29 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           return json(res, 200, runningRelease())
         }
 
+        // ── Storage ──
+        // The workspace storage breakdown, disk pressure and the last
+        // maintenance run, plus on-demand runs from Settings.
+        if (path === '/api/storage' && req.method === 'GET') {
+          try {
+            return json(res, 200, await storageStatus())
+          } catch (err: any) {
+            return json(res, httpStatus(err, 500), { error: err.message || String(err) })
+          }
+        }
+        if (path === '/api/storage/maintenance' && req.method === 'POST') {
+          try {
+            const body = await readJson<any>(req)
+            if (body && typeof body === 'object' && 'dryRun' in body && typeof (body as { dryRun: unknown }).dryRun !== 'boolean') {
+              return json(res, 400, { error: 'dryRun must be a boolean' })
+            }
+            if (maintenanceRunning()) return json(res, 409, { error: 'a maintenance run is already in progress' })
+            return json(res, 200, await runStorageMaintenanceOnce({ dryRun: (body as { dryRun?: boolean })?.dryRun ?? false }))
+          } catch (err: any) {
+            return json(res, httpStatus(err, 500), { error: err.message || String(err) })
+          }
+        }
+
         // ── Settings ──
         // Org / username / timezone (the few user-facing knobs Poise still
         // needs locally). Persisted in ~/.poise/cache.db meta table.
@@ -627,7 +652,10 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           }
           try {
             const orgs = selectedOrg ? selectOrganizations(selectedOrg) : null
-            const snapshot = await fetchAgentLogSnapshot()
+            // The running lane answers from its own indexed read; the
+            // history lane never queues it. Filtering stays here, so the
+            // read is exact even when Caller cannot pre-filter.
+            const snapshot = status === null ? await fetchAgentLogSnapshot() : await fetchRunningAgentLogSnapshot()
             const belongs = (repo: string | null) => !orgs || (!!repo && orgs.some((org) => repoBelongsTo(repo, org.login)))
             const selected = snapshot.entries.filter((entry) => belongs(entry.repo))
             const quarantined = snapshot.quarantined.filter((row) => !row.repo || belongs(row.repo)
@@ -635,9 +663,9 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
                 || (!!entry.correlation_id && row.correlationId === entry.correlation_id)))
             const readable = selected.filter((entry) => !snapshot.quarantined.some((row) => row.id === entry.id
                 || (!!entry.correlation_id && row.correlationId === entry.correlation_id)))
-            // A running-only read filters the same scoped snapshot Current
-            // used to download whole; quarantined rows stay when their status
-            // is unreadable (uncertainty, not absence) or matches.
+            // A running-only read arrives pre-filtered from its own lane;
+            // quarantined rows stay when their status is unreadable
+            // (uncertainty, not absence) or matches.
             const logs = status === null ? readable : readable.filter((entry) => entry.status === status)
             const scopedQuarantined = status === null ? quarantined
               : quarantined.filter((row) => !row.status || row.status === status)
@@ -660,13 +688,14 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
         // value passed to agent-interface as `--p`.
         //
         // `lastTriggered` is NOT persisted by Poise — it's derived
-        // straight from `agent-interface --logs` (the canonical record
-        // of every pr_review / pr_approve run). Each behavior maps to
-        // a `behavior` field value in that log: review-new-prs ↔
-        // pr_review, approve-prs ↔ pr_approve. resolve-unblocking has
-        // no log surface (github-interface doesn't persist its calls)
-        // so its lastTriggered stays null — the dash in the Behaviors
-        // view reflects the actual state of the world.
+        // from a bounded newest-first walk of `agent-interface --logs`
+        // (the canonical record of every pr_review / pr_approve run).
+        // Each behavior maps to a `behavior` field value in that log:
+        // review-new-prs ↔ pr_review, approve-prs ↔ pr_approve.
+        // resolve-unblocking has no log surface (github-interface
+        // doesn't persist its calls) so its lastTriggered stays null —
+        // the dash in the Behaviors view reflects the actual state of
+        // the world.
         if (path === '/api/behavior-metrics' && req.method === 'GET') {
           const query = new URLSearchParams(url.split('?')[1] || '')
           const window = parseWindow(query.get('since'), query.get('until'))
@@ -682,27 +711,40 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           const enabled = getEnabledMap()
           const settings = getSettingMap()
           const scratch = getScratchpadMap()
+          // Indexed latest-trigger and exact incident lookups also prove
+          // absence: a never-run kind cannot cause a whole-history walk.
+          const accounts = getOrganizations()
+          const triggers: Array<[string, string]> = [
+            ['pr_review', 'poise:review-new-prs'],
+            ['pr_approve', 'poise:approve-prs'],
+            ['issue_review', 'poise:review-new-issues'],
+          ]
+          const triggered = (entry: { behavior: string | null, source: string | null, repo: string | null, pr_id: string | null },
+            cliBehavior: string, source: string) =>
+            entry.behavior === cliBehavior
+            && entry.source === source
+            && !!entry.repo
+            && accounts.some((account) => repoBelongsTo(entry.repo!, account.login))
+            && !!entry.pr_id
+          const pending = new Set(getBehaviorDiagnosticIncidents(null)
+            .map((incident) => incident.callId).filter((callId): callId is string => !!callId))
           let logs: Awaited<ReturnType<typeof fetchAgentLogs>> = []
           let snapshot: Awaited<ReturnType<typeof fetchAgentLogSnapshot>> | null = null
           let agentLogsError: string | null = null
           try {
-            snapshot = await fetchAgentLogSnapshot()
+            snapshot = await fetchSelectedAgentLogSnapshot({
+              latest: triggers.flatMap(([behavior, source]) => accounts.map(account => ({ behavior, source, owner: account.login }))),
+              ids: [...pending].sort(),
+            })
             logs = snapshot.entries
             if (snapshot.quarantined.length > 0) agentLogsError = `${snapshot.quarantined.length} unreadable worker log row(s) quarantined`
           } catch (error) {
             agentLogsError = error instanceof Error ? error.message : String(error)
           }
-          // fetchAgentLogs returns newest-first, so .find() picks the
-          // most recent matching row. We only consider rows that have
-          // both a repo and pr_id so the link to Swarm works.
-          const accounts = getOrganizations()
+          // Selection is ordered by started_at, not insertion rowid: calls
+          // can register out of timestamp order on concurrent connections.
           const lastFor = (cliBehavior: string, source: string) => {
-            const r = logs.find((e) =>
-              e.behavior === cliBehavior
-              && e.source === source
-              && e.repo
-              && accounts.some((account) => repoBelongsTo(e.repo!, account.login))
-              && e.pr_id)
+            const r = logs.find((e) => triggered(e, cliBehavior, source))
             return r ? {
               at: r.started_at_precise || r.started_at,
               target: `${r.repo}#${r.pr_id}`,
