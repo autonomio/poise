@@ -211,7 +211,10 @@ def _where(filters: dict[str, Any]) -> tuple[list[str], list[Any]]:
     for column in ("username", "item_type", "repo", "status", "author", "number"):
         value = filters.get(column)
         if value is not None:
-            clauses.append(f"{column} = ?")
+            # Repository names keep GitHub's case in storage while callers
+            # pass them normalized: match case-insensitively so a mixed-case
+            # repo's rows are found, like pr-reviews already does.
+            clauses.append(f"{column} = ? COLLATE NOCASE" if column == "repo" else f"{column} = ?")
             params.append(value)
     updated_since = filters.get("updated_since_datetime")
     if updated_since is not None:

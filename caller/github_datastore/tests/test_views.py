@@ -261,6 +261,19 @@ class ViewsTest(unittest.TestCase):
             self.assertFalse(missing["found"])
             self.assertEqual((missing["reviews"], missing["threads"]), ([], []))
 
+    def test_pr_view_matches_mixed_case_repos_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "db.sqlite"
+            conn = connect(db_path)
+            init_db(conn)
+            item = base_expanded("@mikkokotila", [])
+            with conn:
+                upsert_repo(conn, item["repo"])
+            store_expanded(conn, item)
+            conn.close()
+            # Stored as Vaquum/Test, queried normalized: the row must be found.
+            self.assertEqual(len(json.loads(views.issue(db_path=db_path, repo="vaquum/test"))), 1)
+
     def test_pre_thread_rows_migrate_with_unknown_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "db.sqlite"

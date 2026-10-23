@@ -1364,6 +1364,10 @@ export class ChatControl {
       this.runtime.emit('log', `[chat control] reviews read for ${target.url} failed: ${String(error)}`)
       reviews = null
     }
+    // An ownership transfer mid-read clears this target's observations; the
+    // new owner starts from no baseline, so a stale write here must not
+    // restore the old fingerprint and silence its first notice.
+    if (!store.bindingIsCurrent(instance, binding)) return
     if (!reviews || !reviews.found || reviews.truncated) {
       store.saveObservation(instance, key, previous?.fingerprint ?? '', now)
       return
@@ -1372,13 +1376,16 @@ export class ChatControl {
     const blockers = watched.map(entry => 'thread' in entry
       ? `Reply to review thread ${String(entry.thread)} (latest comment ${String(entry.latest)}${entry.outdated === true ? ', outdated by a newer push' : ''}) and resolve it`
       : `Address review ${String(entry.review)} (${String(entry.state)})`)
+    // Outdated-ness is display detail, not watched state: the agent's own
+    // push flips it without any new review or reply, and must not wake it.
+    const fingerprinted = watched.map(({ outdated: _outdated, ...rest }) => rest)
     const data = { kind: 'reviews', target: target.url,
       reviews: reviews.reviews.map(review => ({ id: review.id, author: review.author, state: review.state })),
       threads: reviews.threads.map(thread => ({ thread: thread.thread, resolved: thread.resolved, outdated: thread.outdated,
         comments: thread.comments.map(comment => comment.id),
         authors: [...new Set(thread.comments.map(comment => comment.author))] })),
       blockers, done: WORK_DONE }
-    this.observe(binding, key, data, now, blockers.length > 0, false, watched)
+    this.observe(binding, key, data, now, blockers.length > 0, false, fingerprinted)
   }
 
   private observe(binding: store.Binding, key: string, data: Record<string, unknown>, now: number, initiallyActionable: boolean, pending = false, actionable?: unknown): void {

@@ -887,6 +887,53 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
   })
 
+  it('notifies the new owner when a handoff crosses an unavailable reviews read', async () => {
+    database.setMeta('agentAccount', 'fixture-agent')
+    const first = await manager()
+    const target = 'https://github.com/acme/app/pull/69'
+    await command(first.id, { operation: 'bind', target })
+    store.pauseDelivery(runtime.instance, first.id)
+    const feedback = { found: true, truncated: false,
+      reviews: [{ id: 'R_1', author: 'reviewer', state: 'CHANGES_REQUESTED' }],
+      threads: [{ thread: 'T_1', resolved: false, outdated: false, comments: [{ id: 'C_1', author: 'reviewer' }] }] }
+    reviews.mockResolvedValue(feedback)
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, first.id)).toHaveLength(1)
+    let resolveRead!: (value: ReviewsObservation | null) => void
+    reviews.mockReturnValueOnce(new Promise<ReviewsObservation | null>(done => { resolveRead = done }))
+    const calls = reviews.mock.calls.length
+    clock += 5 * 60_000
+    const ticked = control.tick()
+    await until(() => reviews.mock.calls.length > calls)
+    const grok = CATALOG.models.find(m => m.provider === 'grok')
+    if (!grok) throw new Error('fixture lacks grok')
+    const second = await runtime.handoff(first.id, { agent: 'grok', model: grok.identity })
+    resolveRead(null)
+    await ticked
+    // The failed pass must not restore the old fingerprint: the same
+    // feedback notifies the new owner. Loop serialization runs the stale
+    // pass before this one, so the assertion is deterministic.
+    reviews.mockResolvedValue(feedback)
+    clock += 5 * 60_000
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, second.id).some(m => JSON.parse(m.body).kind === 'reviews')).toBe(true)
+  }, 60_000)
+
+  it('stays silent when a push marks an unresolved thread outdated', async () => {
+    database.setMeta('agentAccount', 'fixture-agent')
+    const parent = await manager()
+    const target = 'https://github.com/acme/app/pull/70'
+    await command(parent.id, { operation: 'bind', target })
+    const threads = (outdated: boolean) => [{ thread: 'T_1', resolved: false, outdated, comments: [{ id: 'C_1', author: 'reviewer' }] }]
+    reviews.mockResolvedValue({ found: true, truncated: false, reviews: [], threads: threads(false) })
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+    reviews.mockResolvedValue({ found: true, truncated: false, reviews: [], threads: threads(true) })
+    clock += 5 * 60_000
+    await observeReviews(target)
+    expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
+  })
+
   it('reads bound-PR reviews from the local datastore and never throws on malformed rows', async () => {
     const processModule = await import('../server/process')
     const { readWorkReviews } = await import('../server/chat/control')
