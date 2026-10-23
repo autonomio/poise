@@ -237,7 +237,7 @@ test('shows a pending timer action failure in the pane after a refetch rerenders
 
 test('ignores a pre-Resume refetch that arrives after the resumed timer data', async ({ page }) => {
   await page.addInitScript(() => {
-    const observed = window as Window & { timerJsonReads: number }
+    const observed = window as Window & { timerJsonReads?: number }
     observed.timerJsonReads = 0
     const request = window.fetch.bind(window)
     window.fetch = async (...args) => {
@@ -247,7 +247,7 @@ test('ignores a pre-Resume refetch that arrives after the resumed timer data', a
       response.json = async () => {
         const data: unknown = await read()
         // The consumer's await continuation runs before this next task.
-        setTimeout(() => { observed.timerJsonReads++ }, 0)
+        setTimeout(() => { observed.timerJsonReads = (observed.timerJsonReads ?? 0) + 1 }, 0)
         return data
       }
       return response
@@ -282,7 +282,7 @@ test('ignores a pre-Resume refetch that arrives after the resumed timer data', a
     await pane.getByRole('button', { name: 'Resume', exact: true }).click()
     await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveAttribute('aria-pressed', 'false')
   } finally { release() }
-  await expect.poll(() => page.evaluate(() => (window as Window & { timerJsonReads: number }).timerJsonReads)).toBeGreaterThanOrEqual(3)
+  await expect.poll(() => page.evaluate(() => (window as Window & { timerJsonReads?: number }).timerJsonReads)).toBeGreaterThanOrEqual(3)
   await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveAttribute('aria-pressed', 'false')
   await expect(pane.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
   await expect(pane.locator('.chat-timer-status')).not.toContainText('on hold')

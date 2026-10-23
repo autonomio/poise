@@ -953,10 +953,10 @@ export class ChatControl {
     }
   }
 
-  /** Delivery: per recipient the lower `seq` of the two candidates goes
-   *  first, and at most one row per recipient per round. A timer row passes
-   *  an older ordinary message only where ordinary delivery does not run:
-   *  the message is paused, or the chat is `interrupted`, `error` or `closed`. */
+  /** Delivery: per recipient the lower `seq` of the admissible candidates
+   *  goes first, and at most one row per round. A waiting timer cannot block
+   *  ordinary delivery, nor can an ordinary row whose admission is blocked.
+   *  With no ordinary candidate, timer admission still reopens closed chats. */
   private deliver(now: number): void {
     const instance = this.runtime.instance
     const page = store.pending(instance, this.deliveryAfter, now)
@@ -968,22 +968,27 @@ export class ChatControl {
       while (at < page.length && page[at].recipient === recipient) rows.push(page[at++])
       // Recipient identity keeps the rotation stable as new messages arrive.
       this.deliveryAfter = recipient
-      const ordinary = rows.find(row => row.timer_id === null)
-      const timerRow = releaseSwitchPending() ? undefined : rows.find(row => row.timer_id !== null)
-      const next = ordinary && timerRow ? (ordinary.seq < timerRow.seq ? ordinary : timerRow) : (ordinary ?? timerRow)
-      if (!next) continue
       this.isolate('delivery', recipient, () => {
         if (!this.runtime.ownsSession(recipient)) return
+        const ordinary = this.ordinaryReady(recipient) ? rows.find(row => row.timer_id === null) : undefined
+        const candidate = rows.find(row => row.timer_id !== null)
+        const timerRow = candidate && (!ordinary || this.timerWait(recipient, candidate.timer_id!, now) === null) ? candidate : undefined
+        const next = ordinary && timerRow ? (ordinary.seq < timerRow.seq ? ordinary : timerRow) : (ordinary ?? timerRow)
+        if (!next) return
         if (next.timer_id !== null) this.admitTimerRow(recipient, next, now)
         else this.admitOrdinaryRow(recipient, next, now)
       })
     }
   }
 
-  private admitOrdinaryRow(recipient: string, item: store.InternalMessage, now: number): void {
+  private ordinaryReady(recipient: string): boolean {
     const session = this.runtime.get(recipient)
-    if (!session || session.status !== 'idle' || session.contextResetting || session.contextCompacting || session.queue?.items.length) return
-    if (session.role === 'manager' && session.retiredModel) return
+    return !!session && session.status === 'idle' && !session.contextResetting && !session.contextCompacting
+      && !session.queue?.items.length && !(session.role === 'manager' && session.retiredModel)
+  }
+
+  private admitOrdinaryRow(recipient: string, item: store.InternalMessage, now: number): void {
+    if (!this.ordinaryReady(recipient)) return
     // No native steering, invented answers, or retries of admitted work. A
     // restart interrupts an admitted turn through normal Chat recovery.
     try {

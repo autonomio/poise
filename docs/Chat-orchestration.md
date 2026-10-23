@@ -85,7 +85,11 @@ Timers pane. Each firing starts one turn whose text is the timer message
 under a `[Poise timer …]` header; the transcript shows the message with its
 timer, setter and collapsed firings, and timer changes land as notes. A
 timer survives restarts: missed occurrences collapse into the next delivery
-with their count, and the schedule keeps its phase.
+with their count, and the schedule keeps its phase. Delivery orders admissible
+inbox candidates by sequence: a timer waiting for the person's grace period or
+an update cannot block an ordinary message; an ordinary message blocked by a
+failed or paused task queue cannot block an otherwise ready timer. A timer
+still reopens a closed chat before admission.
 
 The person stays in charge. Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold

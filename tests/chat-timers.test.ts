@@ -793,6 +793,66 @@ describe('durable timers that wake chats', () => {
     await until(() => runtime.get(p.id)?.status === 'idle')
   }, 60_000)
 
+  it('delivers ordinary messages past an older timer in the person grace period', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const timer = await heartbeat(m, p)
+    runtime.prompt(p.id, { text: 'Person task', attachments: [], mentions: [] })
+    await until(() => (prompts.get(p.id) ?? []).length === 1)
+    clock += 10 * 60_000
+    await control.tick()
+    expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      const finished = runtime.events(p.id, 0).events.filter(e => e.event.type === 'turn.finished').at(-1)!
+      clock = Date.parse(finished.at) + 30_000
+    })
+    store.message(instance, p.id, m.id, 'Ordinary during grace', `grace:${randomUUID()}`)
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === 2)
+    expect(prompts.get(p.id)![1].text).toContain('Ordinary during grace')
+    expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+    clock += 61_000
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === 3)
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: timer.id })
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 60_000)
+
+  it.each(['failed', 'paused'] as const)('delivers a timer past an older ordinary row blocked by a %s queue', async (state) => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    if (state === 'failed') {
+      runtime.prompt(p.id, { text: 'First', attachments: [], mentions: [] })
+      await until(() => (prompts.get(p.id) ?? []).length === 1)
+      await runtime.enqueue(p.id, randomUUID(), { text: 'Queued doomed', attachments: [], mentions: [] })
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => (prompts.get(p.id) ?? []).length === 2)
+      finishes.get(p.id)!({ stopReason: 'error', error: 'Queue failure' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    } else await runtime.enqueue(p.id, randomUUID(), { text: 'Paused task', attachments: [], mentions: [] })
+    const queue = runtime.get(p.id)!.queue!
+    expect(queue.ready).toBe(false)
+    expect(queue.items).toHaveLength(1)
+    expect(queue.items[0].state).toBe(state === 'failed' ? 'failed' : 'waiting')
+    store.message(instance, p.id, m.id, 'Ordinary behind queue', `queue:${randomUUID()}`)
+    const ordinary = store.inbox(instance, p.id).find(row => row.body === 'Ordinary behind queue')!
+    const timer = await heartbeat(m, p, { delayMinutes: 1 })
+    const count = (prompts.get(p.id) ?? []).length
+    clock += 2 * 60_000
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === count + 1)
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: timer.id })
+    const firing = store.inbox(instance, p.id).find(row => row.timer_id === timer.id)!
+    expect(ordinary.seq).toBeLessThan(firing.seq)
+    expect(store.inbox(instance, p.id).find(row => row.seq === ordinary.seq)?.state).toBe('pending')
+    expect(runtime.get(p.id)!.queue).toEqual(queue)
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 60_000)
+
   it('lets ordinary messages and another timer pass an older firing in backoff', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const count = () => (prompts.get(p.id) ?? []).length
