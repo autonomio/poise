@@ -56,13 +56,9 @@ export class EditorReviews {
     // entry and re-rendering is the whole implementation.
     window.addEventListener('chat:use-suggested-reply', (event) => {
       const detail = (event as CustomEvent<{ subject: ChatSubject, text: string }>).detail
-      if (!this.slug || detail?.subject?.surface !== 'editor-review') return
-      const prefix = `${this.slug}:`
-      if (!detail.subject.key.startsWith(prefix)) return
-      const id = detail.subject.key.slice(prefix.length)
-      if (!this.data.reviews.some((review) => review.id === id)) return
-      this.drafts.set(id, detail.text)
-      this.render()
+      if (detail?.subject?.surface !== 'editor-review') return
+      this.drafts.set(detail.subject.key, detail.text)
+      if (this.slug && detail.subject.key.startsWith(`${this.slug}:`)) this.render()
     })
     document.addEventListener('visibilitychange', () => {
       clearTimeout(this.timer)
@@ -215,6 +211,7 @@ export class EditorReviews {
   open(id: string): void {
     const review = this.data.reviews.find((item) => item.id === id)
     if (!review) return
+    const key = `${this.slug}:${id}`
     this.host.beforeOpen()
     this.selected = id
     this.error = ''
@@ -223,7 +220,7 @@ export class EditorReviews {
       section.addEventListener('click', (event) => this.click(event))
       section.addEventListener('input', () => {
         const input = section.querySelector<HTMLTextAreaElement>('.editor-review-reply')
-        if (this.selected) this.drafts.set(this.selected, input?.value ?? '')
+        this.drafts.set(key, input?.value ?? '')
       })
       this.section = section
       this.renderSection()
@@ -253,7 +250,7 @@ export class EditorReviews {
       <div class="editor-review-actions">${review.canReply ? `<button type="button" data-action="reply"${this.busy ? ' disabled' : ''}>Reply on GitHub</button>` : ''}
       ${review.canResolve && !review.resolved ? `<button type="button" data-action="resolve"${this.busy ? ' disabled' : ''}>Resolve thread</button>` : ''}</div>`)
     const input = this.section.querySelector<HTMLTextAreaElement>('.editor-review-reply')
-    const draft = this.drafts.get(review.id) ?? ''
+    const draft = this.drafts.get(`${this.slug}:${review.id}`) ?? ''
     if (input && input.value !== draft) input.value = draft
   }
 
@@ -271,7 +268,8 @@ export class EditorReviews {
   private async act(review: ArticleReview, action: 'reply' | 'resolve'): Promise<void> {
     const slug = this.slug!
     const generation = this.generation
-    const body = this.drafts.get(review.id) ?? ''
+    const key = `${slug}:${review.id}`
+    const body = this.drafts.get(key) ?? ''
     if (action === 'reply' && !body.trim()) { this.error = 'Write a reply first.'; this.renderSection(); return }
     this.actions.add(slug)
     this.revision++
@@ -279,7 +277,7 @@ export class EditorReviews {
     this.renderSection()
     try {
       const data = await this.request(slug, '/action', { id: review.id, action, ...(action === 'reply' ? { body } : {}) })
-      if (action === 'reply') this.drafts.delete(review.id)
+      if (action === 'reply') this.drafts.delete(key)
       if (generation !== this.generation) return
       this.data = data
     } catch (error) { if (generation === this.generation) this.error = (error as Error).message }

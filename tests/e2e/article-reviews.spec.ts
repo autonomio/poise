@@ -344,6 +344,60 @@ test('uses a suggested reply from a review moved to the side pane', async ({ pag
   await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Thanks — clarified in the latest update.')
 })
 
+test('keeps a side-pane suggested reply for its original document after switching documents', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 })
+  const { calls, state, sock } = await editorWithReviews(page)
+  await page.route('**/api/editor/doc/other', route => route.fulfill({ json: {
+    slug: 'other', title: 'Other document', content: '# Other document\n\nOpening paragraph.', updated_at: '2026-10-18T08:00:00Z', version: VERSION,
+  } }))
+  const other = { ...review(), messages: [{ ...review().messages[0], body: 'Feedback on the other document.' }] }
+  for (const endpoint of ['reviews', 'reviews/sync']) {
+    await page.route(`**/api/editor/doc/other/${endpoint}`, route => route.fulfill({ json: {
+      reviews: [other], checkedAt: '2026-10-18T08:00:00Z', active: true, stale: false, problems: [],
+    } }))
+  }
+  await page.locator('.editor-review-mark').first().click()
+  const id = await sendThreadMessage(page, sock, 'Draft a reply')
+  state.history[id] = await finishReply(sock, id, 'Draft a reply', JSON.stringify({ chat: 'A draft.', reply: 'Reply for the original document.' }))
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  const pane = page.locator('#chat-side-pane')
+  await expect(pane).toContainText('Reply for the original document.')
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+  await expect(page.locator('#editor-doc')).toContainText('Other document')
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  await expect(panel).toContainText('Feedback on the other document.')
+  await panel.getByLabel('Reply on GitHub', { exact: true }).fill('Keep the other document draft.')
+  await pane.getByRole('button', { name: 'Use as reply', exact: true }).click()
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Keep the other document draft.')
+  await pane.getByRole('button', { name: 'Back to the review', exact: true }).click()
+  await expect(panel).toContainText('Please clarify this passage.')
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Reply for the original document.')
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+  await expect(page.locator('#editor-doc')).toContainText('Other document')
+  await page.locator('.editor-review-mark').first().click()
+  await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Keep the other document draft.')
+  expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+})
+
+test('opens a reply-only review response from Chat in Editor and hands off its reply', async ({ page }) => {
+  const { calls, state, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const id = await sendThreadMessage(page, sock, 'Draft only a reply')
+  state.history[id] = await finishReply(sock, id, 'Draft only a reply', JSON.stringify({ chat: 'A reply without document edits.', reply: 'Thanks for the review.' }))
+  await thread(page).getByRole('button', { name: 'Move to the side pane', exact: true }).click()
+  await page.locator('#chat-side-pane').getByRole('button', { name: 'Open in Chat', exact: true }).click()
+  const transcript = page.locator('.chat-transcript')
+  await expect(transcript).toContainText('Thanks for the review.')
+  await expect(transcript.getByRole('button', { name: 'Use as reply', exact: true })).toHaveCount(0)
+  await expect(transcript.getByRole('button', { name: 'Open in Editor', exact: true })).toHaveCount(1)
+  await transcript.getByRole('button', { name: 'Open in Editor', exact: true }).click()
+  await page.locator('#chat-side-pane').getByRole('button', { name: 'Use as reply', exact: true }).click()
+  await page.locator('.editor-review-mark').first().click()
+  await expect(thread(page).getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Thanks for the review.')
+  expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
+})
+
 test('keeps a side-pane suggestion bound to its review after another review opens inline', async ({ page }) => {
   await page.setViewportSize({ width: 1800, height: 900 })
   const second: ArticleReview = { ...review(), id: 'thread-2', site: 'Second site', anchor: { quote: 'A final thought.', before: '', after: '', unique: true } }

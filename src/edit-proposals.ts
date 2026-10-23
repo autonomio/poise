@@ -101,7 +101,6 @@ export function renderEditCards(
       return `<div class="chat-edit-card" data-kind="${kind}" data-state="${state}" data-card-key="${escapeHtml(cardKey)}" data-old="${escapeHtml(e.old)}" data-new="${escapeHtml(e.new)}" data-context-before="${escapeHtml(e.context_before || '')}" data-context-after="${escapeHtml(e.context_after || '')}" data-description="${escapeHtml(e.description || '')}">${desc}${oldRow}${newRow}${actions}</div>`
     }).join('')
     parts.push(`<div class="chat-edit-cards">${cards}</div>`)
-    if (options.readOnly) parts.push('<div class="chat-edit-card-actions"><button type="button" class="chat-edit-card-btn" data-open-in-editor>Open in Editor</button></div>')
   }
   if (options.review && reply.reply) {
     parts.push('<div class="chat-edit-cards"><div class="chat-edit-card" data-kind="reply">'
@@ -111,6 +110,9 @@ export function renderEditCards(
         ? ''
         : `<div class="chat-edit-card-actions"><button type="button" class="chat-edit-card-btn" data-use-suggested-reply data-reply="${escapeHtml(reply.reply)}">Use as reply</button></div>`)
       + '</div></div>')
+  }
+  if (options.readOnly && (reply.edits?.length || (options.review && reply.reply))) {
+    parts.push('<div class="chat-edit-card-actions"><button type="button" class="chat-edit-card-btn" data-open-in-editor>Open in Editor</button></div>')
   }
   return parts.join('')
 }

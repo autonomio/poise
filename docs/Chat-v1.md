@@ -51,7 +51,10 @@ even while its initial history is loading;
 the Needs you marker remains until every request has been answered. Moving a
 thread transfers the latest composer, including an explicit empty draft. Closing a
 passage or review pane opened from Chat retains its draft for the inline thread. Back
-loads the thread's own document before reopening its passage or review.
+loads the thread's own document before reopening its passage or review. Suggested
+review replies stay with their document and review across document switches.
+Reply-only review cards in Chat also offer Open in Editor, where Use as reply
+fills the GitHub composer without posting.
 
 ## Fresh console and split pane
 
