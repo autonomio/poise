@@ -17,6 +17,16 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 10_000
   while (!check()) { if (Date.now() > deadline) throw new Error('local session deadline'); await new Promise(r => setTimeout(r, 25)) }
 }
+async function untilIdle(id: string) {
+  await until(() => {
+    const status = runtime.get(id)?.status
+    if (status === 'error') {
+      const errors = runtime.events(id, 0).events.map(entry => entry.event).filter(event => event.type === 'error')
+      throw new Error(`Local workspace startup failed: ${JSON.stringify(errors)}`)
+    }
+    return status === 'idle'
+  })
+}
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'poise-local-chat-test-'))
   vi.stubEnv('POISE_DB', join(root, 'chat.db'))
@@ -55,7 +65,7 @@ beforeEach(async () => {
 describe('Poise-local session storage', () => {
   it('resumes an already removed closed workspace under its canonical lease', async () => {
     const record = await runtime.create({ agent: 'grok', model: 'grok-4.6-high' })
-    await until(() => runtime.get(record.id)?.status === 'idle')
+    await untilIdle(record.id)
     await runtime.close(record.id)
     await rm(dirname(record.checkout), { recursive: true })
     await runtime.resume(record.id)
@@ -66,7 +76,7 @@ describe('Poise-local session storage', () => {
 
   it('recreates a workspace deleted by the maintenance holder while resume waits for its lease', async () => {
     const record = await runtime.create({ agent: 'grok', model: 'grok-4.6-high' })
-    await until(() => runtime.get(record.id)?.status === 'idle')
+    await untilIdle(record.id)
     await runtime.close(record.id)
     const { CheckoutLease } = await import('../../server/chat/checkout-lock')
     const maintenance = new CheckoutLease(record.checkout, { ownerKind: 'poise:chat', ownerId: 'maintenance', ownerLabel: 'Storage maintenance', instance: 'test' })
@@ -83,7 +93,7 @@ describe('Poise-local session storage', () => {
 
   it('keeps existing dirty work and refuses an invalid owner marker during resume', async () => {
     const record = await runtime.create({ agent: 'grok', model: 'grok-4.6-high' })
-    await until(() => runtime.get(record.id)?.status === 'idle')
+    await untilIdle(record.id)
     await writeFile(join(record.checkout, 'draft.txt'), 'only copy\n')
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: record.checkout, encoding: 'utf8' })
     await runtime.close(record.id)
@@ -99,7 +109,7 @@ describe('Poise-local session storage', () => {
 
   it('retains a resumed initializer worker lease until the guarded bootstrap has settled', async () => {
     const record = await runtime.create({ agent: 'grok', model: 'grok-4.6-high' })
-    await until(() => runtime.get(record.id)?.status === 'idle')
+    await untilIdle(record.id)
     await runtime.close(record.id)
     await rm(dirname(record.checkout), { recursive: true })
     const commands = await import('../../server/chat/git')
@@ -129,7 +139,7 @@ describe('Poise-local session storage', () => {
 
   it('retries a removed workspace bootstrap that failed after git init', async () => {
     const record = await runtime.create({ agent: 'grok', model: 'grok-4.6-high' })
-    await until(() => runtime.get(record.id)?.status === 'idle')
+    await untilIdle(record.id)
     await runtime.close(record.id)
     await rm(dirname(record.checkout), { recursive: true })
     const commands = await import('../../server/chat/git')
