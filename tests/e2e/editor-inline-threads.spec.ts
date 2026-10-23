@@ -471,6 +471,7 @@ test('lets a real document picker supersede an external load waiting for annotat
     }
   })
   const { state } = await editor(page, [annotation({ id: 'ann-1' })])
+  await expect(page.locator('.annotation-mark[data-ann-id="ann-1"]').first()).toBeVisible()
   state.sessions.unshift(session({ id: 's-passage', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' }))
   await page.route('**/api/editor/docs', route => route.fulfill({ json: { docs: [
     { slug: 'draft', title: 'A question', updated_at: AT, size: TEXT.length },
