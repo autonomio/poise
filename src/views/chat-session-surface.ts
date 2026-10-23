@@ -92,10 +92,7 @@ function newEditState(): EditState {
 // localStorage is origin-scoped; the instance and session namespace prevents
 // another workspace from consuming the marker. Only card identity/cursor is
 // retained, never document text or the proposed edit.
-function restoreEditState(session: SessionRecord): EditState {
-  const pending = pendingEdits.get(session.id)
-  if (pending) return pending
-  const state = newEditState()
+function restoreEditState(session: SessionRecord, state: EditState = pendingEdits.get(session.id) ?? newEditState()): EditState {
   state.storagePrefix = `poise:editor-applied:v2:${encodeURIComponent(session.instance)}:${encodeURIComponent(session.id)}:`
   for (const storageKey of Object.keys(localStorage)) {
     if (!storageKey.startsWith(state.storagePrefix)) continue
@@ -111,6 +108,7 @@ function restoreEditState(session: SessionRecord): EditState {
       || typeof item.operationId !== 'string' || !item.operationId) throw new Error('Saved edit recovery cursor is invalid')
     const marker: SavedEdit = { turnId: identity[0], messageId: identity[1], index: identity[2], afterSeq: item.afterSeq, operationId: item.operationId }
     const key = `${marker.turnId}:${marker.messageId}:${marker.index}`
+    if (state.deciding.has(key) || state.saved.has(key)) continue
     state.applied.add(key)
     state.baselines.set(key, marker.afterSeq)
     state.saved.set(key, marker)
@@ -318,6 +316,13 @@ export function mountSessionSurface(container: HTMLElement, options: SurfaceOpti
     const key = `${turnId}:${messageId}:${index}`
     const state = editState
     if (state.deciding.has(key)) return
+    try {
+      // Another tab can save after this surface mounts, before its decision.
+      restoreEditState(record, state)
+    } catch (error) {
+      setNotice(`Saved edit recovery could not be read — ${(error as Error).message}`)
+      return
+    }
     state.deciding.add(key)
     if (!state.applied.has(key)) state.baselines.set(key, seenSeq)
     pendingEdits.set(sessionId, state)

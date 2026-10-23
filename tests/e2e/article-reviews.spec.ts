@@ -327,6 +327,32 @@ test('fills the GitHub reply from a suggested reply without posting it', async (
   expect(calls.filter((call) => call.path.endsWith('/action'))).toEqual([])
 })
 
+test('keeps a newly selected suggested reply when an earlier GitHub reply succeeds', async ({ page }) => {
+  const { calls, sock } = await editorWithReviews(page)
+  await page.locator('.editor-review-mark').first().click()
+  const panel = page.getByRole('dialog', { name: 'Review comment', exact: true })
+  const id = await sendThreadMessage(page, sock, 'Draft the next reply')
+  await finishReply(sock, id, 'Draft the next reply', JSON.stringify({ chat: 'Another draft.', reply: 'Keep this new unsent reply.' }))
+  await expect(threadTranscript(page)).toContainText('Keep this new unsent reply.')
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const requested = new Promise<void>(resolve => { started = resolve })
+  await page.route('**/api/editor/doc/draft/reviews/action', async route => { started(); await held; await route.fallback() })
+  try {
+    await panel.getByLabel('Reply on GitHub', { exact: true }).fill('The earlier submitted reply.')
+    await panel.getByRole('button', { name: 'Reply on GitHub', exact: true }).click()
+    await requested
+    await threadTranscript(page).getByRole('button', { name: 'Use as reply', exact: true }).click()
+    await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Keep this new unsent reply.')
+    release()
+    await expect(panel).toContainText('The earlier submitted reply.')
+    await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toBeEnabled()
+    await expect(panel.getByLabel('Reply on GitHub', { exact: true })).toHaveValue('Keep this new unsent reply.')
+    expect(calls.filter(call => call.path.endsWith('/action')).map(call => call.body)).toEqual([{ id: 'thread-1', action: 'reply', body: 'The earlier submitted reply.' }])
+  } finally { release() }
+})
+
 test('uses a suggested reply from a review moved to the side pane', async ({ page }) => {
   const { state, sock } = await editorWithReviews(page)
   await page.locator('.editor-review-mark').first().click()

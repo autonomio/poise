@@ -399,6 +399,57 @@ test('keeps an unacknowledged saved insertion when another tab declines a differ
   } finally { await other.close() }
 })
 
+test('learns another tab saved an insertion before accepting in an already mounted surface', async ({ page }) => {
+  const first = await editor(page, TEXT, { preserveOnReload: true })
+  await openDocChat(page)
+  const id = await sendPaneMessage(page, first.sock, 'Add one sentence')
+  first.state.history[id] = await finishReply(first.sock, id, 'Add one sentence', INSERTION)
+  const other = await page.context().newPage()
+  try {
+    await other.addInitScript(() => {
+      sessionStorage.setItem('poise-workspace-initialized', '1')
+      sessionStorage.setItem('chat-fixture-initialized', '1')
+      localStorage.setItem('poise-view', 'current')
+    })
+    const second = await editor(other, TEXT, { preserveOnReload: true })
+    second.state.sessions.push({ ...first.state.sessions.find(item => item.id === id)! })
+    second.state.history[id] = [...first.state.history[id]]
+    second.sock.seq = first.sock.seq
+    await openDocChat(other)
+    const card = paneTranscript(other).locator('.chat-edit-card').first()
+    await expect(card.getByRole('button', { name: 'Accept', exact: true })).toBeVisible()
+    const mountedComposer = await pane(other).locator('.chat-input').elementHandle()
+    first.sock.autoAck = false
+    await paneTranscript(page).locator('.chat-edit-card').first().getByRole('button', { name: 'Accept', exact: true }).click()
+    await expect.poll(() => first.sock.framesOf('edit.decide').length).toBe(1)
+    first.sock.ack(first.sock.framesOf('edit.decide')[0], false, 'Decision unavailable')
+    await expect(pane(page).getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+    expect(first.saves).toEqual([TEXT.replace('Opening paragraph.', 'Opening paragraph. Added once.')])
+    let content = first.saves[0]
+    const repeatedSaves: string[] = []
+    await other.route('**/api/editor/doc/draft', route => {
+      if (route.request().method() === 'PUT' || route.request().method() === 'POST') {
+        content = String((route.request().postDataJSON() as { content: string }).content)
+        repeatedSaves.push(content)
+      }
+      return route.fulfill({ json: { slug: 'draft', title: 'A question', content, updated_at: AT, version: VERSION } })
+    })
+    await other.route('**/api/editor/doc/other', route => route.fulfill({ json: { slug: 'other', content: '# Other document', updated_at: AT, version: VERSION } }))
+    await other.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'other' } })))
+    await expect(other.locator('#editor-doc')).toContainText('Other document')
+    await other.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft' } })))
+    await expect(other.locator('#editor-doc')).toContainText('Opening paragraph. Added once.')
+    expect(await mountedComposer!.evaluate(el => el.isConnected)).toBe(true)
+    await card.getByRole('button', { name: 'Accept', exact: true }).click()
+    await expect.poll(() => second.sock.framesOf('edit.decide').length).toBe(1)
+    await expect(card.locator('.chat-edit-card-badge-applied')).toHaveText('Applied')
+    expect(second.sock.framesOf('edit.decide')[0].command).toMatchObject({ sessionId: id, decision: 'applied' })
+    expect(repeatedSaves).toEqual([])
+    expect(content).toBe(first.saves[0])
+    await expect(other.locator('#editor-doc')).not.toContainText('Added once. Added once.')
+  } finally { await other.close() }
+})
+
 test("highlights an edit card's target in the document on hover", async ({ page }) => {
   const { sock } = await editor(page)
   await openDocChat(page)

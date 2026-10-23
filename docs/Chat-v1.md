@@ -21,7 +21,8 @@ attachments, checkout-file mentions, advertised commands, draft preservation,
 steering during a turn and Stop. Capabilities belong to each native session:
 unsupported optional controls are not simulated.
 
-Current cards, Swarm rows and Editor documents can hand off into Chat. Changing
+Current cards, Swarm rows and Editor documents can hand off into Chat. A pending
+legacy-row lookup is cancelled by leaving Swarm or choosing another row. Changing
 the agent creates a new native session with a labelled context handoff, not a
 pretence that one vendor's session migrated to another. Each Current card has
 one Chat session of its own, opened from the card in the side pane or from
@@ -39,8 +40,9 @@ pi, image input, worktrees and parallel turns on the same checkout are outside v
 Editor edit cards disable Accept and Decline while saving and recording a
 decision. Failed saves allow another Accept; retrying a failed decision after
 a successful save records it without applying the edit again, across pane
-remounts and page reloads. Origin-local recovery markers contain only the
-workspace/session/card identity, operation generation and transcript cursor; a later
+remounts and page reloads. Decision admission also reloads saved markers from
+other tabs, including when this surface was mounted before their save.
+Origin-local recovery markers contain only the workspace/session/card identity, operation generation and transcript cursor; a later
 authoritative decision or acknowledgement removes them. Older decisions cannot
 clear a later saved edit. Markers use separate card keys, so an unrelated
 decision in another tab cannot erase them. A late applied receipt withdraws its
@@ -54,8 +56,9 @@ passage or review pane opened from Chat retains its draft for the inline thread.
 loads the thread's own document before reopening its passage or review. Suggested
 review replies stay with their document and review across document switches.
 Reply-only review cards in Chat also offer Open in Editor, where Use as reply
-fills the GitHub composer without posting. Leaving Editor, switching documents,
-or opening another external target cancels a pending conversation handoff.
+fills the GitHub composer without posting. Selecting a new suggested reply while
+an earlier reply posts preserves the new unsent draft. Leaving Editor, switching
+documents, or opening another external target cancels a pending conversation handoff.
 
 ## Fresh console and split pane
 

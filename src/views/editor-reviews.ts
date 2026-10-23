@@ -277,7 +277,7 @@ export class EditorReviews {
     this.renderSection()
     try {
       const data = await this.request(slug, '/action', { id: review.id, action, ...(action === 'reply' ? { body } : {}) })
-      if (action === 'reply') this.drafts.delete(key)
+      if (action === 'reply' && this.drafts.get(key) === body) this.drafts.delete(key)
       if (generation !== this.generation) return
       this.data = data
     } catch (error) { if (generation === this.generation) this.error = (error as Error).message }

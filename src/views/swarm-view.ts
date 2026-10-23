@@ -129,6 +129,7 @@ let viewEl: HTMLElement
 let bodyEl: HTMLElement
 let searchEl: HTMLInputElement | null = null
 let initialized = false
+let importedSessionOpenRequestId = 0
 let entries: LogEntry[] = []
 let quarantined: QuarantinedLog[] = []
 let searchQuery = ''
@@ -422,6 +423,7 @@ function isChatTurn(e: LogEntry): boolean {
 // row that was never opened in Chat says so in place; its replies stay in
 // Swarm, readable by expanding the row.
 async function openImportedSession(button: HTMLButtonElement, session: string): Promise<void> {
+  const requestId = ++importedSessionOpenRequestId
   let reachable = false
   let found: { id: string } | null = null
   try {
@@ -429,11 +431,12 @@ async function openImportedSession(button: HTMLButtonElement, session: string): 
     reachable = res.ok
     if (res.ok) found = ((await res.json()) as { session: { id: string } | null }).session
   } catch { /* unreachable Chat keeps the button below */ }
+  if (requestId !== importedSessionOpenRequestId || !viewEl || viewEl.hidden) return
   if (found) {
     window.dispatchEvent(new CustomEvent('poise:open-chat-session', { detail: { id: found.id } }))
     return
   }
-  if (!reachable) return
+  if (!reachable || !button.isConnected) return
   const message = document.createElement('span')
   message.className = 'agent-target agent-never-imported'
   message.textContent = 'This conversation was never opened in Chat — its replies stay in Swarm.'
@@ -1316,6 +1319,7 @@ export async function initSwarmView() {
 }
 
 export function stopSwarmRefresh() {
+  importedSessionOpenRequestId++
   if (progressPoll) clearInterval(progressPoll)
   progressPoll = null
   if (swarmListening) {

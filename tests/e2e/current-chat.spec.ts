@@ -333,3 +333,43 @@ test('a legacy chat never opened in Chat says so on its Swarm row', async ({ pag
   await expect(page.locator('.agent-never-imported')).toHaveText('This conversation was never opened in Chat — its replies stay in Swarm.')
   await expect(page.locator('#view-chat')).not.toBeVisible()
 })
+
+for (const returnToSwarm of [false, true]) {
+  test(`ignores a legacy lookup after leaving Swarm, return=${returnToSwarm}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const json = Response.prototype.json
+      Response.prototype.json = async function () {
+        const value: unknown = await json.call(this)
+        if (new URL(this.url).searchParams.has('legacy')) Reflect.set(window, 'legacyLookupRead', true)
+        return value
+      }
+      window.addEventListener('poise:open-chat-session', () => Reflect.set(window, 'legacyChatOpened', true))
+    })
+    const imported = session({ id: 's-imported', title: 'Imported legacy chat', importedFrom: 'legacy-chat-1' })
+    await legacySwarm(page, [imported])
+    let release!: () => void
+    let started!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const requested = new Promise<void>(resolve => { started = resolve })
+    await page.route('**/api/chat/sessions?legacy=legacy-chat-1', async route => {
+      started()
+      await held
+      await route.fulfill({ json: { session: imported } })
+    })
+    try {
+      await page.locator('.agent-session-link', { hasText: 'legacy-chat-1' }).click()
+      await requested
+      await page.getByRole('button', { name: 'Current', exact: true }).click()
+      await expect(page.locator('#view-swarm')).toBeHidden()
+      if (returnToSwarm) {
+        await page.getByRole('button', { name: 'Swarm', exact: true }).click()
+        await expect(page.locator('#view-swarm')).toBeVisible()
+      }
+      release()
+      await expect.poll(() => page.evaluate(() => Reflect.get(window, 'legacyLookupRead'))).toBe(true)
+      expect(await page.evaluate(() => Reflect.get(window, 'legacyChatOpened'))).not.toBe(true)
+      await expect(page.locator(returnToSwarm ? '#view-swarm' : '#view-current')).toBeVisible()
+      await expect(page.locator('#view-chat')).toBeHidden()
+    } finally { release() }
+  })
+}
