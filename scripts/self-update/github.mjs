@@ -1,4 +1,4 @@
-// The GitHub gate. A thin REST client bound to one repository, plus the pure
+// The GitHub gate. A thin client bound to one repository, plus the
 // rules that decide whether a pull request has earned a merge: the repository
 // identity matches, its independently required CI checks pass, the
 // trusted CI workflow passed its aggregate gate on this exact head, and the
