@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mocks, pr, HEAD_SHA, externalCalls, loadModules, restartModules, arrangeCli, agentLog, datastoreHealthOutput, deferred, fixture } from './behaviors-runtime-fixture'
+import { mocks, pr, HEAD_SHA, externalCalls, loadModules, restartModules, resetLogCache, arrangeCli, agentLog, datastoreHealthOutput, deferred, fixture } from './behaviors-runtime-fixture'
 
 describe('startup snapshots and recovery', () => {
 
@@ -74,6 +74,7 @@ describe('startup snapshots and recovery', () => {
       started_at_precise: '2026-07-15T11:59:00.001Z',
       error: 'authentication failed',
     })]
+    await resetLogCache()
 
     await runtime.runEnabledBehaviorsOnce()
 
@@ -106,6 +107,7 @@ describe('startup snapshots and recovery', () => {
       started_at: '2026-07-29T18:01:09.127Z',
       completed_at: '2026-07-29T18:07:51.000Z',
     })]
+    await resetLogCache()
 
     await runtime.runEnabledBehaviorsOnce()
 
@@ -133,6 +135,7 @@ describe('startup snapshots and recovery', () => {
     fixture.agentLogs = corruption === 'duplicate'
       ? [failed, { id: failed.id, repo: 'other/unrelated', pr_id: '999' }]
       : [{ repo: pr.repo, pr_id: String(pr.number), behavior: 'pr_review', corrupt: true }]
+    await resetLogCache()
     fixture.listedPrs.push({ ...pr, number: 18, url: `https://github.com/${pr.repo}/pull/18` })
     await runtime.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
@@ -142,8 +145,10 @@ describe('startup snapshots and recovery', () => {
 
     // Rotation or a revised failure cannot erase the earlier uncertainty.
     fixture.agentLogs = [failed]
+    await resetLogCache()
     await runtime.runEnabledBehaviorsOnce()
     fixture.agentLogs = []
+    await resetLogCache()
     const loaded = await restartModules()
     loaded.behaviors.startBehaviorsRuntime()
     await loaded.behaviors.runEnabledBehaviorsOnce()
@@ -153,6 +158,7 @@ describe('startup snapshots and recovery', () => {
     ])
     // A valid positive result resolves a snapshot's missing review evidence.
     fixture.agentLogs = [{ ...failed, status: 'completed', action: 'reviewed_clean', outcome: 'clean', head_sha: HEAD_SHA, completed_at: new Date().toISOString(), error: '' }]
+    await resetLogCache()
     await loaded.behaviors.runEnabledBehaviorsOnce()
     expect(mocks.spawnDetached).toHaveBeenCalledOnce()
     expect(loaded.database.getMeta('behavior_review_new_prs_snapshot_recovery_v2')).toBe('1')
@@ -174,6 +180,7 @@ describe('startup snapshots and recovery', () => {
       outcome: 'clean',
       head_sha: HEAD_SHA,
     })]
+    await resetLogCache()
     mocks.authStatus = 'reauth_required'
 
     runtime.startBehaviorsRuntime()

@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../server/agent', async (importOriginal) => ({
   ...await importOriginal<typeof import('../server/agent')>(),
   fetchAgentLogs: mocks.fetchAgentLogs,
+  fetchRunningAgentLogs: mocks.fetchAgentLogs,
   fetchAgentLogSnapshot: async () => ({ entries: await mocks.fetchAgentLogs(), quarantined: mocks.quarantined }),
+  fetchRunningAgentLogSnapshot: async () => ({ entries: await mocks.fetchAgentLogs(), quarantined: mocks.quarantined }),
   fetchAgentResponse: vi.fn(),
 }))
 vi.mock('../server/process', () => ({

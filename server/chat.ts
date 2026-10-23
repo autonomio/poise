@@ -21,7 +21,7 @@ import { join, resolve, isAbsolute, sep } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { chmod, lstat, mkdir, open, writeFile, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { fetchAgentLogs, fetchAgentLogSnapshot, scopedAgentLogs, type LogEntry } from './agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchRunningAgentLogs, scopedAgentLogs, type LogEntry } from './agent'
 import { db } from './db'
 import { readDoc, slugFromEditorSession } from './editor'
 import { HttpError } from './http'
@@ -679,8 +679,10 @@ export async function startAuthorContent(topic: string, sessionId: string): Prom
   if (claude) await claudeAuth.requireReady()
   const modelCliEnv = await prepareModelClis(catalog, [catalog.behaviors.author_content])
   // Snapshot every existing id in this session. Exact topic matching prevents
-  // an unrelated delayed call from being attributed to this launch.
-  const beforeIds = new Set((await fetchAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' } }))
+  // an unrelated delayed call from being attributed to this launch. Fresh:
+  // a shared snapshot could miss a row registered moments ago and let it
+  // read as this launch.
+  const beforeIds = new Set((await fetchAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' }, fresh: true }))
     .filter((entry: any) => entry.behavior === 'author_content' && entry.session_id === normalizedSessionId)
     .map((entry: any) => String(entry.id || '')))
 
@@ -704,7 +706,9 @@ export async function startAuthorContent(topic: string, sessionId: string): Prom
     await new Promise((r) => setTimeout(r, 200))
     let fresh: LogEntry[]
     try {
-      fresh = (await fetchAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' } })).filter((entry: any) => {
+      // The new call is running: poll the running lane, fresh every time,
+      // instead of rereading the whole log behind the history lane.
+      fresh = (await fetchRunningAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' }, fresh: true })).filter((entry: any) => {
         const id = String(entry.id || '')
         return entry.behavior === 'author_content'
           && entry.session_id === normalizedSessionId

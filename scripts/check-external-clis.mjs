@@ -201,7 +201,9 @@ const checks = [
     requiredOutput: [
       '--author-content',
       '--chat',
+      '--cursor',
       '--debate',
+      '--limit',
       '--logs',
       '--model',
       '--models',
@@ -216,6 +218,7 @@ const checks = [
       '--rounds',
       '--session',
       '--session-id',
+      '--status',
     ],
   },
   {
