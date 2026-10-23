@@ -16,7 +16,7 @@ import { BUILD_SHA } from '../build-identity'
 import type { ChatRuntime } from '../chat/runtime'
 import { listOpenTurns } from '../chat/storage'
 import { HttpError, readJson, type RequestAuthority } from '../http'
-import { pauseReleaseBackground, releaseBackgroundBusy, resumeReleaseBackground } from '../release-background'
+import { markReleaseSwitch, pauseReleaseBackground, releaseBackgroundBusy, resumeReleaseBackground } from '../release-background'
 import { runningCallerCalls } from './caller-calls'
 import { canRestartForUpdate, requestUpdateRestart } from './restart'
 
@@ -76,7 +76,7 @@ export const DRAIN_TURN_STOPPED =
   'the agent keeps its context, so send a new prompt to continue.'
 
 // Browser routes that start a Caller call or the model check.
-const LAUNCH_ROUTES = new Set(['/api/pr-review', '/api/agent-replay', '/api/chat-content', '/api/debate', '/api/chat', '/api/models/refresh'])
+const LAUNCH_ROUTES = new Set(['/api/pr-review', '/api/agent-replay', '/api/chat-content', '/api/debate', '/api/models/refresh'])
 
 export interface DrainTimer {
   setTimeout(callback: () => void, delayMs: number): unknown
@@ -238,6 +238,7 @@ export class ServiceControl {
     this.switchTo = release
     if (first) {
       this.log(`[service] switching to release ${release} once no Chat turn and no work of this server runs`)
+      markReleaseSwitch(true)
       this.pollSwitch()
     }
     return { release, switching: true }
@@ -251,6 +252,7 @@ export class ServiceControl {
     this.switchPoll = null
     this.log(`[service] the switch to release ${this.switchTo} was withdrawn; staying on release ${this.release.name}`)
     this.switchTo = null
+    markReleaseSwitch(false)
   }
 
   private pollSwitch(): void {
@@ -262,6 +264,8 @@ export class ServiceControl {
       // Refused from here on; the gateway shows the person that Poise is updating.
       pauseReleaseBackground()
       this.runtime.startDrain('service')
+      // The drain governs from here: the switch is no longer waiting for quiet.
+      markReleaseSwitch(false)
       this.drainOn = true
       this.log(`[service] restarting on release ${this.switchTo}; running agent calls carry on`)
       if (!(this.options.restart ?? requestUpdateRestart)()) {
@@ -312,6 +316,7 @@ export class ServiceControl {
     if (this.switchPoll !== null) this.timer.clearTimeout(this.switchPoll)
     this.switchPoll = null
     if (this.drainOn || this.switchTo !== null) this.lift()
+    if (this.switchTo !== null) markReleaseSwitch(false)
     this.switchTo = null
   }
 

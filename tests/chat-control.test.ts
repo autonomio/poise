@@ -67,6 +67,20 @@ async function until(check: () => boolean) {
   while (Date.now() < deadline) { if (check()) return; await new Promise(done => setTimeout(done, 15)) }
   throw new Error('control fixture readiness deadline')
 }
+async function observeCi(target: string): Promise<void> {
+  await control.tick()
+  // The tick admits an independent background pass; wait for its persisted
+  // result before changing the next mocked response or reading the inbox.
+  await until(() => store.observation(runtime.instance, `ci:${target}`)?.checked_at === clock)
+}
+async function observeMerge(target: string): Promise<void> {
+  await control.tick()
+  await until(() => store.observation(runtime.instance, `merge:${target}`)?.checked_at === clock)
+}
+async function observeReviews(target: string): Promise<void> {
+  await control.tick()
+  await until(() => store.observation(runtime.instance, `reviews:${target}`)?.checked_at === clock)
+}
 async function config(id: string) {
   const context = await control.context(id)
   const path = /"([^"\n]+\.json)"/.exec(context)?.[1]
@@ -260,83 +274,84 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
   it('shares five-minute CI reads, records failures once, and delivers recovery and recurring failures', async () => {
     const parent = await manager()
     const target = 'https://github.com/acme/app/pull/9'
-    await command(parent.id, { operation: 'bind', target })
     const failed = { head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] }
     ci.mockResolvedValue(failed)
+    await command(parent.id, { operation: 'bind', target })
     await Promise.all([control.tick(), control.tick()])
+    await until(() => store.observation(runtime.instance, `ci:${target}`)?.checked_at === clock)
     expect(ci).toHaveBeenCalledTimes(1)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(ci).toHaveBeenCalledTimes(2)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     ci.mockResolvedValue(failed)
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(3)
   })
 
   it('stays silent when CI settles green on a new head with no failures', async () => {
     const parent = await manager()
     const target = 'https://github.com/acme/app/pull/93'
-    await command(parent.id, { operation: 'bind', target })
     const h1 = 'a'.repeat(40), h2 = 'b'.repeat(40)
     ci.mockResolvedValue({ head: h1, failing: [] })
-    await control.tick()
+    await command(parent.id, { operation: 'bind', target })
+    await observeCi(target)
     ci.mockResolvedValue({ head: h2, failing: [], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     ci.mockResolvedValue({ head: h2, failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     expect(prompts.has(parent.id)).toBe(false)
     ci.mockResolvedValue({ head: h2, failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: h2, failing: [] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
   })
 
   it('retains settled CI evidence during a rerun when another check remains failed', async () => {
     const parent = await manager()
     const target = 'https://github.com/acme/app/pull/91'
-    await command(parent.id, { operation: 'bind', target })
     const first = { name: 'First', state: 'completed', conclusion: 'failure' }
     const second = { name: 'Second', state: 'completed', conclusion: 'failure' }
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [first, second] })
-    await control.tick()
+    await command(parent.id, { operation: 'bind', target })
+    await observeCi(target)
     const settled = store.observation(runtime.instance, `ci:${target}`)!.fingerprint
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second], pending: true })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     expect(store.observation(runtime.instance, `ci:${target}`)!.fingerprint).toBe(settled)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [second] })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
     expect(JSON.parse(store.inbox(runtime.instance, parent.id)[1].body).failing).toEqual([second])
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
   })
 
   it.each([false, true])('waits for the first settled CI result across restart (failed=%s)', async failed => {
     const parent = await manager()
     const target = 'https://github.com/acme/app/pull/92'
-    await command(parent.id, { operation: 'bind', target })
     const failing = failed ? [{ name: 'First', state: 'completed', conclusion: 'failure' }] : []
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing, pending: true })
-    await control.tick()
+    await command(parent.id, { operation: 'bind', target })
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     await restart()
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing })
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(failed ? 1 : 0)
-    clock += 5 * 60_000; await control.tick()
+    clock += 5 * 60_000; await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(failed ? 1 : 0)
   })
 
@@ -562,8 +577,8 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
 
   it('wakes a session once when a check fails on its pull request', async () => {
     const parent = await manager()
-    await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/79' })
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] })
+    await command(parent.id, { operation: 'bind', target: 'https://github.com/acme/app/pull/79' })
     await control.tick()
     await until(() => prompts.has(parent.id))
     expect(prompts.get(parent.id)).toHaveLength(1)
@@ -636,9 +651,9 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
   it('does not notify a stale owner or restore its observations after a CI read crosses a handoff', async () => {
     const first = await manager(), second = await manager()
     const target = 'https://github.com/acme/app/pull/46'
-    await command(first.id, { operation: 'bind', target })
     let complete!: (value: CiObservation) => void
     ci.mockImplementationOnce(() => new Promise<CiObservation>(done => { complete = done }))
+    await command(first.id, { operation: 'bind', target })
     const reading = control.tick()
     await until(() => ci.mock.calls.length === 1)
     await command(first.id, { operation: 'unbind', target })
@@ -650,6 +665,8 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     expect(store.observation(runtime.instance, `ci:${target}`)).toBeUndefined()
     ci.mockResolvedValue(failure)
     await control.tick()
+    // CI reads run in their own pass behind the tick; the new owner's read follows the crossed one.
+    await until(() => store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure')))
     expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
   })
 
@@ -663,7 +680,7 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     // The prompt startup above is slow enough for the 1s interval timer to
     // tick first; the clock advance reopens the read cadence deterministically.
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, first.id)).toHaveLength(1)
     expect(store.inbox(runtime.instance, first.id)[0].state).toBe('pending')
     // Paused delivery holds the notice pending while the source turns idle,
@@ -676,10 +693,10 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const second = await runtime.handoff(first.id, { agent: 'grok', model: grok.identity })
     expect(store.bindings(runtime.instance).find(b => b.target === target)?.session).toBe(second.id)
     expect(store.inbox(runtime.instance, first.id)).toHaveLength(0)
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, second.id)).toHaveLength(1)
     expect(store.inbox(runtime.instance, first.id)).toHaveLength(0)
   }, 60_000)
@@ -689,15 +706,15 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const target = 'https://github.com/acme/app/pull/61'
     await command(first.id, { operation: 'bind', target })
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] })
-    await control.tick()
+    await observeCi(target)
     await runtime.close(first.id)
     expect(store.bindings(runtime.instance)).toHaveLength(0)
     await command(second.id, { operation: 'bind', target })
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, second.id).some(m => m.body.includes('failure'))).toBe(true)
     const closed = store.inbox(runtime.instance, first.id).length
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, first.id)).toHaveLength(closed)
   }, 60_000)
 
@@ -706,18 +723,18 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const target = 'https://github.com/acme/app/pull/62'
     await command(parent.id, { operation: 'bind', target })
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [], mergeable: false, mergeableState: 'dirty', author: 'other', draft: false, base: 'main' })
-    await control.tick()
+    await observeMerge(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     const notice = JSON.parse(store.inbox(runtime.instance, parent.id)[0].body)
     expect(notice).toMatchObject({ kind: 'merge', conflict: true })
     expect(notice.blockers).toEqual(['Resolve the merge conflicts with main'])
     expect(notice.done).toHaveLength(3)
     clock += 5 * 60_000
-    await control.tick()
+    await observeMerge(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [], mergeable: true, mergeableState: 'clean', author: 'other', draft: false, base: 'main' })
     clock += 5 * 60_000
-    await control.tick()
+    await observeMerge(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
   })
 
@@ -727,11 +744,11 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await command(parent.id, { operation: 'bind', target })
     ownsBehind.mockReturnValue(true)
     ci.mockResolvedValue({ head: 'a'.repeat(40), failing: [], mergeable: true, mergeableState: 'behind', author: 'fixture-agent', draft: false, base: 'main' })
-    await control.tick()
+    await observeMerge(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     ownsBehind.mockReturnValue(false)
     clock += 5 * 60_000
-    await control.tick()
+    await observeMerge(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     expect(store.inbox(runtime.instance, parent.id)[0].body).toContain('Bring the branch up to date with main')
   })
@@ -771,24 +788,24 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await command(parent.id, { operation: 'bind', target })
     const failed = { head: 'a'.repeat(40), failing: [{ name: 'Verify', state: 'completed', conclusion: 'failure' }] }
     ci.mockResolvedValue(failed)
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     ci.mockRejectedValue(new Error('GitHub access unavailable'))
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id).map(m => m.body).filter(b => b.includes('ci_unavailable'))).toHaveLength(1)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
     ci.mockResolvedValue(failed)
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
     ci.mockRejectedValue(new Error('GitHub access unavailable'))
     clock += 5 * 60_000
-    await control.tick()
+    await observeCi(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(3)
   })
 
@@ -800,26 +817,26 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const review = { id: 'R_1', author: 'reviewer', state: 'CHANGES_REQUESTED' }
     reviews.mockResolvedValue({ found: true, truncated: false, reviews: [review],
       threads: [{ thread: 'T_1', resolved: false, outdated: false, comments: [{ id: 'C_1', author: 'reviewer' }] }] })
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     const notice = JSON.parse(store.inbox(runtime.instance, parent.id)[0].body)
     expect(notice).toMatchObject({ kind: 'reviews' })
     expect(notice.blockers).toHaveLength(2)
     expect(notice.done).toHaveLength(3)
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     reviews.mockResolvedValue({ found: true, truncated: false, reviews: [review],
       threads: [{ thread: 'T_1', resolved: false, outdated: false,
         comments: [{ id: 'C_1', author: 'reviewer' }, { id: 'C_2', author: 'fixture-agent' }] }] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     reviews.mockResolvedValue({ found: true, truncated: false, reviews: [review],
       threads: [{ thread: 'T_1', resolved: false, outdated: false,
         comments: [{ id: 'C_1', author: 'reviewer' }, { id: 'C_2', author: 'fixture-agent' }, { id: 'C_3', author: 'reviewer' }] }] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(2)
     expect(store.inbox(runtime.instance, parent.id)[1].body).toContain('C_3')
   })
@@ -831,18 +848,18 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     await command(parent.id, { operation: 'bind', target })
     reviews.mockResolvedValue({ found: true, truncated: false,
       reviews: [{ id: 'R_1', author: 'reviewer', state: 'APPROVED' }], threads: [] })
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     reviews.mockResolvedValue({ found: true, truncated: false,
       reviews: [{ id: 'R_1', author: 'reviewer', state: 'DISMISSED' }], threads: [] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     reviews.mockResolvedValue({ found: true, truncated: false,
       reviews: [{ id: 'R_1', author: 'reviewer', state: 'DISMISSED' }],
       threads: [{ thread: 'T_1', resolved: false, outdated: false, comments: [{ id: 'C_1', author: 'reviewer' }] }] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
     expect(store.inbox(runtime.instance, parent.id)[0].body).toContain('DISMISSED')
   })
@@ -853,20 +870,20 @@ describe('native Poise control through HTTP, SQLite and the real Chat runtime', 
     const target = 'https://github.com/acme/app/pull/68'
     await command(parent.id, { operation: 'bind', target })
     reviews.mockResolvedValue(null)
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     reviews.mockResolvedValue({ found: false, truncated: false, reviews: [], threads: [] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     reviews.mockResolvedValue({ found: true, truncated: true, reviews: [], threads: [] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(0)
     reviews.mockResolvedValue({ found: true, truncated: false,
       reviews: [{ id: 'R_1', author: 'reviewer', state: 'CHANGES_REQUESTED' }], threads: [] })
     clock += 5 * 60_000
-    await control.tick()
+    await observeReviews(target)
     expect(store.inbox(runtime.instance, parent.id)).toHaveLength(1)
   })
 
