@@ -46,11 +46,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  const { stopBehaviorsRuntime } = await import('../server/behaviors')
-  const { closeDatabase } = await import('../server/db')
-  await stopBehaviorsRuntime()
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  closeDatabase()
+  const { shutdownProductionServer } = await import('../server/production')
+  await shutdownProductionServer(server)
   for (const key of [
     'POISE_DB',
     'POISE_EDITOR_DIR',
