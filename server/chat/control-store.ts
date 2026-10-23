@@ -140,9 +140,10 @@ export function inbox(instance: string, recipient: string, after = 0): InternalM
 /** Per recipient, two candidates: the oldest pending ordinary row and the
  *  oldest pending timer row. A hold excludes the recipient from both: while
  *  a chat is held, its timers skip their firings and turns other chats
- *  would start in it wait. The tick picks at most one row per recipient. */
+ *  would start in it wait. Page by 100 recipients, retaining both candidates
+ *  at the boundary. The tick picks at most one row per recipient. */
 export function pending(instance: string, afterRecipient = '', now = Date.now()): InternalMessage[] {
-  const page = db.prepare(`SELECT ${INBOX_COLUMNS} FROM (
+  const page = db.prepare(`WITH candidates AS (
       SELECT ${INBOX_COLUMNS} FROM chat_control_inbox
       WHERE instance = ? AND state = 'pending' AND timer_id IS NULL
         AND seq IN (SELECT MIN(seq) FROM chat_control_inbox WHERE instance = ? AND state = 'pending' AND timer_id IS NULL GROUP BY recipient)
@@ -160,8 +161,12 @@ export function pending(instance: string, afterRecipient = '', now = Date.now())
         AND i.timer_id IN (SELECT id FROM chat_control_timers WHERE instance = ? AND state = 'active'
           AND (not_before IS NULL OR not_before <= ?))
         AND i.recipient NOT IN (SELECT session FROM chat_control_holds WHERE instance = ?)
-    ) ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient, seq LIMIT 100`)
-    .all(instance, instance, instance, instance, instance, instance, instance, now, instance, now, instance, afterRecipient) as InternalMessage[]
+    ), recipients AS (
+      SELECT recipient FROM candidates GROUP BY recipient
+      ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient LIMIT 100
+    ) SELECT ${INBOX_COLUMNS} FROM candidates WHERE recipient IN (SELECT recipient FROM recipients)
+      ORDER BY CASE WHEN recipient > ? THEN 0 ELSE 1 END, recipient, seq`)
+    .all(instance, instance, instance, instance, instance, instance, instance, now, instance, now, instance, afterRecipient, afterRecipient) as InternalMessage[]
   return page
 }
 export function pauseDelivery(instance: string, session: string): void {

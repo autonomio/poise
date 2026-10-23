@@ -793,6 +793,37 @@ describe('durable timers that wake chats', () => {
     await until(() => runtime.get(p.id)?.status === 'idle')
   }, 60_000)
 
+  it.each([99, 100])('keeps both delivery candidates at the %i-chat page boundary during a release switch', async (bulkCount) => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const timer = await heartbeat(m, p)
+    await holdingTimers(async () => {
+      clock += 10 * 60_000
+      // Store-only recipients need no native work: every timer is waiting
+      // for the update, while the real last recipient has an ordinary row.
+      for (let i = 0; i < bulkCount; i++) {
+        const id = `!page-${String(i).padStart(3, '0')}`
+        const record = { ...p, id }
+        database.db.prepare(`INSERT INTO chat_sessions(id, record, agent, repo, checkout, branch, status, title, instance, created_at, updated_at)
+          VALUES(?, ?, 'grok', '', '', '', 'idle', 'Bulk', ?, ?, ?)`)
+          .run(id, JSON.stringify(record), instance, new Date(clock).toISOString(), new Date(clock).toISOString())
+        const bulk = store.createTimer(instance, { sessionId: id, label: 'Bulk', message: 'Wait', delayMinutes: 10 }, { kind: 'person' }, clock - 10 * 60_000)
+        store.fireTimer(instance, bulk.id, clock)
+      }
+      store.fireTimer(instance, timer.id, clock)
+      store.message(instance, p.id, m.id, 'Ordinary at page boundary', `page:${randomUUID()}`)
+      const page = store.pending(instance, '', clock)
+      expect(new Set(page.map(row => row.recipient)).size).toBe(100)
+      if (bulkCount === 99) expect(page.filter(row => row.recipient === p.id)).toHaveLength(2)
+      await control.tick()
+      if (bulkCount === 100) await control.tick()
+      await until(() => prompts.has(p.id))
+      expect(prompts.get(p.id)![0].text).toContain('Ordinary at page boundary')
+      expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
+  }, 60_000)
+
   it('delivers ordinary messages past an older timer in the person grace period', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const timer = await heartbeat(m, p)

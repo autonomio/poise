@@ -89,7 +89,8 @@ with their count, and the schedule keeps its phase. Delivery orders admissible
 inbox candidates by sequence: a timer waiting for the person's grace period or
 an update cannot block an ordinary message; an ordinary message blocked by a
 failed or paused task queue cannot block an otherwise ready timer. A timer
-still reopens a closed chat before admission.
+still reopens a closed chat before admission. Each scheduler page rotates over
+100 recipients and keeps both candidates for every selected recipient.
 
 The person stays in charge. Their Stop holds the chat, skipping its timers'
 firings until their next message or Resume; the Hold toggle and Hold-all hold
