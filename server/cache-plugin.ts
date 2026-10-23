@@ -24,7 +24,7 @@ import { parseBounds, parseWindow, readAnalytics, readAnalyticsHistory } from '.
 import { checkGithubQuota, readGithubQuota, startGithubQuotaRuntime, stopGithubQuotaRuntime } from './github-quota'
 import { handleGhBody, listOrgRepos, listOrganizationsRepos, selectOrganizations, repoBelongsTo, requireConfiguredRepository } from './gh'
 import { getOrganizations, readyOrganizations, addOrganization, retryOrganization, startOrganizationsRuntime, stopOrganizationsRuntime } from './organizations'
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, fetchRecentAgentLogs, fetchRunningAgentLogSnapshot, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentResponse, fetchAgentReasoning, fetchLatestAgentLogEntry, fetchAgentLogRows, fetchRunningAgentLogSnapshot, freezeAgentLogSnapshot, triggerPrReview, replayAgentJob, stopAgentJob } from './agent'
 import { readBehaviorMetrics } from './behavior-metrics'
 import { listChatHistory, sendChat, saveAttachment, runDebate } from './chat'
 import { listDocs, readDoc, writeDoc, deleteDoc, newSlug, readAnnotations, writeAnnotations, getOrCreateChatSession, MAX_DOC_BYTES, MAX_ANNOTATIONS_BYTES, EditorConflictError } from './editor'
@@ -686,9 +686,10 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           const settings = getSettingMap()
           const scratch = getScratchpadMap()
           // The dashboard needs the newest trigger per behavior plus the
-          // dead letters' exact rows: a bounded newest-first walk, not the
-          // whole log. Unenriched incidents name their rows up front, so the
-          // walk resolves every row this response displays.
+          // dead letters' exact rows: one bounded kind walk per behavior
+          // plus one point read for the needles, not the whole log.
+          // Unenriched incidents name their rows up front, so these reads
+          // resolve every row this response displays.
           const accounts = getOrganizations()
           const triggers: Array<[string, string]> = [
             ['pr_review', 'poise:review-new-prs'],
@@ -708,18 +709,28 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
           let snapshot: Awaited<ReturnType<typeof fetchAgentLogSnapshot>> | null = null
           let agentLogsError: string | null = null
           try {
-            snapshot = await fetchRecentAgentLogs({ complete: (walked) =>
-              triggers.every(([cliBehavior, source]) => walked.entries.some((entry) => triggered(entry, cliBehavior, source)))
-              && [...pending].every((callId) => walked.entries.some((entry) => entry.id === callId)
-                || walked.quarantined.some((row) => row.id === callId)) })
+            const [kinds, needles] = await Promise.all([
+              Promise.all(triggers.map(([cliBehavior, source]) =>
+                fetchLatestAgentLogEntry({ behavior: cliBehavior, source, match: (entry) => triggered(entry, cliBehavior, source) }))),
+              fetchAgentLogRows([...pending]),
+            ])
+            const latest = kinds.flatMap((kind) => kind.entry === null ? [] : [kind.entry])
+            // A dead letter's row can also be its behavior's latest trigger:
+            // incident enrichment matches rows by id, so it must appear once.
+            const latestIds = new Set(latest.map((entry) => entry.id))
+            snapshot = freezeAgentLogSnapshot({
+              entries: [...latest, ...needles.entries.filter((entry) => !latestIds.has(entry.id))],
+              quarantined: [...kinds.flatMap((kind) => kind.quarantined), ...needles.quarantined],
+            })
             logs = snapshot.entries
             if (snapshot.quarantined.length > 0) agentLogsError = `${snapshot.quarantined.length} unreadable worker log row(s) quarantined`
           } catch (error) {
             agentLogsError = error instanceof Error ? error.message : String(error)
           }
-          // The walk accumulates newest-first, so .find() picks the most
-          // recent matching row. We only consider rows that have both a
-          // repo and pr_id so the link to Swarm works.
+          // Each kind walk returns that behavior's newest matching row, so
+          // .find() over the latest rows picks the most recent trigger. We
+          // only consider rows that have both a repo and pr_id so the link
+          // to Swarm works.
           const lastFor = (cliBehavior: string, source: string) => {
             const r = logs.find((e) => triggered(e, cliBehavior, source))
             return r ? {

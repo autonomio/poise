@@ -53,6 +53,7 @@ async function cli(command: string, args: string[], options: RunFileOptions) {
   const json = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: '' })
   if (command === 'agent-interface' && args[0] === '--models') return { stdout: CATALOG_STDOUT, stderr: '' }
   if (command === 'agent-interface' && args[0] === '--logs' && args.includes('--limit')) return json({ rows: [], nextCursor: null })
+  if (command === 'agent-interface' && args[0] === '--logs' && args.includes('--ids')) return json({ rows: [], nextCursor: null })
   if (command === 'agent-interface' && args[0] === '--logs') return json([])
   if (command === 'github-datastore' && args[0] === 'health') {
     if (healthFailure) throw healthFailure

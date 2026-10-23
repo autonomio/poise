@@ -21,7 +21,7 @@ import { join, resolve, isAbsolute, sep } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { chmod, lstat, mkdir, open, writeFile, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchRunningAgentLogs, scopedAgentLogs, type LogEntry } from './agent'
+import { fetchAgentLogs, fetchAgentLogPage, fetchAgentLogSnapshot, scopedAgentLogs, type LogEntry } from './agent'
 import { db } from './db'
 import { readDoc, slugFromEditorSession } from './editor'
 import { HttpError } from './http'
@@ -666,6 +666,11 @@ export function isAuthorContentDiscoveryPendingError(
     || code === 'AUTHOR_CONTENT_DISCOVERY_UNAVAILABLE'
 }
 
+// The discovery poll reads the author_content kind's newest rows: the just
+// launched call sits at the head unless dozens of sibling launches beat it
+// within one 200 ms poll.
+const AUTHOR_CONTENT_DISCOVERY_PAGE_ROWS = 50
+
 export async function startAuthorContent(topic: string, sessionId: string): Promise<{ call_id: string, started_at: string }> {
   // Enforce the portable one-argument budget before any CLI work. Linux's
   // common per-string argv ceiling is 128 KiB; 64 KiB leaves headroom for
@@ -706,9 +711,10 @@ export async function startAuthorContent(topic: string, sessionId: string): Prom
     await new Promise((r) => setTimeout(r, 200))
     let fresh: LogEntry[]
     try {
-      // The new call is running: poll the running lane, fresh every time,
-      // instead of rereading the whole log behind the history lane.
-      fresh = (await fetchRunningAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' }, fresh: true })).filter((entry: any) => {
+      // The new call just registered, whatever its status: poll the kind's
+      // newest page instead of rereading the whole log. Running-only would
+      // miss a call that already completed or failed before this poll.
+      fresh = (await fetchAgentLogPage({ behavior: 'author_content', limit: AUTHOR_CONTENT_DISCOVERY_PAGE_ROWS })).entries.filter((entry: any) => {
         const id = String(entry.id || '')
         return entry.behavior === 'author_content'
           && entry.session_id === normalizedSessionId

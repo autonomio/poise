@@ -123,6 +123,8 @@ def init_db():
             create index if not exists calls_diagnostic_pending on calls(ended_at,id)
                 where status != 'running' and (coalesce(error,'') != '' or error_code is not null or diagnostic is not null);
             create index if not exists calls_status_started on calls(status, started_at);
+            create index if not exists calls_started on calls(started_at);
+            create index if not exists calls_behavior_source_started on calls(behavior, source, started_at);
             create trigger if not exists calls_diagnostic_insert after insert on calls
             when new.status != 'running' and (coalesce(new.error,'') != '' or new.error_code is not null or new.diagnostic is not null)
             begin insert or ignore into diagnostic_calls(call_id) values(new.id); end;
@@ -538,33 +540,77 @@ def logs(status: str | None = None):
 LOGS_PAGE_LIMIT_MAX = 1000
 
 
-def logs_page(limit: int, cursor: str | None = None) -> dict:
+def logs_page(limit: int, cursor: str | None = None, behavior: str | None = None, source: str | None = None) -> dict:
     """One bounded newest-first history page; rows stay oldest-first in it.
 
-    Pages walk back by insertion order (rowid), so concurrent appends never
-    shift them. The cursor is the next page's exclusive rowid bound, opaque
-    to callers. Each page costs its own rows, never the retained history."""
+    Pages walk back by start time (rowid breaks ties), so the first match
+    a caller meets is the latest run however track() calls interleaved.
+    The cursor is the next page's exclusive (started_at, rowid) bound,
+    opaque to callers. Behavior/source narrow the walk to one kind: an
+    empty first page proves the kind never ran. Each page costs its own
+    rows, never the retained history."""
     if type(limit) is not int or not 1 <= limit <= LOGS_PAGE_LIMIT_MAX:
         raise ValueError(f"logs page limit must be 1..{LOGS_PAGE_LIMIT_MAX}")
-    bound: int | None = None
+    for name, value in (("behavior", behavior), ("source", source)):
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
+            raise ValueError(f"logs page {name} is invalid")
+    bound: tuple[float, int] | None = None
     if cursor is not None:
-        if not re.fullmatch(r"[1-9][0-9]*", cursor):
+        match = re.fullmatch(r"(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\|([1-9][0-9]*)", cursor)
+        if not match:
             raise ValueError("logs page cursor is invalid")
-        bound = int(cursor)
+        bound = (float(match.group(1)), int(match.group(2)))
+    conds = []
+    params: list = []
+    if behavior is not None:
+        conds.append("behavior = ?")
+        params.append(behavior)
+    if source is not None:
+        conds.append("source = ?")
+        params.append(source)
+    if bound is not None:
+        conds.append("(started_at < ? or (started_at = ? and rowid < ?))")
+        params.extend([bound[0], bound[0], bound[1]])
+    params.append(limit + 1)
     reap_interrupted()
     with db() as conn:
         rows = conn.execute(
             f"select rowid, {LOG_ROW_COLUMNS} from calls"
-            + (" where rowid < ?" if bound is not None else "")
-            + " order by rowid desc limit ?",
-            ((bound, limit + 1) if bound is not None else (limit + 1,)),
+            + (" where " + " and ".join(conds) if conds else "")
+            + " order by started_at desc, rowid desc limit ?",
+            params,
         ).fetchall()
     page = rows[:limit]
-    oldest = page[-1]["rowid"] if page else None
+    oldest = page[-1] if page else None
     return {
         "rows": [_log_row(r) for r in reversed(page)],
-        "nextCursor": str(oldest) if len(rows) > limit and oldest is not None else None,
+        "nextCursor": f"{oldest['started_at']!r}|{oldest['rowid']}" if len(rows) > limit and oldest is not None else None,
     }
+
+
+LOGS_IDS_MAX = 500
+
+
+def logs_rows(ids: list[str]) -> dict:
+    """The exact rows for call ids, newest first; missing ids stay absent.
+
+    One indexed point read per id behind a single call: dead-letter
+    needles resolve without walking history. The page envelope (with a
+    null cursor) keeps one decoder for pages and point reads."""
+    if type(ids) is not list or not 1 <= len(ids) <= LOGS_IDS_MAX:
+        raise ValueError(f"logs rows need 1..{LOGS_IDS_MAX} ids")
+    for id in ids:
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", id):
+            raise ValueError("logs row id is invalid")
+    lowered = [id.lower() for id in ids]
+    reap_interrupted()
+    with db() as conn:
+        rows = conn.execute(
+            f"select {LOG_ROW_COLUMNS} from calls where id in ({','.join('?' * len(lowered))})"
+            " order by started_at desc, rowid desc",
+            lowered,
+        ).fetchall()
+    return {"rows": [_log_row(r) for r in reversed(rows)], "nextCursor": None}
 
 
 def diagnostics(after: int = 0, limit: int = 3) -> dict:
@@ -1531,7 +1577,8 @@ HELP = """usage: agent-interface BEHAVIOR ...
 behaviors:
   --models
   --refresh-models
-  --logs [--status running] [--limit 1..1000] [--cursor CURSOR]
+  --logs [--status running] [--limit 1..1000] [--cursor CURSOR] [--behavior BEHAVIOR] [--source SOURCE]
+  --logs --ids ID[,ID...]
   --diagnostics [after-sequence] [limit-1..10]
   --stop CALL_ID
   --read-response HASH
@@ -1624,21 +1671,30 @@ def main():
         i = 0
         while i < len(rest):
             flag = rest[i]
-            if flag not in ("--status", "--limit", "--cursor") or flag in seen or i + 1 >= len(rest) or rest[i + 1].startswith("--"):
+            if flag not in ("--status", "--limit", "--cursor", "--behavior", "--source", "--ids") or flag in seen or i + 1 >= len(rest) or rest[i + 1].startswith("--"):
                 usage()
             seen[flag] = rest[i + 1]
             i += 2
-        if "--status" in seen and ("--limit" in seen or "--cursor" in seen):
-            usage(error="--status running cannot combine with --limit or --cursor")
+        if "--ids" in seen and len(seen) > 1:
+            usage(error="--ids cannot combine with other flags")
+        if "--status" in seen and ("--limit" in seen or "--cursor" in seen or "--behavior" in seen or "--source" in seen):
+            usage(error="--status running cannot combine with --limit, --cursor, --behavior or --source")
         if "--cursor" in seen and "--limit" not in seen:
             usage(error="--cursor requires --limit")
-        if "--limit" in seen:
+        if ("--behavior" in seen or "--source" in seen) and "--limit" not in seen:
+            usage(error="--behavior and --source require --limit")
+        if "--ids" in seen:
+            try:
+                payload: object = logs_rows(seen["--ids"].split(","))
+            except ValueError as error:
+                usage(error=str(error))
+        elif "--limit" in seen:
             try:
                 limit = int(seen["--limit"])
             except ValueError:
                 usage(error="--limit must be an integer")
             try:
-                payload: object = logs_page(limit, seen.get("--cursor"))
+                payload = logs_page(limit, seen.get("--cursor"), seen.get("--behavior"), seen.get("--source"))
             except ValueError as error:
                 usage(error=str(error))
         else:

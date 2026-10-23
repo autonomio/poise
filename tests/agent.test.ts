@@ -43,7 +43,7 @@ vi.mock('../server/gh', () => ({
   localCheckoutPath: vi.fn(),
 }))
 
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentReasoning, fetchRecentAgentLogs, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
+import { fetchAgentLogs, fetchAgentLogPage, fetchAgentLogRows, fetchAgentLogSnapshot, fetchAgentReasoning, fetchLatestAgentLogEntry, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 
 function logRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -978,49 +978,68 @@ describe('running agent-log lane', () => {
   })
 })
 
-describe('recent agent-log walk', () => {
-  beforeEach(() => { mocks.runFile.mockReset() })
+describe('bounded agent-log pages', () => {
+  beforeEach(() => { mocks.runFile.mockReset(); resetAgentLogCache() })
 
   function page(rows: unknown[], nextCursor: string | null) {
     return { stdout: JSON.stringify({ rows, nextCursor }), stderr: '' }
   }
 
-  it('walks newest pages until every needle resolves', async () => {
+  it('walks one kind until the first match, threading the cursor', async () => {
     const old = logRow({ id: 'a'.repeat(32) })
     const mid = logRow({ id: 'b'.repeat(32) })
     const fresh = logRow({ id: 'c'.repeat(32) })
     mocks.runFile
-      .mockResolvedValueOnce(page([mid, fresh], '2'))
+      .mockResolvedValueOnce(page([mid, fresh], '9|2'))
       .mockResolvedValueOnce(page([old], null))
-    const snapshot = await fetchRecentAgentLogs({ complete: (walked) =>
-      walked.entries.some((entry) => entry.id === 'a'.repeat(32)) })
+    const { entry, quarantined } = await fetchLatestAgentLogEntry({
+      behavior: 'pr_review', source: 'poise:review-new-prs',
+      match: (row) => row.id === 'a'.repeat(32),
+    })
     expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
-      ['--logs', '--limit', '500'],
-      ['--logs', '--limit', '500', '--cursor', '2'],
+      ['--logs', '--limit', '500', '--behavior', 'pr_review', '--source', 'poise:review-new-prs'],
+      ['--logs', '--limit', '500', '--cursor', '9|2', '--behavior', 'pr_review', '--source', 'poise:review-new-prs'],
     ])
-    expect(snapshot.entries.map((row) => row.id)).toEqual(['c'.repeat(32), 'b'.repeat(32), 'a'.repeat(32)])
-    expect(Object.isFrozen(snapshot)).toBe(true)
+    expect(entry?.id).toBe('a'.repeat(32))
+    expect(quarantined).toEqual([])
   })
 
-  it('stops at the first page when it answers, without a trailing fetch', async () => {
-    mocks.runFile.mockResolvedValue(page([logRow()], null))
-    const snapshot = await fetchRecentAgentLogs({ complete: (walked) => walked.entries.length > 0 })
+  it('proves a missing kind with one empty page', async () => {
+    mocks.runFile.mockResolvedValue(page([], null))
+    const { entry, quarantined } = await fetchLatestAgentLogEntry({
+      behavior: 'issue_review', source: 'poise:review-new-issues', match: () => true,
+    })
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
-    expect(snapshot.entries).toHaveLength(1)
+    expect(entry).toBeNull()
+    expect(quarantined).toEqual([])
+  })
+
+  it('throws instead of walking past maxPages', async () => {
+    mocks.runFile.mockResolvedValue(page([logRow({ id: 'b'.repeat(32) })], '9|2'))
+    await expect(fetchLatestAgentLogEntry({ behavior: 'pr_review', match: () => false, maxPages: 3 }))
+      .rejects.toThrow('agent log walk incomplete: newest pr_review row unresolved after 3 pages')
+    expect(mocks.runFile).toHaveBeenCalledTimes(3)
+  })
+
+  it('collects quarantined rows from walked pages', async () => {
+    mocks.runFile.mockResolvedValue(page(['not-a-row', logRow({ id: 'c'.repeat(32) })], null))
+    const { entry, quarantined } = await fetchLatestAgentLogEntry({ behavior: 'pr_review' })
+    expect(entry?.id).toBe('c'.repeat(32))
+    expect(quarantined).toHaveLength(1)
   })
 
   it('rejects a bare row array as a page', async () => {
     mocks.runFile.mockResolvedValue({ stdout: JSON.stringify([logRow()]), stderr: '' })
-    await expect(fetchRecentAgentLogs({ complete: () => true })).rejects.toThrow('returned an invalid page')
+    await expect(fetchAgentLogPage({})).rejects.toThrow('returned an invalid page')
   })
 
   it('aborts between pages', async () => {
     const controller = new AbortController()
     mocks.runFile.mockImplementation(async () => {
       controller.abort()
-      return page([logRow()], '2')
+      return page([logRow()], '9|2')
     })
-    await expect(fetchRecentAgentLogs({ signal: controller.signal, complete: () => false }))
+    await expect(fetchLatestAgentLogEntry({ behavior: 'pr_review', signal: controller.signal, match: () => false }))
       .rejects.toThrow('This operation was aborted')
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
   })
@@ -1028,7 +1047,64 @@ describe('recent agent-log walk', () => {
   it('names an older Caller instead of its usage text', async () => {
     mocks.runFile.mockRejectedValue(Object.assign(new Error('Command failed (2): agent-interface'),
       { code: 2, stdout: '', stderr: 'usage: agent-interface BEHAVIOR ...\n' }))
-    await expect(fetchRecentAgentLogs({ complete: () => true })).rejects.toThrow('Update Caller: paged log reads are unavailable')
+    await expect(fetchAgentLogPage({})).rejects.toThrow('Update Caller: paged log reads are unavailable')
+  })
+
+  it('fetches exact rows by id behind one read, skipping unknown ids', async () => {
+    const first = logRow({ id: 'a'.repeat(32) })
+    const second = logRow({ id: 'b'.repeat(32) })
+    mocks.runFile.mockResolvedValue(page([first, second], null))
+    const snapshot = await fetchAgentLogRows(['b'.repeat(32), 'not-an-id', 'a'.repeat(32)])
+    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
+      ['--logs', '--ids', `${'b'.repeat(32)},${'a'.repeat(32)}`],
+    ])
+    expect(snapshot.entries.map((row) => row.id)).toEqual(['b'.repeat(32), 'a'.repeat(32)])
+    expect(Object.isFrozen(snapshot)).toBe(true)
+  })
+
+  it('reads nothing when no id is valid', async () => {
+    const snapshot = await fetchAgentLogRows(['not-an-id'])
+    expect(mocks.runFile).not.toHaveBeenCalled()
+    expect(snapshot.entries).toEqual([])
+  })
+
+  it('names an older Caller for reads by id', async () => {
+    mocks.runFile.mockRejectedValue(Object.assign(new Error('Command failed (2): agent-interface'),
+      { code: 2, stdout: '', stderr: 'usage: agent-interface BEHAVIOR ...\n' }))
+    await expect(fetchAgentLogRows(['a'.repeat(32)])).rejects.toThrow('Update Caller: log reads by id are unavailable')
+  })
+
+  it('joins concurrent identical reads into one child', async () => {
+    let release!: (value: { stdout: string, stderr: string }) => void
+    mocks.runFile.mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+    const first = fetchAgentLogPage({ behavior: 'chat' })
+    const second = fetchAgentLogPage({ behavior: 'chat' })
+    release(page([logRow({ id: 'c'.repeat(32) })], null))
+    const [one, two] = await Promise.all([first, second])
+    expect(mocks.runFile).toHaveBeenCalledTimes(1)
+    expect(one).toBe(two)
+  })
+
+  it('reads separately for different argv', async () => {
+    mocks.runFile.mockResolvedValue(page([logRow()], null))
+    await Promise.all([
+      fetchAgentLogPage({ behavior: 'chat' }),
+      fetchAgentLogPage({ behavior: 'pr_review' }),
+    ])
+    expect(mocks.runFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives each joined waiter its own error object', async () => {
+    let release!: (value: { stdout: string, stderr: string }) => void
+    mocks.runFile.mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+    const first = fetchAgentLogPage({ behavior: 'chat' }).catch((error) => error)
+    const second = fetchAgentLogPage({ behavior: 'chat' }).catch((error) => error)
+    release({ stdout: '[broken', stderr: '' })
+    const [one, two] = await Promise.all([first, second])
+    expect(mocks.runFile).toHaveBeenCalledTimes(1)
+    expect(one.message).toContain('returned invalid JSON')
+    expect(two.message).toContain('returned invalid JSON')
+    expect(one).not.toBe(two)
   })
 })
 

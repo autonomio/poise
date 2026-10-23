@@ -128,6 +128,10 @@ function importedEvents(sessionId: string) {
   return storage.listEvents(sessionId, 0).events.filter(({ event }) => event.type === 'history.imported')
 }
 
+async function resetLogCache() {
+  (await import('../server/agent')).resetAgentLogCache()
+}
+
 function makeRuntime() {
   return new Runtime({ instance, instanceLabel: 'test', callerTurns: null, catalog: async () => CATALOG as any,
     adapters: { grok: adapter, claude: adapter, codex: adapter, muse: adapter }, requireClaudeReady: async () => {}, probeAgent: async () => ({ ok: true }),
@@ -150,6 +154,7 @@ beforeEach(async () => {
   mocks.logs = '[]'
   mocks.bodies = new Map()
   mocks.logsError = null
+  await resetLogCache()
   instance = `legacy:${randomUUID()}`
   workspaceRoot = join(root, randomUUID())
   runtime = makeRuntime()
