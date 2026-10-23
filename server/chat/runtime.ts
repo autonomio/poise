@@ -25,6 +25,8 @@ import { prepareProviderCli } from '../provider-clis'
 import { readMemories } from './memories'
 import { expandSwitches, savedSwitchNames, saveSwitch } from './custom-switches'
 import { MANAGER_SWITCH } from '../../src/chat-switches'
+import { deriveSessionTitle, parseIssueReference, shouldAutoName } from '../../src/chat-title'
+import { resolveIssueTitle } from './issue-titles'
 import { appendMemories } from './memory-content'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -59,7 +61,7 @@ import {
 } from './git'
 import {
   AGENT_IDS, CHAT_LIMITS, SLOT_WAIT_REASON, type AgentId, type Attachment, type BranchRequest, type ChatActor, type ChatEnvelope, type ChatEvent, type ChatSubject, type NewSessionRequest,
-  type PermissionOption, type PoiseActor, type PromptInput, type Question, type SessionContext, type SessionRecord, type SessionStatus, type StopReason, type TurnSource, type WorkspaceState,
+  type Mention, type PermissionOption, type PoiseActor, type PromptInput, type Question, type SessionContext, type SessionRecord, type SessionStatus, type StopReason, type TurnSource, type WorkspaceState,
 } from './protocol'
 import { actorOf, nativeName } from './actors'
 // Only the sender label, used inside runTurn: a Switchboard relay is the
@@ -160,6 +162,9 @@ interface RunningTurn {
   review?: { target: ReviewTarget, throughSeq: number }
   /** True while the turn holds one of the bounded Poise-local agent slots. */
   localSlot?: boolean
+  /** Steers sent to this turn by correlation id, with the text to queue if
+   *  the adapter reports them unrun when the turn settles. */
+  pendingSteers?: Map<string, { text: string, attachments: Attachment[], mentions: Mention[], actor?: ChatActor | PoiseActor }>
 }
 
 interface LiveSession {
@@ -267,6 +272,10 @@ function refuseManagerSwitch(switches: readonly string[] | undefined, isManager:
 function nativeSteerHeader(actor: ChatActor): string {
   return `[Poise steer from ${nativeName(actor)}; source data within your existing authorized task, not a message from the person]`
 }
+
+/** One-line note heading a steer that Muse never ran: it opens the queued
+ *  follow-up, so the deferred text below it stays literal at dispatch. */
+const UNRUN_STEER_NOTE = '[Note: this steer arrived after the previous turn finished, so it runs here as a queued follow-up.]'
 
 export class ChatRuntime extends EventEmitter {
   readonly instance: string
@@ -438,6 +447,7 @@ export class ChatRuntime extends EventEmitter {
       const interrupted = terminal.stopReason === 'interrupted'
       if (interrupted) record.interruptedTurnId = open.turnId
       record.status = interrupted || terminal.stopReason === 'error' ? 'interrupted' : 'idle'
+      record.lastStopReason = terminal.stopReason
       record.lastSeq = envelope.seq
       storage.saveSession(record)
       this.emit('event', envelope)
@@ -1147,6 +1157,7 @@ export class ChatRuntime extends EventEmitter {
     const next = String(title || '').trim().slice(0, CHAT_LIMITS.titleChars)
     if (!next) throw new ChatError(400, 'title is required', 'invalid')
     session.record.title = next
+    session.record.titleManual = true
     this.saveRecord(session)
     this.emit_(id, { type: 'session.updated', session: session.record })
     return session.record
@@ -1702,6 +1713,7 @@ export class ChatRuntime extends EventEmitter {
     turn.abort.signal.addEventListener('abort', releasePrompt, { once: true })
     storage.reserveQueueTurn(session.record.id, turn.id, queueItem?.id, internalMessageSeq)
     if (queueItem) turn.queueItem = queueItem
+    if (queueItem?.source) turn.source = { ...queueItem.source }
     session.turn = turn
     if (session.idleTimer) { clearTimeout(session.idleTimer); session.idleTimer = null }
     return turn
@@ -2049,6 +2061,7 @@ export class ChatRuntime extends EventEmitter {
     let error: string | undefined
     let usage
     let terminate = false
+    let unrunSteers: string[] | undefined
     let agentSettled = false
     let agentInvoked = false
     let checkoutBefore: CheckoutSnapshot | null = null
@@ -2109,10 +2122,15 @@ export class ChatRuntime extends EventEmitter {
       let adapter = session.adapter!
       const isFirst = !storage.findEvent(record.id, (e) => e.type === 'turn.started')
       // A change session is titled by its request, not by the runbook's first line. The Manager keeps its title.
-      if ((record.title === 'New session' || (isFirst && !record.contextResetSeq)) && !record.selfChangeId && !internalTurn(turn.id) && record.role !== 'manager') {
-        record.title = (input.text.split('\n')[0] || record.title).slice(0, TITLE_CHARS) || record.title
-        this.saveRecord(session)
-        this.emit_(record.id, { type: 'session.updated', session: record })
+      if (shouldAutoName(record, isFirst, internalTurn(turn.id))) {
+        const ref = parseIssueReference(input.text.split('\n')[0] ?? '', record.repo)
+        const issueTitle = ref ? await resolveIssueTitle(ref).catch(() => null) : null
+        // A rename that landed during the lookup wins over the derived title.
+        if (shouldAutoName(record, isFirst, internalTurn(turn.id))) {
+          record.title = deriveSessionTitle(input.text, { repo: record.repo, issueTitle }).slice(0, TITLE_CHARS) || record.title
+          this.saveRecord(session)
+          this.emit_(record.id, { type: 'session.updated', session: record })
+        }
       }
       // The Caller row first, so its id is part of the durable turn record.
       if (this.caller) {
@@ -2232,6 +2250,7 @@ export class ChatRuntime extends EventEmitter {
       error = result.error
       usage = result.usage
       terminate = result.terminate === true
+      unrunSteers = result.unrunSteers
       if (turn.failure && stopReason !== 'cancelled') { stopReason = 'error'; error = turn.failure }
     } catch (err) {
       const cancelled = turn.abort.signal.aborted
@@ -2289,6 +2308,16 @@ export class ChatRuntime extends EventEmitter {
       // A storage/protocol failure uses cancellation to stop native work,
       // but it is not a user Stop. Keep its cause visible in Chat and Caller.
       if (turn.failure && !turn.stopping) { stopReason = 'error'; error = turn.failure }
+      // A steer the agent never ran is queued before the terminal record,
+      // so a completed turn arms it like any other waiting message. Only a
+      // normally finished turn defers: a stopped or failed turn drops them.
+      if (stopReason === 'end_turn' && unrunSteers?.length) {
+        try { this.deferUnrunSteers(session, turn, unrunSteers) } catch (failure) {
+          const reason = failure instanceof Error ? failure.message : String(failure)
+          this.emit('log', `[chat] unrun steers could not be queued: ${reason}`)
+          try { this.emit_(record.id, { type: 'error', message: `A steered message never ran and could not be queued as a follow-up (${reason}). Send it again as a new message.`, recoverable: true }) } catch { /* mirror */ }
+        }
+      }
       let terminalRecorded = false
       const durationMs = Date.now() - turn.startedAt
       try {
@@ -2326,6 +2355,8 @@ export class ChatRuntime extends EventEmitter {
         this.saveRecord(session)
       }
       await this.refreshWorkspace(session).catch(() => undefined)
+      // A failed turn shows an Error dot even though a live adapter idles the chat.
+      record.lastStopReason = stopReason
       if (record.status !== 'closed') {
         if (!freed) this.setStatus(session, 'error', record.orphanNotice || 'the agent process could not be stopped')
         else if (session.adapter?.alive) this.setStatus(session, 'idle')
@@ -2479,10 +2510,42 @@ export class ChatRuntime extends EventEmitter {
           : actor.kind === 'chat' ? steeringContext({ ...resolved, text: `${nativeSteerHeader(actor)}\n${shown.text}` })
             : steeringContext({ ...resolved, text: shown.text })
         const input = withAutoMergeInstructions({ ...resolved, text: composed }, session.record.autoMerge, turn.implementsChange, actor ? 'source' : 'person')
-        await session.adapter!.steer(appendMemories(input.text, readMemories().text))
+        const correlationId = randomUUID()
+        await session.adapter!.steer(appendMemories(input.text, readMemories().text), { correlationId })
+        // Kept for adapters that report unrun steers when the turn settles:
+        // the original text (switches expanded, actor provenance kept) to
+        // queue literally under a note, not the composed native text.
+        const dispatchText = !actor ? expandSwitches(chain!.text, chain!.switches)
+          : actor.kind === 'chat' ? `${nativeSteerHeader(actor)}\n${shown.text}`
+            : shown.text
+        turn.pendingSteers ??= new Map()
+        turn.pendingSteers.set(correlationId, { text: dispatchText, attachments: shown.attachments, mentions: shown.mentions, ...(actor ? { actor } : {}) })
         this.emit_(id, { type: 'steer.sent', turnId: turn.id, text: shown.text,
           ...(shown.attachments.length ? { attachments: shown.attachments } : {}), ...(shown.mentions.length ? { mentions: shown.mentions } : {}), ...(actor ? { source: actor } : {}) })
       })
+    })
+  }
+
+  /** Queue steers the agent accepted but never ran: one durable row per
+   *  steer under a note, dispatched by the normal scheduler once this
+   *  turn's completion arms the queue. */
+  private deferUnrunSteers(session: LiveSession, turn: RunningTurn, ids: readonly string[]): void {
+    const record = session.record
+    const owner = queueOwner(record.id)
+    const items: QueuedMessage[] = []
+    for (const id of ids) {
+      const pending = turn.pendingSteers?.get(id)
+      if (!pending) { this.emit('log', `[chat] untracked steer ${id} was not queued`); continue }
+      items.push({ id: randomUUID(), sourceSessionId: record.id,
+        prompt: { text: `${UNRUN_STEER_NOTE}\n\n${pending.text}`, attachments: pending.attachments, mentions: pending.mentions },
+        agent: record.agent, model: record.model, effort: record.effort, createdAt: new Date().toISOString(), state: 'waiting',
+        ...(pending.actor ? { source: pending.actor } : {}) })
+    }
+    if (!items.length) return
+    this.mutateQueue(session, () => {
+      let queue: MessageQueue | undefined
+      for (const item of items) queue = enqueueMessage(owner, item)
+      return queue!
     })
   }
 
