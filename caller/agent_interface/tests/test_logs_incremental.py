@@ -177,3 +177,67 @@ class LogsIncrementalCase(TestCase):
             agent_interface.logs_page(1001)
         with self.assertRaises(ValueError):
             agent_interface.logs_page(2, cursor="oldest")
+
+    def test_latest_selection_proves_missing_kinds_and_old_ids_without_history_pages(self):
+        self.seed(TEN_X_ROWS)
+        with agent_interface.db() as conn:
+            # The later insertion has an older timestamp; rowid is not recency.
+            conn.execute("update calls set behavior='pr_review', source='poise:review-new-prs', repo='OWNER/repo', pr_id='1' where id=?",
+                         (f"{TEN_X_ROWS - 1:032x}",))
+            conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,source,repo,pr_id) values(?,?,?,?,?,?,?,?,?)",
+                         ("f" * 32, "opus-5-max", "late insertion, older call", 1761000000.0, "completed",
+                          "pr_review", "poise:review-new-prs", "owner/repo", "2"))
+            plan = conn.execute("explain query plan " + agent_interface.LOGS_LATEST_QUERY,
+                                ("pr_review", "poise:review-new-prs", "owner")).fetchall()
+        details = " ".join(row[3] for row in plan)
+        self.assertIn("calls_behavior_owner_started", details)
+        self.assertNotIn("SCAN", details)
+        self.assertNotIn("TEMP B-TREE", details)
+        selection = {"latest": [
+            {"behavior": "pr_review", "source": "poise:review-new-prs", "owner": "owner"},
+            {"behavior": "issue_review", "source": "poise:review-new-issues", "owner": "owner"},
+            {"behavior": "pr_review", "source": "poise:review-new-prs", "owner": "absent"},
+        ], "ids": ["0" * 32]}
+        rows = agent_interface.logs_selected(selection)
+        self.assertEqual([row["id"] for row in rows], ["0" * 32, f"{TEN_X_ROWS - 1:032x}"])
+        selected = self.cli("--logs", "--select", json.dumps(selection))
+        self.assertEqual((selected.returncode, selected.stderr), (0, ""))
+        self.assertEqual(json.loads(selected.stdout), rows)
+
+    def test_launch_selection_includes_terminal_calls_and_retains_ambiguity(self):
+        self.seed(2)
+        before = agent_interface.logs_watermark()
+        self.assertEqual(before, "2")
+        watermark = self.cli("--logs", "--watermark")
+        self.assertEqual((watermark.returncode, json.loads(watermark.stdout)), (0, {"cursor": before}))
+        with agent_interface.db() as conn:
+            for id_, session, prompt, status in [
+                ("a" * 32, "session", "--topic", "completed"),
+                ("b" * 32, "other", "--topic", "completed"),
+                ("c" * 32, "session", "other topic", "completed"),
+            ]:
+                conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,session_id) values(?,?,?,?,?,?,?)",
+                             (id_, "opus-5-max", prompt, 1761000000.0, status, "author_content", session))
+            plan = conn.execute("explain query plan select id from calls where session_id=? and behavior=? and rowid>? and prompt=? order by rowid limit 2",
+                                ("session", "author_content", int(before), "--topic")).fetchall()
+        self.assertIn("calls_session_behavior", " ".join(row[3] for row in plan))
+        self.assertEqual([row["id"] for row in agent_interface.logs_session_since(before, "session", "author_content", "--topic")], ["a" * 32])
+        with agent_interface.db() as conn:
+            conn.execute("insert into calls (id,model,prompt,started_at,status,behavior,session_id) values(?,?,?,?,?,?,?)",
+                         ("d" * 32, "opus-5-max", "--topic", 1761000001.0, "failed", "author_content", "session"))
+        selected = self.cli("--logs", "--after", before, "--session", "session", "--behavior", "author_content", "--prompt", "--topic")
+        self.assertEqual((selected.returncode, selected.stderr), (0, ""))
+        self.assertEqual([row["status"] for row in json.loads(selected.stdout)], ["completed", "failed"])
+        self.assertEqual(agent_interface.logs_session_since(agent_interface.logs_watermark(), "session", "author_content", "--topic"), [])
+
+    def test_selected_reads_fail_loud_on_malformed_or_oversized_needles(self):
+        for selection in [None, {}, {"latest": [], "ids": ["partial"]},
+                          {"latest": [{"behavior": "pr_review"}], "ids": []},
+                          {"latest": [], "ids": ["a" * 32] * 1001}]:
+            with self.assertRaises(ValueError):
+                agent_interface.logs_selected(selection)
+            done = self.cli("--logs", "--select", json.dumps(selection))
+            self.assertEqual(done.returncode, 2, done.stdout)
+        for after in ["-1", "01", "unknown", str(2**63)]:
+            with self.assertRaises(ValueError):
+                agent_interface.logs_session_since(after, "session", "author_content", "topic")

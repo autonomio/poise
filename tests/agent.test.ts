@@ -43,7 +43,7 @@ vi.mock('../server/gh', () => ({
   localCheckoutPath: vi.fn(),
 }))
 
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentReasoning, fetchRecentAgentLogs, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentReasoning, fetchSelectedAgentLogSnapshot, fetchAgentLogsSince, fetchAgentLogWatermark, fetchRunningAgentLogs, fetchRunningAgentLogSnapshot, quarantinedLogMayMatch, resetAgentLogCache } from '../server/agent'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 
 function logRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -978,57 +978,62 @@ describe('running agent-log lane', () => {
   })
 })
 
-describe('recent agent-log walk', () => {
+describe('selected agent-log reads', () => {
   beforeEach(() => { mocks.runFile.mockReset() })
+  const selection = { latest: [
+    { behavior: 'pr_review', source: 'poise:review-new-prs', owner: 'owner' },
+    { behavior: 'issue_review', source: 'poise:review-new-issues', owner: 'owner' },
+  ], ids: ['a'.repeat(32)] }
 
-  function page(rows: unknown[], nextCursor: string | null) {
-    return { stdout: JSON.stringify({ rows, nextCursor }), stderr: '' }
-  }
-
-  it('walks newest pages until every needle resolves', async () => {
-    const old = logRow({ id: 'a'.repeat(32) })
-    const mid = logRow({ id: 'b'.repeat(32) })
-    const fresh = logRow({ id: 'c'.repeat(32) })
-    mocks.runFile
-      .mockResolvedValueOnce(page([mid, fresh], '2'))
-      .mockResolvedValueOnce(page([old], null))
-    const snapshot = await fetchRecentAgentLogs({ complete: (walked) =>
-      walked.entries.some((entry) => entry.id === 'a'.repeat(32)) })
-    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
-      ['--logs', '--limit', '500'],
-      ['--logs', '--limit', '500', '--cursor', '2'],
-    ])
-    expect(snapshot.entries.map((row) => row.id)).toEqual(['c'.repeat(32), 'b'.repeat(32), 'a'.repeat(32)])
+  it('shares and caches one bounded selection with a missing kind and an old incident', async () => {
+    let answer!: (value: { stdout: string, stderr: string }) => void
+    mocks.runFile.mockImplementation(() => new Promise(resolve => { answer = resolve }))
+    const first = fetchSelectedAgentLogSnapshot(selection)
+    const concurrent = fetchSelectedAgentLogSnapshot(selection)
+    expect(mocks.runFile).toHaveBeenCalledTimes(1)
+    expect(mocks.runFile.mock.calls[0][1]).toEqual(['--logs', '--select', JSON.stringify(selection)])
+    answer({ stdout: JSON.stringify([logRow()]), stderr: '' })
+    const snapshot = await first
+    expect(await concurrent).toBe(snapshot)
+    expect(await fetchSelectedAgentLogSnapshot(selection)).toBe(snapshot)
+    expect(snapshot.entries.map(row => row.id)).toEqual(['a'.repeat(32)])
+    expect(mocks.runFile).toHaveBeenCalledTimes(1)
     expect(Object.isFrozen(snapshot)).toBe(true)
   })
 
-  it('stops at the first page when it answers, without a trailing fetch', async () => {
-    mocks.runFile.mockResolvedValue(page([logRow()], null))
-    const snapshot = await fetchRecentAgentLogs({ complete: (walked) => walked.entries.length > 0 })
-    expect(mocks.runFile).toHaveBeenCalledTimes(1)
-    expect(snapshot.entries).toHaveLength(1)
+  it('keeps large selections on the same off-thread decoder as history', async () => {
+    const rows = Array.from({ length: 1000 }, (_, index) => logRow({
+      id: index.toString(16).padStart(32, '0'), prompt: 'x'.repeat(4000),
+    }))
+    mocks.runFile.mockResolvedValue({ stdout: JSON.stringify(rows), stderr: '' })
+    const selected = await fetchSelectedAgentLogSnapshot({ latest: [], ids: rows.map(row => String(row.id)) })
+    expect(selected.entries).toHaveLength(1000)
+    expect(selected.entries[0]!.id).toBe((999).toString(16).padStart(32, '0'))
+    expect(Object.isFrozen(selected.entries[0])).toBe(true)
+  }, 30_000)
+
+  it('includes terminal candidates after the exact pre-launch insertion boundary', async () => {
+    mocks.runFile.mockResolvedValueOnce({ stdout: JSON.stringify({ cursor: '42' }), stderr: '' })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([logRow({ behavior: 'author_content', session_id: 'session', status: 'completed' })]), stderr: '' })
+    const before = await fetchAgentLogWatermark()
+    const snapshot = await fetchAgentLogsSince(before, { session: 'session', behavior: 'author_content', prompt: '--topic' }, { fresh: true })
+    expect(snapshot.entries[0]!.status).toBe('completed')
+    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([
+      ['--logs', '--watermark'],
+      ['--logs', '--after', '42', '--session', 'session', '--behavior', 'author_content', '--prompt', '--topic'],
+    ])
   })
 
-  it('rejects a bare row array as a page', async () => {
-    mocks.runFile.mockResolvedValue({ stdout: JSON.stringify([logRow()]), stderr: '' })
-    await expect(fetchRecentAgentLogs({ complete: () => true })).rejects.toThrow('returned an invalid page')
+  it.each(['[]', '{"cursor":-1}', '{"cursor":"bad"}'])('rejects a malformed insertion boundary %s', async stdout => {
+    mocks.runFile.mockResolvedValue({ stdout, stderr: '' })
+    await expect(fetchAgentLogWatermark()).rejects.toThrow('invalid insertion boundary')
   })
 
-  it('aborts between pages', async () => {
-    const controller = new AbortController()
-    mocks.runFile.mockImplementation(async () => {
-      controller.abort()
-      return page([logRow()], '2')
-    })
-    await expect(fetchRecentAgentLogs({ signal: controller.signal, complete: () => false }))
-      .rejects.toThrow('This operation was aborted')
-    expect(mocks.runFile).toHaveBeenCalledTimes(1)
-  })
-
-  it('names an older Caller instead of its usage text', async () => {
+  it('names unsupported Caller selection instead of reporting absent history', async () => {
     mocks.runFile.mockRejectedValue(Object.assign(new Error('Command failed (2): agent-interface'),
       { code: 2, stdout: '', stderr: 'usage: agent-interface BEHAVIOR ...\n' }))
-    await expect(fetchRecentAgentLogs({ complete: () => true })).rejects.toThrow('Update Caller: paged log reads are unavailable')
+    await expect(fetchSelectedAgentLogSnapshot(selection)).rejects.toThrow('Update Caller: selected log reads are unavailable')
+    await expect(fetchAgentLogWatermark()).rejects.toThrow('Update Caller: selected log reads are unavailable')
   })
 })
 

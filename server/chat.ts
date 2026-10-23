@@ -21,7 +21,7 @@ import { join, resolve, isAbsolute, sep } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { chmod, lstat, mkdir, open, writeFile, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { fetchAgentLogs, fetchAgentLogSnapshot, fetchRunningAgentLogs, scopedAgentLogs, type LogEntry } from './agent'
+import { fetchAgentLogs, fetchAgentLogSnapshot, fetchAgentLogsSince, fetchAgentLogWatermark, scopedAgentLogs, type LogEntry } from './agent'
 import { db } from './db'
 import { readDoc, slugFromEditorSession } from './editor'
 import { HttpError } from './http'
@@ -678,13 +678,9 @@ export async function startAuthorContent(topic: string, sessionId: string): Prom
   const claude = isClaudeModel(catalog, catalog.behaviors.author_content)
   if (claude) await claudeAuth.requireReady()
   const modelCliEnv = await prepareModelClis(catalog, [catalog.behaviors.author_content])
-  // Snapshot every existing id in this session. Exact topic matching prevents
-  // an unrelated delayed call from being attributed to this launch. Fresh:
-  // a shared snapshot could miss a row registered moments ago and let it
-  // read as this launch.
-  const beforeIds = new Set((await fetchAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' }, fresh: true }))
-    .filter((entry: any) => entry.behavior === 'author_content' && entry.session_id === normalizedSessionId)
-    .map((entry: any) => String(entry.id || '')))
+  // Capture the insertion boundary before launch; an indexed session query
+  // then sees new candidates even if they finish before the first poll.
+  const before = await fetchAgentLogWatermark()
 
   // --session-id ties this call to the chat session, so the chat
   // history can include this turn (listChatHistory filters by
@@ -706,15 +702,14 @@ export async function startAuthorContent(topic: string, sessionId: string): Prom
     await new Promise((r) => setTimeout(r, 200))
     let fresh: LogEntry[]
     try {
-      // The new call is running: poll the running lane, fresh every time,
-      // instead of rereading the whole log behind the history lane.
-      fresh = (await fetchRunningAgentLogs({ identity: { sessionId: normalizedSessionId, behavior: 'author_content' }, fresh: true })).filter((entry: any) => {
+      const snapshot = await fetchAgentLogsSince(before,
+        { session: normalizedSessionId, behavior: 'author_content', prompt: trimmed }, { fresh: true })
+      fresh = scopedAgentLogs(snapshot, { sessionId: normalizedSessionId, behavior: 'author_content' }).filter((entry) => {
         const id = String(entry.id || '')
         return entry.behavior === 'author_content'
           && entry.session_id === normalizedSessionId
           && String(entry.prompt || '').trim() === trimmed
           && /^[0-9a-fA-F]{32}$/.test(id)
-          && !beforeIds.has(id)
       })
     } catch (error) {
       // spawnDetached has already observed the child's spawn event. A log

@@ -26,9 +26,9 @@ import { claudeSubscriptionEnvironment, runFile, spawnDetached } from './process
 import { withNoticeDiagnosticIdentity } from './logging-context'
 import { diagnostic } from './logging'
 import { requireAgentAccount } from './settings'
-import { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, parseAgentLogPage, parseAgentLogStdout, scopedAgentLogs } from './agent-log-parse'
+import { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, parseAgentLogStdout, scopedAgentLogs } from './agent-log-parse'
 import type { AgentLogParseReply, AgentLogParseRequest } from './agent-log-worker'
-import type { AgentLogIdentity, AgentLogSnapshot, LogEntry, QuarantinedAgentLog } from './agent-log-parse'
+import type { AgentLogIdentity, AgentLogSnapshot, LogEntry } from './agent-log-parse'
 
 export { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, quarantinedLogMayMatch, scopedAgentLogs } from './agent-log-parse'
 export type {
@@ -113,12 +113,17 @@ const runningAgentLogLane: AgentLogLane = {
   args: ['--logs', '--status', 'running'], source: 'agent-interface --logs --status running',
   running: null, queued: null, cached: null,
 }
+const selectedAgentLogLanes = new Map<string, AgentLogLane>()
 
 // Test lifecycle: drop both lanes' cached snapshots so the next read spawns.
 // Production never calls it; in-flight reads are untouched.
 export function resetAgentLogCache(): void {
   historyAgentLogLane.cached = null
   runningAgentLogLane.cached = null
+  for (const [key, lane] of selectedAgentLogLanes) {
+    lane.cached = null
+    if (!lane.running && !lane.queued) selectedAgentLogLanes.delete(key)
+  }
 }
 
 // Shaped like runFile's own abort rejection, minus the child-kill fields:
@@ -297,7 +302,8 @@ function callerUpdateError(args: readonly string[], error: unknown): Error | nul
   if (args.length < 2) return null
   const stderr = (error as { stderr?: unknown } | null)?.stderr
   if (typeof stderr !== 'string' || !stderr.includes('usage:')) return null
-  const feature = args.includes('--status') ? 'running-only' : 'paged'
+  const feature = args.includes('--status') ? 'running-only'
+    : args.includes('--limit') ? 'paged' : 'selected'
   return new Error(`Update Caller: ${feature} log reads are unavailable`, { cause: error })
 }
 
@@ -378,43 +384,59 @@ async function agentLogWorkerAssetUrl(): Promise<URL> {
   return agentLogWorkerAsset
 }
 
-// One bounded history walk, newest pages first: each step costs its own
-// page, never the retained history, and stops as soon as complete says the
-// accumulated newest-first snapshot answers the caller. Pages walk back by
-// insertion order, so rows appended mid-walk sit ahead of the cursor and the
-// walk still ends. Callers pass needles, not cursors.
-const AGENT_LOG_PAGE_SIZE = 500
+export interface AgentLogSelection {
+  latest: Array<{ behavior: string, source: string, owner: string }>
+  ids: string[]
+}
 
-export async function fetchRecentAgentLogs(options: {
-  signal?: AbortSignal
-  pageSize?: number
-  complete: (snapshot: AgentLogSnapshot) => boolean
-}): Promise<AgentLogSnapshot> {
-  const pageSize = Math.min(Math.max(Math.floor(options.pageSize ?? AGENT_LOG_PAGE_SIZE), 1), 1000)
-  const source = 'agent-interface --logs --limit'
-  const entries: LogEntry[] = []
-  const quarantined: QuarantinedAgentLog[] = []
-  let cursor: string | null = null
-  for (;;) {
-    options.signal?.throwIfAborted()
-    const args = cursor === null
-      ? ['--logs', '--limit', String(pageSize)]
-      : ['--logs', '--limit', String(pageSize), '--cursor', cursor]
-    let stdout: string
-    try {
-      ({ stdout } = await spawnAgentLogRead(args, options.signal))
-    } catch (error) {
-      throw callerUpdateError(args, error) ?? error
-    }
-    // Pages arrive newest first and decode newest first, so concatenating
-    // keeps the global newest-first order with no reordering.
-    const page = parseAgentLogPage(stdout, source)
-    entries.push(...page.entries)
-    quarantined.push(...page.quarantined)
-    cursor = page.nextCursor
-    const assembled: AgentLogSnapshot = { entries, quarantined }
-    if (cursor === null || options.complete(assembled)) return freezeAgentLogSnapshot(assembled)
+export async function fetchSelectedAgentLogSnapshot(
+  selection: AgentLogSelection,
+  options: { signal?: AbortSignal, fresh?: boolean } = {},
+): Promise<AgentLogSnapshot> {
+  return selectedAgentLogSnapshot(['--logs', '--select', JSON.stringify(selection)], options)
+}
+
+export async function fetchAgentLogsSince(
+  after: string,
+  selection: { session: string, behavior: string, prompt: string },
+  options: { signal?: AbortSignal, fresh?: boolean } = {},
+): Promise<AgentLogSnapshot> {
+  return selectedAgentLogSnapshot(['--logs', '--after', after, '--session', selection.session,
+    '--behavior', selection.behavior, '--prompt', selection.prompt], options)
+}
+
+export async function fetchAgentLogWatermark(): Promise<string> {
+  const args = ['--logs', '--watermark']
+  let stdout: string
+  try { ({ stdout } = await spawnAgentLogRead(args, undefined)) }
+  catch (error) { throw callerUpdateError(args, error) ?? error }
+  const value = JSON.parse(stdout) as { cursor?: unknown } | null
+  if (!value || typeof value.cursor !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value.cursor)) {
+    throw new Error('agent-interface --logs --watermark returned an invalid insertion boundary')
   }
+  return value.cursor
+}
+
+async function selectedAgentLogSnapshot(
+  args: readonly string[], options: { signal?: AbortSignal, fresh?: boolean },
+): Promise<AgentLogSnapshot> {
+  const key = JSON.stringify(args)
+  let lane = selectedAgentLogLanes.get(key)
+  if (!lane) {
+    for (const [oldKey, old] of selectedAgentLogLanes) {
+      if (!old.running && !old.queued && (!old.cached || Date.now() >= old.cached.expiresAt || selectedAgentLogLanes.size >= 32)) selectedAgentLogLanes.delete(oldKey)
+    }
+    if (selectedAgentLogLanes.size >= 32) throw new Error('agent log selection capacity is full; retry after current reads settle')
+    lane = { args, source: 'agent-interface --logs selected read', running: null, queued: null, cached: null }
+    selectedAgentLogLanes.set(key, lane)
+  }
+  const source = lane.source
+  return laneAgentLogSnapshot(lane, options, async signal => {
+    let stdout: string
+    try { ({ stdout } = await spawnAgentLogRead(args, signal)) }
+    catch (error) { throw callerUpdateError(args, error) ?? error }
+    return decodeAgentLogSnapshot(stdout, source, signal)
+  })
 }
 
 function warnAgentLogCap(stdout: string, rows: number): void {
