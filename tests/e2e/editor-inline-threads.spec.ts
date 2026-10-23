@@ -446,8 +446,8 @@ for (const destination of ['another view', 'the Editor again', 'another document
       }
       release()
       await expect.poll(() => page.evaluate(() => Reflect.get(window, 'sessionLookupRead'))).toBe(true)
-      await expect(pane(page)).not.toHaveClass(/open/)
-      await expect(page.locator('#chat-side-pane .chat-input')).not.toBeFocused()
+      await expect(page.locator('#chat-side-pane.open')).toHaveCount(0)
+      await expect(page.locator('#chat-side-pane .chat-input:focus')).toHaveCount(0)
       if (destination === 'another view') await expect(page.locator('#view-editor')).toBeHidden()
       else await expect(page.locator('#editor-doc')).toContainText(destination === 'another document' ? 'Other document' : 'Opening paragraph.')
     } finally { release() }
