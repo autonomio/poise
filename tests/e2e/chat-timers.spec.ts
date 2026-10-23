@@ -235,6 +235,59 @@ test('shows a pending timer action failure in the pane after a refetch rerenders
   await expect(pane.locator('.chat-timers-error')).toBeVisible()
 })
 
+test('ignores a pre-Resume refetch that arrives after the resumed timer data', async ({ page }) => {
+  await page.addInitScript(() => {
+    const observed = window as Window & { timerJsonReads: number }
+    observed.timerJsonReads = 0
+    const request = window.fetch.bind(window)
+    window.fetch = async (...args) => {
+      const response = await request(...args)
+      if (!new URL(response.url, location.href).pathname.endsWith('/timers')) return response
+      const read = response.json.bind(response)
+      response.json = async () => {
+        const data: unknown = await read()
+        // The consumer's await continuation runs before this next task.
+        setTimeout(() => { observed.timerJsonReads++ }, 0)
+        return data
+      }
+      return response
+    }
+  })
+  const one = timerView({ id: 'one', sessionId: 's1', label: 'Check CI', state: 'held', reason: 'person_held' })
+  const state = makeState([session({ id: 's1' })])
+  state.timers = { s1: timersData({ timers: [one], holds: [{ sessionId: 's1', cause: 'held', since: NOW }] }) }
+  await installRoutes(page, state)
+  let holdNext = false
+  let entered!: () => void
+  let release!: () => void
+  const requested = new Promise<void>(resolve => { entered = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/chat/sessions/s1/timers', async route => {
+    if (!holdNext) return route.fallback()
+    holdNext = false
+    const old = structuredClone(state.timers!.s1)
+    entered()
+    await held
+    await route.fulfill({ json: old })
+  })
+  const sock = await installSocket(page, state)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Timers', exact: true }).click()
+  const pane = page.locator('#chat-timers-pane')
+  await expect(pane.getByRole('button', { name: 'Resume', exact: true })).toBeVisible()
+  holdNext = true
+  sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'held' })
+  await requested
+  try {
+    await pane.getByRole('button', { name: 'Resume', exact: true }).click()
+    await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  } finally { release() }
+  await expect.poll(() => page.evaluate(() => (window as Window & { timerJsonReads: number }).timerJsonReads)).toBeGreaterThanOrEqual(3)
+  await expect(pane.getByRole('button', { name: 'Hold', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(pane.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+  await expect(pane.locator('.chat-timer-status')).not.toContainText('on hold')
+})
+
 test('recovers timer controls after a failed refetch returns unchanged data', async ({ page }) => {
   const one = timerView({ id: 'timer-1', label: 'Check CI' })
   const state = makeState([session({ id: 's1' })])
@@ -248,14 +301,27 @@ test('recovers timer controls after a failed refetch returns unchanged data', as
   await page.getByRole('button', { name: 'Timers', exact: true }).click()
   const pane = page.locator('#chat-timers-pane')
   await expect(pane.locator('.chat-timer')).toHaveCount(1)
+  await pane.locator('.chat-timers-label').fill('Unsent label')
+  await pane.locator('.chat-timers-message').fill('Unsent message')
+  await pane.locator('.chat-timers-kind').selectOption('once')
+  await pane.locator('.chat-timers-minutes').fill('25')
   unavailable = true
   sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'held' })
   await expect(pane.getByRole('alert')).toContainText('Timers could not be loaded')
+  await expect(pane.locator('.chat-timers-label')).toHaveValue('Unsent label')
+  await expect(pane.locator('.chat-timers-message')).toHaveValue('Unsent message')
+  await expect(pane.locator('.chat-timers-kind')).toHaveValue('once')
+  await expect(pane.locator('.chat-timers-minutes')).toHaveValue('25')
+  await pane.locator('.chat-timers-message').fill('Still composing after failure')
   unavailable = false
   sock.push('s1', { type: 'timer.changed', timer: summary(one), change: 'released' })
   await expect(pane.locator('.chat-timer')).toHaveCount(1)
   await expect(pane.locator('.chat-timers-add')).toBeVisible()
   await expect(pane.getByRole('alert')).toBeHidden()
+  await expect(pane.locator('.chat-timers-label')).toHaveValue('Unsent label')
+  await expect(pane.locator('.chat-timers-message')).toHaveValue('Still composing after failure')
+  await expect(pane.locator('.chat-timers-kind')).toHaveValue('once')
+  await expect(pane.locator('.chat-timers-minutes')).toHaveValue('25')
 })
 
 test('renders timer turns, timer changes and every wait cause with escaped labels', async ({ page }) => {

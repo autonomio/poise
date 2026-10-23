@@ -88,6 +88,7 @@ let headerEl: HTMLElement
 let timersPaneEl: HTMLElement
 let timersOpenFor: string | null = null
 let timersJson = ''
+let timersFetchGeneration = 0
 let timersRefresh: ReturnType<typeof setInterval> | null = null
 let mainEl: HTMLElement
 let scrollEl: HTMLElement
@@ -1886,7 +1887,7 @@ function toggleTimers(): void {
   timersJson = ''
   if (timersPaneEl.dataset.timersSession !== e.record.id) {
     timersPaneEl.dataset.timersSession = e.record.id
-    timersPaneEl.innerHTML = '<div class="chat-timers"><div class="st-help" role="status">Loading timers…</div></div>'
+    timersPaneEl.innerHTML = '<div class="chat-timers"><div class="st-help chat-timers-loading" role="status">Loading timers…</div></div>'
   }
   timersPaneEl.hidden = false
   if (timersRefresh) clearInterval(timersRefresh)
@@ -1903,9 +1904,10 @@ async function refreshTimersPane(): Promise<void> {
   const id = timersOpenFor
   const e = entry()
   if (!id || !e || e.record.id !== id) return
+  const generation = ++timersFetchGeneration
   try {
     const data = await chatClient.timers(id)
-    if (timersOpenFor !== id) return
+    if (timersOpenFor !== id || generation !== timersFetchGeneration) return
     const tick = data.scheduler.lastTickAt ? Date.parse(data.scheduler.lastTickAt) : NaN
     const json = JSON.stringify({ ...data, scheduler: { running: data.scheduler.running, error: data.scheduler.error ?? null,
       stale: !Number.isFinite(tick) || Date.now() - tick > 60_000 } })
@@ -1919,9 +1921,17 @@ async function refreshTimersPane(): Promise<void> {
       holdAll: async (held: boolean) => { await chatClient.setAllTimersHeld(held); timersJson = ''; await refreshTimersPane() },
     })
   } catch (error) {
-    if (timersOpenFor !== id) return
+    if (timersOpenFor !== id || generation !== timersFetchGeneration) return
     timersJson = ''
-    timersPaneEl.innerHTML = `<div class="chat-timers"><div class="st-help st-help-error" role="alert">Timers could not be loaded — ${escapeHtml((error as Error).message)}</div></div>`
+    timersPaneEl.querySelector('.chat-timers-loading')?.remove()
+    let alert = timersPaneEl.querySelector<HTMLElement>('.chat-timers-load-error')
+    if (!alert) {
+      alert = document.createElement('div')
+      alert.className = 'st-help st-help-error chat-timers-load-error'
+      alert.setAttribute('role', 'alert')
+      timersPaneEl.prepend(alert)
+    }
+    alert.textContent = `Timers could not be loaded — ${(error as Error).message}`
   }
 }
 

@@ -969,8 +969,9 @@ export class ChatControl {
       // Recipient identity keeps the rotation stable as new messages arrive.
       this.deliveryAfter = recipient
       const ordinary = rows.find(row => row.timer_id === null)
-      const timerRow = rows.find(row => row.timer_id !== null)
-      const next = ordinary && timerRow ? (ordinary.seq < timerRow.seq ? ordinary : timerRow) : (ordinary ?? timerRow!)
+      const timerRow = releaseSwitchPending() ? undefined : rows.find(row => row.timer_id !== null)
+      const next = ordinary && timerRow ? (ordinary.seq < timerRow.seq ? ordinary : timerRow) : (ordinary ?? timerRow)
+      if (!next) continue
       this.isolate('delivery', recipient, () => {
         if (!this.runtime.ownsSession(recipient)) return
         if (next.timer_id !== null) this.admitTimerRow(recipient, next, now)

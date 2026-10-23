@@ -767,6 +767,32 @@ describe('durable timers that wake chats', () => {
     if (kind === 'every') expect(store.retainTimers(instance, clock).rows).toBe(1)
   }, 60_000)
 
+  it('delivers ordinary messages past an older timer while a release switch waits', async () => {
+    const m = await workspaceManager(), p = await manager('Worker')
+    const timer = await heartbeat(m, p)
+    runtime.prompt(p.id, { text: 'Busy', attachments: [], mentions: [] })
+    await until(() => (prompts.get(p.id) ?? []).length === 1)
+    clock += 10 * 60_000
+    await control.tick()
+    expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+    await holdingTimers(async () => {
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+      store.message(instance, p.id, m.id, 'Ordinary during release', `release:${randomUUID()}`)
+      await control.tick()
+      await until(() => (prompts.get(p.id) ?? []).length === 2)
+      expect(prompts.get(p.id)![1].text).toContain('Ordinary during release')
+      expect(store.timerPendingRow(instance, timer.id)).toBeDefined()
+      finishes.get(p.id)!({ stopReason: 'end_turn' })
+      await until(() => runtime.get(p.id)?.status === 'idle')
+    })
+    await control.tick()
+    await until(() => (prompts.get(p.id) ?? []).length === 3)
+    expect(starts(p.id).at(-1)!.source).toMatchObject({ kind: 'timer', timerId: timer.id })
+    finishes.get(p.id)!({ stopReason: 'end_turn' })
+    await until(() => runtime.get(p.id)?.status === 'idle')
+  }, 60_000)
+
   it('lets ordinary messages and another timer pass an older firing in backoff', async () => {
     const m = await workspaceManager(), p = await manager('Worker')
     const count = () => (prompts.get(p.id) ?? []).length
