@@ -332,6 +332,9 @@ behavior/source/owner needle plus exact call-ID lookups. Missing kinds return
 no row without traversing history. There are at most 256 latest needles and
 1,000 IDs; invalid or larger requests fail. Poise shares identical selections
 in flight and for five seconds, and decodes large responses off its main thread.
+Development parses share one temporary build while workers are active, then
+remove that owned directory after the final worker stops, including failures.
+Production continues to use its packaged worker asset.
 An unsupported command or failed read marks dashboard history unavailable,
 rather than proving that a behavior has never run.
 

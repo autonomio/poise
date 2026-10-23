@@ -1,14 +1,25 @@
+import { access } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   captureAdmission: vi.fn(), captureOutcome: vi.fn(), observeSnapshot: vi.fn(),
   diagnostic: vi.fn(),
   runFile: vi.fn(),
+  workerBuild: vi.fn<(outfile: string) => void>(),
   models: {} as Record<string, { default: string, fallback: string }>,
   agentAccount: 'bit-mis',
   // The scheduler's replay check; these tests admit everything unless told not to.
   admit: vi.fn(async () => undefined),
 }))
+
+vi.mock('esbuild', async importOriginal => {
+  const original = await importOriginal<typeof import('esbuild')>()
+  return { ...original, build: (options: import('esbuild').BuildOptions) => {
+    mocks.workerBuild(options.outfile ?? '')
+    return original.build(options)
+  } }
+})
 
 vi.mock('../server/settings', () => ({
   getModelSettings: () => mocks.models,
@@ -76,6 +87,7 @@ function logRow(overrides: Record<string, unknown> = {}): Record<string, unknown
 beforeEach(() => {
   mocks.captureAdmission.mockClear(); mocks.captureOutcome.mockClear(); mocks.observeSnapshot.mockClear()
   mocks.diagnostic.mockClear()
+  mocks.workerBuild.mockClear()
   resetAgentLogCache()
 })
 
@@ -1047,6 +1059,28 @@ describe('off-thread agent-log parse', () => {
     expect(performance.now() - started).toBeLessThan(100)
     expect(snapshot.entries).toHaveLength(1)
   })
+
+  it('shares one temporary build and removes it after concurrent parse workers finish', async () => {
+    const stdout = JSON.stringify([logRow({ prompt: 'x'.repeat(2 * 1024 * 1024) })])
+    mocks.runFile.mockResolvedValue({ stdout, stderr: '' })
+    const [first, second] = await Promise.all([
+      fetchSelectedAgentLogSnapshot({ latest: [], ids: ['a'.repeat(32)] }),
+      fetchSelectedAgentLogSnapshot({ latest: [], ids: ['b'.repeat(32)] }),
+    ])
+    expect(first.entries).toEqual(second.entries)
+    expect(mocks.workerBuild).toHaveBeenCalledTimes(1)
+    const output = mocks.workerBuild.mock.calls[0]![0]
+    expect(output).not.toContain('node_modules')
+    await expect(access(dirname(output))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 30_000)
+
+  it('removes its temporary asset after a worker reports invalid JSON', async () => {
+    mocks.runFile.mockResolvedValue({ stdout: '[' + ' '.repeat(2 * 1024 * 1024), stderr: '' })
+    await expect(fetchAgentLogSnapshot()).rejects.toThrow('returned invalid JSON')
+    expect(mocks.workerBuild).toHaveBeenCalledTimes(1)
+    const output = mocks.workerBuild.mock.calls[0]![0]
+    await expect(access(dirname(output))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 30_000)
 
   it('parses the worker request and failure shapes', async () => {
     const { executeAgentLogParse } = await import('../server/agent-log-worker')

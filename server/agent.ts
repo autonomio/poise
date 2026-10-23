@@ -13,7 +13,9 @@ import { captureBehaviorAdmission, captureBehaviorOutcome, observeAgentSnapshot 
 // the agent-interface project owns.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
@@ -320,68 +322,91 @@ async function decodeAgentLogSnapshot(stdout: string, source: string, signal?: A
   }
   signal?.throwIfAborted()
   const asset = await agentLogWorkerAssetUrl()
-  signal?.throwIfAborted()
-  return new Promise<AgentLogSnapshot>((resolve, reject) => {
-    const worker = new Worker(asset)
-    worker.unref()
-    let settled = false
-    const timer = setTimeout(() => fail(new Error(`${source} parse timed out`)), AGENT_LOG_PARSE_TIMEOUT_MS)
-    const fail = (error: unknown) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      void worker.terminate()
-      reject(error)
-    }
-    const onAbort = () => fail(agentLogAbortError(signal!))
-    signal?.addEventListener('abort', onAbort, { once: true })
-    worker.once('message', (reply: AgentLogParseReply) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      void worker.terminate()
-      if (reply?.ok) {
-        try { resolve(freezeAgentLogSnapshot(reply.snapshot)) }
-        catch (error) { reject(error) }
-      } else {
-        reject(Object.assign(
-          new Error(reply?.error?.message ?? `${source} parse failed`,
-            { cause: reply?.error?.causeMessage ?? undefined }),
-          { name: reply?.error?.name ?? 'Error' }))
+  let worker: Worker | undefined
+  try {
+    signal?.throwIfAborted()
+    return await new Promise<AgentLogSnapshot>((resolve, reject) => {
+      worker = new Worker(asset.url)
+      worker.unref()
+      let settled = false
+      const timer = setTimeout(() => fail(new Error(`${source} parse timed out`)), AGENT_LOG_PARSE_TIMEOUT_MS)
+      const fail = (error: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        reject(error)
       }
+      const onAbort = () => fail(agentLogAbortError(signal!))
+      signal?.addEventListener('abort', onAbort, { once: true })
+      worker.once('message', (reply: AgentLogParseReply) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        if (reply?.ok) {
+          try { resolve(freezeAgentLogSnapshot(reply.snapshot)) }
+          catch (error) { reject(error) }
+        } else {
+          reject(Object.assign(
+            new Error(reply?.error?.message ?? `${source} parse failed`,
+              { cause: reply?.error?.causeMessage ?? undefined }),
+            { name: reply?.error?.name ?? 'Error' }))
+        }
+      })
+      worker.once('error', fail)
+      worker.once('exit', (code) => fail(new Error(`${source} parse worker stopped (exit ${code})`)))
+      worker.postMessage({ stdout, source } satisfies AgentLogParseRequest)
     })
-    worker.once('error', fail)
-    worker.once('exit', (code) => fail(new Error(`${source} parse worker stopped (exit ${code})`)))
-    worker.postMessage({ stdout, source } satisfies AgentLogParseRequest)
-  })
+  } finally {
+    try { await worker?.terminate() } finally { await asset.release() }
+  }
 }
 
 let agentLogWorkerAsset: URL | null = null
-let agentLogWorkerDevDir: string | null = null
+interface DevelopmentLogWorkerAsset { url: URL, dir: string, users: number }
+let agentLogWorkerBuild: Promise<DevelopmentLogWorkerAsset> | null = null
 
-async function agentLogWorkerAssetUrl(): Promise<URL> {
-  if (agentLogWorkerAsset) return agentLogWorkerAsset
+async function agentLogWorkerAssetUrl(): Promise<{ url: URL, release: () => Promise<void> }> {
+  if (agentLogWorkerAsset) return { url: agentLogWorkerAsset, release: () => Promise.resolve() }
   const built = new URL('./agent-log-worker.js', import.meta.url)
   if (existsSync(built)) {
     agentLogWorkerAsset = built
-    return built
+    return { url: built, release: () => Promise.resolve() }
   }
   const source = new URL('./agent-log-worker.ts', import.meta.url)
   if (process.env.NODE_ENV === 'production' || !existsSync(source)) {
     throw new Error('The agent-log parse worker asset is missing')
   }
-  const cache = fileURLToPath(new URL('../node_modules/.cache/', import.meta.url))
-  mkdirSync(cache, { recursive: true })
-  agentLogWorkerDevDir ??= mkdtempSync(join(cache, 'agent-log-parse-'))
-  const output = join(agentLogWorkerDevDir, 'worker.mjs')
-  // Development only. Production ships the built worker and needs no compiler.
-  const { build } = await import('esbuild')
-  await build({ entryPoints: [fileURLToPath(source)], outfile: output, bundle: true,
-    platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent' })
-  agentLogWorkerAsset = pathToFileURL(output)
-  return agentLogWorkerAsset
+  const building = agentLogWorkerBuild ??= buildDevelopmentLogWorker(source)
+  let asset: DevelopmentLogWorkerAsset
+  try { asset = await building }
+  catch (error) { if (agentLogWorkerBuild === building) agentLogWorkerBuild = null; throw error }
+  asset.users += 1
+  let released = false
+  return { url: asset.url, release: async () => {
+    if (released) return
+    released = true
+    if (--asset.users === 0) {
+      if (agentLogWorkerBuild === building) agentLogWorkerBuild = null
+      await rm(asset.dir, { recursive: true, force: true })
+    }
+  } }
+}
+
+async function buildDevelopmentLogWorker(source: URL): Promise<DevelopmentLogWorkerAsset> {
+  const dir = await mkdtemp(join(tmpdir(), 'poise-agent-log-parse-'))
+  const output = join(dir, 'worker.mjs')
+  try {
+    // Only builtins remain external; the development asset needs no dependency-tree location.
+    const { build } = await import('esbuild')
+    await build({ entryPoints: [fileURLToPath(source)], outfile: output, bundle: true,
+      platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent' })
+    return { url: pathToFileURL(output), dir, users: 0 }
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export interface AgentLogSelection {
