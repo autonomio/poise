@@ -152,7 +152,9 @@ describe('Skip repositories API', () => {
     const rows = [{
       id: 'a'.repeat(32), model: 'gpt-6-astra-ultra', prompt: '',
       behavior: 'pr_review', source: 'poise:review-new-prs', repo: REPO, pr_id: '1',
+      actor: 'review-bot', expected_head: HEAD, head_sha: HEAD, correlation_id: 'selection-fixture',
       started_at: '2026-10-23T12:00:00Z', started_at_precise: '2026-10-23T12:00:00.000Z',
+      completed_at: '2026-10-23T12:01:00Z', action: 'reviewed_clean', outcome: 'clean',
       time_elapsed: '1s', status: 'completed', error: '',
     }]
     mocks.runFile.mockImplementation(async (command: string, args: string[], options: RunFileOptions) => {
