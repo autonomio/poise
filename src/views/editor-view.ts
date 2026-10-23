@@ -4657,12 +4657,13 @@ if (typeof window !== 'undefined') {
       }
       if (requestId !== externalOpenRequestId || !viewEl || viewEl.hidden) return
       void fetchDocs({ fresh: true })
-      await loadDoc(detail.slug)
+      const loadingDocument = loadDoc(detail.slug)
+      const documentRequestId = loadRequestId
+      await loadingDocument
       // Chat's read-only edit cards carry their session: open the side pane
       // on the session they came from (falling back to the document chat
       // when it cannot be read).
-      if (detail.session && requestId === externalOpenRequestId && currentSlug === detail.slug && !viewEl.hidden) {
-        const documentRequestId = loadRequestId
+      if (detail.session && requestId === externalOpenRequestId && documentRequestId === loadRequestId && currentSlug === detail.slug && !viewEl.hidden) {
         const d = currentDoc()
         let subject: ChatSubject = { surface: 'editor-document', key: detail.slug, label: d?.title || detail.slug }
         try {

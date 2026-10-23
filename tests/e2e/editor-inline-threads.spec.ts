@@ -454,6 +454,63 @@ for (const destination of ['another view', 'the Editor again', 'another document
   })
 }
 
+test('lets a real document picker supersede an external load waiting for annotations', async ({ page }) => {
+  await page.addInitScript(() => {
+    const json = Response.prototype.json
+    Response.prototype.json = async function () {
+      const value: unknown = await json.call(this)
+      if (this.url.endsWith('/api/editor/doc/draft/annotations')) Reflect.set(window, 'annotationsRead', true)
+      return value
+    }
+    const fetch = window.fetch.bind(window)
+    window.fetch = (...args) => {
+      const input = args[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.includes('/api/chat/sessions/s-passage?')) Reflect.set(window, 'sessionLookupStarted', true)
+      return fetch(...args)
+    }
+  })
+  const { state } = await editor(page, [annotation({ id: 'ann-1' })])
+  state.sessions.unshift(session({ id: 's-passage', subject: { surface: 'editor-passage', key: 'draft:ann-1', label: '' }, status: 'idle' }))
+  await page.route('**/api/editor/docs', route => route.fulfill({ json: { docs: [
+    { slug: 'draft', title: 'A question', updated_at: AT, size: TEXT.length },
+    { slug: 'other', title: 'Other document', updated_at: AT, size: 16 },
+  ] } }))
+  let releaseAnnotations!: () => void
+  let annotationsStarted!: () => void
+  let releaseOther!: () => void
+  let otherStarted!: () => void
+  const annotationsHeld = new Promise<void>(resolve => { releaseAnnotations = resolve })
+  const annotationsRequested = new Promise<void>(resolve => { annotationsStarted = resolve })
+  const otherHeld = new Promise<void>(resolve => { releaseOther = resolve })
+  const otherRequested = new Promise<void>(resolve => { otherStarted = resolve })
+  await page.route('**/api/editor/doc/draft/annotations', async route => {
+    annotationsStarted()
+    await annotationsHeld
+    await route.fulfill({ json: { annotations: [], version: VERSION } })
+  })
+  await page.route('**/api/editor/doc/other', async route => {
+    otherStarted()
+    await otherHeld
+    await route.fulfill({ json: { slug: 'other', title: 'Other document', content: '# Other document', version: VERSION } })
+  })
+  await page.evaluate(() => Reflect.set(window, 'annotationsRead', false))
+  try {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('poise:editor-load-doc', { detail: { slug: 'draft', session: 's-passage' } })))
+    await annotationsRequested
+    await page.locator('.editor-doc-trigger').click()
+    await page.locator('.editor-doc-item[data-slug="other"]').click()
+    await otherRequested
+    releaseAnnotations()
+    await expect.poll(() => page.evaluate(() => Reflect.get(window, 'annotationsRead'))).toBe(true)
+    expect(await page.evaluate(() => Reflect.get(window, 'sessionLookupStarted'))).not.toBe(true)
+    await expect(page.locator('#chat-side-pane.open')).toHaveCount(0)
+    await expect(page.locator('#editor-doc')).toContainText('Opening paragraph.')
+    releaseOther()
+    await expect(page.locator('#editor-doc')).toContainText('Other document')
+  } finally { releaseAnnotations(); releaseOther() }
+})
+
 test('moves a passage chat to the side pane and back with its draft', async ({ page }) => {
   await editor(page, [annotation({ id: 'ann-1' })])
   await openThreadForMark(page, 'ann-1')
