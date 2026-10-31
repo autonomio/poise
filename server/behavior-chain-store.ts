@@ -138,6 +138,7 @@ export class BehaviorChainJournal {
         event_id TEXT NOT NULL UNIQUE, at INTEGER NOT NULL, payload TEXT NOT NULL, state_hash TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS behavior_chain_history ON behavior_chain_events(chain_id, sequence);
+      CREATE INDEX IF NOT EXISTS behavior_chain_event_kind ON behavior_chain_events(chain_id, json_extract(payload, '$.type'), sequence);
       CREATE TRIGGER IF NOT EXISTS behavior_chain_no_update BEFORE UPDATE ON behavior_chain_events
         BEGIN SELECT RAISE(ABORT, 'behavior chain events are immutable'); END;
       CREATE TRIGGER IF NOT EXISTS behavior_chain_no_delete BEFORE DELETE ON behavior_chain_events
@@ -235,6 +236,29 @@ export class BehaviorChainJournal {
 
   active(after = '', limit = 100): BehaviorChain[] {
     return this.page(after, limit, false)
+  }
+
+  /** Original recorded context/panel, never today's settings or a later
+   * observation of an already-merged target. Old history stays immutable. */
+  preMergeObservation(id: string, mergedAt: number): Record<string, unknown> | null {
+    if (!Number.isSafeInteger(mergedAt) || mergedAt < 0) return null
+    const firstMerge = this.db.prepare(`SELECT sequence FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.merged' ORDER BY sequence LIMIT 1`)
+      .get(id) as { sequence: number } | undefined
+    const row = this.db.prepare(`SELECT payload FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.observed' AND sequence < ?
+        AND at <= ? AND json_extract(payload, '$.observation.checkedAt') <= ?
+        AND json_extract(payload, '$.observation.pull.merged') = 0
+      ORDER BY sequence DESC LIMIT 1`).get(id, firstMerge?.sequence ?? Number.MAX_SAFE_INTEGER, mergedAt, mergedAt) as { payload: string } | undefined
+    return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
+  }
+
+  firstMergedObservation(id: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`SELECT payload FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.observed' AND sequence < (
+        SELECT sequence FROM behavior_chain_events WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.merged'
+        ORDER BY sequence LIMIT 1) ORDER BY sequence DESC LIMIT 1`).get(id, id) as { payload: string } | undefined
+    return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
   }
 
   /** Bounded status lookup, including completed chains while the datastore

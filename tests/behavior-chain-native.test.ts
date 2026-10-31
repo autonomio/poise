@@ -78,7 +78,9 @@ it('preserves actual review identities, responses and times after an external me
     request: { command: 'agent-interface' as const, argv: [], cwd: '/fixture' }, state: 'settled' as const,
     callId: response.invocation_id, outcome: 'clean', evidence: { status: 'completed', action: 'reviewed_clean',
       review_id: 91, head_sha: HEAD, completedAt: completedAt + 1000, artifact: { review_response: response } } }
-  const reviewed = { ...chain, invocations: [invocation] }
+  const preMerge = { ...observation, checkedAt: completedAt + 1000,
+    pull: { ...observation.pull!, merged: false, state: 'open', mergeSha: null, mergedAt: null } }
+  const reviewed = { ...chain, observation: preMerge, invocations: [invocation] }
   expect(decideBehaviorChain(reviewed, observation, Date.now())).toMatchObject({ kind: 'complete' })
   observation.pull!.mergedAt = completedAt - 1
   expect(decideBehaviorChain(reviewed, observation, Date.now())).toMatchObject({ kind: 'hold' })

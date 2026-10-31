@@ -200,6 +200,7 @@ describe('completion-driven atomic behavior decisions', () => {
     expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr', reason: expect.stringContaining('PR-head green checks do not prove integration success') })
     obs.pull!.queueRemoval.reason = 'manual'
     expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'hold', reason: expect.stringContaining('decision') })
+    current = record(journal, current, { type: 'chain.observed', observation: structuredClone(obs) })
     obs.pull!.merged = true; obs.pull!.mergeSha = MERGE; obs.pull!.state = 'closed'
     expect(decideBehaviorChain(current, obs, NOW)).toEqual({ kind: 'complete', mergeSha: MERGE })
   })

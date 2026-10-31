@@ -11,6 +11,20 @@ PR and its published review while preserving the normal CI and thread gates.
 A confirmed external merge is recorded separately: without qualifying pre-merge
 review evidence its review obligation remains open through journal recovery.
 
+After a confirmed merge, review reconciliation uses the last canonical
+pre-merge observation recorded before both the actual merge time and the first
+merge event. Its target, head, review context and required reviewer slots remain
+fixed. Today's reviewer settings and post-merge PR edits cannot discharge that
+obligation. A previously missing original review may become visible later, but
+its response and actual GitHub submission must precede the merge and match the
+original basis. The first recorded merged context and the current merged read
+must also match that basis; a mismatch recorded at the first merge cannot be
+erased by a later edit restoring the old title/body. Missing historical context
+or an empty panel stays unproven;
+the supported reviewer setting is one to three. This lookup reads existing
+immutable history and adds no state field, execution authority or polling loop.
+Previously completed histories are not rewritten or retroactively certified.
+
 Status: the native implementation completed the ten real cycles documented below. The admission cutover and GUI changes carry separate local regression proof; those historical cycles do not prove production cutover. Production execution remains disabled by default.
 
 The existing behavior scheduler consumes one durable journal in Poise's existing database. It admits one atomic invocation for a chain, records its native Caller correlation before starting a process, observes the resulting artifacts, and then decides the next behavior. A chain identifies an issue and its eventual PR; it is not a persistent Chat session or worker.
