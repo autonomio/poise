@@ -31,6 +31,8 @@ test('merged chains retain open obligations and controls until canonical complet
   await expect(controls.locator('[data-chain-capacity]')).toContainText('1 durable model admission(s) reserved')
   await expect(controls.locator('[data-chain-capacity]')).toContainText('label work-ready')
   await expect(controls.locator('[data-chain-capacity]')).toContainText('Admissions paused')
+  await list.scrollIntoViewIfNeeded()
+  await expect(list).toBeVisible()
   await page.screenshot({ path: 'test-results/behavior-v2-obligations.png', fullPage: true })
   unavailable = true
   await controls.getByRole('button', { name: 'Refresh chains' }).click()
