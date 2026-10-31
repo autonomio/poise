@@ -8,11 +8,12 @@ import { readFile, readdir } from 'node:fs/promises'
 // over whatever came next. Every one was found by a separate audit, months
 // apart. This is cheaper than a fifth audit.
 const VIEWS_DIR = new URL('../src/views/', import.meta.url).pathname
-const MAIN = new URL('../src/main.ts', import.meta.url).pathname
+// Classic's entry wires the views; src/main.ts is only the bootstrap that loads it.
+const CLASSIC_ENTRY = new URL('../src/classic.ts', import.meta.url).pathname
 
 describe('every view that exports a leave-cleanup has it wired up', () => {
-  it('calls each exported stop* from main.ts', async () => {
-    const main = await readFile(MAIN, 'utf8')
+  it('calls each exported stop* from classic.ts', async () => {
+    const main = await readFile(CLASSIC_ENTRY, 'utf8')
     const files = (await readdir(VIEWS_DIR)).filter((f) => f.endsWith('-view.ts'))
     expect(files.length).toBeGreaterThan(0)
 

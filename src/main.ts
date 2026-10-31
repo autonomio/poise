@@ -7,6 +7,10 @@ import { INTERFACE_STORAGE_KEY, resolveInterface } from './interface-choice'
 import { installSelfUpdateWatch } from './self-update-watch'
 import { watchForUpdates } from './updating'
 import { watchForSignOut } from './signed-out'
+// The updating and signed-out overlays' styles. The watchers below can show
+// them before an interface loads, so the bootstrap carries the styles; the
+// bundler includes them once no matter which entry imports them too.
+import './views/updating.css'
 
 /** Rollback for every browser: a one-line commit setting this to true loads
  *  classic whatever a browser chose. Reverting the flip alone would leave
@@ -14,14 +18,21 @@ import { watchForSignOut } from './signed-out'
 const FORCE_CLASSIC_INTERFACE = false
 
 async function boot(): Promise<void> {
-  // 1. An Extensions sign-in comes back to /extensions/oauth?code&state.
+  // The tab-wide watchers first, as classic's entry installed them at
+  // evaluation: every request this page makes is observed, including the
+  // Extensions return below. A promoted build, an answer the gateway marks
+  // as updating, and a sign-in in front of Poise that has ended.
+  installSelfUpdateWatch()
+  watchForUpdates()
+  watchForSignOut()
+  // An Extensions sign-in comes back to /extensions/oauth?code&state.
   // Finish it before anything else reads that query: Google's return looks
   // the same. Only this address pays for the import.
   if (location.pathname === '/extensions/oauth') {
     const { finishExtensionSignIn } = await import('./views/extensions-view')
     await finishExtensionSignIn()
   }
-  // 2. The recovery address (`?interface=classic`) saves the classic choice;
+  // The recovery address (`?interface=classic`) saves the classic choice;
   // the override and the stored choice decide otherwise. Classic is the
   // default until the flip.
   const query = new URLSearchParams(location.search)
@@ -40,14 +51,8 @@ async function boot(): Promise<void> {
     }
   }
   document.documentElement.dataset.interface = decision.choice
-  // 3. The tab-wide watchers, before an interface makes its first request: a
-  // promoted build, an answer the gateway marks as updating, and a sign-in
-  // in front of Poise that has ended.
-  installSelfUpdateWatch()
-  watchForUpdates()
-  watchForSignOut()
-  // 4. One interface. A failed load falls back to classic and says so,
-  // naming the failure.
+  // One interface. A failed load falls back to classic and says so, naming
+  // the failure.
   try {
     if (decision.choice === 'new') {
       const ui = await import('./ui/app')
