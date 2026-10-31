@@ -13,6 +13,9 @@ import select
 import signal
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
+
+_OWNER_NONCE = uuid4().hex
 
 
 def _start(pid: int) -> str:
@@ -39,7 +42,27 @@ def capture(pid: int) -> str:
         # Local development without /proc may still run behaviors, but cannot
         # later authorize a signal or recovery from a numeric PID alone.
         value = {"version": 1, "pid": pid, "unverified": str(error)[:500]}
-    return json.dumps(value, separators=(",", ":"))
+    return json.dumps({**value, "owner_nonce": _OWNER_NONCE}, separators=(",", ":"))
+
+
+def owns_registration(encoded: str | None) -> bool:
+    """Only the process which won track() may write its normal release.
+
+    A later CLI can reuse its numeric PID, including on development platforms
+    without /proc. The per-process nonce was committed by that original claim.
+    """
+    try:
+        value = json.loads(encoded or "null")
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(value, dict) or value.get("pid") != os.getpid() or value.get("owner_nonce") != _OWNER_NONCE:
+        return False
+    if "unverified" in value:
+        return True
+    try:
+        return state(encoded, os.getpid()) == "alive"
+    except RuntimeError:
+        return False
 
 
 def decode(encoded: str | None, pid: int) -> dict:

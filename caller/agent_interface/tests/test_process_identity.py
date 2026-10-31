@@ -22,6 +22,15 @@ class ProcessIdentityCase(TestCase):
             self.assertEqual(process_identity.state(self.encoded, 42), "different")
             start.assert_not_called()
 
+    def test_normal_finalization_requires_this_process_original_registration(self):
+        encoded = process_identity.capture(os.getpid())
+        self.assertTrue(process_identity.owns_registration(encoded))
+        value = json.loads(encoded)
+        for change in ({"owner_nonce": "another-process"}, {"pid": os.getpid() + 1}):
+            self.assertFalse(process_identity.owns_registration(json.dumps({**value, **change})))
+        self.assertFalse(process_identity.owns_registration(None))
+        self.assertFalse(process_identity.owns_registration("not json"))
+
     def test_unreadable_epoch_or_process_never_means_gone(self):
         for failure in (PermissionError("denied"), FileNotFoundError("epoch unavailable")):
             with self.subTest(error=type(failure).__name__), \

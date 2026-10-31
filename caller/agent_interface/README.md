@@ -41,6 +41,8 @@ used. Externally managed Chat turns retain Poise's existing Stop route.
 Native per-Call resource receipts live in `resource_ownership`, outside the
 replaceable publication artifact. Directory registration precedes allocation;
 all PR attempt roots and copied credentials use a private recorded Call parent.
+The normal finalizer also verifies the process nonce committed by the original
+unique Call claim; a later failed launch cannot borrow that claim by PID reuse.
 Positive cleanup, including a covering retry after a retained failure, is
 required for settlement. Log reads perform no deletion and never manufacture
 release from PID loss, wall-clock order or path absence. Complete containment

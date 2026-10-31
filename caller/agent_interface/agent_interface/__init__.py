@@ -2308,9 +2308,9 @@ def main():
         # authorizes the chain's next invocation.
         if flag_value("--source") == "poise:behavior-chain" and flag_value("--correlation-id"):
             with db() as conn:
-                row = conn.execute("select id,status from calls where correlation_id=? and pid=?",
+                row = conn.execute("select id,status,process_identity from calls where correlation_id=? and pid=?",
                                    (flag_value("--correlation-id"), str(os.getpid()))).fetchone()
-            if row is not None and row["status"] != "running":
+            if row is not None and row["status"] != "running" and process_identity.owns_registration(row["process_identity"]):
                 resource_ownership.cleanup_remaining(DB, row["id"])
                 with db() as conn:
                     ownership = resource_ownership.read(conn, row["id"])
