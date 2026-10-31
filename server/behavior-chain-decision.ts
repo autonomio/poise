@@ -111,6 +111,14 @@ export function lastChainQueueInvocation(chain: BehaviorChain): ChainInvocation 
   }
 }
 
+/** Closure fences effects, not adoption of original artifacts or receipts. */
+export function closedChainTarget(chain: BehaviorChain, observation: ChainObservation | null, behavior: ChainBehavior): string | null {
+  if (chain.mergeSha) return 'the pull request is confirmed merged'
+  if (observation?.pull && (observation.pull.merged || observation.pull.state !== 'open')) return 'the pull request is closed'
+  if (observation && !observation.issue.open && ['review-issue', 'implement-issue', 'repair-pr'].includes(behavior)) return 'the seed issue is closed'
+  return null
+}
+
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
 export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number,

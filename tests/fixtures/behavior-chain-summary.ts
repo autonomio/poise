@@ -6,7 +6,7 @@ import type { ChainObservation } from '../../server/behavior-chain-decision'
 
 /** UI regression fixture: real isolated journal and production wire mapper,
  * never a behavior run or acceptance artifact. No global server DB is imported. */
-export function chainSummaryFixture(state: 'pending-active' | 'pending-admitted' | 'pending-no-invocation' | 'pending-original-response' | 'complete' | 'historical') {
+export function chainSummaryFixture(state: 'unmerged' | 'pending-active' | 'pending-admitted' | 'pending-no-invocation' | 'pending-original-response' | 'complete' | 'historical') {
   const db = new Database(':memory:')
   try {
     const journal = new BehaviorChainJournal(db)
@@ -23,6 +23,11 @@ export function chainSummaryFixture(state: 'pending-active' | 'pending-admitted'
         mergeSha: 'a'.repeat(40), mergedAt: Date.now() - 1000, queueEntry: null, queueRemoval: null, changesRequested: false,
         unresolved: 0, approved: false, ready: false, reviewIds: [], reviewReceipts: [], reviewRevision: 'missing',
         reviewContext: 'b'.repeat(64), greyRuns: [], pending: false, failing: [], conflict: false, behind: false } }
+    if (state === 'unmerged') {
+      observation.issue.open = true
+      Object.assign(observation.publication, { merged: false, state: 'open', merge_sha: null })
+      Object.assign(observation.pull!, { merged: false, state: 'open', mergeSha: null, mergedAt: null })
+    }
     chain = journal.append(chain.id, 'observed', chain.sequence, { type: 'chain.observed', observation })
     if (state === 'pending-active' || state === 'pending-admitted' || state === 'pending-original-response') {
       const direct = state === 'pending-original-response'
@@ -36,7 +41,7 @@ export function chainSummaryFixture(state: 'pending-active' | 'pending-admitted'
         type: 'invocation.uncertain', invocationId: 'original-work', reason: 'original response missing' })
     }
     const pending = state.startsWith('pending')
-    chain = journal.append(chain.id, 'merge', chain.sequence, { type: 'chain.merged', mergeSha: 'a'.repeat(40),
+    if (state !== 'unmerged') chain = journal.append(chain.id, 'merge', chain.sequence, { type: 'chain.merged', mergeSha: 'a'.repeat(40),
       evidence: { repository: chain.repository, pull_number: 17, merged: true, merge_sha: 'a'.repeat(40),
         ...(state === 'historical' ? {} : { review_complete: !pending }) } })
     if (state === 'pending-no-invocation') chain = journal.append(chain.id, 'held', chain.sequence, { type: 'chain.held',

@@ -53,6 +53,7 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
       || !['hold', 'resume'].includes(String(body.operation))) throw new HttpError(400, 'id, current sequence and hold/resume operation are required')
     const chain = journal.read(body.id)
     if (!chain) throw new HttpError(404, 'behavior chain not found')
+    if (chain.mergeSha) throw new HttpError(409, 'Merged chains permit original receipt reconciliation only; new invocations cannot resume')
     const operation = body.operation
     const next = journal.append(chain.id, randomUUID(), Number(body.sequence), operation === 'hold'
       ? { type: 'chain.held', reason: 'New invocations held by the person' } : { type: 'chain.resumed' })

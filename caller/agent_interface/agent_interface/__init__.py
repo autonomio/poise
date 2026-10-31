@@ -221,6 +221,37 @@ def track(
     return id_
 
 
+def fence_closed_behavior(model: str, actor: str, repository: str, number: int,
+                          behavior: str, correlation_id: str, expected_head: str | None = None) -> dict:
+    """Win the original correlation before any worker can claim it. Existing
+    Calls, including running or uncertain ones, are never changed or released."""
+    if behavior not in {"issue_review", "implement_issue", "repair_pr", "pr_review", "pr_approve"}:
+        raise ValueError("unsupported native behavior fence")
+    if not isinstance(model, str) or not model.strip() or len(model.encode()) > 256 or model != model.strip():
+        raise ValueError("fence requires the original model identity")
+    if not REPO_RE.fullmatch(repository) or type(number) is not int or number < 1:
+        raise ValueError("fence requires the original repository and positive target number")
+    actor, correlation_id = atoms.actor(actor), atoms.correlation_id(correlation_id)
+    if expected_head is not None or behavior in {"repair_pr", "pr_review", "pr_approve"}:
+        expected_head = atoms.expected_head(expected_head)
+    identity = {"model": model, "actor": actor, "repo": repository, "pr_id": str(number),
+                "behavior": behavior, "expected_head": expected_head, "source": "poise:behavior-chain"}
+    with db() as conn:
+        conn.execute("begin immediate")
+        row = conn.execute("select * from calls where correlation_id=?", (correlation_id,)).fetchone()
+        if row is not None:
+            if any(row[key] != value for key, value in identity.items()):
+                raise ValueError("correlation already records a different native invocation")
+            return {"id": row["id"], "correlation_id": correlation_id, "outcome": "existing", **identity}
+        id_, now = uuid4().hex, time()
+        conn.execute("""insert into calls(id,model,prompt,started_at,ended_at,status,actor,repo,pr_id,behavior,
+                     expected_head,source,correlation_id,action,outcome,error_code,resources_settled_at,artifact)
+                     values(?,?,'',?,?,'superseded',?,?,?,?,?,?,?,'not_started','target_closed','target_closed',?,?)""",
+                     (id_, model, now, now, actor, repository, str(number), behavior, expected_head,
+                      identity["source"], correlation_id, now, json.dumps({"phase": "admission_fenced"})))
+    return {"id": id_, "correlation_id": correlation_id, "outcome": "fenced", **identity}
+
+
 # ── --record-turn ──────────────────────────────────────────────────────
 # A Chat turn runs in Poise's own runtime; Caller keeps the calls row so Swarm
 # lists it with its model, elapsed time and outcome. The row is marked with a
@@ -2208,6 +2239,7 @@ behaviors:
   --debate TOPIC [--rounds N]
   --record-turn start --model MODEL --session ID --source SOURCE [--repo OWNER/NAME --pr N] [--correlation-id ID]
   --record-turn finish CALL_ID --status completed|failed|cancelled [--error TEXT]
+  --fence-closed-behavior --model MODEL --actor USER --repo OWNER/NAME --number N --behavior BEHAVIOR --correlation-id ID [--expected-head SHA]
   --pr-stop-gate
   --install-pr-stop-gate
 
@@ -2303,6 +2335,11 @@ def _main():
         usage(error="first argument must be a behavior switch")
     if sys.argv[1:] in (["--help"], ["-h"]) or sys.argv[-1] in ("--help", "-h"):
         usage(0)
+    if sys.argv[1] == "--fence-closed-behavior":
+        print(json.dumps(fence_closed_behavior(required_flag("--model"), required_flag("--actor"), required_flag("--repo"),
+                                              int(required_flag("--number")), required_flag("--behavior"),
+                                              required_flag("--correlation-id"), flag_value("--expected-head"))))
+        return
     if sys.argv[1:] == ["--models"]:
         print(json.dumps({**CATALOG.export(), "policy": review_budget.REVIEW_POLICY}, indent=2))
         return
