@@ -5,6 +5,7 @@ import { chainReviewResponse, decideBehaviorChain, type ChainDecision, type Chai
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainEvent, type ChainInvocation } from './behavior-chain-store'
 import { budgetShortfall, headroomShortfall, measureBehaviorHeadroom, readBehaviorResourceAdmission,
   type BehaviorResourceAdmission, type BehaviorResourceHeadroom } from './behavior-resources'
+import { attributedNativeAction, matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement } from './behavior-chain-action'
 
 export interface ChainSeed { repository: string, number: number }
 export interface ChainRuntimeOperations {
@@ -271,7 +272,12 @@ export class BehaviorChainRuntime {
       }
     } else {
       try {
-        const evidence = await this.operations.perform(invocation)
+        let evidence = await this.operations.perform(invocation)
+        if (attributedNativeAction(invocation)) {
+          const proof = nativeActionReceipt(chain, invocation, evidence)
+          this.append(this.current(chain), { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { nativeActionReceipt: proof } })
+          evidence = nativeActionSettlement(proof)
+        }
         this.append(this.current(chain), { type: 'invocation.settled', invocationId: invocation.id, callId: null,
           outcome: String(evidence.outcome || evidence.action), evidence: { status: 'completed', ...evidence } })
         this.operations.wake()
@@ -336,17 +342,28 @@ export class BehaviorChainRuntime {
       return
     }
     if (invocation.request.command === 'github-interface') {
-      const pull = observation.pull
+      if (attributedNativeAction(invocation)) {
+        const proof = matchingNativeActionReceipt(chain, invocation)
+        if (proof) {
+          const evidence = nativeActionSettlement(proof)
+          this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
+            outcome: String(evidence.outcome), evidence })
+          this.operations.wake()
+        }
+        return
+      }
       let evidence: Record<string, unknown> | null = null
       if (invocation.behavior === 'rerun-grey-ci' && observation.greyRecovery?.invocationId === invocation.id
         && ['rerun_observed', 'superseded'].includes(String(observation.greyRecovery.receipt.outcome))) {
         evidence = { ...observation.greyRecovery.receipt,
           status: observation.greyRecovery.receipt.outcome === 'superseded' ? 'deferred' : 'completed' }
       }
-      if (invocation.behavior === 'publish-issue' && observation.publication.pull_number) evidence = { outcome: 'published', ...observation.publication }
-      if (invocation.behavior === 'merge-pr' && pull?.merged && pull.mergeSha) evidence = { outcome: 'merged', merged: true, merge_sha: pull.mergeSha, head_sha: pull.head }
-      if (invocation.behavior === 'merge-pr' && pull?.queueEntry) evidence = { outcome: 'in_queue', queue_entry_id: pull.queueEntry, head_sha: pull.head }
-      if (invocation.behavior === 'resolve-threads' && pull?.unresolved === 0) evidence = { outcome: 'resolved', head_sha: pull.head }
+      if (invocation.behavior === 'publish-issue' && observation.publication.pull_number
+        && invocation.request.argv.includes('--invocation-id') && invocation.request.argv.includes('--expected-head')
+        && observation.publication.head_invocation === invocation.request.argv[invocation.request.argv.indexOf('--invocation-id') + 1]
+        && observation.publication.head_sha === invocation.request.argv[invocation.request.argv.indexOf('--expected-head') + 1]) {
+        evidence = { outcome: 'published', ...observation.publication }
+      }
       if (evidence) this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
         outcome: String(evidence.outcome), evidence: { status: 'completed', ...evidence } })
       return

@@ -79,6 +79,23 @@ read-only mode. A later attempt of that exact workflow/head settles its original
 admission; an unchanged attempt remains uncertain. A confirmed preflight read
 failure is a failed, unstarted action and retries with the existing backoff.
 
+## Native action receipts
+
+Merge, queue-submission and conversation-resolution responses are attributed to
+their original admitted invocation, actor, request digest, repository, PR and
+pinned head. The runtime validates and retains a bounded receipt in the canonical
+journal before terminal settlement. If settlement is interrupted, rebuilding the
+journal recovers that same accepted response without another native write. A
+returned response survives a subsequent nonzero process exit; the process failure
+is retained separately from the accepted effect. An observed prior merge, queue
+entry or empty thread set does not prove that this invocation performed it.
+Without its accepted response, the invocation remains uncertain and blocks a
+replacement write, even when another actor subsequently advances the PR. A
+failed receipt write has the same boundary: the returned response alone is not
+durable authority. Other chains can continue. Publication recovery likewise
+requires the original native invocation marker and pinned head; grey-CI recovery
+retains its existing exact-workflow/attempt inspection.
+
 ## Seed observation batch
 
 One observation starts one native process for its seed issue, comments and
