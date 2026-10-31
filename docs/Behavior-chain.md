@@ -17,7 +17,10 @@ merge event. Its target, head, review context and required reviewer slots remain
 fixed. Today's reviewer settings and post-merge PR edits cannot discharge that
 obligation. A previously missing original review may become visible later, but
 its response and actual GitHub submission must precede the merge and match the
-original basis. Missing historical context or an empty panel stays unproven;
+original basis. The first recorded merged context and the current merged read
+must also match that basis; a mismatch recorded at the first merge cannot be
+erased by a later edit restoring the old title/body. Missing historical context
+or an empty panel stays unproven;
 the supported reviewer setting is one to three. This lookup reads existing
 immutable history and adds no state field, execution authority or polling loop.
 Previously completed histories are not rewritten or retroactively certified.

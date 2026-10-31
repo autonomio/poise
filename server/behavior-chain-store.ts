@@ -253,6 +253,14 @@ export class BehaviorChainJournal {
     return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
   }
 
+  firstMergedObservation(id: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`SELECT payload FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.observed' AND sequence < (
+        SELECT sequence FROM behavior_chain_events WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.merged'
+        ORDER BY sequence LIMIT 1) ORDER BY sequence DESC LIMIT 1`).get(id, id) as { payload: string } | undefined
+    return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
+  }
+
   /** Bounded status lookup, including completed chains while the datastore
    * still lists their PR. The journal hash validates the selected projection. */
   forPull(repository: string, number: number, identity?: { headRef: string | null, headRepo: string | null }): BehaviorChain | null {

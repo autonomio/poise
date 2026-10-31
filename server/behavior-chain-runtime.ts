@@ -147,9 +147,11 @@ export class BehaviorChainRuntime {
           await this.recover(chain, pendingInvocation, observation, snapshot)
           continue
         }
-        const mergeBasis = observation.pull?.merged
-          ? this.journal.preMergeObservation(chain.id, observation.pull.mergedAt ?? Number.NaN) as ChainObservation | null : null
-        const decision = decideBehaviorChain(chain, observation, Date.now(), mergeBasis)
+        const mergeEvidence = observation.pull?.merged ? {
+          before: this.journal.preMergeObservation(chain.id, observation.pull.mergedAt ?? Number.NaN) as ChainObservation | null,
+          firstMerged: this.journal.firstMergedObservation(chain.id) as ChainObservation | null,
+        } : undefined
+        const decision = decideBehaviorChain(chain, observation, Date.now(), mergeEvidence)
         if (decision.kind === 'complete') {
           this.append(chain, { type: 'chain.merged', mergeSha: decision.mergeSha, evidence: { repository: chain.repository,
             pull_number: observation.pull!.number, merged: true, merge_sha: decision.mergeSha, review_complete: true } })
