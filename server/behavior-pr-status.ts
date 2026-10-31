@@ -256,7 +256,7 @@ export interface PrStatusRow {
   ownership?: { engine: 'v1' | 'v2', chainId?: string, sequence?: number, reviewPending?: boolean | null,
     reviewStatus?: 'pending' | 'complete' | 'not-recorded', observation?: 'fresh' | 'stale' | 'missing' | 'skipped-while-owned',
     mergeSha?: string | null, journal?: string, reviews?: { completed: number | null, required: number | null },
-    reconciliation?: { nextObservationAt: string | null, waitingForOriginalResponse: boolean } }
+    reconciliation?: { nextObservationAt: string | null, waitingForOriginalResponse: boolean, waitingForResourceRelease?: boolean } }
   repository: string
   number: number
   org: string | null

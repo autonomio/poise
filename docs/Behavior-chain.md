@@ -105,7 +105,12 @@ missing original response. Intentionally deferred observation is not a
 collector outage, and old GitHub facets remain unverified. The chain summary's
 `reconciliation.nextObservationAt` is epoch milliseconds (`0` means eligible
 on the existing pass, `null` means no GitHub check is scheduled), with a separate
-`waitingForOriginalResponse` flag. No timer, independent execution ledger or
+`waitingForOriginalResponse` flag. The optional `waitingForResourceRelease`
+flag identifies merged model ownership whose native resources remain
+unverified. Its GitHub observation time is null even though native receipt
+reconciliation remains immediately eligible on every pass, including when the
+invocation is uncertain. It is not a missing original merge/resolve response.
+No timer, independent execution ledger or
 new completion control is added. Old duplicate events are preserved; this fix
 does not shrink accumulated history or rewrite historical hashes.
 
