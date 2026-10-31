@@ -24,6 +24,7 @@ test('merged chains retain open obligations as reconciliation-only and stale rea
   await expect(list).toContainText('Merged: aaaaaaaaaaaa')
   await expect(list).toContainText('Review evidence pending')
   await expect(list).toContainText('repair-pr: uncertain')
+  await expect(list).toContainText('Original native resource release is unverified; Caller reconciliation continues while GitHub observations are deferred')
   await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
   await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
   await expect(list.getByRole('button', { name: 'History' })).toBeEnabled()

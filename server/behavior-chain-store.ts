@@ -64,7 +64,8 @@ const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
 // The reducer admits at most one unsettled invocation, always the last one.
 // These expressions index derived observation scheduling, never ownership or
-// admission authority. API/status readers use the same expression below.
+// admission authority. Native receipt eligibility is separate from the
+// GitHub observation schedule reported by API/status readers.
 const LIVE_MODEL_SQL = `json_extract(state, '$.invocations[#-1].state') != 'settled'
   AND json_type(state, '$.invocations[#-1].model') != 'null'
   AND json_extract(state, '$.invocations[#-1].evidence.resources_settled_at') IS NULL`
@@ -270,7 +271,8 @@ export class BehaviorChainJournal {
   }
 
   reconciliationAt(chain: BehaviorChain): number | null {
-    const row = this.db.prepare(`SELECT (${RECHECK_AT_SQL}) AS at FROM behavior_chain_current WHERE chain_id = ? AND sequence = ?`)
+    const row = this.db.prepare(`SELECT CASE WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND (${LIVE_MODEL_SQL})
+      THEN NULL ELSE (${RECHECK_AT_SQL}) END AS at FROM behavior_chain_current WHERE chain_id = ? AND sequence = ?`)
       .get(chain.id, chain.sequence) as { at: number | null } | undefined
     if (!row) throw new Error('behavior chain changed while reading its reconciliation schedule')
     return row.at

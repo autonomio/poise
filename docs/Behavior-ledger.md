@@ -182,6 +182,10 @@ the [bounded reconciliation cadence](Behavior-chain.md#bounded-reconciliation).
 when immediately eligible, a completed chain needs no further read, or GitHub
 cannot supply a missing original action response; `waitingForOriginalResponse`
 distinguishes the latter. During
+a native resource wait, optional `waitingForResourceRelease` is true and no
+GitHub read is scheduled, while the original Caller receipt remains eligible
+on every pass. An uncertain model invocation retains its capacity and held
+state without declaring the deliberately skipped GitHub read stale. During
 a scheduled wait, `observation: skipped-while-owned` retains the hold and unknown
 GitHub facets without falsely marking the collector failed. A due but unserved
 read is still stale. This is derived read-only scheduling information, not

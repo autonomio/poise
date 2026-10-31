@@ -1,6 +1,11 @@
 import { attributedNativeAction, matchingNativeActionReceipt, nativeActionSettlement } from './behavior-chain-action'
 import type { BehaviorChain } from './behavior-chain-store'
 
+export function chainWaitsForResourceRelease(chain: BehaviorChain): boolean {
+  return !!chain.mergeSha && chain.invocations.some(invocation => invocation.state !== 'settled' && invocation.model !== null
+    && !(typeof invocation.evidence?.resources_settled_at === 'string' && Number.isFinite(Date.parse(invocation.evidence.resources_settled_at))))
+}
+
 /** Pure wire projection, shared by the HTTP handler and isolated browser fixtures. */
 export function behaviorChainSummary(chain: BehaviorChain, reconciliation?: { at: number | null }) {
   const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
@@ -9,6 +14,7 @@ export function behaviorChainSummary(chain: BehaviorChain, reconciliation?: { at
     reviewPending: chain.reviewPending ?? null,
     reviewStatus: chain.reviewPending === true ? 'pending' : chain.reviewPending === false ? 'complete' : 'not-recorded',
     reconciliation: reconciliation ? { nextObservationAt: reconciliation.at,
+      ...(chainWaitsForResourceRelease(chain) ? { waitingForResourceRelease: true } : {}),
       waitingForOriginalResponse: reconciliation.at === null && chain.reviewPending === true
         && chain.invocations.some((invocation) => invocation.state !== 'settled' && attributedNativeAction(invocation)) } : null,
     pullNumber: publication?.pull_number ?? null,
