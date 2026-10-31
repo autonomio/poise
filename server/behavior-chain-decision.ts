@@ -102,15 +102,22 @@ function reviewComplete(chain: BehaviorChain, behavior: 'review-issue' | 'review
 
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
-export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number): ChainDecision {
+export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number,
+  mergeBasis = chain.observation as ChainObservation | null): ChainDecision {
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
   const pull = observation.pull
   if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
-    const basis = chainBasis(['pr', pull.head, pull.reviewContext])
-    if (!observation.prReviewers.length || observation.prReviewers.some((reviewer) =>
-      reviewComplete(chain, 'review-pr', basis, reviewer, observation) !== 'complete')) {
+    if (!mergeBasis?.pull || mergeBasis.pull.merged || !Number.isFinite(mergeBasis.checkedAt)
+      || typeof pull.mergedAt !== 'number' || !Number.isFinite(pull.mergedAt) || mergeBasis.checkedAt > pull.mergedAt
+      || mergeBasis.pull.number !== pull.number || mergeBasis.pull.head !== pull.head || !mergeBasis.pull.reviewContext
+      || !Array.isArray(mergeBasis.prReviewers) || !mergeBasis.prReviewers.length) {
+      return { kind: 'hold', reason: 'confirmed merge retains an open review obligation: original pre-merge review basis is missing or contradictory' }
+    }
+    const original = { ...observation, prReviewers: mergeBasis.prReviewers, pull: { ...pull, reviewContext: mergeBasis.pull.reviewContext } }
+    const basis = chainBasis(['pr', pull.head, original.pull.reviewContext])
+    if (original.prReviewers.some((reviewer) => reviewComplete(chain, 'review-pr', basis, reviewer, original) !== 'complete')) {
       return { kind: 'hold', reason: 'confirmed merge retains an open review obligation: qualifying pre-merge review response is missing' }
     }
     return { kind: 'complete', mergeSha: pull.mergeSha }
