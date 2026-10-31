@@ -146,7 +146,7 @@ it('reports a deliberate original-evidence recheck without declaring the old Git
     ci: { state: 'unknown' }, blocker: { id: 'held' } })
 })
 
-it('distinguishes immediate native resource reconciliation from an intentionally skipped GitHub observation', async () => {
+it.each(['merged', 'closed-pr', 'closed-seed'] as const)('distinguishes immediate native resource reconciliation from a skipped GitHub read for %s', async kind => {
   const { journal, chain, obs, status } = await setup()
   const now = Date.now()
   let current = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'original-model', behavior: 'repair-pr',
@@ -154,9 +154,11 @@ it('distinguishes immediate native resource reconciliation from an intentionally
     request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
   current = record(journal, current, { type: 'invocation.uncertain', invocationId: 'original-model', reason: 'original resource release is unknown' })
   obs.checkedAt = now - 5 * 60_000
-  Object.assign(obs.pull!, { merged: true, mergeSha: MERGE, state: 'closed', mergedAt: now - 6 * 60_000 })
+  Object.assign(obs.pull!, { merged: kind === 'merged', mergeSha: kind === 'merged' ? MERGE : null,
+    state: kind === 'closed-seed' ? 'open' : 'closed', mergedAt: kind === 'merged' ? now - 6 * 60_000 : null })
+  if (kind === 'closed-seed') obs.issue.open = false
   current = record(journal, current, { type: 'chain.observed', observation: obs })
-  current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+  if (kind === 'merged') current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
     pull_number: pr.number, merged: true, merge_sha: MERGE, review_complete: false } })
   const before = journal.history(chain.id)
   expect(journal.reconcilable('', now, false).map(row => row.id)).toContain(chain.id)
@@ -168,6 +170,22 @@ it('distinguishes immediate native resource reconciliation from an intentionally
   expect(reply.rows[0]).toMatchObject({ ownership: { observation: 'skipped-while-owned', reconciliation: {
     nextObservationAt: null, waitingForOriginalResponse: false, waitingForResourceRelease: true } }, ci: { state: 'unknown' }, blocker: { id: 'held' } })
   expect(reply.rows[0].blocker.details.join(' ')).toContain('resource release remains unverified')
+  expect(journal.liveModelInvocationCount()).toBe(1)
+  expect(journal.history(chain.id)).toEqual(before)
+})
+
+it.each(['review-pr', 'approve-pr'] as const)('keeps open-PR %s observation eligible when only its seed closes', async behavior => {
+  const { journal, chain, obs } = await setup()
+  let current = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'open-pr-model', behavior,
+    actor: chain.reviewer, model: 'fixture', slot: 'primary', basis: 'review', admittedAt: Date.now(),
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  current = record(journal, current, { type: 'invocation.uncertain', invocationId: 'open-pr-model', reason: 'original resource release is unknown' })
+  obs.issue.open = false
+  current = record(journal, current, { type: 'chain.observed', observation: obs })
+  const before = journal.history(chain.id)
+  expect(journal.reconciliationAt(current)).toBe(0)
+  expect(behaviorChainSummary(current, { at: 0 }).reconciliation).toEqual({ nextObservationAt: 0, waitingForOriginalResponse: false })
+  expect(journal.reconcilable('', Date.now(), false).map(row => row.id)).toContain(chain.id)
   expect(journal.liveModelInvocationCount()).toBe(1)
   expect(journal.history(chain.id)).toEqual(before)
 })

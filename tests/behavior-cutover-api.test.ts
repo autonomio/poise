@@ -35,7 +35,7 @@ it('reports durable cutover through the real HTTP handler and refuses stale or i
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) }
 })
 
-it('keeps a confirmed merge with an open review obligation active through API reads and controls', async () => {
+it('keeps a confirmed merge with an open review obligation readable while refusing futile admission controls', async () => {
   const journal = behaviorChainJournal()
   let pending = journal.append('api/repo#7', 'pending-seed', 0, { type: 'chain.admitted', repository: 'api/repo', issue: 7,
     branch: 'poise/issue-7', author: 'author', reviewer: 'reviewer' })
@@ -60,11 +60,38 @@ it('keeps a confirmed merge with an open review obligation active through API re
     expect(detail.chain.reviewPending).toBe(true)
     const canonical = journal.read(pending.id)!
     expect(detail.chain).toEqual(behaviorChainSummary(canonical, { at: journal.reconciliationAt(canonical) }))
-    const response = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: pending.id, sequence: pending.sequence, operation: 'hold' }) })
-    expect(response.status).toBe(200)
-    expect((await response.json()).chain).toMatchObject({ reviewPending: true, held: 'New invocations held by the person' })
+    const before = journal.history(pending.id)
+    for (const operation of ['hold', 'resume']) {
+      const response = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: pending.id, sequence: pending.sequence, operation }) })
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain('original receipt reconciliation only')
+    }
+    expect(journal.history(pending.id)).toEqual(before)
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) }
+})
+
+it('preserves exact-sequence Hold and Resume for unmerged ownership', async () => {
+  const journal = behaviorChainJournal()
+  const chain = journal.append('api/repo#9', 'unmerged-seed', 0, { type: 'chain.admitted', repository: 'api/repo', issue: 9,
+    branch: 'poise/issue-9', author: 'author', reviewer: 'reviewer' })
+  const server = createServer((req, res) => { void handleBehaviorChains(req, res, req.url || '/') })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('server did not bind')
+  const post = (operation: string, sequence: number) => fetch(`http://127.0.0.1:${address.port}/api/behavior-chains`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: chain.id, sequence, operation }) })
+  try {
+    const hold = await post('hold', chain.sequence)
+    expect(hold.status).toBe(200)
+    const held = (await hold.json()).chain
+    expect(held.held).toBe('New invocations held by the person')
+    expect((await post('resume', chain.sequence)).status).toBe(409)
+    const resume = await post('resume', held.sequence)
+    expect(resume.status).toBe(200)
+    expect((await resume.json()).chain.held).toBeNull()
+    expect(journal.read(chain.id)?.invocations).toEqual([])
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
 })
 
 it('shares the production summary and historical rebuild contract with browser payloads', () => {

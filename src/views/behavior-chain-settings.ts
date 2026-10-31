@@ -184,7 +184,7 @@ export function behaviorChainSettings() {
           chain.reviewPending ? 'Review evidence pending' : '',
           chain.mergeSha && (chain.reviewStatus === 'not-recorded' || chain.reviewPending == null) ? 'Pre-merge review completion not recorded' : '',
           !complete && chain.held ? `Held: ${chain.held}` : '', !complete ? progress : ''].filter(Boolean).join(' · ')
-        const control = complete || (chain.mergeSha && !active) ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}"${!cutover ? ' disabled' : ''}>${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
+        const control = chain.mergeSha ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}"${!cutover ? ' disabled' : ''}>${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
         const attribution = last?.nativeAction?.attribution === 'accepted-response' ? ' · original action response accepted'
           : last?.nativeAction?.attribution === 'observed-no-action' ? ' · observed; mutation not attributed'
             : last?.nativeAction?.attribution === 'not-recorded' ? ' · action attribution not recorded' : ''

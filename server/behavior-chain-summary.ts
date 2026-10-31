@@ -1,8 +1,10 @@
 import { attributedNativeAction, matchingNativeActionReceipt, nativeActionSettlement } from './behavior-chain-action'
+import { closedChainTarget, type ChainObservation } from './behavior-chain-decision'
 import type { BehaviorChain } from './behavior-chain-store'
 
 export function chainWaitsForResourceRelease(chain: BehaviorChain): boolean {
-  return !!chain.mergeSha && chain.invocations.some(invocation => invocation.state !== 'settled' && invocation.model !== null
+  return chain.invocations.some(invocation => invocation.state !== 'settled' && invocation.model !== null
+    && !!closedChainTarget(chain, chain.observation as ChainObservation | null, invocation.behavior)
     && !(typeof invocation.evidence?.resources_settled_at === 'string' && Number.isFinite(Date.parse(invocation.evidence.resources_settled_at))))
 }
 

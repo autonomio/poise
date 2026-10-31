@@ -52,6 +52,7 @@ function operations(obs: ChainObservation, overrides: Partial<ChainRuntimeOperat
     received: () => {}, available: () => true, capacity: () => 2, permitted: () => true,
     request: async () => { throw new Error('unexpected admission') }, launch: async () => { throw new Error('unexpected launch') },
     perform: async () => { throw new Error('must not repeat an uncertain action') }, resumePublication: async () => { throw new Error('unexpected resume') },
+    fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') },
     wake: () => {}, ...overrides }
 }
 

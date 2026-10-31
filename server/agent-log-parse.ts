@@ -22,7 +22,7 @@ export interface LogEntry {
   time_elapsed: string
   status: string
   progress?: ModelProgress | null
-  outcome: 'clean' | 'changes_requested' | 'approved' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | null
+  outcome: 'clean' | 'changes_requested' | 'approved' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | 'target_closed' | null
   head_sha: string | null
   expected_head: string | null
   source: string | null
@@ -204,6 +204,8 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const correlationId = optionalString('correlation_id')
   const action = optionalString('action')
   const error = optionalString('error') || ''
+  const errorCode = optionalString('error_code')
+  const resourcesSettledAt = optionalString('resources_settled_at')
   const preflightFailed = status === 'failed'
     && action === 'not_started'
     && outcome === 'preflight_failed'
@@ -214,6 +216,15 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const managedReview = behavior === 'pr_review' || behavior === 'pr_approve' || (source === 'poise:behavior-chain' && issueReview)
   if (artifact !== null && ((!atomicWork && !managedReview) || typeof artifact !== 'object' || Array.isArray(artifact)
     || Buffer.byteLength(JSON.stringify(artifact)) > 128 * 1024)) throw new Error(`agent-interface log row ${index} has an invalid atomic artifact`)
+  // A native correlation fence is not a review superseded by another head.
+  // Only its exact no-provider/no-publication shape can release ownership.
+  const closedFence = source === 'poise:behavior-chain' && (atomicWork || managedReview)
+    && status === 'superseded' && outcome === 'target_closed' && action === 'not_started' && errorCode === 'target_closed'
+    && !error && headSha === null && !!completedAt && Number.isFinite(Date.parse(completedAt))
+    && !!resourcesSettledAt && Number.isFinite(Date.parse(resourcesSettledAt)) && Date.parse(resourcesSettledAt) >= Date.parse(completedAt)
+    && row.runner == null && row.review_id == null && row.review_comments == null && row.receipts == null && row.response == null
+    && artifact !== null && typeof artifact === 'object' && !Array.isArray(artifact)
+    && (artifact as Record<string, unknown>).phase === 'admission_fenced' && Object.keys(artifact).length === 1
   if (!LOG_CALL_ID.test(id)
     || (prId !== null && !LOG_PR_ID.test(prId))
     || (repo !== null && !LOG_REPO.test(repo))
@@ -222,13 +233,14 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     || !Number.isFinite(Date.parse(startedAt))
     || (startedAtPrecise !== null && !Number.isFinite(Date.parse(startedAtPrecise)))
     || (completedAt !== null && !Number.isFinite(Date.parse(completedAt)))
-    || !['clean', 'changes_requested', 'approved', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', null].includes(outcome)
+    || !['clean', 'changes_requested', 'approved', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', 'target_closed', null].includes(outcome)
+    || (outcome === 'target_closed' && !closedFence)
     || (headSha !== null && !/^[0-9a-f]{40}$/.test(headSha))
     || (expectedHead !== null && !/^[0-9a-f]{40}$/.test(expectedHead))
     || !['reviewed_clean', 'requested_changes', 'approved', 'not_started', 'commented', 'published', 'no_changes', null].includes(action)
     || ((action === 'published' || action === 'no_changes' || outcome === 'published' || outcome === 'no_changes') && !atomicWork)
     || ((action === 'commented' || outcome === 'commented') && !issueReview)
-    || ((action === 'not_started' || outcome === 'preflight_failed') && !preflightFailed)
+    || ((action === 'not_started' || outcome === 'preflight_failed') && !preflightFailed && !closedFence)
     || (source !== null && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(source))
     || (correlationId !== null && !LOG_CORRELATION_ID.test(correlationId))) {
     throw new Error(`agent-interface log row ${index} violates the schema`)
@@ -262,7 +274,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     if (status === 'failed' && !error) {
       throw new Error(`agent-interface log row ${index} has no terminal error`)
     }
-    if (status === 'superseded'
+    if (status === 'superseded' && !closedFence
       && (!completedAt || outcome !== 'superseded' || !headSha || action !== null)) {
       throw new Error(`agent-interface log row ${index} has incomplete superseded outcome`)
     }
@@ -290,7 +302,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     action: action as LogEntry['action'],
     response: optionalString('response'),
     error,
-    error_code: optionalString('error_code'),
+    error_code: errorCode,
     diagnostic: parseProcessDiagnostic(row.diagnostic),
     review_policy: optionalString('review_policy'),
     recovery_model: optionalString('recovery_model'),
@@ -298,7 +310,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     review_comments: Number.isSafeInteger(row.review_comments) && Number(row.review_comments) >= 0 ? Number(row.review_comments) : null,
     receipts: parseReceipts(row.receipts),
     ...(artifact === null ? {} : { artifact: artifact as Record<string, unknown> }),
-    ...(row.resources_settled_at === null || row.resources_settled_at === undefined ? {} : { resources_settled_at: optionalString('resources_settled_at') }),
+    ...(resourcesSettledAt === null ? {} : { resources_settled_at: resourcesSettledAt }),
     ...(row.issue_revision === null || row.issue_revision === undefined ? {} : { issue_revision: optionalString('issue_revision') }),
     runner: runner as LogEntry['runner'],
   }

@@ -16,7 +16,7 @@ export function projectChainPrStatus(chain: BehaviorChain, pr: DatastorePr, org:
   const active = chain.invocations.find((invocation) => invocation.state !== 'settled')
   const waitingForResourceRelease = chainWaitsForResourceRelease(chain)
   const ownedWorking = !!active && active.model !== null && active.state !== 'uncertain' && !active.evidence?.resources_settled_at
-  const scheduled = recheckAt !== undefined && !!(chain.held || chain.mergeSha) && (recheckAt === null || recheckAt > now)
+  const scheduled = recheckAt !== undefined && !!(chain.held || chain.mergeSha || waitingForResourceRelease) && (recheckAt === null || recheckAt > now)
   const observationState = !observation ? 'missing' : fresh ? 'fresh'
     : (ownedWorking || scheduled) && Number.isFinite(observation.checkedAt) && observation.checkedAt <= now ? 'skipped-while-owned'
       : !pull ? 'missing' : 'stale'

@@ -1881,7 +1881,9 @@ function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry
       quarantineEvidence(snapshot, claim, call).hasLiveEvidence)
     return false
   }
-  if (call.outcome === 'published' || call.outcome === 'no_changes') throw new Error('atomic publication cannot settle a legacy review claim')
+  if (call.outcome === 'published' || call.outcome === 'no_changes' || call.outcome === 'target_closed') {
+    throw new Error('native chain outcomes cannot settle a legacy review claim')
+  }
   // A recovered completion settles the launch record itself, not just the
   // incident and the firing: without the outcome, action, completion time
   // and head, the approval basis and round accounting would still see no

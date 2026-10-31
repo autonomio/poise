@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from '../server/behavior-chain-store'
 import type { Organization } from '../server/organizations'
+import type { NativeChainHooks } from '../server/behavior-chain-native'
 
 const mocks = vi.hoisted(() => ({ runFile: vi.fn() }))
 vi.mock('../server/process', () => ({ runFile: mocks.runFile, spawnDetached: vi.fn() }))
@@ -17,12 +18,12 @@ const chain: BehaviorChain = { id: 'example/repo#7', repository: 'example/repo',
   mergeSha: null, observation: null, invocations: [] }
 const reviewer = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
 
-function actionOperations() {
+function actionOperations(overrides: Partial<NativeChainHooks> = {}) {
   return nativeChainOperations({ login: 'example' } as Organization, {
     roster: async () => ({ issueReviewers: [], prReviewers: [], implementer: reviewer, repairer: reviewer, approver: reviewer }),
     resolve: async () => reviewer, prepare: async () => ({}), borrow: () => () => {}, available: () => true,
     capacity: () => 3, permitted: () => true, note: () => '', severity: () => 'p2', received: () => {},
-    reviews: async () => 'reviews', existing: async () => new Set(), wake: () => {},
+    reviews: async () => 'reviews', existing: async () => new Set(), wake: () => {}, ...overrides,
   })
 }
 
@@ -31,6 +32,39 @@ function mergeInvocation(): ChainInvocation {
     reservation: null, admittedAt: Date.now() - 1000, admissionSequence: 2, state: 'started', callId: null, outcome: null, evidence: null,
     request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', '21', '--expected-head', HEAD, '--token-user', 'reviewer'] } }
 }
+
+it.each(['fenced', 'existing'] as const)('validates the original closed-target fence response without provider preparation: %s', async outcome => {
+  const prepare = vi.fn(async () => ({}))
+  const borrow = vi.fn(() => () => {})
+  const invocation: ChainInvocation = { ...mergeInvocation(), behavior: 'repair-pr', model: 'fixture', actor: 'author',
+    request: { command: 'agent-interface', cwd: '/fixture', argv: ['--atomic-work', 'example/repo#7', '--pull-number', '21', '--expected-head', HEAD] } }
+  mocks.runFile.mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'c'.repeat(32), outcome, model: 'fixture', actor: 'author',
+    repo: chain.repository, pr_id: '21', behavior: 'repair_pr', source: 'poise:behavior-chain', correlation_id: invocation.id, expected_head: HEAD }) })
+  expect(await actionOperations({ prepare, borrow }).fenceClosedTarget(chain, invocation)).toBe(outcome === 'fenced')
+  expect(mocks.runFile.mock.calls.at(-1)?.slice(0, 2)).toEqual(['agent-interface', ['--fence-closed-behavior', '--model', 'fixture',
+    '--actor', 'author', '--repo', chain.repository, '--number', '21', '--behavior', 'repair_pr', '--correlation-id', invocation.id, '--expected-head', HEAD]])
+  expect(prepare).not.toHaveBeenCalled()
+  expect(borrow).not.toHaveBeenCalled()
+})
+
+it('refuses a late native launch before reserving capacity or preparing a provider', async () => {
+  const prepare = vi.fn(async () => ({}))
+  const borrow = vi.fn(() => () => {})
+  expect(await actionOperations({ prepare, borrow }).launch(mergeInvocation(), () => {}, () => false)).toBe(false)
+  expect(prepare).not.toHaveBeenCalled()
+  expect(borrow).not.toHaveBeenCalled()
+})
+
+it('releases borrowed capacity when closure arrives during provider preparation', async () => {
+  const release = vi.fn()
+  const borrow = vi.fn(() => release)
+  const prepare = vi.fn(async () => ({}))
+  const allowed = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false)
+  expect(await actionOperations({ prepare, borrow }).launch(mergeInvocation(), () => {}, allowed)).toBe(false)
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(borrow).toHaveBeenCalledTimes(1)
+  expect(release).toHaveBeenCalledTimes(1)
+})
 
 it('retains a returned native mutation response when its process subsequently fails', async () => {
   const response = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21,

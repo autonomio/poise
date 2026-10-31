@@ -48,7 +48,7 @@ function operations(overrides: Partial<ChainRuntimeOperations> = {}): ChainRunti
   return { enabled: () => false, accounts: () => ({ author: 'author', reviewer: 'reviewer' }), discover: async () => [],
     ownsRepository: () => true, observe: async () => observation(), readInvocations: async () => ({ entries: [], quarantined: [] }),
     received: () => {}, available: () => false, capacity: () => 3, permitted: () => false, request: forbidden,
-    launch: forbidden, perform: forbidden, resumePublication: forbidden, wake: () => {}, ...overrides }
+    launch: forbidden, perform: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {}, ...overrides }
 }
 
 it('deduplicates merged holds and bounds repeated observation from durable state across runtime replacement', async () => {
@@ -215,7 +215,8 @@ it.each([false, true])('does not defer original model/resource settlement, with 
   let visible = present
   const readInvocations = vi.fn(async () => ({ entries: visible ? [structuredClone(call)] : [], quarantined: [] }))
   const observe = vi.fn(async () => observation())
-  const runtime = new BehaviorChainRuntime(journal, operations({ readInvocations, observe }))
+  // A native fence sees the existing original even before this reader does.
+  const runtime = new BehaviorChainRuntime(journal, operations({ readInvocations, observe, fenceClosedTarget: async () => false }))
   await runtime.run()
   vi.setSystemTime(NOW + 3 * 86400_000)
   await runtime.run()
