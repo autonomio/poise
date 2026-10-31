@@ -3,14 +3,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { behaviorChainJournal } from './behavior-chain-journal'
 import { HttpError, httpStatus, readJson } from './http'
 import { getBehaviorChainSettings, getSettings } from './settings'
-import { getBehaviorChainRuntimeHealth } from './behaviors'
+import { getBehaviorChainCapacity, getBehaviorChainRuntimeHealth } from './behaviors'
 import { behaviorCutoverBlockers } from './behavior-cutover'
 import type { BehaviorChain, ChainEvent } from './behavior-chain-store'
 
 function summary(chain: BehaviorChain) {
   const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
   return { id: chain.id, repository: chain.repository, issue: chain.issue, branch: chain.branch, author: chain.author, reviewer: chain.reviewer,
-    sequence: chain.sequence, held: chain.held, waiting: chain.waiting, mergeSha: chain.mergeSha, pullNumber: publication?.pull_number ?? null,
+    sequence: chain.sequence, held: chain.held, waiting: chain.waiting, mergeSha: chain.mergeSha,
+    reviewPending: chain.reviewPending === true, pullNumber: publication?.pull_number ?? null,
     invocationCount: chain.invocations.length, invocations: chain.invocations.slice(-20).map((invocation) => ({
       id: invocation.id, behavior: invocation.behavior, state: invocation.state, callId: invocation.callId, model: invocation.model,
       slot: invocation.slot, outcome: invocation.outcome, admittedAt: invocation.admittedAt,
@@ -44,11 +45,11 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
             ...('outcome' in event ? { outcome: event.outcome } : {}) }
         })
         return reply(res, 200, { chain: summary(chain), events, next: rows.length === 20 ? rows.at(-1)!.sequence : null,
-          cutover: cutover(), settings: getBehaviorChainSettings(), runtime: getBehaviorChainRuntimeHealth() })
+          cutover: cutover(), settings: getBehaviorChainSettings(), runtime: getBehaviorChainRuntimeHealth(), capacity: getBehaviorChainCapacity() })
       }
       const after = params.get('after') || ''
       const chains = journal.page(after, 100, params.get('state') === 'active' ? false : params.get('state') === 'merged' ? true : null)
-      return reply(res, 200, { chains: chains.map(summary), next: chains.length === 100 ? chains.at(-1)!.id : null, cutover: cutover(), settings: getBehaviorChainSettings(), runtime: getBehaviorChainRuntimeHealth() })
+      return reply(res, 200, { chains: chains.map(summary), next: chains.length === 100 ? chains.at(-1)!.id : null, cutover: cutover(), settings: getBehaviorChainSettings(), runtime: getBehaviorChainRuntimeHealth(), capacity: getBehaviorChainCapacity() })
     }
     if (req.method !== 'POST') throw new HttpError(405, 'behavior chains support GET and POST')
     const body = await readJson<unknown>(req)

@@ -5,7 +5,7 @@ import type { BehaviorCutoverState } from '../behavior-cutover'
 type Settings = NonNullable<AppSettings['behaviorChain']>
 interface ChainRow {
   id: string, repository: string, issue: number, sequence: number, held: string | null, waiting: string | null,
-  mergeSha: string | null, pullNumber: number | null,
+  mergeSha: string | null, reviewPending?: boolean, pullNumber: number | null,
   invocations: Array<{ behavior: string, state: string, outcome?: string | null }>
 }
 interface JournalEvent { sequence: number, at: number, type: string, reason?: string, outcome?: string }
@@ -25,7 +25,7 @@ export function behaviorChainSettings() {
     <p class="st-help">This intake controls v2. Repository/author triggers and the approval-round cap in the Behaviors table apply to legacy work. Existing reviewer counts, phase switches, pauses, notes and PR exclusions still apply to v2.</p>
     <button type="button" class="st-clear" data-chain-save disabled>Save chain settings</button> <button type="button" class="st-clear" data-chain-reload>Reload saved settings</button> <button type="button" class="st-clear" data-chain-refresh>Refresh chains</button>
     <p class="st-help">Hold pauses future invocations; it does not stop a running worker. Use its existing Stop control to stop it.</p>
-    <p role="status" data-chain-status></p><details data-legacy hidden><summary>Legacy PR ownership retained at cutover</summary><ul></ul></details><ul data-chain-list></ul>
+    <p role="status" data-chain-status></p><p data-chain-capacity>Atomic behavior capacity has not been read.</p><details data-legacy hidden><summary>Legacy PR ownership retained at cutover</summary><ul></ul></details><ul data-chain-list></ul>
     <button type="button" class="st-clear" data-chain-more hidden>More chains</button>
     <section aria-label="Chain journal" hidden><p data-history-title></p><ol data-history></ol><button type="button" class="st-clear" data-history-more hidden>More events</button></section>`
   const enabled = element.querySelector<HTMLInputElement>('[data-chain-enabled]')!
@@ -95,6 +95,7 @@ export function behaviorChainSettings() {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-chain-id]')
     if (!button) return
     if (button.dataset.operation === 'history') { await readHistory(button.dataset.chainId!); return }
+    if (!cutover) { status.textContent = 'Refresh chains before changing their controls.'; return }
     button.disabled = true
     try {
       const response = await fetch('/api/behavior-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -165,14 +166,22 @@ export function behaviorChainSettings() {
       element.querySelector('[data-cutover-status]')!.textContent = !cutover ? 'Admission state unavailable' : cutover.mode === 'v2'
         ? `v2 owns new work · legacy PRs at cutover: ${cutover.legacyPulls.length}`
         : cutover.mode === 'draining' ? `Draining behaviors · ${(data.cutover.blockers as string[]).join('; ') || 'Verifying the legacy ownership boundary'}` : 'v1 owns new work'
+      const capacity = data.capacity
+      element.querySelector('[data-chain-capacity]')!.textContent = capacity?.status === 'available'
+        ? `Atomic behaviors: ${capacity.reservedModelInvocations} durable model admission(s) reserved · ceiling ${capacity.modelInvocationLimit} (shared with other heavy work). Intake: ${capacity.intake?.seedMode === 'all' ? 'all issues' : `label ${capacity.intake?.label}`}. ${capacity.enabled ? 'Admissions enabled.' : 'Admissions paused.'} Manager worker-Chat capacity is separate.`
+        : `Atomic behavior capacity unavailable${capacity?.error ? `: ${capacity.error}` : '.'}`
       list.innerHTML = rows.map((chain) => {
         const active = chain.invocations.find(invocation => invocation.state !== 'settled')
         const last = chain.invocations[chain.invocations.length - 1]
         const github = /^[-A-Za-z0-9_.]+\/[-A-Za-z0-9_.]+$/.test(chain.repository) && Number.isSafeInteger(chain.issue)
           ? `<a href="https://github.com/${escapeHtml(chain.repository)}/issues/${chain.issue}">#${chain.issue}</a>` : escapeHtml(chain.id)
-        const state = chain.mergeSha ? `Merged: ${chain.mergeSha.slice(0, 12)}` : chain.held || (active
-          ? `${active.behavior}: ${active.state}${active.outcome ? ` · ${active.outcome}` : ''}` : chain.waiting || 'Awaiting the next observation')
-        const control = chain.mergeSha ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}">${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
+        const complete = !!chain.mergeSha && !chain.reviewPending
+        const progress = active ? `${active.behavior}: ${active.state}${active.outcome ? ` · ${active.outcome}` : ''}`
+          : chain.waiting || 'Awaiting the next observation'
+        const state = [chain.mergeSha ? `Merged: ${chain.mergeSha.slice(0, 12)}` : '',
+          chain.reviewPending ? 'Review evidence pending' : '',
+          !complete && chain.held ? `Held: ${chain.held}` : '', !complete ? progress : ''].filter(Boolean).join(' · ')
+        const control = complete ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}">${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
         return `<li>v2 · ${github}${chain.pullNumber ? ` → <a href="https://github.com/${escapeHtml(chain.repository)}/pull/${Number(chain.pullNumber)}">PR #${Number(chain.pullNumber)}</a>` : ''}: ${escapeHtml(state)}${!active && last ? ` · Last: ${escapeHtml(last.behavior)} (${escapeHtml(last.outcome || last.state)})` : ''}${control} <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-operation="history">History</button></li>`
       }).join('') || '<li>No behavior chains.</li>'
       const errors = Array.isArray(data.runtime) ? data.runtime.filter((entry: { error: string | null }) => entry.error).map((entry: { organization: string, error: string }) => `${entry.organization}: ${entry.error}`).join('; ') : ''
@@ -180,6 +189,8 @@ export function behaviorChainSettings() {
     } catch (error) {
       cutover = null; cutoverButton.disabled = true; enabled.disabled = true
       save.disabled = true
+      for (const button of list.querySelectorAll<HTMLButtonElement>('button[data-operation="hold"], button[data-operation="resume"]')) button.disabled = true
+      element.querySelector('[data-chain-capacity]')!.textContent = 'Atomic behavior capacity unavailable.'
       element.querySelector('[data-cutover-status]')!.textContent = 'Admission state unavailable'
       status.textContent = `Chains could not be refreshed: ${(error as Error).message}`
     } finally { reading = false; more.disabled = false }

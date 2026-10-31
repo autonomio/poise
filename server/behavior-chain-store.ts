@@ -146,6 +146,8 @@ export class BehaviorChainJournal {
         chain_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL, merged INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS behavior_chain_active ON behavior_chain_current(merged, chain_id);
+      CREATE INDEX IF NOT EXISTS behavior_chain_pull ON behavior_chain_current(
+        lower(json_extract(state, '$.repository')), json_extract(state, '$.observation.publication.pull_number'));
     `)
   }
 
@@ -233,6 +235,26 @@ export class BehaviorChainJournal {
     return this.page(after, limit, false)
   }
 
+  /** Bounded status lookup, including completed chains while the datastore
+   * still lists their PR. The journal hash validates the selected projection. */
+  forPull(repository: string, number: number, identity?: { headRef: string | null, headRepo: string | null }): BehaviorChain | null {
+    let rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current
+      WHERE lower(json_extract(state, '$.repository')) = lower(?)
+        AND json_extract(state, '$.observation.publication.pull_number') = ? LIMIT 2`)
+      .all(repository, number) as Array<{ chain_id: string }>
+    if (!rows.length && identity?.headRef && identity.headRepo?.toLowerCase() === repository.toLowerCase()) {
+      rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current
+        WHERE merged = 0 AND lower(json_extract(state, '$.repository')) = lower(?) AND json_extract(state, '$.branch') = ? LIMIT 2`)
+        .all(repository, identity.headRef) as Array<{ chain_id: string }>
+    }
+    if (rows.length > 1) throw new Error('multiple behavior chains claim the same pull request')
+    if (!rows.length) return null
+    const chain = this.read(rows[0].chain_id)!
+    const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
+    if (publication?.pull_number != null && publication.pull_number !== number) throw new Error('native branch belongs to a different published pull request')
+    return chain
+  }
+
   page(after = '', limit = 100, merged: boolean | null = null): BehaviorChain[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('behavior chain page must contain 1 to 100 records')
     const rows = (merged === null
@@ -270,10 +292,14 @@ export class BehaviorChainJournal {
 
   modelCapacityAvailable(capacity: number): boolean {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('native invocation capacity must be positive')
+    return this.liveModelInvocationCount() < capacity
+  }
+
+  liveModelInvocationCount(): number {
     const row = this.db.prepare(`SELECT count(*) AS count FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
       WHERE c.merged = 0 AND json_extract(i.value, '$.state') != 'settled'
         AND json_type(i.value, '$.model') != 'null' AND json_extract(i.value, '$.evidence.resources_settled_at') IS NULL`).get() as { count: number }
-    return row.count < capacity
+    return row.count
   }
 
   /** Resource allowances held by live native invocations, over the same

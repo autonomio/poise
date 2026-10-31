@@ -137,6 +137,29 @@ initializing datastores appear as explicit per-organization coverage, never
 as an empty success; stale or unavailable inputs render `unknown` with the
 source named.
 
+Rows now name `ownership.engine` as `v1` or `v2`. Legacy rows retain the
+counter/cache rules above. A v2 row reads the canonical chain projection,
+including phase, holds, uncertain invocations, head-pinned native check rollup
+and queue evidence; it does not substitute the legacy merge cache or review-cap
+escape. Its `ownership` includes chain identity, sequence, confirmed merge SHA,
+review-pending state and a canonical journal link. `ownership.reviews` reports
+verified current-head review slots against the observed required panel; both
+counts are `null` when the observation is stale or unavailable. The legacy
+`rounds` fields are `null` for v2 because that counter does not govern chains.
+A confirmed merge with an open review obligation stays distinct from completion;
+a fully completed chain is excluded even if the datastore still lists its PR
+as open. Closed PRs absent from that listing remain visible in the chain list.
+
+V2 uses the decision path's two-minute observation-freshness bound. Missing or
+unrecognized check rollups stay unknown; an empty failing-check list is not
+proof of success. Held/uncertain ownership remains visible even when PR state
+is stale, and stale chain evidence marks reply health stale. A contradictory
+journal or ambiguous ownership fails the existing endpoint with 503 instead of
+falling back to legacy status. Indexed target lookups validate selected journal
+projections without loading unrelated histories. The existing in-memory blocker
+clock applies to both engines; ordinary refreshes do not reset an unchanged
+blocker. Status reads start no worker and collect no additional GitHub evidence.
+
 ## Health split
 
 `/api/health` carries the ledger twice: `dependencies.ledger` for whether

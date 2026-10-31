@@ -33,6 +33,20 @@ After completion, v2 owns new eligible seed issues; new legacy issue intake is f
 
 The chain list displays v2 ownership, actual phase/wait/hold/uncertainty, last recorded outcome and confirmed merge SHA, with links to the issue and PR. More chains and per-chain History/More events page through the existing journal readers. It refreshes on the application's existing refresh clock while General settings is open. Unavailable reads disable cutover controls instead of displaying a confident engine state. Repository/author triggers and the approval-round escape remain explicitly legacy-only; v2 uses its selected label/all-issues intake and never escapes unresolved blockers by approving.
 
+API summaries include `reviewPending`. A confirmed merge remains visible while
+its review obligation is open, alongside any hold or uncertain invocation;
+Hold/Resume remains available until canonical completion. Failed refreshes disable
+the retained row's write controls until a successful read. Chain settings also
+show workspace-wide durable model admissions and their behavior-lane ceiling,
+the actual all-issues/label intake and admission pause. This count survives a
+replacement semaphore and includes uncertain model ownership until native
+resource-release proof arrives; it is not a claim that a provider process is
+currently alive or that all unreserved slots are free of other heavy work.
+Unavailable counts are unknown, never zero. The same `chainCapacity` appears
+beside `workerCapacity` in behavior diagnostics and Manager context. The latter
+still describes Manager worker Chats and their enhancement backlog; its Rhythm
+target does not govern atomic chain admissions. No new refresh loop is added.
+
 The existing authorized HTTP API supports interactive and headless controls: `GET /api/behavior-chains`, optional `state=active|merged`, cursor `after`, or `id` with an event-sequence cursor; `POST` accepts `id`, current `sequence` and `operation=hold|resume`. Cutover controls instead send the current cutover `sequence` and `operation=switch-to-v2|cancel-cutover`. Reads include `cutover` (mode, sequence, request time, recorded legacy targets and current drain blockers). Summaries/events are paginated. Stale writes fail instead of overwriting a later decision.
 
 ## Handoffs and outcomes

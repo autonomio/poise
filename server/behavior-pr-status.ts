@@ -4,7 +4,8 @@
 //
 // Read-only by construction: datastore `view` reads (cached 60 s), pure
 // behavior_seen/dead-letter SELECTs, meta reads, and the in-memory
-// merge-candidate cache the existing merge-prs tick fills. No Caller
+// merge-candidate cache the existing merge-prs tick fills, or canonical
+// journal projections for chain-owned PRs. No Caller
 // invocation, no GitHub request, and no claim, retry, incident,
 // queue-admission, or launch change (an expired repo hold may be lazily
 // purged while reading it, which observes identically either way).
@@ -15,6 +16,9 @@ import { classifyBehaviorDiagnostic } from '../src/behavior-failure-cause'
 import { countReviewRounds, listGreyCiPendingHeads, listLiveReviewClaims, listPrReviewStates } from './db'
 import { getOrganizations } from './organizations'
 import { prAccounts } from './pr-accounts'
+import { behaviorChainForPull, behaviorChainJournal, behaviorChainOwnsRepository } from './behavior-chain-journal'
+import { projectChainPrStatus } from './behavior-chain-pr-status'
+import { getBehaviorChainSettings } from './settings'
 import {
   BEHAVIOR_KEYS,
   MERGE_CANDIDATE_CACHE_STALE_MS,
@@ -243,6 +247,8 @@ export function computePrBlocker(input: BlockerInput): ComputedBlocker {
 }
 
 export interface PrStatusRow {
+  ownership?: { engine: 'v1' | 'v2', chainId?: string, sequence?: number, reviewPending?: boolean,
+    mergeSha?: string | null, journal?: string, reviews?: { completed: number | null, required: number | null } }
   repository: string
   number: number
   org: string | null
@@ -250,7 +256,8 @@ export interface PrStatusRow {
   createdAt: string | null
   /** Whole minutes since `createdAt`; null when the age is unknown. */
   ageMinutes: number | null
-  rounds: { completed: number, cap: number | null, next: number }
+  /** Legacy counter only; null fields for v2, whose verified panel is in ownership.reviews. */
+  rounds: { completed: number | null, cap: number | null, next: number | null }
   verdict: (PrStatusVerdict & { onCurrentHead: boolean | null }) | null
   ci: { state: string | null, head: string | null, asOf: string | null } | { state: 'unknown', reason: string }
   queue: { state: PrStatusQueueState, entryId: string | null, since: string | null }
@@ -309,6 +316,14 @@ function incidentKey(incident: { repo: string | null, pr: number | null, target:
   if (incident.repo && incident.pr) return targetKey(incident.repo, incident.pr)
   const ref = /^[^#]+#\d+/.exec(incident.target)?.[0]
   return ref ? ref.toLowerCase() : null
+}
+
+function trackBlocker(key: string, id: PrBlockerId, basis: string, asOf: string) {
+  const previous = blockerSince.get(key)
+  if (previous && previous.id === id && previous.key === basis) return previous
+  const tracked = { id, key: basis, since: asOf, sinceRestart: !previous }
+  blockerSince.set(key, tracked)
+  return tracked
 }
 
 async function readScopeRows(scope: string | null): Promise<{ rows: DatastorePr[] | null, error: string | null }> {
@@ -419,11 +434,32 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
   }
 
   const rows: PrStatusRow[] = []
+  let chainEvidenceStale = false
+  let chainAdmissionsEnabled: boolean | undefined
   for (const { pr, org } of inventory) {
     if (!pair.includes(pr.author.toLowerCase())) continue
     const target = `${pr.repo}#${pr.number}`
     const key = targetKey(pr.repo, pr.number)
     const scoped = <T>(operation: () => T): T => withBehaviorOrganization(org ?? undefined, operation)
+    const chain = behaviorChainForPull(pr.repo, pr.number, pr)
+    if (chain) {
+      // A confirmed completed chain is stronger than an open datastore row
+      // that has not caught up. Retained review obligations stay visible.
+      if (chain.mergeSha && !chain.reviewPending) continue
+      chainAdmissionsEnabled ??= getBehaviorChainSettings().enabled && behaviorChainJournal().cutover().mode === 'v2'
+      const projected = projectChainPrStatus(chain, pr, org, now, chainAdmissionsEnabled)
+      const tracked = trackBlocker(key, projected.row.blocker.id, projected.key, asOf)
+      projected.row.blocker.since = tracked.since
+      projected.row.blocker.sinceRestart = tracked.sinceRestart
+      projected.row.flags.age = pr.created_at !== null && now - Date.parse(pr.created_at) > PR_STATUS_AGE_FLAG_MS
+      projected.row.flags.staleBlocker = now - Date.parse(tracked.since) > PR_STATUS_BLOCKER_STALE_MS
+      chainEvidenceStale ||= projected.stale
+      rows.push(projected.row)
+      continue
+    }
+    if (behaviorChainOwnsRepository(pr.repo) && (!pr.headRef || !pr.headRepo)) {
+      throw new Error(`PR ${target} lacks branch evidence needed to distinguish legacy and chain ownership`)
+    }
 
     const skippedBy = SKIPPABLE_BEHAVIORS.filter((behavior) => skips.get(behavior)?.has(pr.repo.toLowerCase()))
     const refusal = scoped(() => ownPullRequestRefusal(accounts.me, target, pr, accounts.agent)
@@ -537,13 +573,7 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
       evidenceFresh: cacheUsable, evidenceWhy,
     })
 
-    const identity = `${computed.id}:${computed.key}`
-    const previous = blockerSince.get(key)
-    const unchanged = previous && `${previous.id}:${previous.key}` === identity
-    const tracked = unchanged
-      ? previous
-      : { id: computed.id, key: computed.key, since: asOf, sinceRestart: !previous }
-    if (!unchanged) blockerSince.set(key, tracked)
+    const tracked = trackBlocker(key, computed.id, computed.key, asOf)
 
     const createdMs = pr.created_at ? Date.parse(pr.created_at) : Number.NaN
     const ageMinutes = Number.isFinite(createdMs) ? Math.max(0, Math.floor((now - createdMs) / 60_000)) : null
@@ -551,6 +581,7 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
     const staleFlag = now - Date.parse(tracked.since) > PR_STATUS_BLOCKER_STALE_MS
 
     rows.push({
+      ownership: { engine: 'v1' },
       repository: pr.repo, number: pr.number, org, author: pr.author,
       createdAt: pr.created_at, ageMinutes,
       rounds: { completed, cap, next: reviewRoundNumber(pr.repo, pr.number) },
@@ -574,7 +605,7 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
     || a.repository.localeCompare(b.repository) || a.number - b.number)
   const totalOpen = rows.length
   const sliced = rows.slice(0, limit)
-  const partial = coverage.some((entry) => entry.status !== 'ready')
+  const partial = chainEvidenceStale || coverage.some((entry) => entry.status !== 'ready')
   return {
     version: 1,
     health: { status: partial ? 'stale' : 'ok', pending: 0, dropped: 0, gaps: [] },

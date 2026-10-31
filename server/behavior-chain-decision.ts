@@ -1,6 +1,8 @@
 import { chainBasis, type BehaviorChain, type ChainBehavior, type ChainInvocation } from './behavior-chain-store'
 import { validReviewResponse, type ReviewResponse } from './review-response'
 
+export const CHAIN_OBSERVATION_MAX_AGE_MS = 120_000
+
 export interface ChainReviewer { slot: string, model: string, recovery: string }
 export interface ChainObservation extends Record<string, unknown> {
   checkedAt: number
@@ -25,6 +27,7 @@ export interface ChainObservation extends Record<string, unknown> {
     reviewReceipts: Array<{ id: number, head: string, state: string, invocation: string | null, response?: unknown, submittedAt?: number }>,
     greyRuns: Array<{ id: number, attempt: number }>,
     pending: boolean, failing: string[], conflict: boolean, behind: boolean,
+    checksState?: string | null, readinessBlockers?: string[],
   }
 }
 export type ChainDecision =
@@ -103,7 +106,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
   const pull = observation.pull
-  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > 120_000 || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
+  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
     const basis = chainBasis(['pr', pull.head, pull.reviewContext])
     if (!observation.prReviewers.length || observation.prReviewers.some((reviewer) =>

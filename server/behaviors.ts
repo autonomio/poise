@@ -7186,6 +7186,32 @@ export interface RunEnabledBehaviorsOptions {
 
 const behaviorChains = new Map<string, BehaviorChainRuntime>()
 const behaviorChainHealth = new Map<string, { lastSweepAt: number, error: string | null }>()
+export interface BehaviorChainCapacity {
+  status: 'available' | 'unavailable'
+  error: string | null
+  reservedModelInvocations: number | null
+  modelInvocationLimit: number
+  enabled: boolean | null
+  intake: { seedMode: 'all' | 'label', label: string | null } | null
+}
+
+/** Workspace-wide durable admissions, distinct from Manager worker Chats
+ * and from the process-local semaphore's current holdings. */
+export function getBehaviorChainCapacity(): BehaviorChainCapacity {
+  const modelInvocationLimit = behaviorCheckSlots.laneCapacity('behavior')
+  try {
+    const settings = getBehaviorChainSettings()
+    const journal = behaviorChainJournal()
+    return { status: 'available', error: null, modelInvocationLimit,
+      reservedModelInvocations: journal.liveModelInvocationCount(),
+      enabled: settings.enabled && journal.cutover().mode === 'v2',
+      intake: { seedMode: settings.seedMode, label: settings.seedMode === 'label' ? settings.label : null } }
+  } catch (error) {
+    return { status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+      modelInvocationLimit, reservedModelInvocations: null, enabled: null, intake: null }
+  }
+}
+
 export function getBehaviorChainRuntimeHealth() {
   return [...behaviorChainHealth].filter(([organization]) => organization !== '@cutover' || behaviorAdmissionDraining())
     .map(([organization, health]) => ({ organization, ...health }))
@@ -7567,9 +7593,10 @@ export interface BehaviorsRuntimeHealth {
   checkSlots: CheckSlotStats & { callerLaunches: number }
   /** Manager worker slots in use versus target, and the labelled backlog. */
   workerCapacity: WorkerCapacity
+  chainCapacity: BehaviorChainCapacity
 }
 
-function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
+function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): BehaviorsRuntimeHealth {
   const now = Date.now()
   const busyEntries = [...behaviorOperationStartedAt.entries()].filter(([key]) => key.startsWith(`${currentOrganization()?.login.toLowerCase() ?? 'legacy'}:`))
   const busy = busyEntries.map(([key, since]) => ({
@@ -7669,7 +7696,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
   return {
     runtimeError: !tickerStarted ? 'The behavior scheduler has stopped.'
       : heartbeatStale ? 'The behavior scheduler is no longer responding.'
-        : operationStale ? 'A behavior operation exceeded its execution deadline.' : chainError || null,
+        : operationStale ? 'A behavior operation exceeded its execution deadline.' : chainError || chainCapacity.error || null,
     status: tickerStarted
       && !heartbeatStale
       && !operationStale
@@ -7677,6 +7704,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
       && (!anyEnabled || identityValid)
       && !datastoreUnavailable
       && !chainError
+      && chainCapacity.status === 'available'
       ? 'ok'
       : 'degraded',
     running: tickerStarted,
@@ -7700,6 +7728,7 @@ function scopedBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
     eventLoop: eventLoopDelayStats(),
     checkSlots: { ...behaviorCheckSlots.stats(), callerLaunches: runningCallerLaunches() },
     workerCapacity: getWorkerCapacity(),
+    chainCapacity,
   }
 }
 
@@ -7720,12 +7749,13 @@ export function getBehaviorDiagnosticIncidents(snapshot: AgentLogSnapshot | null
 }
 
 export function getBehaviorsRuntimeHealth(): BehaviorsRuntimeHealth {
-  if (behaviorOrganization.getStore() !== undefined) return scopedBehaviorsRuntimeHealth()
+  const chainCapacity = getBehaviorChainCapacity()
+  if (behaviorOrganization.getStore() !== undefined) return scopedBehaviorsRuntimeHealth(chainCapacity)
   const health = readyOrganizations().map((org) => ({
     org: org.login,
-    health: behaviorOrganization.run(org, scopedBehaviorsRuntimeHealth),
+    health: behaviorOrganization.run(org, () => scopedBehaviorsRuntimeHealth(chainCapacity)),
   }))
-  if (health.length === 0) return scopedBehaviorsRuntimeHealth()
+  if (health.length === 0) return scopedBehaviorsRuntimeHealth(chainCapacity)
   const first = health[0].health
   if (health.length === 1) return first
   return {

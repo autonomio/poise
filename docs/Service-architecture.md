@@ -1193,8 +1193,12 @@ A per-PR status projection is served beside the ledger at guarded, read-only
 `GET /api/behavior-ledger/pr-status` with a `pr-status` loopback CLI
 subcommand. It projects one row per open pull request from already-held
 state (datastore listing, launch ledger, incidents, queue admissions, and
-the merge-prs tick's cached candidate reading) with no new Caller or GitHub
-read and no execution influence. See [Behavior ledger](Behavior-ledger.md).
+the merge-prs tick's cached candidate reading, or the canonical journal for
+chain-owned work) with no new Caller or GitHub read and no execution influence.
+Rows identify v1/v2 ownership; v2 exposes retained merge/review obligations and
+uses nullable verified review-slot counts instead of the legacy review-cap
+counter. Stale chain observations remain unverified and contradictory journal
+evidence fails unavailable. See [Behavior ledger](Behavior-ledger.md).
 
 ## Google document publishing
 
