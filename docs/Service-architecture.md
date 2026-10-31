@@ -1193,8 +1193,21 @@ A per-PR status projection is served beside the ledger at guarded, read-only
 `GET /api/behavior-ledger/pr-status` with a `pr-status` loopback CLI
 subcommand. It projects one row per open pull request from already-held
 state (datastore listing, launch ledger, incidents, queue admissions, and
-the merge-prs tick's cached candidate reading) with no new Caller or GitHub
-read and no execution influence. See [Behavior ledger](Behavior-ledger.md).
+the merge-prs tick's cached candidate reading, or the canonical journal for
+chain-owned work) with no new Caller or GitHub read and no execution influence.
+The status reply is version 2 (ordinary ledger replies remain version 1).
+Rows identify v1/v2 ownership; v2 exposes retained merge/review obligations and
+uses nullable verified review-slot counts instead of the legacy review-cap
+counter. Stale chain observations remain unverified and contradictory journal
+evidence fails unavailable. Queue observations do not acquire original enqueue
+attribution, and an owned long-running model invocation remains a current phase
+while GitHub facets await refresh. Chain summaries preserve pending/complete/
+not-recorded review evidence without changing journal payloads or historical
+hashes. Behavior diagnostics add workspace-wide durable `chainCapacity`, with
+mode, effective enablement, saved intake, configured budgets/reservations and
+separate process-local counts. Manager worker-Chat occupancy is nullable when
+unreadable, and its backlog excludes proven chain-owned issues. See
+[Behavior ledger](Behavior-ledger.md) and [Behavior chain](Behavior-chain.md).
 
 ## Google document publishing
 

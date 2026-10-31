@@ -65,7 +65,7 @@ gaps names the violation; docs describe what runs.
 | E9 | Every failure is classified by what a retry depends on: input-determined, dependency-determined, or uncertain side effect. | Gap G3: bounded per-target holds are per-code, with carved-out exceptions. |
 | E10 | Dependency recovery releases every target held on that dependency through one probe per window; input-held targets stay held. | Partial: the reviewer trip is half-open with a single probe per window; per-target dependency holds do not release this way (G3). |
 | E11 | Pipeline health reflects eligible-work age and delivered progress. Targeted holds degrade health. | Gap G4: `scopedBehaviorsRuntimeHealth` returns `ok` while every target is held. |
-| E12 | Every blocked target has an actionable explanation. | Partial: `pr-status` carries a closed blocker vocabulary, but flags are display-only and never alert or release. |
+| E12 | Every blocked target has an actionable explanation. | Partial: `pr-status` schema 2 keeps its closed blocker vocabulary, including canonical chain hold/uncertainty alongside legacy dead letters/quarantine. Flags remain display-only and never alert or release. |
 | E13 | Component failure is distinct from intentional admission pauses, including upgrade drains; each pause exposes owner, progress and deadline. | Gap G8: no shared pause vocabulary with owner/progress/deadline. |
 | E14 | Every operation declares idempotency under a pinned precondition, non-idempotency with receipt reconciliation, or unreconcilable hold-and-escalate. | Gap G9: merge SHA-pinning is unstated; grey-CI, merge and resolve handle the same unknown outcome three ways. |
 

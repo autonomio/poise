@@ -1062,6 +1062,7 @@ export function createPoiseMiddleware(opts: CachePluginOptions = {}): Connect.Ne
               deadLetters: evidence.deadLetters,
               holds: runtime.holds,
               workerCapacity: runtime.workerCapacity,
+              chainCapacity: runtime.chainCapacity,
             },
           })
         }

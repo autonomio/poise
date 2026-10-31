@@ -1,6 +1,8 @@
 import { chainBasis, type BehaviorChain, type ChainBehavior, type ChainInvocation } from './behavior-chain-store'
 import { validReviewResponse, type ReviewResponse } from './review-response'
 
+export const CHAIN_OBSERVATION_MAX_AGE_MS = 120_000
+
 export interface ChainReviewer { slot: string, model: string, recovery: string }
 export interface ChainObservation extends Record<string, unknown> {
   checkedAt: number
@@ -25,6 +27,7 @@ export interface ChainObservation extends Record<string, unknown> {
     reviewReceipts: Array<{ id: number, head: string, state: string, invocation: string | null, response?: unknown, submittedAt?: number }>,
     greyRuns: Array<{ id: number, attempt: number }>,
     pending: boolean, failing: string[], conflict: boolean, behind: boolean,
+    checksState?: string | null, readinessBlockers?: string[],
   }
 }
 export type ChainDecision =
@@ -97,13 +100,23 @@ function reviewComplete(chain: BehaviorChain, behavior: 'review-issue' | 'review
   }) ? 'complete' : 'missing-artifact'
 }
 
+/** Queue participation is separate from attribution of its enqueue mutation. */
+export function lastChainQueueInvocation(chain: BehaviorChain): ChainInvocation | undefined {
+  for (let index = chain.invocations.length - 1; index >= 0; index--) {
+    const invocation = chain.invocations[index]
+    if (invocation.behavior === 'merge-pr' && (invocation.evidence?.status === 'completed'
+      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
+      && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome))) return invocation
+  }
+}
+
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
 export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number): ChainDecision {
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
   const pull = observation.pull
-  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > 120_000 || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
+  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
     const basis = chainBasis(['pr', pull.head, pull.reviewContext])
     if (!observation.prReviewers.length || observation.prReviewers.some((reviewer) =>
@@ -139,12 +152,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   const dismissed = pull.reviewReceipts.find((review) => review.head === pull.head && review.state === 'DISMISSED'
     && chain.invocations.some((invocation) => invocation.behavior === 'approve-pr' && invocation.callId === review.invocation))
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
-  const lastQueue = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'merge-pr'
-    // Observing an existing entry does not attribute its enqueue mutation,
-    // but its subsequent rejection still belongs to this chain's work.
-    && (invocation.evidence?.status === 'completed'
-      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
-    && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome)))
+  const lastQueue = lastChainQueueInvocation(chain)
   let queueVerification: string | null = null
   if (lastQueue?.evidence?.head_sha === pull.head) {
     const removal = pull.queueRemoval

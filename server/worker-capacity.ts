@@ -18,6 +18,7 @@ import { db, getMeta, setMeta } from './db'
 import { organizationArgs, readyOrganizations } from './organizations'
 import { runFile } from './process'
 import { getManagerSettings } from './settings'
+import { behaviorChainOwner } from './behavior-chain-journal'
 import { openAlerts, raiseAlert, resolveAlert, updateAlertDetails } from './alerts/store'
 
 /** The GitHub label whose open unassigned tickets are the Manager's backlog. */
@@ -34,7 +35,7 @@ const BACKLOG_LIMIT = 200
 
 export interface WorkerCapacity {
   /** Worker chats occupying slots (role worker, not closed). */
-  running: number
+  running: number | null
   /** Configured target (Manager Rhythm). */
   target: number
   /** Open unassigned tickets with the work label; null while unknown. */
@@ -110,7 +111,7 @@ export function getWorkerCapacity(): WorkerCapacity {
   const target = getManagerSettings().rhythm
   const state = readChatState()
   return {
-    running: state?.running ?? 0,
+    running: state?.running ?? null,
     target,
     backlog: cachedBacklog ?? null,
     label: WORK_LABEL,
@@ -163,6 +164,7 @@ async function readLabelledBacklog(
       const row = raw as Partial<DatastoreIssue>
       if (typeof row.repo !== 'string' || typeof row.number !== 'number' || !Number.isSafeInteger(row.number)) return null
       if (bound.has(`${row.repo.toLowerCase()}#${row.number}`)) continue
+      if (behaviorChainOwner(row.repo, row.number, 'issues')) continue
       total += 1
     }
   }
@@ -219,6 +221,7 @@ async function searchCandidates(
     if (!/^https:\/\/github\.com\//.test(row.url)) continue
     if (allowed && !allowed.has(repo.toLowerCase())) continue
     if (bound.has(`${repo.toLowerCase()}#${row.number}`)) continue
+    if (behaviorChainOwner(repo, row.number, 'issues')) continue
     if ((row.labels ?? []).some((label) => typeof label?.name === 'string' && label.name.toLowerCase() === WORK_LABEL)) continue
     issues.push({ repo, number: row.number, title: row.title, body: typeof row.body === 'string' ? row.body : '', url: row.url })
   }
@@ -265,9 +268,10 @@ export async function refreshWorkerCapacity(options: RefreshWorkerCapacityOption
   const now = options.now ?? Date.now()
   const settings = getManagerSettings()
   const state = readChatState()
-  const running = state?.running ?? 0
-  const bound = boundIssueKeys(state?.boundTargets ?? [])
-  const eligible = state !== null && state.hasManager && !settings.paused
+  if (!state) return { running: null, target: settings.rhythm, backlog: cachedBacklog ?? null, label: WORK_LABEL }
+  const running = state.running
+  const bound = boundIssueKeys(state.boundTargets)
+  const eligible = state.hasManager && !settings.paused
     && !(settings.scope !== null && settings.scope.length === 0)
   const idle = eligible && running < settings.rhythm
 
@@ -302,6 +306,14 @@ export async function refreshWorkerCapacity(options: RefreshWorkerCapacityOption
   }
 
   const open = openAlerts({ kind: 'worker_idle', now }).some((alert) => alert.dedupeKey === DEDUPE_KEY)
+  if (candidateCache) {
+    try {
+      if (candidateCache.candidates.some((candidate) => behaviorChainOwner(candidate.repo, candidate.number, 'issues'))) candidateCache = null
+    } catch {
+      if (open) updateAlertDetails(DEDUPE_KEY, alertTitle(running, settings.rhythm), alertBody(running, settings.rhythm, null))
+      return { running, target: settings.rhythm, backlog, label: WORK_LABEL }
+    }
+  }
   const stale = !candidateCache || now - candidateCache.at >= WORKER_IDLE_REPEAT_MS
   if (!open || stale) {
     let candidates: WorkerCandidate[] | null

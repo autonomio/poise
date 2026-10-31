@@ -66,8 +66,9 @@ export function parseBehaviorLedgerArguments(args: string[], env: NodeJS.Process
   return base
 }
 
-function complete(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1 || !('health' in value)) return false
+function complete(value: unknown, prStatus = false): boolean {
+  if (!value || typeof value !== 'object' || !('version' in value)
+    || !(value.version === 1 || (prStatus && value.version === 2)) || !('health' in value)) return false
   const health = value.health
   return !!health && typeof health === 'object' && 'status' in health && health.status === 'ok'
     && 'pending' in health && health.pending === 0 && 'dropped' in health && health.dropped === 0
@@ -103,7 +104,7 @@ export async function runBehaviorLedgerCli(args: string[], write = (text: string
     const text = Buffer.concat(chunks).toString('utf8')
     const value: unknown = JSON.parse(text)
     write(text.endsWith('\n') ? text : text + '\n')
-    return response.ok && complete(value) ? 0 : 1
+    return response.ok && complete(value, args[0] === 'pr-status') ? 0 : 1
   } catch (error) {
     writeError((error instanceof Error ? error.message : 'Ledger read failed') + '\n')
     return 1

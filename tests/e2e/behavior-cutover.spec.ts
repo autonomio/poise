@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 import { BEHAVIORS } from '../../src/behaviors'
 import type { BehaviorCutoverState } from '../../src/behavior-cutover'
+import { chainSummaryFixture } from '../fixtures/behavior-chain-summary'
 
 async function general(page: Page) {
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
@@ -10,6 +11,57 @@ async function general(page: Page) {
 }
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
+
+test('merged chains retain open obligations and controls until canonical completion, and stale reads disable writes', async ({ page }) => {
+  await workspace(page)
+  let complete = false
+  let unavailable = false
+  await page.route('**/api/behavior-chains', route => unavailable
+    ? route.fulfill({ status: 503, json: { error: 'journal unavailable' } })
+    : route.fulfill({ json: chainSummaryFixture(complete ? 'complete' : 'pending-active') }))
+  const controls = await general(page)
+  const list = controls.locator('[data-chain-list]')
+  await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+  await expect(list).toContainText('Review evidence pending')
+  await expect(list).toContainText('repair-pr: uncertain')
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('1 durable model admission(s) reserved')
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('label work-ready')
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('Admissions paused')
+  await list.scrollIntoViewIfNeeded()
+  await expect(list).toBeVisible()
+  await page.screenshot({ path: 'test-results/behavior-v2-obligations.png', fullPage: true })
+  unavailable = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeDisabled()
+  await expect(controls.locator('[data-chain-capacity]')).toHaveText('Atomic behavior capacity unavailable.')
+  unavailable = false
+  complete = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(list).not.toContainText('Review evidence pending')
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+  await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+})
+
+for (const state of ['pending-admitted', 'pending-no-invocation', 'historical'] as const) {
+  test(`merged chain controls reflect canonical ${state} evidence without creating review authority`, async ({ page }) => {
+    await workspace(page)
+    await page.route('**/api/behavior-chains', route => route.fulfill({ json: chainSummaryFixture(state) }))
+    const controls = await general(page)
+    const list = controls.locator('[data-chain-list]')
+    await list.scrollIntoViewIfNeeded()
+    await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+    if (state === 'pending-admitted') {
+      await expect(list).toContainText('repair-pr: admitted')
+      await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
+    } else {
+      await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+      await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+      await expect(list).toContainText(state === 'historical' ? 'Pre-merge review completion not recorded'
+        : 'Awaiting original pre-merge review evidence; no new invocation can start after merge')
+    }
+  })
+}
 
 test('one cutover action reports drain, survives reload and reflects actual completion without touching Chats', async ({ page }) => {
   await workspace(page)

@@ -269,6 +269,8 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         changesRequested: latest?.state === 'CHANGES_REQUESTED' && latest.commit_id === head,
         unresolved: Number(readiness.unresolved_live_conversation_count), approved: readiness.reviewer_approved_current_head,
         ready: readiness.green === true, reviewIds: reviews.filter((review) => review.commit_id === head && review.state !== 'DISMISSED').map((review) => positive(review.id, 'review')),
+        checksState: typeof readiness.checks_state === 'string' ? readiness.checks_state : null,
+        readinessBlockers: readiness.blockers as string[],
         reviewReceipts, reviewContext: state.review_context,
         reviewRevision, greyRuns, pending, failing: failures.map((check) => `${check.name}:${check.conclusion || check.state}`).sort(),
         // The existing readiness primitive already applies the repository's
