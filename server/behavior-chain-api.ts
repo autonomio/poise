@@ -5,8 +5,8 @@ import { HttpError, httpStatus, readJson } from './http'
 import { getBehaviorChainSettings, getSettings } from './settings'
 import { getBehaviorChainCapacity, getBehaviorChainRuntimeHealth } from './behaviors'
 import { behaviorCutoverBlockers } from './behavior-cutover'
-import type { ChainEvent } from './behavior-chain-store'
-import { behaviorChainSummary as summary } from './behavior-chain-summary'
+import type { BehaviorChain, ChainEvent } from './behavior-chain-store'
+import { behaviorChainSummary } from './behavior-chain-summary'
 
 function reply(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value))
@@ -16,6 +16,7 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
   try {
     const params = new URL(url, 'http://localhost').searchParams
     const journal = behaviorChainJournal()
+    const summary = (chain: BehaviorChain) => behaviorChainSummary(chain, { at: journal.reconciliationAt(chain) })
     const cutover = () => ({ ...journal.cutover(), blockers: journal.cutover().mode === 'draining' ? behaviorCutoverBlockers() : [] })
     if (req.method === 'GET') {
       const id = params.get('id')

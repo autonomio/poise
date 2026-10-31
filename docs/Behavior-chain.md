@@ -60,8 +60,8 @@ PRs with pending review evidence; `state=merged` retains the existing terminal
 classification, including legacy not-recorded merges. Failed refreshes disable
 the retained row's write controls until a successful read. Native action summaries
 distinguish original accepted responses, observed no-action results and uncertain
-or unrecorded attribution without returning the full receipt. Repeated held-merge
-observation/recovery work is tracked separately in #799. Chain settings also
+or unrecorded attribution without returning the full receipt. Quiescent evidence
+checks use the bounded reconciliation described below. Chain settings also
 show workspace-wide durable model admissions and their behavior-lane ceiling,
 the durable mode, effective all-issues/label intake or inactive saved intake,
 and admission pause. Configured resource budgets, reservations and unaccounted
@@ -75,6 +75,39 @@ Unavailable counts are unknown, never zero. The same `chainCapacity` appears
 beside `workerCapacity` in behavior diagnostics and Manager context. The latter
 still describes Manager worker Chats and their enhancement backlog; its Rhythm
 target does not govern atomic chain admissions. No new refresh loop is added.
+
+### Bounded reconciliation
+
+The existing scheduler selects a normal-work page before a separate due
+reconciliation page under its existing pass budget. Quiescent held or merged
+chains keep their original ownership and active-list membership, but cannot
+consume the normal-work page. Native model/resource receipts are still read
+while an original model lacks resource-release proof, including after a merge;
+only unnecessary GitHub observation waits.
+
+A successful quiescent observation schedules its next read at `checkedAt +
+min(24 hours, max(2 minutes, checkedAt - origin))`. Origin is the recorded actual
+merge time, otherwise the first native admission; a held chain with neither
+uses the one-day cap. The interval approximately doubles until the cap. These
+times are derived from canonical state and indexed, so process replacement
+does not reset the cadence. Existing Resume makes unmerged work immediately
+eligible again; it never creates post-merge review authority. Identical holds
+are not repeated and a person's hold is retained. Failed observations neither
+advance timestamps nor become success: their error remains in runtime health
+after unrelated work is allowed to advance, with at most one attempt per
+target per existing pass under the existing account/native budgets.
+
+Merged `merge-pr` and `resolve-threads` uncertainty uses original journal
+receipts only. A missing original response schedules no GitHub read; retaining
+that response makes its original settlement eligible without another mutation.
+Settings and API/status summaries show the scheduled evidence check or the
+missing original response. Intentionally deferred observation is not a
+collector outage, and old GitHub facets remain unverified. The chain summary's
+`reconciliation.nextObservationAt` is epoch milliseconds (`0` means eligible
+on the existing pass, `null` means no GitHub check is scheduled), with a separate
+`waitingForOriginalResponse` flag. No timer, independent execution ledger or
+new completion control is added. Old duplicate events are preserved; this fix
+does not shrink accumulated history or rewrite historical hashes.
 
 The existing authorized HTTP API supports interactive and headless controls: `GET /api/behavior-chains`, optional `state=active|merged`, cursor `after`, or `id` with an event-sequence cursor; `POST` accepts `id`, current `sequence` and `operation=hold|resume`. Cutover controls instead send the current cutover `sequence` and `operation=switch-to-v2|cancel-cutover`. Reads include `cutover` (mode, sequence, request time, recorded legacy targets and current drain blockers). Summaries/events are paginated. Stale writes fail instead of overwriting a later decision.
 

@@ -140,6 +140,8 @@ export class BehaviorChainRuntime {
           if (chain.mergeSha && direct && this.recoverNativeAction(chain, direct)) continue
           const owned = chain.invocations.find((invocation) => invocation.state !== 'settled' && invocation.model !== null)
           const call = owned ? snapshot.entries.find((entry) => entry.correlation_id === owned.id) : null
+          const releasedAt = owned?.evidence?.resources_settled_at
+          if (chain.mergeSha && owned && !(typeof releasedAt === 'string' && Number.isFinite(Date.parse(releasedAt)))) continue
           if (owned && call && (call.status === 'running' || !call.resources_settled_at || !Number.isFinite(Date.parse(call.resources_settled_at)))) {
             // The authoritative admission already owns this invocation. Only
             // its native settlement can advance it; rereading GitHub while it

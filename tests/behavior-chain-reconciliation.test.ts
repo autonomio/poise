@@ -1,18 +1,28 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, expect, it, vi } from 'vitest'
-import { BehaviorChainJournal, type BehaviorChain, type ChainEvent } from '../server/behavior-chain-store'
+import { BehaviorChainJournal, chainBasis, type BehaviorChain, type ChainEvent } from '../server/behavior-chain-store'
 import type { ChainObservation } from '../server/behavior-chain-decision'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
+import { nativeActionReceipt } from '../server/behavior-chain-action'
+import { completedReviewCall } from './review-response-fixture'
 
 const NOW = 1_800_000_000_000
 const MERGE = 'c'.repeat(40)
 const reviewer = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
 const databases: Database.Database[] = []
-afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.useRealTimers() })
+const roots: string[] = []
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  vi.useRealTimers()
+})
 
-function setup() {
+function setup(path = ':memory:') {
   vi.useFakeTimers(); vi.setSystemTime(NOW)
-  const db = new Database(':memory:'); databases.push(db)
+  const db = new Database(path); databases.push(db)
   return { db, journal: new BehaviorChainJournal(db) }
 }
 function record(journal: BehaviorChainJournal, chain: BehaviorChain, event: ChainEvent) {
@@ -116,4 +126,108 @@ it('keeps merged journal-only uncertainty without repeatedly reading GitHub or s
   expect(observe).not.toHaveBeenCalled()
   expect(journal.history(chain.id)).toEqual(before)
   expect(journal.read(chain.id)?.invocations[0].state).toBe('uncertain')
+  const proof = nativeActionReceipt(chain, chain.invocations[0], { action: 'merge_if_ready', repository: chain.repository,
+    pull_number: 17, head_sha: 'a'.repeat(40), outcome: 'merged', merge_sha: MERGE, merge_method: 'merge' })
+  chain = record(journal, chain, { type: 'invocation.reconciled', invocationId: 'original-action', evidence: { nativeActionReceipt: proof } })
+  await new BehaviorChainRuntime(journal, operations({ observe })).run()
+  expect(journal.read(chain.id)?.invocations[0]).toMatchObject({ state: 'settled', outcome: 'merged' })
+  expect(observe).not.toHaveBeenCalled()
+})
+
+it('reopens an old duplicated history without an observation burst, ownership change or rewritten authority', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'poise-reconciliation-')); roots.push(root)
+  const path = join(root, 'journal.db')
+  const { db, journal } = setup(path)
+  let chain = seed(journal)
+  chain = record(journal, chain, { type: 'chain.observed', observation: observation() })
+  chain = record(journal, chain, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+    pull_number: 17, merged: true, merge_sha: MERGE, review_complete: false } })
+  chain = record(journal, chain, { type: 'chain.held', reason: 'original review evidence missing' })
+  for (let repeat = 0; repeat < 5; repeat++) {
+    chain = record(journal, chain, { type: 'chain.observed', observation: observation() })
+    chain = record(journal, chain, { type: 'chain.held', reason: 'original review evidence missing' })
+  }
+  const before = db.prepare('SELECT sequence, payload, state_hash FROM behavior_chain_events ORDER BY sequence').all()
+  expect(before).toHaveLength(14)
+  const next = journal.reconciliationAt(chain)
+  db.close(); databases.splice(databases.indexOf(db), 1)
+  const reopened = new Database(path); databases.push(reopened)
+  const retained = new BehaviorChainJournal(reopened)
+  retained.rebuild()
+  const observe = vi.fn(async () => observation())
+  await new BehaviorChainRuntime(retained, operations({ observe })).run()
+  expect(observe).not.toHaveBeenCalled()
+  expect(retained.reconciliationAt(retained.read(chain.id)!)).toBe(next)
+  expect(retained.forPull(chain.repository, 17)?.id).toBe(chain.id)
+  expect(retained.active().map((row) => row.id)).toContain(chain.id)
+  expect(reopened.prepare('SELECT sequence, payload, state_hash FROM behavior_chain_events ORDER BY sequence').all()).toEqual(before)
+})
+
+it.each([false, true])('rechecks late original review visibility within the bound and rejects a post-merge submission: %s', async (lateSubmission) => {
+  const { journal } = setup()
+  let chain = seed(journal)
+  const call = completedReviewCall(chain.repository, 17, 'a'.repeat(40), chain.reviewer)
+  const before = observation()
+  Object.assign(before.pull!, { merged: false, state: 'open', mergeSha: null, mergedAt: null })
+  Object.assign(before.publication, { merged: false, state: 'open', merge_sha: null })
+  chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'review', behavior: 'review-pr', actor: chain.reviewer,
+    model: call.model, slot: 'primary', basis: chainBasis(['pr', 'a'.repeat(40), 'b'.repeat(64)]), admittedAt: Date.parse(call.started_at),
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  chain = record(journal, chain, { type: 'invocation.settled', invocationId: 'review', callId: call.id, outcome: 'clean',
+    evidence: { status: 'completed', action: 'reviewed_clean', review_id: call.review_id, head_sha: 'a'.repeat(40),
+      completedAt: Date.parse(call.completed_at!), resources_settled_at: call.completed_at, artifact: call.artifact } })
+  chain = record(journal, chain, { type: 'chain.observed', observation: before })
+  vi.setSystemTime(NOW + 1000)
+  let visible = false
+  const observe = vi.fn(async () => {
+    const live = observation()
+    live.pull!.mergedAt = NOW + 500
+    if (visible) {
+      live.pull!.reviewIds = [call.review_id!]
+      live.pull!.reviewReceipts = [{ id: call.review_id!, head: 'a'.repeat(40), state: 'COMMENTED', invocation: call.id,
+        response: call.artifact!.review_response, submittedAt: lateSubmission ? NOW + 501 : NOW }]
+    }
+    return live
+  })
+  const runtime = new BehaviorChainRuntime(journal, operations({ observe }))
+  await runtime.run()
+  expect(journal.read(chain.id)?.reviewPending).toBe(true)
+  visible = true
+  vi.setSystemTime(NOW + 121_000)
+  await runtime.run()
+  expect(observe).toHaveBeenCalledTimes(2)
+  expect(journal.read(chain.id)).toMatchObject({ mergeSha: MERGE, reviewPending: lateSubmission })
+})
+
+it.each([false, true])('does not defer original model/resource settlement, with an original Call initially present: %s', async (present) => {
+  const { journal } = setup()
+  let chain = seed(journal)
+  chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'original-model', behavior: 'review-pr',
+    actor: 'reviewer', model: 'fixture', slot: 'primary', basis: 'review', admittedAt: NOW - 5000,
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  chain = record(journal, chain, { type: 'invocation.started', invocationId: 'original-model' })
+  chain = record(journal, chain, { type: 'chain.observed', observation: observation() })
+  chain = record(journal, chain, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+    pull_number: 17, merged: true, merge_sha: MERGE, review_complete: false } })
+  const call = completedReviewCall(chain.repository, 17, 'a'.repeat(40), chain.reviewer)
+  Object.assign(call, { source: 'poise:behavior-chain', correlation_id: 'original-model', status: 'running',
+    action: null, outcome: null, completed_at: null, resources_settled_at: null, artifact: null, review_id: null })
+  let visible = present
+  const readInvocations = vi.fn(async () => ({ entries: visible ? [structuredClone(call)] : [], quarantined: [] }))
+  const observe = vi.fn(async () => observation())
+  const runtime = new BehaviorChainRuntime(journal, operations({ readInvocations, observe }))
+  await runtime.run()
+  vi.setSystemTime(NOW + 3 * 86400_000)
+  await runtime.run()
+  expect(readInvocations).toHaveBeenCalledTimes(2)
+  expect(observe).not.toHaveBeenCalled()
+  expect(journal.liveModelInvocationCount()).toBe(1)
+  Object.assign(call, { status: 'failed', action: 'not_started', outcome: 'preflight_failed',
+    completed_at: new Date().toISOString(), resources_settled_at: new Date().toISOString() })
+  visible = true
+  await runtime.run()
+  expect(readInvocations).toHaveBeenCalledTimes(3)
+  expect(journal.read(chain.id)?.invocations[0].state).toBe('settled')
+  expect(journal.liveModelInvocationCount()).toBe(0)
+  expect(observe).toHaveBeenCalledTimes(1)
 })

@@ -58,7 +58,8 @@ it('keeps a confirmed merge with an open review obligation active through API re
     expect(journal.read(complete.id)).not.toHaveProperty('reviewPending')
     const detail = await (await fetch(`${base}?id=${encodeURIComponent(pending.id)}`)).json()
     expect(detail.chain.reviewPending).toBe(true)
-    expect(detail.chain).toEqual(behaviorChainSummary(journal.read(pending.id)!))
+    const canonical = journal.read(pending.id)!
+    expect(detail.chain).toEqual(behaviorChainSummary(canonical, { at: journal.reconciliationAt(canonical) }))
     const response = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: pending.id, sequence: pending.sequence, operation: 'hold' }) })
     expect(response.status).toBe(200)

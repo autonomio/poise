@@ -176,6 +176,17 @@ projections without loading unrelated histories. The existing in-memory blocker
 clock applies to both engines; ordinary refreshes do not reset an unchanged
 blocker. Status reads start no worker and collect no additional GitHub evidence.
 
+Quiescent held/merged ownership can also deliberately defer observation under
+the [bounded reconciliation cadence](Behavior-chain.md#bounded-reconciliation).
+`ownership.reconciliation` names its next observation as an ISO time, or null
+when immediately eligible, a completed chain needs no further read, or GitHub
+cannot supply a missing original action response; `waitingForOriginalResponse`
+distinguishes the latter. During
+a scheduled wait, `observation: skipped-while-owned` retains the hold and unknown
+GitHub facets without falsely marking the collector failed. A due but unserved
+read is still stale. This is derived read-only scheduling information, not
+permission to retry a write or alter an obligation.
+
 ## Health split
 
 `/api/health` carries the ledger twice: `dependencies.ledger` for whether
