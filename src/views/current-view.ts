@@ -102,6 +102,12 @@ let prStatus: Map<string, PrStatus> = new Map()
 // pinned at the top forever.
 let pendingLiveItems: LiveItem[] = []
 const PENDING_TTL_MS = 60 * 60 * 1000
+
+interface RepoLabel { name: string, color: string, description: string | null }
+// Label catalogues by repo, shared across composer opens so a catalogue is
+// read once per few minutes however often the composer opens.
+const repoLabelCache = new Map<string, { labels: RepoLabel[], at: number }>()
+const LABEL_CACHE_TTL_MS = 5 * 60 * 1000
 // Tick listener installed on view init; removed via stopCurrentPolling()
 // when navigating away. Single shared clock — see startRefreshTicker().
 const onLiveTick = () => pollLiveTick()
@@ -297,6 +303,8 @@ const CHAT_ICON_SVG = '<svg width="11" height="11" viewBox="0 0 14 14" fill="non
 const COPY_ICON_SVG = '<svg width="11" height="11" viewBox="0 0 14 14" fill="none"><rect x="3" y="3" width="7" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 3V2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'
 // Checkmark shown for ~1.2s after a successful copy as visual feedback.
 const CHECK_ICON_SVG = '<svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M3 7.5l3 3 5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+// Tag mark for the issue composer's label picker — quiet on purpose.
+const TAG_ICON_SVG = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 2.5h4.5L12 8a1 1 0 0 1 0 1.4L9.4 12a1 1 0 0 1-1.4 0L2.5 6.9V2.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="5" cy="5" r="1" fill="currentColor"/></svg>'
 
 // Opens the card's Chat session in the Chat view: its session when it has
 // one, else the composer with the card's prefill. The first message,
@@ -977,6 +985,12 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     <div class="composer-row">
       <button class="composer-add">Open issue</button>
       <button class="composer-cancel" type="button">Cancel</button>
+      <button class="composer-labels" type="button" aria-label="Labels" aria-expanded="false" aria-haspopup="dialog" title="Labels">${TAG_ICON_SVG}<span class="composer-labels-count" hidden></span></button>
+    </div>
+    <div class="composer-labels-pop" role="dialog" aria-label="Issue labels" hidden>
+      <input type="search" class="composer-labels-filter" placeholder="Filter labels…" aria-label="Filter labels" autocomplete="off" />
+      <div class="composer-labels-list" role="group" aria-label="Labels"></div>
+      <div class="composer-labels-foot"></div>
     </div>
   `
   laneNode.insertBefore(composer, addBtn)
@@ -986,6 +1000,155 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   const repoSel = composer.querySelector<HTMLSelectElement>('.issue-repo')!
   const addB = composer.querySelector<HTMLButtonElement>('.composer-add')!
   const cancelB = composer.querySelector<HTMLButtonElement>('.composer-cancel')!
+  const labelsBtn = composer.querySelector<HTMLButtonElement>('.composer-labels')!
+  const labelsCount = composer.querySelector<HTMLElement>('.composer-labels-count')!
+  const labelsPop = composer.querySelector<HTMLElement>('.composer-labels-pop')!
+  const labelsFilter = composer.querySelector<HTMLInputElement>('.composer-labels-filter')!
+  const labelsList = composer.querySelector<HTMLElement>('.composer-labels-list')!
+  const labelsFoot = composer.querySelector<HTMLElement>('.composer-labels-foot')!
+
+  // Label picker state. Selections belong to one repo's catalogue: switching
+  // repos clears them, since names from repo A must never ride along into B.
+  let selectedLabels: string[] = []
+  let labelCatalogue: RepoLabel[] | null = null
+  let labelCatalogueRepo = ''
+  let labelCatalogueError: string | null = null
+  let labelLoading = false
+  let labelGen = 0
+  const paintLabelsCount = () => {
+    labelsCount.hidden = selectedLabels.length === 0
+    labelsCount.textContent = selectedLabels.length ? String(selectedLabels.length) : ''
+    labelsBtn.setAttribute('aria-label', selectedLabels.length ? `Labels, ${selectedLabels.length} selected` : 'Labels')
+  }
+  const paintLabelsList = () => {
+    const query = labelsFilter.value.trim().toLowerCase()
+    if (labelLoading) {
+      labelsList.innerHTML = '<div class="composer-labels-empty">Loading labels…</div>'
+      return
+    }
+    if (labelCatalogueError) {
+      labelsList.innerHTML = `<div class="composer-labels-empty">${escapeHtml(labelCatalogueError)}</div>`
+      return
+    }
+    if (!labelCatalogue) {
+      labelsList.innerHTML = '<div class="composer-labels-empty">Pick a repository first.</div>'
+      return
+    }
+    const rows = labelCatalogue.filter((label) => !query || label.name.toLowerCase().includes(query))
+    if (!rows.length) {
+      labelsList.innerHTML = `<div class="composer-labels-empty">${labelCatalogue.length ? 'No labels match.' : 'This repository has no labels.'}</div>`
+      return
+    }
+    labelsList.innerHTML = rows.map((label) => {
+      const checked = selectedLabels.includes(label.name)
+      const dot = /^[0-9a-fA-F]{6}$/.test(label.color) ? ` style="--dot: #${label.color}"` : ''
+      const hint = label.description ? ` title="${escapeHtml(label.description)}"` : ''
+      return `<label class="composer-label-row"${hint}><input type="checkbox" value="${escapeHtml(label.name)}"${checked ? ' checked' : ''} /><span class="composer-label-dot"${dot}></span><span class="composer-label-name">${escapeHtml(label.name)}</span></label>`
+    }).join('')
+  }
+  const paintLabelsFoot = (note: string | null) => {
+    const base = selectedLabels.length ? `${selectedLabels.length} selected` : ''
+    labelsFoot.textContent = [base, note].filter(Boolean).join(' · ')
+  }
+  const closeLabelsPop = (focusButton: boolean) => {
+    if (labelsPop.hidden) return
+    labelsPop.hidden = true
+    labelsBtn.setAttribute('aria-expanded', 'false')
+    document.removeEventListener('pointerdown', outsideLabels, true)
+    if (focusButton && labelsPop.contains(document.activeElement)) labelsBtn.focus()
+  }
+  const openLabelsPop = () => {
+    labelsPop.hidden = false
+    labelsBtn.setAttribute('aria-expanded', 'true')
+    document.addEventListener('pointerdown', outsideLabels, true)
+    // The repo list may have landed after the composer opened, selecting a
+    // repo no catalogue was ever read for.
+    if (repoSel.value && labelCatalogueRepo !== repoSel.value && !labelLoading) ensureLabels(repoSel.value)
+    paintLabelsList()
+    labelsFilter.focus()
+  }
+  // A pointer landing outside closes the panel. It fires before the icon's
+  // click, so the toggle suppresses the reopen the same press would cause.
+  let labelsOutsideClosed = false
+  function outsideLabels(event: PointerEvent): void {
+    if (labelsPop.hidden || labelsPop.contains(event.target as Node) || labelsBtn.contains(event.target as Node)) return
+    labelsOutsideClosed = true
+    closeLabelsPop(false)
+  }
+  const loadLabels = async (repo: string, generation: number): Promise<void> => {
+    labelLoading = true
+    labelCatalogueError = null
+    if (!labelsPop.hidden) paintLabelsList()
+    try {
+      const res = await fetch('/api/gh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'list_repo_labels', repository_full_name: repo }),
+      })
+      if (generation !== labelGen || !composer.isConnected) return
+      if (!res.ok) throw new Error(`Github ${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}`)
+      const data = await res.json()
+      if (!Array.isArray(data?.labels)) throw new Error('unexpected label catalogue shape')
+      labelCatalogue = (data.labels as RepoLabel[]).filter((label) => typeof label?.name === 'string')
+      labelCatalogueRepo = repo
+      repoLabelCache.set(repo, { labels: labelCatalogue, at: Date.now() })
+    } catch (err) {
+      if (generation !== labelGen || !composer.isConnected) return
+      // A failed catalogue must read as failed, not as "no labels", and it
+      // must not block a label-less issue: the create path stays open.
+      labelCatalogue = null
+      labelCatalogueError = `Could not load labels — ${(err as Error).message}`
+    } finally {
+      if (generation === labelGen && composer.isConnected) {
+        labelLoading = false
+        if (!labelsPop.hidden) { paintLabelsList(); paintLabelsFoot(null) }
+      }
+    }
+  }
+  const ensureLabels = (repo: string): void => {
+    if (!repo) { labelCatalogue = null; labelCatalogueRepo = ''; return }
+    const cached = repoLabelCache.get(repo)
+    if (cached && Date.now() - cached.at < LABEL_CACHE_TTL_MS) {
+      labelCatalogue = cached.labels
+      labelCatalogueRepo = repo
+      labelCatalogueError = null
+      return
+    }
+    labelGen++
+    void loadLabels(repo, labelGen)
+  }
+  labelsBtn.addEventListener('click', () => {
+    if (labelsOutsideClosed) { labelsOutsideClosed = false; return }
+    if (labelsPop.hidden) openLabelsPop()
+    else closeLabelsPop(true)
+  })
+  labelsFilter.addEventListener('input', paintLabelsList)
+  labelsFilter.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLabelsPop(true) }
+    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit() }
+  })
+  labelsList.addEventListener('change', () => {
+    selectedLabels = [...labelsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')].map((box) => box.value)
+    paintLabelsCount()
+    paintLabelsFoot(null)
+  })
+  repoSel.addEventListener('change', () => {
+    // A late catalogue for the previous repo must neither populate this one
+    // nor carry its selections over.
+    labelGen++
+    labelLoading = false
+    labelCatalogueError = null
+    labelsFilter.value = ''
+    if (selectedLabels.length) {
+      paintLabelsFoot(`Cleared ${selectedLabels.length} label${selectedLabels.length === 1 ? '' : 's'} from the previous repository.`)
+      selectedLabels = []
+      paintLabelsCount()
+    }
+    labelCatalogue = null
+    ensureLabels(repoSel.value)
+    if (!labelsPop.hidden) paintLabelsList()
+  })
+  ensureLabels(repoSel.value)
 
   // The list was a one-shot snapshot taken when the composer opened. If
   // /api/repos had not answered yet it silently degraded to the repos inside
@@ -1007,6 +1170,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
   // the source card still deleted — the person just never saw either happen.
   const close = () => {
     if (submitting) { showError('Still opening the issue — wait for it to finish.'); return }
+    closeLabelsPop(false)
     retire(composer)
     addBtn.hidden = false
   }
@@ -1030,6 +1194,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     addB.disabled = true
     reportError('')
     let created: LiveItem | undefined
+    let labelsDropped: string[] = []
     try {
       const ghRes = await fetch('/api/gh', {
         method: 'POST',
@@ -1039,6 +1204,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
           repository_full_name: repo,
           title,
           body,
+          ...(selectedLabels.length ? { labels: selectedLabels } : {}),
         }),
       })
       if (!ghRes.ok) {
@@ -1053,6 +1219,7 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
       // the new issue is visible the moment the composer closes.
       try {
         const result = await ghRes.json()
+        if (Array.isArray(result?.labels_dropped)) labelsDropped = result.labels_dropped.filter((name: unknown) => typeof name === 'string')
         const r = result?.record
         if (r && r.kind === 'issue' && r.number) {
           pendingLiveItems = pendingLiveItems.filter((p) => !(p.repo === r.repo && p.number === r.number))
@@ -1101,6 +1268,12 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     if (created && !withinActiveWindow(created)) {
       showLoadError('Issue created — the current filter is hiding it.')
       window.setTimeout(() => viewFeedback('current-created', 'Current item created', ''), 6000)
+    }
+    // GitHub answers 201 and silently drops labels the account may not
+    // apply. The issue exists; say plainly which labels did not make it.
+    if (labelsDropped.length) {
+      const names = labelsDropped.slice(0, 5).join(', ') + (labelsDropped.length > 5 ? ', …' : '')
+      showLoadError(`Issue created — GitHub did not apply these labels (the account may lack permission): ${names}.`)
     }
   }
 

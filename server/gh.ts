@@ -33,9 +33,37 @@ const GH_INTERFACE = 'github-interface'
 const GH = 'gh'
 const ISSUE_TITLE_PREFIX = 'title='
 const ISSUE_BODY_PREFIX = 'body='
+const ISSUE_LABEL_PREFIX = 'labels[]='
+const LABEL_PAGE_SIZE = 100
+const LABEL_PAGES_MAX = 10
 
 function fitsProcessArgument(prefix: string, value: string): boolean {
   return Buffer.byteLength(prefix + value, 'utf8') <= MAX_PROCESS_ARG_BYTES
+}
+
+/** The stored github.com credential for the configured main user (`me`),
+ *  never whichever gh account happens to be active. */
+async function resolveMeToken(me: string): Promise<string> {
+  try {
+    const tokenArgs = ['auth', 'token', '--hostname', 'github.com', '--user', me]
+    const token = (await runFile(GH, tokenArgs, {
+      // Resolve the stored github.com credential selected above. Inherited
+      // token variables and GH_HOST must not redirect identity selection.
+      env: {
+        GH_HOST: undefined,
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: undefined,
+        GH_ENTERPRISE_TOKEN: undefined,
+        GITHUB_ENTERPRISE_TOKEN: undefined,
+      },
+      timeoutMs: 15_000,
+      maxOutputBytes: 1 * 1024 * 1024,
+    })).stdout.trim()
+    if (!token) throw new Error('empty token')
+    return token
+  } catch (err: any) {
+    throw new Error(`could not resolve a gh token for ${me} (run \`gh auth login\` as ${me}): ${err?.stderr?.toString?.() || err?.message || String(err)}`)
+  }
 }
 
 // github-interface resolves the repo from cwd's last two path parts when
@@ -726,6 +754,21 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
     if (issueBody && !fitsProcessArgument(ISSUE_BODY_PREFIX, issueBody)) {
       return { status: 413, body: { error: `body exceeds ${MAX_PROCESS_ARG_BYTES - ISSUE_BODY_PREFIX.length} UTF-8 bytes` } }
     }
+    let labelNames: string[] = []
+    if (body.labels !== undefined) {
+      if (!Array.isArray(body.labels) || body.labels.length > 100) {
+        return { status: 400, body: { error: 'labels must be an array of at most 100 names' } }
+      }
+      for (const name of body.labels) {
+        if (typeof name !== 'string' || !name.trim() || name.length > 200) {
+          return { status: 400, body: { error: 'each label must be a non-empty name of at most 200 characters' } }
+        }
+        if (!fitsProcessArgument(ISSUE_LABEL_PREFIX, name)) {
+          return { status: 413, body: { error: `label exceeds ${MAX_PROCESS_ARG_BYTES - ISSUE_LABEL_PREFIX.length} UTF-8 bytes` } }
+        }
+      }
+      labelNames = [...new Set(body.labels as string[])]
+    }
     try { requireConfiguredRepository(repoFull) }
     catch (error) { return { status: 400, body: { error: (error as Error).message } } }
     if (!me) return { status: 400, body: { error: 'Set your GitHub account in Settings → General before creating issues' } }
@@ -733,26 +776,8 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
 
     // Resolve `me`'s gh credential.
     let token = ''
-    try {
-      const tokenArgs = ['auth', 'token', '--hostname', 'github.com', '--user', me]
-      token = (await runFile(GH, tokenArgs, {
-        // Resolve the stored github.com credential selected above. Inherited
-        // token variables and GH_HOST must not redirect identity selection.
-        env: {
-          GH_HOST: undefined,
-          GH_TOKEN: undefined,
-          GITHUB_TOKEN: undefined,
-          GH_ENTERPRISE_TOKEN: undefined,
-          GITHUB_ENTERPRISE_TOKEN: undefined,
-        },
-        timeoutMs: 15_000,
-        maxOutputBytes: 1 * 1024 * 1024,
-      })).stdout.trim()
-      if (!token) throw new Error('empty token')
-    } catch (err: any) {
-      const msg = err?.stderr?.toString?.() || err?.message || String(err)
-      return { status: 502, body: { error: `could not resolve a gh token for ${me} (run \`gh auth login\` as ${me}): ${msg}` } }
-    }
+    try { token = await resolveMeToken(me) }
+    catch (err) { return { status: 502, body: { error: (err as Error).message } } }
 
     try {
       // `-f` sends raw string fields (no true/false/number coercion); gh
@@ -761,6 +786,7 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
       // issue is created with no body (GitHub allows that).
       const apiArgs = ['api', `repos/${owner}/${repo}/issues`, '-f', `title=${title}`]
       if (issueBody) apiArgs.push('-f', `body=${issueBody}`)
+      for (const name of labelNames) apiArgs.push('-f', `${ISSUE_LABEL_PREFIX}${name}`)
       const { stdout } = await runFile(GH, apiArgs, {
         env: {
           GH_HOST: 'github.com',
@@ -781,6 +807,12 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
       if (!number) {
         return { status: 502, body: { error: 'gh api create issue: missing number in response' } }
       }
+      // GitHub answers 201 and silently drops `labels` when the creating
+      // user may not apply them. Report what was actually accepted, and
+      // name what was dropped, rather than showing a success that lies.
+      const applied = new Set(((issue.labels || []) as Array<{ name?: unknown }>).map((label) => String(label?.name || '')))
+      applied.delete('')
+      const labels_dropped = labelNames.filter((name) => !applied.has(name))
       const nowIso = new Date().toISOString()
       const record: GhRecord = {
         kind: 'issue',
@@ -798,16 +830,64 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
         last_commenter: null,
         last_commenter_avatar: null,
         last_comment_body: null,
-        labels: [],
+        labels: [...applied],
         owner_login: null,
         owner_avatar: null,
         reviewRequested: null,
       }
-      return { status: 200, body: { record } }
+      return { status: 200, body: { record, labels_dropped } }
     } catch (err: any) {
       let msg = err?.stderr?.toString?.() || err?.message || String(err)
       if (token) msg = msg.split(token).join('***')   // never leak the token in errors
       return { status: 502, body: { error: 'gh api create issue failed: ' + msg } }
+    }
+  }
+
+  if (op === 'list_repo_labels') {
+    // The repository's label catalogue for Current's issue composer, read
+    // as `me` like the create itself. Paged in-process: `gh api --paginate`
+    // concatenates page bodies into one unparseable blob.
+    const repoFull = String(body.repository_full_name || '')
+    if (!repoFull.includes('/')) return { status: 400, body: { error: 'repository_full_name required (org/repo)' } }
+    try { requireConfiguredRepository(repoFull) }
+    catch (error) { return { status: 400, body: { error: (error as Error).message } } }
+    if (!me) return { status: 400, body: { error: 'Set your GitHub account in Settings → General before reading labels' } }
+    const [owner, repo] = repoFull.split('/', 2)
+    let token = ''
+    try { token = await resolveMeToken(me) }
+    catch (err) { return { status: 502, body: { error: (err as Error).message } } }
+    try {
+      const labels: { name: string, color: string, description: string | null }[] = []
+      for (let page = 1; page <= LABEL_PAGES_MAX; page++) {
+        const { stdout } = await runFile(GH, ['api', `repos/${owner}/${repo}/labels`, '-f', `per_page=${LABEL_PAGE_SIZE}`, '-f', `page=${page}`], {
+          env: {
+            GH_HOST: 'github.com',
+            GH_TOKEN: token,
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN: undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+          },
+          timeoutMs: 15_000,
+          maxOutputBytes: 1 * 1024 * 1024,
+        })
+        const entries: unknown = JSON.parse(stdout)
+        if (!Array.isArray(entries)) {
+          return { status: 502, body: { error: `gh api list labels for ${repoFull}: unexpected response shape` } }
+        }
+        for (const entry of entries) {
+          if (!entry || typeof entry !== 'object' || typeof (entry as { name?: unknown }).name !== 'string') {
+            return { status: 502, body: { error: `gh api list labels for ${repoFull}: unexpected response shape` } }
+          }
+          const row = entry as { name: string, color?: unknown, description?: unknown }
+          labels.push({ name: row.name, color: typeof row.color === 'string' ? row.color : '', description: typeof row.description === 'string' ? row.description : null })
+        }
+        if (entries.length < LABEL_PAGE_SIZE) break
+      }
+      return { status: 200, body: { labels } }
+    } catch (err: any) {
+      let msg = err?.stderr?.toString?.() || err?.message || String(err)
+      if (token) msg = msg.split(token).join('***')   // never leak the token in errors
+      return { status: 502, body: { error: 'gh api list labels failed: ' + msg } }
     }
   }
 
