@@ -1229,6 +1229,10 @@ resources are never released by closure alone. Merged-chain Hold/Resume writes
 return 409 and the GUI retains History and read-only reconciliation. No new
 endpoint, signal or journal event type is added; the Caller contract is in
 [agent_interface](../caller/agent_interface/README.md#fencing-a-closed-behavior).
+Poise's existing log decoder validates the fence's exact terminal no-effect
+shape and native resource-release timestamp before the journal can settle its
+reservation. Closed-target native resource waits are separate from public
+GitHub recheck times; unrelated open-PR review/approval stays eligible.
 
 ## Google document publishing
 

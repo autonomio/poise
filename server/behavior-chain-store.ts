@@ -271,7 +271,12 @@ export class BehaviorChainJournal {
   }
 
   reconciliationAt(chain: BehaviorChain): number | null {
-    const row = this.db.prepare(`SELECT CASE WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND (${LIVE_MODEL_SQL})
+    const row = this.db.prepare(`SELECT CASE WHEN (${LIVE_MODEL_SQL}) AND (
+      json_extract(state, '$.mergeSha') IS NOT NULL
+      OR json_extract(state, '$.observation.pull.merged') = 1
+      OR json_extract(state, '$.observation.pull.state') != 'open'
+      OR (json_extract(state, '$.observation.issue.open') = 0
+        AND json_extract(state, '$.invocations[#-1].behavior') IN ('review-issue', 'implement-issue', 'repair-pr')))
       THEN NULL ELSE (${RECHECK_AT_SQL}) END AS at FROM behavior_chain_current WHERE chain_id = ? AND sequence = ?`)
       .get(chain.id, chain.sequence) as { at: number | null } | undefined
     if (!row) throw new Error('behavior chain changed while reading its reconciliation schedule')

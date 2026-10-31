@@ -85,6 +85,10 @@ chains keep their original ownership and active-list membership, but cannot
 consume the normal-work page. Native model/resource receipts are still read
 while an original model lacks resource-release proof, including after a merge;
 only unnecessary GitHub observation waits.
+Known closed PRs and closed seeds use the same native-only resource wait for
+their blocked model behaviors. A closed seed alone does not defer PR review or
+approval of an open PR. Public recheck times describe GitHub observation;
+native receipt reconciliation remains eligible on every pass.
 
 A successful quiescent observation schedules its next read at `checkedAt +
 min(24 hours, max(2 minutes, checkedAt - origin))`. Origin is the recorded actual
@@ -150,6 +154,9 @@ An existing Call is never altered, and normal validated receipt reconciliation
 must prove release. Fence failures remain reported and retain ownership; the
 existing tick retries that idempotent command at most once per two minutes,
 using a durable attempt time rather than a new timer.
+The receipt reader accepts only the fence's exact no-provider, no-publication
+shape with its native resource-release timestamp. Other superseded outcomes
+retain their original validation; malformed fence rows stay quarantined.
 
 Original artifact/receipt adoption continues while paused or held. Incomplete
 publication after closure is held once; complete original comments, reviews or

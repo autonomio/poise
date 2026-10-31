@@ -47,13 +47,16 @@ function setup(behavior: ChainBehavior | null = 'repair-pr', started = false) {
       behavior: ({ 'repair-pr': 'repair_pr', 'review-pr': 'pr_review', 'approve-pr': 'pr_approve',
         'implement-issue': 'implement_issue', 'review-issue': 'issue_review' } as Partial<Record<ChainBehavior, string>>)[invocation.behavior],
       status: 'superseded', action: 'not_started', outcome: 'target_closed', artifact: { phase: 'admission_fenced' },
+      head_sha: null, expected_head: ['review-issue', 'implement-issue'].includes(invocation.behavior) ? null : HEAD,
+      pr_id: ['review-issue', 'implement-issue'].includes(invocation.behavior) ? String(chain.issue) : '17',
+      review_id: null, review_comments: null, receipts: null, error_code: 'target_closed',
       resources_settled_at: new Date().toISOString() })
     calls.push(call)
     return true
   })
   const operations: ChainRuntimeOperations = { enabled: () => true, accounts: () => ({ author: 'author', reviewer: 'reviewer' }),
     discover: async () => [], ownsRepository: () => true, observe: vi.fn(async () => observed()),
-    readInvocations: vi.fn(async () => ({ entries: structuredClone(calls), quarantined: [] })), received: () => {},
+    readInvocations: vi.fn(async () => parseAgentLogStdout(JSON.stringify(calls), 'closed-target native receipt fixture')), received: () => {},
     available: () => true, capacity: () => 1, permitted: (_chain, decision) => !['review-pr', 'approve-pr'].includes(decision.behavior),
     request: forbidden, launch: forbidden, perform: forbidden, resumePublication: forbidden, fenceClosedTarget, wake: () => {} }
   return { db, journal, chain, calls, operations, forbidden, fenceClosedTarget }
@@ -156,7 +159,8 @@ it('keeps a running original and uncertain resource ownership until native settl
   calls.push(call)
   const runtime = new BehaviorChainRuntime(journal, operations)
   await runtime.run()
-  Object.assign(call, { status: 'failed', action: 'not_started', outcome: 'preflight_failed', completed_at: new Date().toISOString() })
+  Object.assign(call, { status: 'failed', action: 'not_started', outcome: 'preflight_failed', head_sha: null,
+    error: 'original target closed before the provider ran', completed_at: new Date().toISOString() })
   await runtime.run()
   expect(journal.liveModelInvocationCount()).toBe(1)
   expect(operations.observe).not.toHaveBeenCalled()

@@ -50,6 +50,11 @@ still owns phase decisions, and Poise reads the resulting Call through its norma
 validated receipt reader before releasing its durable reservation. A failed or
 lost fence response alone proves no settlement. This adds no remote endpoint or
 replacement worker.
+The consumer requires the exact `admission_fenced` artifact, null executed head
+and publication fields, and a valid resource-release timestamp. Caller tests
+feed real `--logs --select` bytes into Poise's decoder and journal runtime for
+all five behaviors; malformed variants remain quarantined. These contract
+checks create no GitHub artifacts and are not workflow acceptance runs.
 
 # Recording a Chat turn
 
