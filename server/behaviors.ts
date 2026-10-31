@@ -7216,7 +7216,7 @@ export function getBehaviorChainRuntimeHealth() {
   return [...behaviorChainHealth].filter(([organization]) => organization !== '@cutover' || behaviorAdmissionDraining())
     .map(([organization, health]) => ({ organization, ...health }))
 }
-function chainBehaviorKey(behavior: ChainBehavior): BehaviorKey | null {
+export function chainBehaviorKey(behavior: ChainBehavior): BehaviorKey | null {
   return ({ 'review-issue': 'review-new-issues', 'review-pr': 'review-new-prs', 'approve-pr': 'approve-prs',
     'implement-issue': 'implement-issues', 'repair-pr': 'repair-prs',
     'resolve-threads': 'resolve-unblocking', 'merge-pr': 'merge-prs', 'rerun-grey-ci': 'rerun-grey-ci' } as Partial<Record<ChainBehavior, BehaviorKey>>)[behavior] ?? null

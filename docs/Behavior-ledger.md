@@ -102,7 +102,10 @@ each linking to the ledger target lookup for drill-down:
 node dist/behavior-ledger.js pr-status --limit 50
 ```
 
-Same guards, GET-only method, 512 KiB bound, and CLI exit codes as the
+The status reply uses schema `version: 2`; the other ledger replies stay at
+version 1. The CLI accepts status versions 1 and 2 for rolling compatibility,
+without accepting version 2 on ordinary ledger operations. Same guards,
+GET-only method, 512 KiB bound, and CLI exit codes as the
 ledger routes. `limit` is an integer from 1 to 100, default 50; the reply
 carries `totalOpen` and `truncated` when the limit cuts rows. Flagged rows
 sort first, then oldest opened first. Each row shows open age since
@@ -114,7 +117,7 @@ blocker. A row is flagged past 60 minutes of age, or when its blocker
 identity stays unchanged for more than 15 minutes.
 
 The blocker is a closed vocabulary, first match wins: `not_eligible`,
-`held` (dead letter or quarantine, with diagnostic cause and next retry),
+`held` (legacy dead letter/quarantine, or canonical chain hold/uncertainty),
 `review_running`, `awaiting_author`, `awaiting_review`, `ci_pending` /
 `ci_failing`, `unresolved_threads`, `conflicting`, `behind`, `blocked`,
 `approved_not_enqueued` (with sub-reason), `in_queue`, and `unknown`
@@ -150,10 +153,20 @@ A confirmed merge with an open review obligation stays distinct from completion;
 a fully completed chain is excluded even if the datastore still lists its PR
 as open. Closed PRs absent from that listing remain visible in the chain list.
 
+Queue attribution names the original accepted enqueue invocation when its
+validated receipt matches the actual entry. Merely observing an entry, including
+a successful `in_queue` response, does not acquire mutation attribution. A later
+observation cannot erase an earlier accepted enqueue for that same entry.
+
 V2 uses the decision path's two-minute observation-freshness bound. Missing or
 unrecognized check rollups stay unknown; an empty failing-check list is not
 proof of success. Held/uncertain ownership remains visible even when PR state
-is stale, and stale chain evidence marks reply health stale. A contradictory
+is stale. A legitimately owned model invocation remains the current phase with
+its age while the runtime intentionally skips GitHub re-observation; those old
+facets remain unknown without falsely marking the collector stale. Missing
+observations remain distinct. Other stale chain evidence marks reply health
+stale. Current phase switches/pauses, the chain admission pause and the release
+barrier remain meaningful; recorded holds and policy refusals are retained. A contradictory
 journal or ambiguous ownership fails the existing endpoint with 503 instead of
 falling back to legacy status. Indexed target lookups validate selected journal
 projections without loading unrelated histories. The existing in-memory blocker

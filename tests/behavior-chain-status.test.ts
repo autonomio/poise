@@ -4,6 +4,8 @@ import type { ChainObservation } from '../server/behavior-chain-decision'
 import { CheckSemaphore } from '../server/check-semaphore'
 import { arrangeCli, fixture, loadModules, mocks, pr } from './behaviors-runtime-fixture'
 import { completedReviewCall } from './review-response-fixture'
+import { nativeActionReceipt, nativeActionSettlement } from '../server/behavior-chain-action'
+import { behaviorChainSummary } from '../server/behavior-chain-summary'
 
 const HEAD = 'a'.repeat(40)
 const MERGE = 'b'.repeat(40)
@@ -28,6 +30,7 @@ async function setup() {
   const { database: db, behaviors: runtime } = await loadModules()
   db.setMeta('me', 'poise-user')
   db.setMeta('behavior_chain_settings', JSON.stringify({ enabled: true, seedMode: 'label', label: 'work-ready' }))
+  for (const key of ['review-new-prs', 'approve-prs', 'repair-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci'] as const) runtime.setEnabled(key, true)
   arrangeCli()
   const journal = new BehaviorChainJournal(db.db)
   const draining = journal.changeAdmission(0, 'draining')
@@ -112,6 +115,35 @@ it.each(['stale', 'future'])('keeps %s observations unknown instead of reporting
     rounds: { completed: null, next: null }, ci: { state: 'unknown' }, queue: { state: 'unknown' }, blocker: { id: 'unknown' } })
 })
 
+it('shows a long-running owned invocation and its age without mistaking skipped observation for collector failure', async () => {
+  const { journal, chain, obs, status } = await setup()
+  let current = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'owned-review', behavior: 'review-pr',
+    actor: chain.reviewer, model: 'fixture', slot: 'primary', basis: 'review', admittedAt: obs.checkedAt,
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  current = record(journal, current, { type: 'invocation.started', invocationId: 'owned-review' })
+  const reply = await status.readPrStatus(50, obs.checkedAt + 30 * 60_000)
+  expect(reply.health.status).toBe('ok')
+  expect(reply.rows[0]).toMatchObject({ ownership: { observation: 'skipped-while-owned' },
+    blocker: { id: 'review_running', line: 'v2 review-pr: started' }, ci: { state: 'unknown' } })
+  expect(reply.rows[0].blocker.details[0]).toContain('30 minute(s) ago')
+  expect(journal.read(chain.id)?.sequence).toBe(current.sequence)
+})
+
+it.each(['switch', 'phase-pause', 'release', 'repository-skip'] as const)('reports the existing %s admission control without changing it', async (kind) => {
+  const { runtime, status } = await setup()
+  const release = await import('../server/release-background')
+  if (kind === 'switch') runtime.setEnabled('review-new-prs', false)
+  if (kind === 'phase-pause') await runtime.setPaused('review-new-prs', new Date(Date.now() + 60_000).toISOString(), 'person')
+  if (kind === 'release') release.pauseReleaseBackground()
+  if (kind === 'repository-skip') runtime.setRepositorySkips('review-new-prs', [pr.repo])
+  try {
+    const row = (await status.readPrStatus(50)).rows[0]
+    expect(row.blocker.id).toBe(kind === 'repository-skip' ? 'not_eligible' : 'blocked')
+    expect(row.blocker.line).toContain(kind === 'switch' ? 'is disabled' : kind === 'phase-pause' ? 'admissions are paused'
+      : kind === 'release' ? 'release background barrier' : 'Skip repositories')
+  } finally { release.resumeReleaseBackground() }
+})
+
 it('reports the actual queue rejection and retains blocker age across repeated observations', async () => {
   const { journal, chain, obs, status } = await setup()
   obs.pull!.queueRemoval = { id: 'rejected-entry', reason: 'failed_checks', at: obs.checkedAt, actor: null }
@@ -125,6 +157,51 @@ it('reports the actual queue rejection and retains blocker age across repeated o
   expect(repeated.rows[0].blocker.since).toBe(first.rows[0].blocker.since)
 })
 
+it.each(['enqueued', 'in_queue'] as const)('distinguishes the original %s response from somebody else queueing the candidate', async (outcome) => {
+  const { journal, chain, obs, status } = await setup()
+  let current = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'queue-action', behavior: 'merge-pr',
+    actor: chain.reviewer, model: null, slot: null, basis: 'queue', admittedAt: Date.now(),
+    request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', String(pr.number),
+      '--expected-head', HEAD, '--token-user', chain.reviewer] } } })
+  const proof = nativeActionReceipt(current, current.invocations[0], { action: 'merge_if_ready', repository: pr.repo,
+    pull_number: pr.number, head_sha: HEAD, outcome, queue_entry_id: 'real-entry' })
+  current = record(journal, current, { type: 'invocation.settled', invocationId: 'queue-action', callId: null, outcome,
+    evidence: nativeActionSettlement(proof) })
+  obs.checkedAt = Date.now()
+  obs.pull!.queueEntry = 'real-entry'
+  current = record(journal, current, { type: 'chain.observed', observation: obs })
+  const row = (await status.readPrStatus(50)).rows[0]
+  expect(row.queue).toMatchObject({ state: 'queued', attribution: outcome === 'enqueued' ? 'accepted-response' : 'observed' })
+  expect(row.blocker.line).toContain(outcome === 'enqueued' ? 'enqueue accepted' : 'enqueue mutation is not attributed')
+  const summary = behaviorChainSummary(current)
+  expect(summary.invocations[0].nativeAction).toMatchObject({
+    attribution: outcome === 'enqueued' ? 'accepted-response' : 'observed-no-action', queueEntryId: 'real-entry',
+  })
+  expect(JSON.stringify(summary)).not.toContain('nativeActionReceipt')
+})
+
+it('preserves the original enqueue attribution after a later no-action observation of the same entry', async () => {
+  const { journal, chain, obs, status } = await setup()
+  let current = chain
+  for (const outcome of ['enqueued', 'in_queue'] as const) {
+    const id = `queue-${outcome}`
+    current = record(journal, current, { type: 'invocation.admitted', invocation: { id, behavior: 'merge-pr',
+      actor: chain.reviewer, model: null, slot: null, basis: 'queue', admittedAt: Date.now(),
+      request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', String(pr.number),
+        '--expected-head', HEAD, '--token-user', chain.reviewer] } } })
+    const proof = nativeActionReceipt(current, current.invocations.at(-1)!, { action: 'merge_if_ready', repository: pr.repo,
+      pull_number: pr.number, head_sha: HEAD, outcome, queue_entry_id: 'original-entry' })
+    current = record(journal, current, { type: 'invocation.settled', invocationId: id, callId: null, outcome,
+      evidence: nativeActionSettlement(proof) })
+  }
+  obs.checkedAt = Date.now()
+  obs.pull!.queueEntry = 'original-entry'
+  record(journal, current, { type: 'chain.observed', observation: obs })
+  const row = (await status.readPrStatus(50)).rows[0]
+  expect(row.queue).toMatchObject({ state: 'queued', entryId: 'original-entry', attribution: 'accepted-response', invocationId: 'queue-enqueued' })
+  expect(behaviorChainSummary(current).invocations[1].nativeAction?.attribution).toBe('observed-no-action')
+})
+
 it('keeps a paused chain and a legacy PR under their respective status rules', async () => {
   const { db, runtime, chain, status } = await setup()
   db.setMeta('behavior_chain_settings', JSON.stringify({ enabled: false, seedMode: 'all', label: 'work-ready' }))
@@ -134,6 +211,16 @@ it('keeps a paused chain and a legacy PR under their respective status rules', a
   expect(reply.rows.find((row) => row.number === pr.number)).toMatchObject({ ownership: { engine: 'v2', chainId: chain.id },
     rounds: { cap: null }, blocker: { id: 'blocked', line: 'v2 admissions paused; existing ownership is retained' } })
   expect(reply.rows.find((row) => row.number === 18)).toMatchObject({ ownership: { engine: 'v1' }, rounds: { cap: 3 } })
+})
+
+it('recognizes a reserved native branch before publication has a PR number, without inventing an observation', async () => {
+  const { journal, chain, status } = await setup()
+  record(journal, chain, { type: 'chain.observed', observation: { ...observation(Date.now()), pull: null,
+    publication: { pull_number: null, head_sha: null, head_invocation: null, state: null, merged: false, merge_sha: null } } })
+  fixture.listedPrs = [{ ...pr, head_ref: chain.branch, head_repo: pr.repo }]
+  const row = (await status.readPrStatus(50)).rows[0]
+  expect(row).toMatchObject({ ownership: { engine: 'v2', chainId: chain.id, observation: 'missing' },
+    rounds: { completed: null, cap: null }, ci: { state: 'unknown' }, blocker: { id: 'unknown' } })
 })
 
 it('does not list a confirmed completed chain as an open PR while the datastore catches up', async () => {
@@ -188,11 +275,47 @@ it('keeps durable model reservations visible after replacing the process-local s
   runtime.setBehaviorCheckSlots(new CheckSemaphore(() => 4))
   expect(runtime.getBehaviorCheckSlots().stats().running).toBe(0)
   expect(runtime.getBehaviorChainCapacity()).toMatchObject({ status: 'available', reservedModelInvocations: 1,
-    modelInvocationLimit: 3, enabled: true, intake: { seedMode: 'label', label: 'work-ready' } })
+    modelInvocationLimit: 3, enabled: true, mode: 'v2', intake: { seedMode: 'label', label: 'work-ready' },
+    processLocal: { behaviorRunning: 0 }, resources: { unaccounted: 1 } })
   record(journal, current, { type: 'invocation.reconciled', invocationId: 'surviving-model',
     evidence: { resources_settled_at: new Date().toISOString() } })
   expect(runtime.getBehaviorChainCapacity()).toMatchObject({ reservedModelInvocations: 0 })
   expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+})
+
+it('reports budget exhaustion from the same reservation snapshot that refuses another admission', async () => {
+  const { runtime, journal, chain } = await setup()
+  vi.stubEnv('POISE_BEHAVIOR_MEMORY_BUDGET_BYTES', '1024')
+  vi.stubEnv('POISE_BEHAVIOR_DISK_BUDGET_BYTES', '2048')
+  vi.stubEnv('POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES', '256')
+  vi.stubEnv('POISE_BEHAVIOR_DISK_RESERVATION_BYTES', '512')
+  try {
+    const invocation = { id: 'budget-owner', behavior: 'review-pr' as const, actor: chain.reviewer, model: 'fixture', slot: 'primary',
+      basis: 'review', admittedAt: Date.now(), reservation: { memoryBytes: 1024, diskBytes: 2048 },
+      request: { command: 'agent-interface' as const, cwd: '/fixture', argv: [] } }
+    record(journal, chain, { type: 'invocation.admitted', invocation })
+    const snapshot = runtime.getBehaviorChainCapacity()
+    expect(snapshot).toMatchObject({ status: 'available', reservedModelInvocations: 1, modelInvocationLimit: 3,
+      resources: { budget: { memoryBytes: 1024, diskBytes: 2048 }, reserved: { memoryBytes: 1024, diskBytes: 2048 }, unaccounted: 0 } })
+    const other = journal.append(chainIdentity(pr.repo, 8), 'other-budget-seed', 0, { type: 'chain.admitted', repository: pr.repo,
+      issue: 8, branch: 'poise/issue-8', author: chain.author, reviewer: chain.reviewer })
+    expect(journal.admitInvocation(other, 'over-budget', { ...invocation, id: 'next-owner', reservation: { memoryBytes: 256, diskBytes: 512 } },
+      3, snapshot.resources!.budget!)).toBeNull()
+  } finally { vi.unstubAllEnvs() }
+})
+
+it('keeps a full durable ceiling distinct from an empty in-memory semaphore and invalid budget configuration', async () => {
+  const { runtime, journal, chain } = await setup()
+  record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'full-owner', behavior: 'review-pr',
+    actor: chain.reviewer, model: 'fixture', slot: 'primary', basis: 'review', admittedAt: Date.now(),
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  runtime.setBehaviorCheckSlots(new CheckSemaphore(() => 2))
+  expect(runtime.getBehaviorChainCapacity()).toMatchObject({ reservedModelInvocations: 1, modelInvocationLimit: 1,
+    processLocal: { behaviorRunning: 0, allRunning: 0 } })
+  expect(journal.modelCapacityAvailable(1)).toBe(false)
+  vi.stubEnv('POISE_BEHAVIOR_MEMORY_BUDGET_BYTES', 'invalid')
+  try { expect(runtime.getBehaviorChainCapacity()).toMatchObject({ status: 'unavailable', reservedModelInvocations: null }) }
+  finally { vi.unstubAllEnvs() }
 })
 
 it('reports unavailable capacity as unknown instead of free', async () => {

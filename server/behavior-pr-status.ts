@@ -19,8 +19,11 @@ import { prAccounts } from './pr-accounts'
 import { behaviorChainForPull, behaviorChainJournal, behaviorChainOwnsRepository } from './behavior-chain-journal'
 import { projectChainPrStatus } from './behavior-chain-pr-status'
 import { getBehaviorChainSettings } from './settings'
+import { CHAIN_OBSERVATION_MAX_AGE_MS, decideBehaviorChain, type ChainObservation } from './behavior-chain-decision'
+import { releaseBackgroundPaused } from './release-background'
 import {
   BEHAVIOR_KEYS,
+  chainBehaviorKey,
   MERGE_CANDIDATE_CACHE_STALE_MS,
   SKIPPABLE_BEHAVIORS,
   datastoreFreshnessEntries,
@@ -35,10 +38,13 @@ import {
   isEnabled,
   isPaused,
   ownPullRequestRefusal,
+  pullRequestPolicy,
+  pullRequestRefusal,
   reviewRoundNumber,
   withBehaviorOrganization,
   type BehaviorKey,
   type DatastorePr,
+  type SkippableBehavior,
 } from './behaviors'
 
 export type PrBlockerId = 'not_eligible' | 'held' | 'review_running' | 'awaiting_author'
@@ -247,7 +253,8 @@ export function computePrBlocker(input: BlockerInput): ComputedBlocker {
 }
 
 export interface PrStatusRow {
-  ownership?: { engine: 'v1' | 'v2', chainId?: string, sequence?: number, reviewPending?: boolean,
+  ownership?: { engine: 'v1' | 'v2', chainId?: string, sequence?: number, reviewPending?: boolean | null,
+    reviewStatus?: 'pending' | 'complete' | 'not-recorded', observation?: 'fresh' | 'stale' | 'missing' | 'skipped-while-owned',
     mergeSha?: string | null, journal?: string, reviews?: { completed: number | null, required: number | null } }
   repository: string
   number: number
@@ -260,7 +267,8 @@ export interface PrStatusRow {
   rounds: { completed: number | null, cap: number | null, next: number | null }
   verdict: (PrStatusVerdict & { onCurrentHead: boolean | null }) | null
   ci: { state: string | null, head: string | null, asOf: string | null } | { state: 'unknown', reason: string }
-  queue: { state: PrStatusQueueState, entryId: string | null, since: string | null }
+  queue: { state: PrStatusQueueState, entryId: string | null, since: string | null,
+    attribution?: 'accepted-response' | 'observed', invocationId?: string }
   blocker: { id: PrBlockerId, line: string, since: string, sinceRestart: boolean, details: string[] }
   flags: { age: boolean, staleBlocker: boolean }
   eligibility: { refusal: string | null, skippedBy: string[] }
@@ -277,7 +285,7 @@ export interface PrStatusCoverage {
 }
 
 export interface PrStatusReply {
-  version: 1
+  version: 2
   health: { status: 'ok' | 'stale' | 'unavailable', pending: 0, dropped: 0, gaps: [] }
   asOf: string
   identity: { status: 'valid' | 'invalid', error: string | null }
@@ -346,7 +354,7 @@ async function readScopeRows(scope: string | null): Promise<{ rows: DatastorePr[
 export async function readPrStatus(limit: number, now = Date.now()): Promise<PrStatusReply> {
   const asOf = new Date(now).toISOString()
   const unhealthy = (identity: PrStatusReply['identity'], orgs: PrStatusCoverage[]): PrStatusReply => ({
-    version: 1, health: { status: 'unavailable', pending: 0, dropped: 0, gaps: [] }, asOf,
+    version: 2, health: { status: 'unavailable', pending: 0, dropped: 0, gaps: [] }, asOf,
     identity, datastore: { orgs }, rows: [], totalOpen: 0, truncated: false,
   })
 
@@ -447,7 +455,22 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
       // that has not caught up. Retained review obligations stay visible.
       if (chain.mergeSha && !chain.reviewPending) continue
       chainAdmissionsEnabled ??= getBehaviorChainSettings().enabled && behaviorChainJournal().cutover().mode === 'v2'
-      const projected = projectChainPrStatus(chain, pr, org, now, chainAdmissionsEnabled)
+      const observation = chain.observation as ChainObservation | null
+      const fresh = !!observation && observation.checkedAt <= now && now - observation.checkedAt <= CHAIN_OBSERVATION_MAX_AGE_MS
+      const active = chain.invocations.find((invocation) => invocation.state !== 'settled')
+      const next = fresh && !active ? decideBehaviorChain(chain, observation, now) : null
+      const phase = active?.behavior ?? (next?.kind === 'invoke' ? next.behavior : null)
+      const phaseKey = phase ? chainBehaviorKey(phase) : null
+      const pauses = scoped(() => [
+        ...(releaseBackgroundPaused() ? ['release background barrier is paused'] : []),
+        ...(phaseKey && !isEnabled(phaseKey) ? [`${phaseKey} is disabled`] : []),
+        ...(phaseKey && isPaused(phaseKey) ? [`${phaseKey} admissions are paused`] : []),
+      ])
+      const skippable = phaseKey && (SKIPPABLE_BEHAVIORS as readonly string[]).includes(phaseKey) ? phaseKey as SkippableBehavior : null
+      const refusal = skippable && observation?.pull ? scoped(() => pullRequestRefusal(pullRequestPolicy(skippable), chain.repository, pr.number,
+        { author: chain.author, status: observation.pull!.state, draft: observation.pull!.draft })) : null
+      const projected = projectChainPrStatus(chain, pr, org, now, chainAdmissionsEnabled, pauses,
+        { refusal, skippedBy: skippable && skips.get(skippable)?.has(pr.repo.toLowerCase()) ? [skippable] : [] })
       const tracked = trackBlocker(key, projected.row.blocker.id, projected.key, asOf)
       projected.row.blocker.since = tracked.since
       projected.row.blocker.sinceRestart = tracked.sinceRestart
@@ -457,7 +480,7 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
       rows.push(projected.row)
       continue
     }
-    if (behaviorChainOwnsRepository(pr.repo) && (!pr.headRef || !pr.headRepo)) {
+    if ((!pr.headRef || !pr.headRepo) && behaviorChainOwnsRepository(pr.repo)) {
       throw new Error(`PR ${target} lacks branch evidence needed to distinguish legacy and chain ownership`)
     }
 
@@ -607,7 +630,7 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
   const sliced = rows.slice(0, limit)
   const partial = chainEvidenceStale || coverage.some((entry) => entry.status !== 'ready')
   return {
-    version: 1,
+    version: 2,
     health: { status: partial ? 'stale' : 'ok', pending: 0, dropped: 0, gaps: [] },
     asOf,
     identity: { status: 'valid', error: null },
@@ -648,7 +671,7 @@ function sendPrStatus(res: ServerResponse, status: number, body: PrStatusReply):
   let text = JSON.stringify(body)
   if (Buffer.byteLength(text) > PR_STATUS_RESPONSE_BYTES) {
     status = 503
-    text = JSON.stringify({ version: 1, health: body.health, error: 'response_too_large' })
+    text = JSON.stringify({ version: body.version, health: body.health, error: 'response_too_large' })
   }
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
