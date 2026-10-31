@@ -6,6 +6,7 @@ type Settings = NonNullable<AppSettings['behaviorChain']>
 interface ChainRow {
   id: string, repository: string, issue: number, sequence: number, held: string | null, waiting: string | null,
   mergeSha: string | null, reviewPending?: boolean | null, reviewStatus?: 'pending' | 'complete' | 'not-recorded', pullNumber: number | null,
+  reconciliation?: { nextObservationAt: number | null, waitingForOriginalResponse: boolean, waitingForResourceRelease?: boolean } | null,
   invocations: Array<{ behavior: string, state: string, outcome?: string | null,
     nativeAction?: { attribution: string, outcome: string | null } | null }>
 }
@@ -189,7 +190,11 @@ export function behaviorChainSettings() {
             : last?.nativeAction?.attribution === 'not-recorded' ? ' · action attribution not recorded' : ''
         const obligation = chain.mergeSha && chain.reviewPending && !active
           ? ' · Awaiting original pre-merge review evidence; no new invocation can start after merge.' : ''
-        return `<li>v2 · ${github}${chain.pullNumber ? ` → <a href="https://github.com/${escapeHtml(chain.repository)}/pull/${Number(chain.pullNumber)}">PR #${Number(chain.pullNumber)}</a>` : ''}: ${escapeHtml(state)}${escapeHtml(obligation)}${!active && last ? ` · Last: ${escapeHtml(last.behavior)} (${escapeHtml(last.outcome || last.state)}${escapeHtml(attribution)})` : ''}${control} <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-operation="history">History</button></li>`
+        const recheck = chain.reconciliation?.waitingForResourceRelease ? ' · Original native resource release is unverified; Caller reconciliation continues while GitHub observations are deferred.'
+          : chain.reconciliation?.waitingForOriginalResponse ? ' · Original action response required; GitHub reads cannot settle this invocation.'
+          : chain.reconciliation?.nextObservationAt && chain.reconciliation.nextObservationAt > Date.now()
+            ? ` · Next original-evidence observation: ${new Date(chain.reconciliation.nextObservationAt).toLocaleString()}.` : ''
+        return `<li>v2 · ${github}${chain.pullNumber ? ` → <a href="https://github.com/${escapeHtml(chain.repository)}/pull/${Number(chain.pullNumber)}">PR #${Number(chain.pullNumber)}</a>` : ''}: ${escapeHtml(state)}${escapeHtml(obligation)}${escapeHtml(recheck)}${!active && last ? ` · Last: ${escapeHtml(last.behavior)} (${escapeHtml(last.outcome || last.state)}${escapeHtml(attribution)})` : ''}${control} <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-operation="history">History</button></li>`
       }).join('') || '<li>No behavior chains.</li>'
       const errors = Array.isArray(data.runtime) ? data.runtime.filter((entry: { error: string | null }) => entry.error).map((entry: { organization: string, error: string }) => `${entry.organization}: ${entry.error}`).join('; ') : ''
       status.textContent = `Read ${new Date().toLocaleTimeString()}${errors ? ` · ${errors}` : ''}`

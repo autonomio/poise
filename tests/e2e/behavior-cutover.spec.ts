@@ -24,6 +24,7 @@ test('merged chains retain open obligations and controls until canonical complet
   await expect(list).toContainText('Merged: aaaaaaaaaaaa')
   await expect(list).toContainText('Review evidence pending')
   await expect(list).toContainText('repair-pr: uncertain')
+  await expect(list).toContainText('Original native resource release is unverified; Caller reconciliation continues while GitHub observations are deferred')
   await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
   await expect(controls.locator('[data-chain-capacity]')).toContainText('1 durable model admission(s) reserved')
   await expect(controls.locator('[data-chain-capacity]')).toContainText('label work-ready')
@@ -43,7 +44,7 @@ test('merged chains retain open obligations and controls until canonical complet
   await expect(list).toContainText('Merged: aaaaaaaaaaaa')
 })
 
-for (const state of ['pending-admitted', 'pending-no-invocation', 'historical'] as const) {
+for (const state of ['pending-admitted', 'pending-no-invocation', 'pending-original-response', 'historical'] as const) {
   test(`merged chain controls reflect canonical ${state} evidence without creating review authority`, async ({ page }) => {
     await workspace(page)
     await page.route('**/api/behavior-chains', route => route.fulfill({ json: chainSummaryFixture(state) }))
@@ -51,14 +52,16 @@ for (const state of ['pending-admitted', 'pending-no-invocation', 'historical'] 
     const list = controls.locator('[data-chain-list]')
     await list.scrollIntoViewIfNeeded()
     await expect(list).toContainText('Merged: aaaaaaaaaaaa')
-    if (state === 'pending-admitted') {
-      await expect(list).toContainText('repair-pr: admitted')
+    if (state === 'pending-admitted' || state === 'pending-original-response') {
+      await expect(list).toContainText(state === 'pending-admitted' ? 'repair-pr: admitted' : 'merge-pr: uncertain')
       await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
+      if (state === 'pending-original-response') await expect(list).toContainText('Original action response required; GitHub reads cannot settle this invocation')
     } else {
       await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
       await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
       await expect(list).toContainText(state === 'historical' ? 'Pre-merge review completion not recorded'
         : 'Awaiting original pre-merge review evidence; no new invocation can start after merge')
+      if (state === 'pending-no-invocation') await expect(list).toContainText('Next original-evidence observation:')
     }
   })
 }

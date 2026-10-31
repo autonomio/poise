@@ -1209,6 +1209,18 @@ separate process-local counts. Manager worker-Chat occupancy is nullable when
 unreadable, and its backlog excludes proven chain-owned issues. See
 [Behavior ledger](Behavior-ledger.md) and [Behavior chain](Behavior-chain.md).
 
+Chain/status summaries also expose derived reconciliation timing for quiescent
+ownership. The existing scheduler and indexed journal projection bound GitHub
+rechecks while preserving the public active/merged filters, native resource
+settlement and immutable history. The normal-work page precedes due quiescent
+reconciliation; observation failures remain reported after unrelated progress.
+Merged direct-action recovery reads original journal responses without another
+GitHub observation. The optional `reconciliation` read fields add no write
+operation or authority; a deliberate wait keeps GitHub facets unknown without
+declaring a collector outage. No extra poller, gateway scope or event type is
+introduced. [Bounded reconciliation](Behavior-chain.md#bounded-reconciliation)
+defines the cadence and timestamp units.
+
 ## Google document publishing
 
 Google account grants belong to the gateway, partitioned by immutable GitHub

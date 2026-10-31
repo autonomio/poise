@@ -255,7 +255,8 @@ export function computePrBlocker(input: BlockerInput): ComputedBlocker {
 export interface PrStatusRow {
   ownership?: { engine: 'v1' | 'v2', chainId?: string, sequence?: number, reviewPending?: boolean | null,
     reviewStatus?: 'pending' | 'complete' | 'not-recorded', observation?: 'fresh' | 'stale' | 'missing' | 'skipped-while-owned',
-    mergeSha?: string | null, journal?: string, reviews?: { completed: number | null, required: number | null } }
+    mergeSha?: string | null, journal?: string, reviews?: { completed: number | null, required: number | null },
+    reconciliation?: { nextObservationAt: string | null, waitingForOriginalResponse: boolean, waitingForResourceRelease?: boolean } }
   repository: string
   number: number
   org: string | null
@@ -470,7 +471,8 @@ export async function readPrStatus(limit: number, now = Date.now()): Promise<PrS
       const refusal = skippable && observation?.pull ? scoped(() => pullRequestRefusal(pullRequestPolicy(skippable), chain.repository, pr.number,
         { author: chain.author, status: observation.pull!.state, draft: observation.pull!.draft })) : null
       const projected = projectChainPrStatus(chain, pr, org, now, chainAdmissionsEnabled, pauses,
-        { refusal, skippedBy: skippable && skips.get(skippable)?.has(pr.repo.toLowerCase()) ? [skippable] : [] })
+        { refusal, skippedBy: skippable && skips.get(skippable)?.has(pr.repo.toLowerCase()) ? [skippable] : [] },
+        behaviorChainJournal().reconciliationAt(chain))
       const tracked = trackBlocker(key, projected.row.blocker.id, projected.key, asOf)
       projected.row.blocker.since = tracked.since
       projected.row.blocker.sinceRestart = tracked.sinceRestart

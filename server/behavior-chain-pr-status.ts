@@ -1,21 +1,24 @@
 import { CHAIN_OBSERVATION_MAX_AGE_MS, chainReviewResponse, lastChainQueueInvocation, type ChainObservation } from './behavior-chain-decision'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from './behavior-chain-store'
-import { matchingNativeActionReceipt, type NativeActionReceipt } from './behavior-chain-action'
+import { attributedNativeAction, matchingNativeActionReceipt, type NativeActionReceipt } from './behavior-chain-action'
+import { chainWaitsForResourceRelease } from './behavior-chain-summary'
 import type { PrBlockerId, PrStatusRow, PrStatusVerdict } from './behavior-pr-status'
 import type { DatastorePr } from './behaviors'
 
 /** Presentation only: no observation collection, admission or effect. */
 export function projectChainPrStatus(chain: BehaviorChain, pr: DatastorePr, org: string | null, now: number, enabled: boolean,
-  pauses: string[] = [], eligibility: PrStatusRow['eligibility'] = { refusal: null, skippedBy: [] }) {
+  pauses: string[] = [], eligibility: PrStatusRow['eligibility'] = { refusal: null, skippedBy: [] }, recheckAt?: number | null) {
   const preview = (text: string) => text.length <= 1024 ? text : `${text.slice(0, 1023)}…`
   const observation = chain.observation as ChainObservation | null
   const pull = observation?.pull?.number === pr.number ? observation.pull : null
   const fresh = !!pull && !!observation && Number.isFinite(observation.checkedAt)
     && observation.checkedAt <= now && now - observation.checkedAt <= CHAIN_OBSERVATION_MAX_AGE_MS
   const active = chain.invocations.find((invocation) => invocation.state !== 'settled')
+  const waitingForResourceRelease = chainWaitsForResourceRelease(chain)
   const ownedWorking = !!active && active.model !== null && active.state !== 'uncertain' && !active.evidence?.resources_settled_at
+  const scheduled = recheckAt !== undefined && !!(chain.held || chain.mergeSha) && (recheckAt === null || recheckAt > now)
   const observationState = !observation ? 'missing' : fresh ? 'fresh'
-    : ownedWorking && Number.isFinite(observation.checkedAt) && observation.checkedAt <= now ? 'skipped-while-owned'
+    : (ownedWorking || scheduled) && Number.isFinite(observation.checkedAt) && observation.checkedAt <= now ? 'skipped-while-owned'
       : !pull ? 'missing' : 'stale'
   const reviews = fresh && observation && pull ? chain.invocations.filter((invocation) => invocation.state === 'settled'
     && ['review-pr', 'approve-pr'].includes(invocation.behavior) && invocation.evidence?.status === 'completed'
@@ -93,6 +96,9 @@ export function projectChainPrStatus(chain: BehaviorChain, pr: DatastorePr, org:
     ownership: { engine: 'v2', chainId: chain.id, sequence: chain.sequence, reviewPending: chain.reviewPending ?? null,
       reviewStatus: chain.reviewPending === true ? 'pending' : chain.reviewPending === false ? 'complete' : 'not-recorded',
       observation: observationState,
+      ...(recheckAt !== undefined ? { reconciliation: { nextObservationAt: recheckAt !== null && recheckAt > 0 ? new Date(recheckAt).toISOString() : null,
+        ...(waitingForResourceRelease ? { waitingForResourceRelease: true } : {}),
+        waitingForOriginalResponse: recheckAt === null && !!active && attributedNativeAction(active) } } : {}),
       mergeSha: chain.mergeSha, reviews: { completed: fresh ? completed : null, required: fresh ? required : null }, journal: `/api/behavior-chains?id=${encodeURIComponent(chain.id)}` },
     rounds: { completed: null, cap: null, next: null },
     verdict: verdict ? { ...verdict, onCurrentHead: fresh ? verdict.head === pull!.head : null } : null,
@@ -104,8 +110,11 @@ export function projectChainPrStatus(chain: BehaviorChain, pr: DatastorePr, org:
         ...(active ? [`Original invocation ${active.id} admitted ${Math.max(0, Math.floor((now - active.admittedAt) / 60_000))} minute(s) ago`] : []),
         ...(active?.outcome ? [active.outcome] : []), ...(chain.held ? [chain.held] : []),
         ...pauses, ...(eligibility.refusal ? [eligibility.refusal] : []),
-        ...(chain.waiting ? [chain.waiting] : []), ...(!fresh ? [ownedWorking ? 'GitHub re-observation is skipped while the original native invocation owns its work'
-          : 'GitHub state is unverified until the next chain observation'] : []),
+        ...(chain.waiting ? [chain.waiting] : []), ...(!fresh ? [waitingForResourceRelease ? 'Original native resource release remains unverified; Caller reconciliation continues while GitHub observation is deferred'
+          : ownedWorking ? 'GitHub re-observation is skipped while the original native invocation owns its work'
+          : scheduled ? recheckAt === null ? 'The original action response is required; GitHub reads cannot settle this invocation'
+            : `Original evidence recheck scheduled for ${new Date(recheckAt!).toISOString()}; GitHub facets remain unverified`
+            : 'GitHub state is unverified until the next chain observation'] : []),
       ].slice(0, 4).map(preview) },
     flags: { age: false, staleBlocker: false }, eligibility,
     ledger: `/api/behavior-ledger?repository=${pr.repo}&number=${pr.number}`,

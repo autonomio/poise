@@ -129,6 +129,63 @@ it('shows a long-running owned invocation and its age without mistaking skipped 
   expect(journal.read(chain.id)?.sequence).toBe(current.sequence)
 })
 
+it('reports a deliberate original-evidence recheck without declaring the old GitHub facets fresh or the collector failed', async () => {
+  const { journal, chain, obs, status } = await setup()
+  const now = Date.now()
+  obs.checkedAt = now - 5 * 60_000
+  Object.assign(obs.pull!, { merged: true, mergeSha: MERGE, state: 'closed', mergedAt: now - 20 * 60_000 })
+  let current = record(journal, chain, { type: 'chain.observed', observation: obs })
+  current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+    pull_number: pr.number, merged: true, merge_sha: MERGE, review_complete: false } })
+  current = record(journal, current, { type: 'chain.held', reason: 'original pre-merge review evidence is missing' })
+  const next = journal.reconciliationAt(current)!
+  const reply = await status.readPrStatus(50, now)
+  expect(reply.health.status).toBe('ok')
+  expect(reply.rows[0]).toMatchObject({ ownership: { observation: 'skipped-while-owned',
+    reconciliation: { nextObservationAt: new Date(next).toISOString(), waitingForOriginalResponse: false } },
+    ci: { state: 'unknown' }, blocker: { id: 'held' } })
+})
+
+it('distinguishes immediate native resource reconciliation from an intentionally skipped GitHub observation', async () => {
+  const { journal, chain, obs, status } = await setup()
+  const now = Date.now()
+  let current = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'original-model', behavior: 'repair-pr',
+    actor: chain.author, model: 'fixture', slot: 'primary', basis: 'repair', admittedAt: now - 20 * 60_000,
+    request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  current = record(journal, current, { type: 'invocation.uncertain', invocationId: 'original-model', reason: 'original resource release is unknown' })
+  obs.checkedAt = now - 5 * 60_000
+  Object.assign(obs.pull!, { merged: true, mergeSha: MERGE, state: 'closed', mergedAt: now - 6 * 60_000 })
+  current = record(journal, current, { type: 'chain.observed', observation: obs })
+  current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+    pull_number: pr.number, merged: true, merge_sha: MERGE, review_complete: false } })
+  const before = journal.history(chain.id)
+  expect(journal.reconcilable('', now, false).map(row => row.id)).toContain(chain.id)
+  expect(journal.reconciliationAt(current)).toBeNull()
+  expect(behaviorChainSummary(current, { at: journal.reconciliationAt(current) }).reconciliation).toMatchObject({
+    nextObservationAt: null, waitingForOriginalResponse: false, waitingForResourceRelease: true })
+  const reply = await status.readPrStatus(50, now)
+  expect(reply.health.status).toBe('ok')
+  expect(reply.rows[0]).toMatchObject({ ownership: { observation: 'skipped-while-owned', reconciliation: {
+    nextObservationAt: null, waitingForOriginalResponse: false, waitingForResourceRelease: true } }, ci: { state: 'unknown' }, blocker: { id: 'held' } })
+  expect(reply.rows[0].blocker.details.join(' ')).toContain('resource release remains unverified')
+  expect(journal.liveModelInvocationCount()).toBe(1)
+  expect(journal.history(chain.id)).toEqual(before)
+})
+
+it('excludes a completed chain from a stale open-PR listing without a false original-response wait', async () => {
+  const { journal, chain, obs, status } = await setup()
+  const now = Date.now()
+  obs.checkedAt = now - 5 * 60_000
+  Object.assign(obs.pull!, { merged: true, mergeSha: MERGE, state: 'closed', mergedAt: now - 20 * 60_000 })
+  let current = record(journal, chain, { type: 'chain.observed', observation: obs })
+  current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE, evidence: { repository: chain.repository,
+    pull_number: pr.number, merged: true, merge_sha: MERGE } })
+  expect(journal.reconciliationAt(current)).toBeNull()
+  const reply = await status.readPrStatus(50, now)
+  expect(reply.rows).toEqual([])
+  expect(reply.health.status).toBe('ok')
+})
+
 it.each(['switch', 'phase-pause', 'release', 'repository-skip'] as const)('reports the existing %s admission control without changing it', async (kind) => {
   const { runtime, status } = await setup()
   const release = await import('../server/release-background')
