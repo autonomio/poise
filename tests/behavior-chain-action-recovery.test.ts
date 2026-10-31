@@ -281,4 +281,3 @@ it.each(['matching', 'wrong-head', 'wrong-invocation', 'missing-flags'])('recove
   await new BehaviorChainRuntime(journal, operations(obs)).run()
   expect(journal.read(chain.id)!.invocations[0].state).toBe(variant === 'matching' ? 'settled' : 'uncertain')
 })
-
