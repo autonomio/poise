@@ -136,6 +136,12 @@ const deleting = new Set<string>()
 // Bulk deletes run with bounded concurrency so one slow stop or lease wait
 // does not hold the rest; the browser allows about six connections per origin.
 const DELETE_CONCURRENCY = 5
+// Placeholders deleted while their creation POST was still in flight, by
+// temp id. The late answer must remove the session it made, not resurrect
+// the deletion, and must not reopen the dialog for it.
+/** A creation whose placeholder was deleted mid-flight. Never reopens the dialog. */
+class PendingCreationCancelled extends Error {}
+const pendingCancelled = new Set<string>()
 let agentsInfo: AgentsResponse | null = null
 let agentsPromise: Promise<AgentsResponse | null> | null = null
 let renderQueued = false
@@ -1066,6 +1072,7 @@ async function deleteSession(id: string): Promise<void> {
   cancelPendingOpen([id])
   if (e.pending) {
     const wasActive = activeId === id
+    pendingCancelled.add(id)
     purgeDeleted(id)
     if (wasActive) resetAfterActiveDeleted()
     queueRender()
@@ -1124,7 +1131,7 @@ async function deleteSessions(ids: string[]): Promise<void> {
   const wasActiveDeleted = !!activeId && targets.includes(activeId)
   // Pending sessions never reached the server: purge them at once.
   const pendingTargets = targets.filter((id) => sessions.get(id)!.pending)
-  for (const id of pendingTargets) purgeDeleted(id)
+  for (const id of pendingTargets) { pendingCancelled.add(id); purgeDeleted(id) }
   const networkTargets = targets.filter((id) => sessions.has(id))
   for (const id of networkTargets) {
     deleting.add(id)
@@ -2792,7 +2799,7 @@ function render(): void {
   const wasAtBottom = distance <= STICK_TO_BOTTOM_PX
   if (e) {
     const subject = e.record.subject
-    transcript.render(e.model, { showActivity, showReasoning, showTools, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
+    transcript.render(e.model, { showActivity, showReasoning, showTools, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, working: e.record.status !== 'waiting' && e.record.status !== 'queued', interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
       chats: [...sessions.values()].map((entry) => ({ id: entry.record.id, title: entry.record.title, role: entry.record.role })),
       ...(subject && subject.surface !== 'current' ? { edits: { surface: subject.surface, readOnly: true } } : {}) })
   } else {
@@ -2871,6 +2878,26 @@ async function createSessionEntry(req: NewSessionRequest, draft: ComposerDraft |
     const r = await chatClient.createSession(req)
     sessions.delete(tempId)
     order = order.filter(x => x !== tempId)
+    if (pendingCancelled.has(tempId)) {
+      pendingCancelled.delete(tempId)
+      // The placeholder was deleted mid-flight: remove the session that just
+      // arrived before it ever surfaces, instead of resurrecting a deletion.
+      try {
+        await chatClient.deleteSession(r.session.id)
+      } catch (err) {
+        // The server would surface it on the next discovery read; show it
+        // now, with the reason, rather than a session from nowhere.
+        const e = upsertRecord(r.session, { pending: false })
+        e.model = temporary.model
+        e.draft = temporary.draft
+        chatClient.subscribe(r.session.id, 0)
+        e.loaded = true
+        queueRender()
+        throw new PendingCreationCancelled(`The session was deleted before it finished starting, and removing it failed — ${(err as Error).message}`)
+      }
+      queueRender()
+      throw new PendingCreationCancelled('The session was deleted before it finished starting.')
+    }
     const e = upsertRecord(r.session, { pending: false })
     e.model = temporary.model
     e.draft = temporary.draft
@@ -2893,6 +2920,11 @@ async function createSessionEntry(req: NewSessionRequest, draft: ComposerDraft |
       composer.setDraft(draft || freshDraft)
     }
     queueRender()
+    // A creation deleted mid-flight reports the cancellation, not the late
+    // POST outcome: there is nothing left to create or to reopen for.
+    if (pendingCancelled.delete(tempId) && !(err instanceof PendingCreationCancelled)) {
+      throw new PendingCreationCancelled('The session was deleted before it finished starting.')
+    }
     throw err
   }
 }
@@ -2903,6 +2935,8 @@ async function createSession(req: NewSessionRequest, errorEl: HTMLElement): Prom
     await createSessionEntry({ ...req, ...(fresh && freshAutoMerge ? { autoMerge: true } : {}), safeMode: fresh && freshSafeMode }, activeId ? null : composer.getDraft())
     if (fresh) { setFreshAutoMerge(false); setFreshSafeMode(false) }
   } catch (err) {
+    // A mid-flight deletion is the person's own doing: no dialog, no notice.
+    if (err instanceof PendingCreationCancelled) { queueRender(); return }
     const code = err instanceof ChatHttpError ? err.code : undefined
     const message = (err as Error).message
     const text = code === 'checkout_dirty' ? `The checkout has uncommitted changes on a branch no session owns — commit or stash them first. ${message}`
