@@ -78,7 +78,7 @@ describe('worker capacity', () => {
   it('stays readable when the chat state cannot be read', async () => {
     managerSettings({ rhythm: 7 })
     capacity.setWorkerChatReader(() => { throw new Error('runtime unavailable') })
-    expect(capacity.getWorkerCapacity()).toEqual({ running: 0, target: 7, backlog: null, label: 'enhancement' })
+    expect(capacity.getWorkerCapacity()).toEqual({ running: null, target: 7, backlog: null, label: 'enhancement' })
     await capacity.refreshWorkerCapacity({ now: at(30), readBacklog: async () => 0, listCandidates: async () => [] })
     expect(store.openAlerts({ now: at(30) })).toEqual([])
   })

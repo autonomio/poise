@@ -2,6 +2,7 @@ import { diagnosticIdentity, withNoticeDiagnosticIdentity } from './logging-cont
 import { captureBehaviorAdmission, captureBehaviorOutcome, behaviorLedgerHeartbeat } from './behavior-ledger'
 import type { LedgerReference } from './behavior-ledger-contract'
 import { behaviorChainJournal, behaviorChainOwner, behaviorChainOwnsRepository } from './behavior-chain-journal'
+import { readBehaviorResourceAdmission, type BehaviorResourceBudget, type BehaviorResourceReservation } from './behavior-resources'
 import { advanceBehaviorCutover, behaviorAdmissionDraining, behaviorCutoverBlockers } from './behavior-cutover'
 import { BehaviorChainRuntime } from './behavior-chain-runtime'
 import { nativeChainOperations } from './behavior-chain-native'
@@ -7192,23 +7193,34 @@ export interface BehaviorChainCapacity {
   reservedModelInvocations: number | null
   modelInvocationLimit: number
   enabled: boolean | null
+  mode: 'v1' | 'draining' | 'v2' | null
   intake: { seedMode: 'all' | 'label', label: string | null } | null
+  processLocal: { behaviorRunning: number, allRunning: number, cap: number }
+  resources: { budget: BehaviorResourceBudget | null, reserved: BehaviorResourceReservation, unaccounted: number } | null
 }
 
 /** Workspace-wide durable admissions, distinct from Manager worker Chats
  * and from the process-local semaphore's current holdings. */
 export function getBehaviorChainCapacity(): BehaviorChainCapacity {
   const modelInvocationLimit = behaviorCheckSlots.laneCapacity('behavior')
+  const slots = behaviorCheckSlots.stats()
+  const processLocal = { behaviorRunning: slots.behaviorRunning, allRunning: slots.running, cap: slots.cap }
   try {
     const settings = getBehaviorChainSettings()
     const journal = behaviorChainJournal()
-    return { status: 'available', error: null, modelInvocationLimit,
-      reservedModelInvocations: journal.liveModelInvocationCount(),
-      enabled: settings.enabled && journal.cutover().mode === 'v2',
+    const usage = journal.capacitySnapshot()
+    const admission = readBehaviorResourceAdmission()
+    const mode = journal.cutover().mode
+    return { status: 'available', error: null, modelInvocationLimit, processLocal,
+      reservedModelInvocations: usage.modelInvocations, mode,
+      enabled: settings.enabled && mode === 'v2',
+      resources: { budget: admission?.budget ?? null,
+        reserved: { memoryBytes: usage.reservations.memoryBytes, diskBytes: usage.reservations.diskBytes },
+        unaccounted: usage.reservations.unaccounted },
       intake: { seedMode: settings.seedMode, label: settings.seedMode === 'label' ? settings.label : null } }
   } catch (error) {
     return { status: 'unavailable', error: error instanceof Error ? error.message : String(error),
-      modelInvocationLimit, reservedModelInvocations: null, enabled: null, intake: null }
+      modelInvocationLimit, processLocal, reservedModelInvocations: null, mode: null, enabled: null, intake: null, resources: null }
   }
 }
 

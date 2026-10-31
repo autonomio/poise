@@ -181,6 +181,15 @@ notice names up to five open candidates to label, perf and P0/P1 first, with
 links. It comes due again at most hourly until a slot fills or a ticket is
 labelled, and silencing it lasts until then.
 
+Durably chain-owned issues are excluded from that Manager backlog and from
+promotion suggestions; a cached suggestion is rechecked when ownership changes.
+This notice describes Manager worker Chats, not the workspace's total v2 work
+or free machine capacity. Unreadable Chat occupancy stays unknown and cannot
+clear an existing idle incident. Backlog refresh still uses the existing notice
+pass, so disabling notifications may leave it unknown or at its last reading.
+Chain occupancy is a separate synchronous journal snapshot in behavior
+diagnostics and General settings; it does not depend on notices or add a poller.
+
 ## Acting on a notice
 
 - **Open** goes to what the notice is about and puts the notice away. That is

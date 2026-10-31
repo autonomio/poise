@@ -148,6 +148,8 @@ export class BehaviorChainJournal {
       CREATE INDEX IF NOT EXISTS behavior_chain_active ON behavior_chain_current(merged, chain_id);
       CREATE INDEX IF NOT EXISTS behavior_chain_pull ON behavior_chain_current(
         lower(json_extract(state, '$.repository')), json_extract(state, '$.observation.publication.pull_number'));
+      CREATE INDEX IF NOT EXISTS behavior_chain_branch ON behavior_chain_current(
+        lower(json_extract(state, '$.repository')), merged, json_extract(state, '$.branch'));
     `)
   }
 
@@ -300,6 +302,10 @@ export class BehaviorChainJournal {
       WHERE c.merged = 0 AND json_extract(i.value, '$.state') != 'settled'
         AND json_type(i.value, '$.model') != 'null' AND json_extract(i.value, '$.evidence.resources_settled_at') IS NULL`).get() as { count: number }
     return row.count
+  }
+
+  capacitySnapshot() {
+    return this.db.transaction(() => ({ modelInvocations: this.liveModelInvocationCount(), reservations: this.reservedResources() }))()
   }
 
   /** Resource allowances held by live native invocations, over the same
