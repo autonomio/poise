@@ -298,6 +298,8 @@ export class BehaviorChainRuntime {
     if (call.source !== 'poise:behavior-chain' || call.actor !== invocation.actor || call.repo !== chain.repository
       || call.behavior !== nativeBehavior(invocation.behavior)) throw new Error(`native receipt conflicts with behavior admission ${invocation.id}`)
     if (call.status === 'running') return chain
+    const stopped = ['stopped', 'stopping'].includes(call.error_code || '')
+    if (stopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
     if (!nativeResourcesReleased(call)) {
       const evidence = { ...receipt(call), callId: call.id }
       if (!sameReceipt(invocation.evidence, evidence)) {
@@ -315,11 +317,11 @@ export class BehaviorChainRuntime {
     if (call.status === 'failed' && call.action !== 'not_started' && ['implement-issue', 'repair-pr', 'review-issue', 'review-pr', 'approve-pr'].includes(invocation.behavior)) {
       if (invocation.state === 'uncertain' && invocation.evidence?.callId === call.id) {
         const evidence = { ...receipt(call), callId: call.id }
+        if (!resourceReleaseProven(invocation.evidence, true)) this.operations.received(invocation, call)
         return sameReceipt(invocation.evidence, evidence) ? chain
           : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
       }
       this.operations.received(invocation, call)
-      if (['stopped', 'stopping'].includes(call.error_code || '') && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
       chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { ...receipt(call), callId: call.id } })
       return this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
         reason: 'native publication may have happened; reconcile the original invocation against GitHub' })
@@ -327,7 +329,7 @@ export class BehaviorChainRuntime {
     this.operations.received(invocation, call)
     chain = this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
       outcome: call.outcome || call.error_code || call.status, evidence: receipt(call) })
-    if (['stopped', 'stopping'].includes(call.error_code || '')) return this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
+    if (stopped) return chain
     if (call.status === 'failed' && call.action !== 'not_started') return this.append(chain, { type: 'chain.held',
       reason: `behavior invocation ${invocation.id} failed after a possible write; its artifact needs reconciliation` })
     return chain

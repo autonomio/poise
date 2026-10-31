@@ -432,7 +432,9 @@ describe('native admission and recovery', () => {
     obs.publication.head_invocation = callId
     obs.workPublication = { callId, repliesComplete: false, resumable: true, planSha: 'b'.repeat(64) }
     let resumed = 0
+    let received = 0
     const runtime = new BehaviorChainRuntime(journal, operations({ observe: async () => ({ ...obs, checkedAt: Date.now() }),
+      received: () => { received++ },
       readInvocations: async () => ({ entries: [call], quarantined: [] }), resumePublication: async (original, head) => {
         expect(original.id).toBe(pending.id)
         expect(head).toBe(HEAD)
@@ -443,16 +445,19 @@ describe('native admission and recovery', () => {
     call.resources_settled_at = null
     await runtime.run()
     expect(resumed).toBe(0)
+    expect(received).toBe(0)
     expect(journal.liveModelInvocationCount()).toBe(1)
     call.resources_settled_at = releasedAt
     await runtime.run()
     expect(resumed).toBe(1)
+    expect(received).toBe(1)
     expect(journal.read(chain.id)!.invocations).toHaveLength(1)
     expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
     obs.workPublication.resumable = false
     call.artifact = { ...call.artifact, replies_started: true }
     await runtime.run()
     expect(resumed).toBe(1)
+    expect(received).toBe(1)
     expect(journal.read(chain.id)!.invocations[0].evidence?.artifact).toMatchObject({ replies_started: true })
     obs.workPublication.repliesComplete = true
     await runtime.run()

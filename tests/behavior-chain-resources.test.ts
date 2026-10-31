@@ -130,6 +130,27 @@ describe('durable behavior resource reservations', () => {
 })
 
 describe('resource-aware behavior admission', () => {
+  it('retains the person Stop intent while cleanup is uncertain and after its later verified release', async () => {
+    const { journal, chain } = setup()
+    const admitted = { ...invocation('stopped-original', RESERVATION), admittedAt: Date.now() - 3000 }
+    record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+    const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+      behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+      status: 'failed', error_code: 'stopped', error: 'Stopped by user', action: null, outcome: null,
+      head_sha: null, expected_head: null, review_id: null, artifact: null, receipts: null,
+      resource_ownership: { version: 1, roots: [], errors: [] }, resources_settled_at: null as string | null }
+    const runtime = new BehaviorChainRuntime(journal, operations({ enabled: () => false,
+      readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'original Stop resource receipt') }))
+    await runtime.run()
+    expect(journal.read(chain.id)!.held).toContain('stopped by the person')
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    call.resources_settled_at = new Date().toISOString()
+    await runtime.run()
+    expect(journal.read(chain.id)!.held).toContain('stopped by the person')
+    expect(journal.liveModelInvocationCount()).toBe(0)
+    expect(journal.read(chain.id)!.invocations).toHaveLength(1)
+  })
+
   it('retains a modern unsettled native invocation when its historical Call has no ownership record', async () => {
     const { journal, chain } = setup()
     const admitted = { ...invocation('ownership-missing', RESERVATION), admittedAt: Date.now() - 3000 }
