@@ -35,6 +35,7 @@ export type ChainDecision =
   | { kind: 'hold', reason: string }
   | { kind: 'complete', mergeSha: string }
   | { kind: 'invoke', behavior: ChainBehavior, basis: string, actor: string, reviewer: ChainReviewer | null, reason: string }
+export interface MergeReviewEvidence { before: ChainObservation | null, firstMerged: ChainObservation | null }
 
 function settled(chain: BehaviorChain, behavior: ChainBehavior, basis: string, slot: string | null): ChainInvocation[] {
   return chain.invocations.filter((invocation) => invocation.behavior === behavior && invocation.basis === basis
@@ -113,15 +114,20 @@ export function lastChainQueueInvocation(chain: BehaviorChain): ChainInvocation 
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
 export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number,
-  mergeBasis = chain.observation as ChainObservation | null): ChainDecision {
+  mergeEvidence?: MergeReviewEvidence): ChainDecision {
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
   const pull = observation.pull
   if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
-    if (!mergeBasis?.pull || mergeBasis.pull.merged || !Number.isFinite(mergeBasis.checkedAt)
+    const mergeBasis = mergeEvidence ? mergeEvidence.before : !chain.mergeSha ? chain.observation as ChainObservation | null : null
+    const first = mergeEvidence ? mergeEvidence.firstMerged : !chain.mergeSha ? observation : null
+    if (!mergeBasis?.pull || mergeBasis.pull.merged !== false || !Number.isFinite(mergeBasis.checkedAt)
       || typeof pull.mergedAt !== 'number' || !Number.isFinite(pull.mergedAt) || mergeBasis.checkedAt > pull.mergedAt
       || mergeBasis.pull.number !== pull.number || mergeBasis.pull.head !== pull.head || !mergeBasis.pull.reviewContext
+      || !first?.pull?.merged || first.pull.number !== pull.number || first.pull.head !== pull.head
+      || first.pull.mergeSha !== pull.mergeSha || first.pull.mergedAt !== pull.mergedAt
+      || first.pull.reviewContext !== mergeBasis.pull.reviewContext || pull.reviewContext !== first.pull.reviewContext
       || !Array.isArray(mergeBasis.prReviewers) || !mergeBasis.prReviewers.length) {
       return { kind: 'hold', reason: 'confirmed merge retains an open review obligation: original pre-merge review basis is missing or contradictory' }
     }

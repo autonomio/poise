@@ -60,6 +60,33 @@ it('does not discharge the original two-slot panel when current settings require
   expect(decideBehaviorChain(current(), merge(observation), Date.now())).toMatchObject({ kind: 'hold' })
 })
 
+it('does not substitute the last open context for a changed merged context', () => {
+  const { record, observation, merge, current } = setup()
+  record({ type: 'chain.observed', observation: structuredClone(observation) })
+  const live = merge(observation)
+  live.pull.reviewContext = 'd'.repeat(64)
+  expect(decideBehaviorChain(current(), live, Date.now())).toMatchObject({ kind: 'hold' })
+})
+
+it('retains a mismatch seen at the first merge after the live context is restored', async () => {
+  const { journal, record, observation, merge, current } = setup()
+  record({ type: 'chain.observed', observation: structuredClone(observation) })
+  const live = merge(observation)
+  live.pull.reviewContext = 'd'.repeat(64)
+  const forbidden = async () => { throw new Error('merged evidence reconciliation cannot start work') }
+  const operations: ChainRuntimeOperations = { enabled: () => false, accounts: () => ({ author: 'author', reviewer: 'reviewer' }),
+    discover: async () => [], ownsRepository: () => true, observe: async () => structuredClone(live),
+    readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => false, capacity: () => 3,
+    permitted: () => false, request: forbidden, launch: forbidden, perform: forbidden, resumePublication: forbidden, wake: () => {} }
+  const runtime = new BehaviorChainRuntime(journal, operations)
+  await runtime.run()
+  expect(journal.read(current().id)).toMatchObject({ mergeSha: MERGE, reviewPending: true })
+  live.pull.reviewContext = observation.pull!.reviewContext
+  await runtime.run()
+  journal.rebuild()
+  expect(journal.read(current().id)).toMatchObject({ mergeSha: MERGE, reviewPending: true })
+})
+
 it('allows newly visible original pre-merge evidence against the original panel despite a later settings increase', () => {
   const { record, observation, merge, current } = setup()
   const before = structuredClone(observation)
@@ -131,7 +158,9 @@ it('retains the original basis across later observations, projection rebuild and
     const retained = new BehaviorChainJournal(reopened)
     const basis = retained.preMergeObservation(id, live.pull.mergedAt!) as ChainObservation | null
     expect(basis).toEqual(before)
-    expect(decideBehaviorChain(retained.read(id)!, live, Date.now(), basis)).toMatchObject({ kind: 'hold' })
+    expect(decideBehaviorChain(retained.read(id)!, live, Date.now(), {
+      before: basis, firstMerged: retained.firstMergedObservation(id) as ChainObservation | null,
+    })).toMatchObject({ kind: 'hold' })
     expect(retained.read(id)).toMatchObject({ mergeSha: MERGE, reviewPending: true })
     reopened.close(); databases.splice(databases.indexOf(reopened), 1)
   } finally { rmSync(root, { recursive: true, force: true }) }
