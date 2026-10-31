@@ -157,6 +157,9 @@ Queue attribution names the original accepted enqueue invocation when its
 validated receipt matches the actual entry. Merely observing an entry, including
 a successful `in_queue` response, does not acquire mutation attribution. A later
 observation cannot erase an earlier accepted enqueue for that same entry.
+An ejection applies only to the canonical chain's latest queue participation on
+the current head, with a removal at or after that admission. An older head's
+removal or unrelated queue history cannot hide the current CI/review blocker.
 
 V2 uses the decision path's two-minute observation-freshness bound. Missing or
 unrecognized check rollups stay unknown; an empty failing-check list is not
