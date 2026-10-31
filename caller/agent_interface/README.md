@@ -31,6 +31,31 @@ provider it started; a governed review stops its provider itself on SIGTERM),
 waits briefly, and closes the row as `failed` with `error_code = stopped` and
 the error "Stopped by user". A call that already finished is left as it is.
 
+# Fencing a closed behavior
+
+`--fence-closed-behavior --model MODEL --actor USER --repo OWNER/NAME --number N
+--behavior issue_review|implement_issue|repair_pr|pr_review|pr_approve
+--correlation-id ID [--expected-head SHA]` is Poise's no-worker reconciliation
+command for an original invocation whose target is now closed. PR behaviors and
+repair require the original head. It performs no provider preparation, checkout,
+GitHub operation or signal. In one native database transaction it either wins
+the original correlation and records a terminal `superseded` / `not_started` /
+`target_closed` Call with settled resources, or returns the existing matching
+Call unchanged. Conflicting identity fails; an existing worker's resources are
+never released by this command. Repeats preserve the original receipt and time.
+
+The existing unique correlation claim precedes every managed provider/checkout/
+write. A late original therefore loses that claim if the fence won. The journal
+still owns phase decisions, and Poise reads the resulting Call through its normal
+validated receipt reader before releasing its durable reservation. A failed or
+lost fence response alone proves no settlement. This adds no remote endpoint or
+replacement worker.
+The consumer requires the exact `admission_fenced` artifact, null executed head
+and publication fields, and a valid resource-release timestamp. Caller tests
+feed real `--logs --select` bytes into Poise's decoder and journal runtime for
+all five behaviors; malformed variants remain quarantined. These contract
+checks create no GitHub artifacts and are not workflow acceptance runs.
+
 # Recording a Chat turn
 
 Poise's Chat runs the agents itself; Caller only keeps the row so Swarm lists

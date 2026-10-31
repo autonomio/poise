@@ -12,7 +12,7 @@ async function general(page: Page) {
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
 
-test('merged chains retain open obligations and controls until canonical completion, and stale reads disable writes', async ({ page }) => {
+test('merged chains retain open obligations as reconciliation-only and stale reads disable admission writes', async ({ page }) => {
   await workspace(page)
   let complete = false
   let unavailable = false
@@ -25,7 +25,9 @@ test('merged chains retain open obligations and controls until canonical complet
   await expect(list).toContainText('Review evidence pending')
   await expect(list).toContainText('repair-pr: uncertain')
   await expect(list).toContainText('Original native resource release is unverified; Caller reconciliation continues while GitHub observations are deferred')
-  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+  await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+  await expect(list.getByRole('button', { name: 'History' })).toBeEnabled()
   await expect(controls.locator('[data-chain-capacity]')).toContainText('1 durable model admission(s) reserved')
   await expect(controls.locator('[data-chain-capacity]')).toContainText('label work-ready')
   await expect(controls.locator('[data-chain-capacity]')).toContainText('Admissions paused')
@@ -34,7 +36,7 @@ test('merged chains retain open obligations and controls until canonical complet
   await page.screenshot({ path: 'test-results/behavior-v2-obligations.png', fullPage: true })
   unavailable = true
   await controls.getByRole('button', { name: 'Refresh chains' }).click()
-  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeDisabled()
+  await expect(controls.getByRole('button', { name: 'v2 active', exact: true })).toBeDisabled()
   await expect(controls.locator('[data-chain-capacity]')).toHaveText('Atomic behavior capacity unavailable.')
   unavailable = false
   complete = true
@@ -42,6 +44,20 @@ test('merged chains retain open obligations and controls until canonical complet
   await expect(list).not.toContainText('Review evidence pending')
   await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
   await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+})
+
+test('unmerged ownership retains its Hold control and unavailable reads disable that write', async ({ page }) => {
+  await workspace(page)
+  let unavailable = false
+  await page.route('**/api/behavior-chains', route => unavailable
+    ? route.fulfill({ status: 503, json: { error: 'journal unavailable' } })
+    : route.fulfill({ json: chainSummaryFixture('unmerged') }))
+  const controls = await general(page)
+  const hold = controls.getByRole('button', { name: 'Hold new invocations' })
+  await expect(hold).toBeEnabled()
+  unavailable = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(hold).toBeDisabled()
 })
 
 for (const state of ['pending-admitted', 'pending-no-invocation', 'pending-original-response', 'historical'] as const) {
@@ -52,9 +68,10 @@ for (const state of ['pending-admitted', 'pending-no-invocation', 'pending-origi
     const list = controls.locator('[data-chain-list]')
     await list.scrollIntoViewIfNeeded()
     await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+    await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+    await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
     if (state === 'pending-admitted' || state === 'pending-original-response') {
       await expect(list).toContainText(state === 'pending-admitted' ? 'repair-pr: admitted' : 'merge-pr: uncertain')
-      await expect(list.getByRole('button', { name: 'Hold new invocations' })).toBeEnabled()
       if (state === 'pending-original-response') await expect(list).toContainText('Original action response required; GitHub reads cannot settle this invocation')
     } else {
       await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)

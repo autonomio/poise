@@ -1221,6 +1221,19 @@ declaring a collector outage. No extra poller, gateway scope or event type is
 introduced. [Bounded reconciliation](Behavior-chain.md#bounded-reconciliation)
 defines the cadence and timestamp units.
 
+Known closed targets cannot start or restart a model behavior or continue
+publication. Never-started admissions settle with explicit no-effect evidence;
+started originals without a Call use the bounded native correlation-fence
+command before normal receipt reconciliation. Existing Calls and uncertain
+resources are never released by closure alone. Merged-chain Hold/Resume writes
+return 409 and the GUI retains History and read-only reconciliation. No new
+endpoint, signal or journal event type is added; the Caller contract is in
+[agent_interface](../caller/agent_interface/README.md#fencing-a-closed-behavior).
+Poise's existing log decoder validates the fence's exact terminal no-effect
+shape and native resource-release timestamp before the journal can settle its
+reservation. Closed-target native resource waits are separate from public
+GitHub recheck times; unrelated open-PR review/approval stays eligible.
+
 ## Google document publishing
 
 Google account grants belong to the gateway, partitioned by immutable GitHub

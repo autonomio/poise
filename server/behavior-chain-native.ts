@@ -324,6 +324,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         '--review-response-json', JSON.stringify({ ...response, review_id: reviewed.evidence!.review_id }), ...fixed] }
     },
     async launch(invocation, onExit, allowed) {
+      if (!allowed()) return false
       // Provider preparation finished after the durable admission, so
       // re-verify measured headroom at the last boundary before spawn. A
       // deferral settles as launch_deferred without consuming an attempt;
@@ -346,6 +347,24 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
           onExit: (result) => { release(); onExit(result) } })
         return true
       } catch (error) { release(); throw error }
+    },
+    async fenceClosedTarget(chain, invocation) {
+      const behavior = ({ 'review-issue': 'issue_review', 'implement-issue': 'implement_issue', 'repair-pr': 'repair_pr',
+        'review-pr': 'pr_review', 'approve-pr': 'pr_approve' } as Partial<Record<ChainBehavior, string>>)[invocation.behavior]
+      if (!behavior || invocation.request.command !== 'agent-interface' || !invocation.model) throw new Error('closed-target fence requires the original model invocation')
+      const args = invocation.request.argv
+      const expected = args.includes('--expected-head') ? args[args.indexOf('--expected-head') + 1] : null
+      const target = behavior === 'repair_pr' ? Number(args[args.indexOf('--pull-number') + 1])
+        : ['pr_review', 'pr_approve'].includes(behavior) ? Number(/(?:\/pull\/|^#?)([1-9][0-9]*)$/.exec(args[1])?.[1]) : chain.issue
+      if (!Number.isSafeInteger(target) || target < 1) throw new Error('closed-target fence lacks the original target number')
+      const { stdout } = await runFile('agent-interface', ['--fence-closed-behavior', '--model', invocation.model, '--actor', invocation.actor,
+        '--repo', chain.repository, '--number', String(target), '--behavior', behavior, '--correlation-id', invocation.id,
+        ...(expected ? ['--expected-head', expected] : [])], { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 })
+      const proof = object(JSON.parse(stdout), 'native closed-target fence')
+      if (!/^[0-9a-f]{32}$/.test(String(proof.id)) || !['fenced', 'existing'].includes(String(proof.outcome)) || proof.model !== invocation.model
+        || proof.actor !== invocation.actor || proof.repo !== chain.repository || proof.pr_id !== String(target) || proof.behavior !== behavior
+        || proof.source !== 'poise:behavior-chain' || proof.correlation_id !== invocation.id || proof.expected_head !== expected) throw new Error('native closed-target fence conflicts with its original admission')
+      return proof.outcome === 'fenced'
     },
     async perform(invocation) {
       let stdout: string

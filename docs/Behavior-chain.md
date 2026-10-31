@@ -52,9 +52,10 @@ API summaries include nullable `reviewPending` and `reviewStatus` (`pending`,
 stay not-recorded; they acquire neither fabricated proof nor a new obligation.
 These fields are projections, never normalized into historical reducer state.
 A confirmed merge remains visible alongside any hold or uncertain invocation.
-Merged chains retain Hold/Resume only while an original invocation is unsettled;
-with no unsettled invocation the UI explains the missing original pre-merge
-evidence and offers History, without a futile Resume or a way to create a
+Merged chains offer History and original receipt reconciliation, including
+while an invocation is unsettled. They have no Hold/Resume admission controls;
+the headless API refuses those operations with 409 after a confirmed merge.
+The UI explains missing original pre-merge evidence without a way to create a
 replacement review. `state=active` retains open obligations, including merged
 PRs with pending review evidence; `state=merged` retains the existing terminal
 classification, including legacy not-recorded merges. Failed refreshes disable
@@ -84,6 +85,10 @@ chains keep their original ownership and active-list membership, but cannot
 consume the normal-work page. Native model/resource receipts are still read
 while an original model lacks resource-release proof, including after a merge;
 only unnecessary GitHub observation waits.
+Known closed PRs and closed seeds use the same native-only resource wait for
+their blocked model behaviors. A closed seed alone does not defer PR review or
+approval of an open PR. Public recheck times describe GitHub observation;
+native receipt reconciliation remains eligible on every pass.
 
 A successful quiescent observation schedules its next read at `checkedAt +
 min(24 hours, max(2 minutes, checkedAt - origin))`. Origin is the recorded actual
@@ -136,6 +141,31 @@ Admission-mode transitions use `admission.changed` events under the reserved `@b
 
 Native Call rows and immutable action plans record effect intent before controlled publication. They provide execution evidence to the journal, not a second phase controller. Unique native correlations prevent duplicate processes from executing the same admission. Worker resource settlement is required before a handoff; a terminal model result is insufficient. A restart or interrupted process is reconciled against the original invocation, pushed branch, posted comments and exact-head review receipts.
 
+Known closure blocks all new model requests, worker launch/relaunch and repair
+publication continuation. A durable merge stays closed when a later observation
+has no PR; a closed PR blocks all model behaviors, and a closed seed also blocks
+issue review, implementation and repair. A never-started admission with no
+conflicting or quarantined Call settles as deferred `target_closed`, with
+explicit no-effect evidence and no failed-attempt charge. A started original
+with no Call can use Caller's atomic correlation fence: only winning the
+original unique correlation creates a terminal no-effect native Call. A late
+original cannot claim that correlation before its provider, checkout or writes.
+An existing Call is never altered, and normal validated receipt reconciliation
+must prove release. Fence failures remain reported and retain ownership; the
+existing tick retries that idempotent command at most once per two minutes,
+using a durable attempt time rather than a new timer.
+The receipt reader accepts only the fence's exact no-provider, no-publication
+shape with its native resource-release timestamp. Other superseded outcomes
+retain their original validation; malformed fence rows stay quarantined.
+
+Original artifact/receipt adoption continues while paused or held. Incomplete
+publication after closure is held once; complete original comments, reviews or
+replies can still settle through read-only observation. Native exit or
+quarantined uncertainty is retained. A running Call, or a terminal Call without
+resource-release proof, keeps its existing cleanup owner and reservation; no
+new stop or signal is sent. Closure first seen after that running worker ends
+is not a retroactive guarantee about its in-flight publication.
+
 The publication primitive validates the checkout and model-written metadata in
 read-only mode before Caller records its write intent. Invalid commit subjects,
 PR titles, issue-closing references or reply targets fail as unstarted work,
@@ -150,7 +180,7 @@ Known failures before publication retry with bounded backoff and existing provid
 A repair push checkpoints its exact native head before bounded PR-head
 confirmation. If GitHub's PR projection still trails the push, the existing
 reconciliation pass can complete the original immutable reply plan once the
-head is confirmed and worker resources have settled. The canonical journal
+head is confirmed, the target remains open and worker resources have settled. The canonical journal
 records this continuation before Caller acts; no replacement model starts.
 Caller reserves the reply batch before its first POST. A lost or partial
 reply POST remains uncertain unless every original reply is found on GitHub;

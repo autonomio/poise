@@ -77,7 +77,7 @@ it('retains a mismatch seen at the first merge after the live context is restore
   const operations: ChainRuntimeOperations = { enabled: () => false, accounts: () => ({ author: 'author', reviewer: 'reviewer' }),
     discover: async () => [], ownsRepository: () => true, observe: async () => structuredClone(live),
     readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => false, capacity: () => 3,
-    permitted: () => false, request: forbidden, launch: forbidden, perform: forbidden, resumePublication: forbidden, wake: () => {} }
+    permitted: () => false, request: forbidden, launch: forbidden, perform: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {} }
   const runtime = new BehaviorChainRuntime(journal, operations)
   await runtime.run()
   expect(journal.read(current().id)).toMatchObject({ mergeSha: MERGE, reviewPending: true })
@@ -129,7 +129,7 @@ it('recovers late original visibility through the runtime without a replacement 
   const operations: ChainRuntimeOperations = { enabled: () => false, accounts: () => ({ author: 'author', reviewer: 'reviewer' }),
     discover: async () => [], ownsRepository: () => true, observe: async () => live,
     readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => false, capacity: () => 3,
-    permitted: () => false, request: launch, launch, perform: launch, resumePublication: launch, wake: () => {} }
+    permitted: () => false, request: launch, launch, perform: launch, resumePublication: launch, fenceClosedTarget: launch, wake: () => {} }
   await new BehaviorChainRuntime(journal, operations).run()
   expect(journal.read(current().id)).toMatchObject({ mergeSha: MERGE, reviewPending: false })
   expect(launch).not.toHaveBeenCalled()

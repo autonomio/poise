@@ -240,7 +240,8 @@ describe('native admission and recovery', () => {
       ownsRepository: () => true, observe: async () => ({ ...observation(), checkedAt: Date.now() }),
       readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => true, capacity: () => 2,
       permitted: () => true, request: async () => ({ command: 'agent-interface', argv: ['--model', 'fixture-model'], cwd: '/fixture' }),
-      launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') }, wake: () => {}, ...overrides }
+      launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') },
+      fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') }, wake: () => {}, ...overrides }
   }
 
   it('recovers a review only with its retained substantive response and preserves its original completion time', async () => {
