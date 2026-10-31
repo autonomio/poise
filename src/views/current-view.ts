@@ -242,10 +242,10 @@ function renderShell(): string {
         <span class="lane-title">${l.label}</span>
         <span class="lane-count">0</span>
       </header>
-      <div class="lane-list" data-lane="${l.key}"></div>
       ${l.key === 'pr' ? '' : `
         <button class="lane-add" data-lane="${l.key}" aria-label="${l.key === 'issue' ? 'Add an issue' : `Add a card to ${l.label}`}">+ ${l.key === 'issue' ? 'Add an issue' : 'Add a card'}</button>
       `}
+      <div class="lane-list" data-lane="${l.key}"></div>
     </section>
   `).join('')
 
