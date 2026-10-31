@@ -2,6 +2,8 @@ import { createServer } from 'node:http'
 import { afterAll, expect, it, vi } from 'vitest'
 import { db, setMeta, closeDatabase } from '../server/db'
 import { behaviorChainJournal } from '../server/behavior-chain-journal'
+import { behaviorChainSummary } from '../server/behavior-chain-summary'
+import { chainSummaryFixture } from './fixtures/behavior-chain-summary'
 
 vi.mock('../server/behaviors', () => ({ getBehaviorChainRuntimeHealth: () => [],
   getBehaviorChainCapacity: () => ({ status: 'available', reservedModelInvocations: 0, modelInvocationLimit: 3,
@@ -52,12 +54,56 @@ it('keeps a confirmed merge with an open review obligation active through API re
     const active = await (await fetch(`${base}?state=active`)).json()
     expect(active.chains).toEqual([expect.objectContaining({ id: pending.id, mergeSha: 'a'.repeat(40), reviewPending: true })])
     const merged = await (await fetch(`${base}?state=merged`)).json()
-    expect(merged.chains).toEqual([expect.objectContaining({ id: complete.id, mergeSha: 'b'.repeat(40), reviewPending: false })])
+    expect(merged.chains).toEqual([expect.objectContaining({ id: complete.id, mergeSha: 'b'.repeat(40), reviewPending: null, reviewStatus: 'not-recorded' })])
+    expect(journal.read(complete.id)).not.toHaveProperty('reviewPending')
     const detail = await (await fetch(`${base}?id=${encodeURIComponent(pending.id)}`)).json()
     expect(detail.chain.reviewPending).toBe(true)
+    expect(detail.chain).toEqual(behaviorChainSummary(journal.read(pending.id)!))
     const response = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: pending.id, sequence: pending.sequence, operation: 'hold' }) })
     expect(response.status).toBe(200)
     expect((await response.json()).chain).toMatchObject({ reviewPending: true, held: 'New invocations held by the person' })
+  } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) }
+})
+
+it('shares the production summary and historical rebuild contract with browser payloads', () => {
+  expect(chainSummaryFixture('pending-active').chains[0]).toMatchObject({ reviewStatus: 'pending', reviewPending: true,
+    invocations: [{ behavior: 'repair-pr', state: 'uncertain' }] })
+  expect(chainSummaryFixture('pending-no-invocation').chains[0]).toMatchObject({ reviewStatus: 'pending', reviewPending: true, invocations: [] })
+  expect(chainSummaryFixture('complete').chains[0]).toMatchObject({ reviewStatus: 'complete', reviewPending: false })
+  expect(chainSummaryFixture('historical').chains[0]).toMatchObject({ reviewStatus: 'not-recorded', reviewPending: null })
+})
+
+it('pages a 10,000-event chain and 100 admitted chains without losing the current reason', async () => {
+  const journal = behaviorChainJournal()
+  let long = journal.append('history/repo#1', 'long-history-seed', 0, { type: 'chain.admitted', repository: 'history/repo', issue: 1,
+    branch: 'poise/issue-1', author: 'author', reviewer: 'reviewer' })
+  db.transaction(() => {
+    for (let event = 0; event < 10_000; event++) long = journal.append(long.id, `checkpoint-${event}`, long.sequence,
+      { type: 'chain.waiting', reason: `checkpoint ${event}` })
+    for (let issue = 2; issue <= 100; issue++) journal.append(`history/repo#${issue}`, `history-seed-${issue}`, 0,
+      { type: 'chain.admitted', repository: 'history/repo', issue, branch: `poise/issue-${issue}`, author: 'author', reviewer: 'reviewer' })
+  })()
+  const server = createServer((req, res) => { void handleBehaviorChains(req, res, req.url || '/') })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('server did not bind')
+  const base = `http://127.0.0.1:${address.port}/api/behavior-chains`
+  try {
+    const first = await (await fetch(`${base}?state=active`)).json()
+    expect(first.chains).toHaveLength(100)
+    const second = await (await fetch(`${base}?state=active&after=${encodeURIComponent(first.next)}`)).json()
+    const ids = [...first.chains, ...second.chains].map((chain: { id: string }) => chain.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.filter((id: string) => id.startsWith('history/repo#'))).toHaveLength(100)
+    const history = await (await fetch(`${base}?id=${encodeURIComponent(long.id)}`)).json()
+    expect(history.chain.waiting).toBe('checkpoint 9999')
+    expect(history.events).toHaveLength(20)
+    const more = await (await fetch(`${base}?id=${encodeURIComponent(long.id)}&after=${history.next}`)).json()
+    expect(more.events).toHaveLength(20)
+    expect(more.events[0].sequence).toBeGreaterThan(history.events.at(-1).sequence)
+    const latest = await (await fetch(`${base}?id=${encodeURIComponent(long.id)}&after=${long.sequence - 1}`)).json()
+    expect(latest.events).toHaveLength(1)
+    expect(latest.events[0]).toMatchObject({ type: 'chain.waiting', reason: 'checkpoint 9999' })
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) }
 })

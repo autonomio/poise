@@ -5,8 +5,9 @@ import type { BehaviorCutoverState } from '../behavior-cutover'
 type Settings = NonNullable<AppSettings['behaviorChain']>
 interface ChainRow {
   id: string, repository: string, issue: number, sequence: number, held: string | null, waiting: string | null,
-  mergeSha: string | null, reviewPending?: boolean, pullNumber: number | null,
-  invocations: Array<{ behavior: string, state: string, outcome?: string | null }>
+  mergeSha: string | null, reviewPending?: boolean | null, reviewStatus?: 'pending' | 'complete' | 'not-recorded', pullNumber: number | null,
+  invocations: Array<{ behavior: string, state: string, outcome?: string | null,
+    nativeAction?: { attribution: string, outcome: string | null } | null }>
 }
 interface JournalEvent { sequence: number, at: number, type: string, reason?: string, outcome?: string }
 const defaults: Settings = { enabled: false, seedMode: 'label', label: 'poise' }
@@ -168,7 +169,7 @@ export function behaviorChainSettings() {
         : cutover.mode === 'draining' ? `Draining behaviors · ${(data.cutover.blockers as string[]).join('; ') || 'Verifying the legacy ownership boundary'}` : 'v1 owns new work'
       const capacity = data.capacity
       element.querySelector('[data-chain-capacity]')!.textContent = capacity?.status === 'available'
-        ? `Atomic behaviors: ${capacity.reservedModelInvocations} durable model admission(s) reserved · ceiling ${capacity.modelInvocationLimit} (shared with other heavy work). Intake: ${capacity.intake?.seedMode === 'all' ? 'all issues' : `label ${capacity.intake?.label}`}. ${capacity.enabled ? 'Admissions enabled.' : 'Admissions paused.'} Manager worker-Chat capacity is separate.`
+        ? `v2 chains: ${capacity.reservedModelInvocations} durable model admission(s) reserved · ceiling ${capacity.modelInvocationLimit} (shared with other heavy work).${capacity.processLocal ? ` Process-local behavior runs: ${capacity.processLocal.behaviorRunning}; these counts are not additive.` : ''} Mode: ${capacity.mode ?? 'not recorded'}. ${capacity.enabled ? 'Effective intake' : 'Saved intake (inactive)'}: ${capacity.intake?.seedMode === 'all' ? 'all issues' : `label ${capacity.intake?.label}`}. ${capacity.enabled ? 'Admissions enabled.' : 'Admissions paused.'} Manager worker-Chat capacity is separate.`
         : `Atomic behavior capacity unavailable${capacity?.error ? `: ${capacity.error}` : '.'}`
       list.innerHTML = rows.map((chain) => {
         const active = chain.invocations.find(invocation => invocation.state !== 'settled')
@@ -180,9 +181,15 @@ export function behaviorChainSettings() {
           : chain.waiting || 'Awaiting the next observation'
         const state = [chain.mergeSha ? `Merged: ${chain.mergeSha.slice(0, 12)}` : '',
           chain.reviewPending ? 'Review evidence pending' : '',
+          chain.mergeSha && (chain.reviewStatus === 'not-recorded' || chain.reviewPending == null) ? 'Pre-merge review completion not recorded' : '',
           !complete && chain.held ? `Held: ${chain.held}` : '', !complete ? progress : ''].filter(Boolean).join(' · ')
-        const control = complete ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}">${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
-        return `<li>v2 · ${github}${chain.pullNumber ? ` → <a href="https://github.com/${escapeHtml(chain.repository)}/pull/${Number(chain.pullNumber)}">PR #${Number(chain.pullNumber)}</a>` : ''}: ${escapeHtml(state)}${!active && last ? ` · Last: ${escapeHtml(last.behavior)} (${escapeHtml(last.outcome || last.state)})` : ''}${control} <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-operation="history">History</button></li>`
+        const control = complete || (chain.mergeSha && !active) ? '' : ` <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-sequence="${Number(chain.sequence)}" data-operation="${chain.held ? 'resume' : 'hold'}"${!cutover ? ' disabled' : ''}>${chain.held ? 'Resume' : 'Hold new invocations'}</button>`
+        const attribution = last?.nativeAction?.attribution === 'accepted-response' ? ' · original action response accepted'
+          : last?.nativeAction?.attribution === 'observed-no-action' ? ' · observed; mutation not attributed'
+            : last?.nativeAction?.attribution === 'not-recorded' ? ' · action attribution not recorded' : ''
+        const obligation = chain.mergeSha && chain.reviewPending && !active
+          ? ' · Awaiting original pre-merge review evidence; no new invocation can start after merge.' : ''
+        return `<li>v2 · ${github}${chain.pullNumber ? ` → <a href="https://github.com/${escapeHtml(chain.repository)}/pull/${Number(chain.pullNumber)}">PR #${Number(chain.pullNumber)}</a>` : ''}: ${escapeHtml(state)}${escapeHtml(obligation)}${!active && last ? ` · Last: ${escapeHtml(last.behavior)} (${escapeHtml(last.outcome || last.state)}${escapeHtml(attribution)})` : ''}${control} <button type="button" class="st-clear" data-chain-id="${escapeHtml(chain.id)}" data-operation="history">History</button></li>`
       }).join('') || '<li>No behavior chains.</li>'
       const errors = Array.isArray(data.runtime) ? data.runtime.filter((entry: { error: string | null }) => entry.error).map((entry: { organization: string, error: string }) => `${entry.organization}: ${entry.error}`).join('; ') : ''
       status.textContent = `Read ${new Date().toLocaleTimeString()}${errors ? ` · ${errors}` : ''}`

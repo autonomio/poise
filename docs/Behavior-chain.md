@@ -33,15 +33,30 @@ After completion, v2 owns new eligible seed issues; new legacy issue intake is f
 
 The chain list displays v2 ownership, actual phase/wait/hold/uncertainty, last recorded outcome and confirmed merge SHA, with links to the issue and PR. More chains and per-chain History/More events page through the existing journal readers. It refreshes on the application's existing refresh clock while General settings is open. Unavailable reads disable cutover controls instead of displaying a confident engine state. Repository/author triggers and the approval-round escape remain explicitly legacy-only; v2 uses its selected label/all-issues intake and never escapes unresolved blockers by approving.
 
-API summaries include `reviewPending`. A confirmed merge remains visible while
-its review obligation is open, alongside any hold or uncertain invocation;
-Hold/Resume remains available until canonical completion. Failed refreshes disable
-the retained row's write controls until a successful read. Chain settings also
+API summaries include nullable `reviewPending` and `reviewStatus` (`pending`,
+`complete`, `not-recorded`). Older merges without an explicit review verdict
+stay not-recorded; they acquire neither fabricated proof nor a new obligation.
+These fields are projections, never normalized into historical reducer state.
+A confirmed merge remains visible alongside any hold or uncertain invocation.
+Merged chains retain Hold/Resume only while an original invocation is unsettled;
+with no unsettled invocation the UI explains the missing original pre-merge
+evidence and offers History, without a futile Resume or a way to create a
+replacement review. `state=active` retains open obligations, including merged
+PRs with pending review evidence; `state=merged` retains the existing terminal
+classification, including legacy not-recorded merges. Failed refreshes disable
+the retained row's write controls until a successful read. Native action summaries
+distinguish original accepted responses, observed no-action results and uncertain
+or unrecorded attribution without returning the full receipt. Repeated held-merge
+observation/recovery work is tracked separately in #799. Chain settings also
 show workspace-wide durable model admissions and their behavior-lane ceiling,
-the actual all-issues/label intake and admission pause. This count survives a
+the durable mode, effective all-issues/label intake or inactive saved intake,
+and admission pause. Configured resource budgets, reservations and unaccounted
+ownership are exposed in the same snapshot without headroom probes. This count survives a
 replacement semaphore and includes uncertain model ownership until native
 resource-release proof arrives; it is not a claim that a provider process is
 currently alive or that all unreserved slots are free of other heavy work.
+The separately labelled process-local semaphore count is not additive to durable
+chain occupancy and cannot establish that surviving workers have ended.
 Unavailable counts are unknown, never zero. The same `chainCapacity` appears
 beside `workerCapacity` in behavior diagnostics and Manager context. The latter
 still describes Manager worker Chats and their enhancement backlog; its Rhythm

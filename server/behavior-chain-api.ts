@@ -5,21 +5,8 @@ import { HttpError, httpStatus, readJson } from './http'
 import { getBehaviorChainSettings, getSettings } from './settings'
 import { getBehaviorChainCapacity, getBehaviorChainRuntimeHealth } from './behaviors'
 import { behaviorCutoverBlockers } from './behavior-cutover'
-import type { BehaviorChain, ChainEvent } from './behavior-chain-store'
-
-function summary(chain: BehaviorChain) {
-  const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
-  return { id: chain.id, repository: chain.repository, issue: chain.issue, branch: chain.branch, author: chain.author, reviewer: chain.reviewer,
-    sequence: chain.sequence, held: chain.held, waiting: chain.waiting, mergeSha: chain.mergeSha,
-    reviewPending: chain.reviewPending === true, pullNumber: publication?.pull_number ?? null,
-    invocationCount: chain.invocations.length, invocations: chain.invocations.slice(-20).map((invocation) => ({
-      id: invocation.id, behavior: invocation.behavior, state: invocation.state, callId: invocation.callId, model: invocation.model,
-      slot: invocation.slot, outcome: invocation.outcome, admittedAt: invocation.admittedAt,
-      evidence: invocation.evidence ? { action: invocation.evidence.action, outcome: invocation.evidence.outcome,
-        review_id: invocation.evidence.review_id, head_sha: invocation.evidence.head_sha,
-        resources_settled_at: invocation.evidence.resources_settled_at, error: invocation.evidence.error } : null,
-    })) }
-}
+import type { ChainEvent } from './behavior-chain-store'
+import { behaviorChainSummary as summary } from './behavior-chain-summary'
 
 function reply(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value))
