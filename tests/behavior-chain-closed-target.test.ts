@@ -213,3 +213,45 @@ it('does not prepare a new repair for an open PR whose seed issue is closed', as
   expect(journal.read(chain.id)?.held).toContain('seed issue is closed')
   expect(forbidden).not.toHaveBeenCalled()
 })
+
+it('settles a never-started closed admission while disabled without replacing the person hold', async () => {
+  const { journal, chain, operations, forbidden } = setup('repair-pr')
+  record(journal, chain, { type: 'chain.held', reason: 'New invocations held by the person' })
+  operations.enabled = () => false
+  await new BehaviorChainRuntime(journal, operations).run()
+  expect(journal.read(chain.id)).toMatchObject({ held: 'New invocations held by the person',
+    invocations: [{ state: 'settled', outcome: 'target_closed' }] })
+  expect(journal.liveModelInvocationCount()).toBe(0)
+  expect(forbidden).not.toHaveBeenCalled()
+})
+
+it('rechecks canonical closure at the late launch boundary without accepting a worker', async () => {
+  const { journal, chain, operations, fenceClosedTarget } = setup('repair-pr')
+  operations.observe = async () => observed('open')
+  operations.launch = vi.fn(async (_invocation, _exit, allowed) => {
+    expect(allowed()).toBe(true)
+    let current = record(journal, journal.read(chain.id)!, { type: 'chain.observed', observation: observed() })
+    current = record(journal, current, { type: 'chain.merged', mergeSha: MERGE,
+      evidence: { repository: chain.repository, pull_number: 17, merged: true, merge_sha: MERGE, review_complete: false } })
+    expect(allowed()).toBe(false)
+    return false
+  })
+  await new BehaviorChainRuntime(journal, operations).run()
+  expect(journal.read(chain.id)?.invocations[0]).toMatchObject({ state: 'settled', outcome: 'launch_deferred' })
+  expect(journal.liveModelInvocationCount()).toBe(0)
+  expect(fenceClosedTarget).not.toHaveBeenCalled()
+})
+
+it('adopts the original native fence after a lost acknowledgement without repeating it or starting a worker', async () => {
+  const { journal, chain, operations, fenceClosedTarget, forbidden } = setup('repair-pr', true)
+  const fence = fenceClosedTarget.getMockImplementation()!
+  fenceClosedTarget.mockImplementation(async (chain, invocation) => { await fence(chain, invocation); throw new Error('fence acknowledgement lost') })
+  const runtime = new BehaviorChainRuntime(journal, operations)
+  await expect(runtime.run()).rejects.toThrow('fence acknowledgement lost')
+  expect(journal.liveModelInvocationCount()).toBe(1)
+  await new BehaviorChainRuntime(journal, operations).run()
+  expect(journal.read(chain.id)?.invocations[0]).toMatchObject({ state: 'settled', outcome: 'target_closed' })
+  expect(journal.liveModelInvocationCount()).toBe(0)
+  expect(fenceClosedTarget).toHaveBeenCalledTimes(1)
+  expect(forbidden).not.toHaveBeenCalled()
+})

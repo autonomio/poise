@@ -55,6 +55,17 @@ it('refuses a late native launch before reserving capacity or preparing a provid
   expect(borrow).not.toHaveBeenCalled()
 })
 
+it('releases borrowed capacity when closure arrives during provider preparation', async () => {
+  const release = vi.fn()
+  const borrow = vi.fn(() => release)
+  const prepare = vi.fn(async () => ({}))
+  const allowed = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false)
+  expect(await actionOperations({ prepare, borrow }).launch(mergeInvocation(), () => {}, allowed)).toBe(false)
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(borrow).toHaveBeenCalledTimes(1)
+  expect(release).toHaveBeenCalledTimes(1)
+})
+
 it('retains a returned native mutation response when its process subsequently fails', async () => {
   const response = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21,
     head_sha: HEAD, outcome: 'enqueued', queue_entry_id: 'accepted-queue-entry' }
