@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parseAgentLogStdout } from '../server/agent-log-parse'
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainAdmission, type ChainEvent } from '../server/behavior-chain-store'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
 import type { ChainObservation } from '../server/behavior-chain-decision'
 import type { Organization } from '../server/organizations'
+import { completedReviewCall } from './review-response-fixture'
 
 const mocks = vi.hoisted(() => ({ spawnDetached: vi.fn() }))
 vi.mock('../server/process', () => ({ runFile: vi.fn(), spawnDetached: mocks.spawnDetached }))
@@ -127,6 +129,34 @@ describe('durable behavior resource reservations', () => {
 })
 
 describe('resource-aware behavior admission', () => {
+  it.each([{ phase: 'posted', resource_error: 'cleanup_failed' }, { phase: 'resources_unknown' }])(
+    'retains native reservations when release timestamps contradict $phase evidence', async artifact => {
+      const { journal, chain } = setup()
+      const admitted = { ...invocation('one', RESERVATION), admittedAt: Date.now() - 3000 }
+      let current = record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+      record(journal, current, { type: 'invocation.started', invocationId: admitted.id })
+      const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+        behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+        head_sha: null, expected_head: null, action: 'commented', outcome: 'commented', review_id: null,
+        artifact, resources_settled_at: new Date().toISOString(),
+        receipts: [{ issue: `${chain.repository}#${chain.issue}`, comment_id: 17, author: chain.reviewer, url: null }] }
+      const noAction = vi.fn(async () => { throw new Error('contradictory native resource evidence grants no execution authority') })
+      const ops = operations({ enabled: () => false,
+        readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'native resource receipt fixture'),
+        request: noAction, launch: noAction, perform: noAction, resumePublication: noAction })
+      await new BehaviorChainRuntime(journal, ops).run()
+      current = journal.read(chain.id)!
+      expect(current.invocations[0].state).toBe('uncertain')
+      expect(journal.liveModelInvocationCount()).toBe(1)
+      expect(journal.reservedResources()).toEqual({ ...RESERVATION, unaccounted: 0 })
+      expect(noAction).not.toHaveBeenCalled()
+      expect(parseAgentLogStdout(JSON.stringify([call]), 'same retained native receipt').quarantined).toHaveLength(1)
+      const events = journal.history(chain.id)
+      journal.rebuild()
+      expect(journal.history(chain.id)).toEqual(events)
+      expect(journal.read(chain.id)).toEqual(current)
+    })
+
   it('waits with an explicit reason and no provider preparation while exhausted, then admits after release', async () => {
     bounded()
     const { journal, chain } = setup()

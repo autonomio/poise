@@ -86,3 +86,37 @@ class TestStopCall(TestCase):
             conn.execute("update calls set pid=null where id=?", (id_,))
         with self.assertRaisesRegex(RuntimeError, "recorded no process id"):
             agent_interface.stop_call(id_)
+
+    def test_a_native_same_name_replacement_is_not_the_original_process(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "agent-interface", "--logs"],
+                                   start_new_session=True)
+        self.addCleanup(process.wait)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        id_ = agent_interface.track("fixture-model", "original native admission", repo="acme/app", pr_id="7",
+                                    actor="reviewer", behavior="pr_review", expected_head="a" * 40,
+                                    source="poise:behavior-chain", correlation_id="original-native-stop")
+        with agent_interface.db() as conn:
+            conn.execute("update calls set pid=? where id=?", (str(process.pid), id_))
+        with patch.object(agent_interface, "STOP_COMMAND_MARK", "agent-interface"):
+            with self.assertRaises(RuntimeError):
+                agent_interface.stop_call(id_)
+        self.assertIsNone(process.poll(), "a same-name foreign process is outside this Call's authority")
+        with agent_interface.db() as conn:
+            self.assertEqual(conn.execute("select status,error_code from calls where id=?", (id_,)).fetchone()["status"], "running")
+
+    def test_native_history_without_process_identity_does_not_signal_a_same_name_process(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "agent-interface", "--logs"],
+                                   start_new_session=True)
+        self.addCleanup(process.wait)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        id_ = "d" * 32
+        with agent_interface.db() as conn:
+            conn.execute("insert into calls(id,model,prompt,started_at,status,source,pid,behavior,repo,pr_id,actor,expected_head) "
+                         "values(?, 'fixture-model','historical native admission',?,'running','poise:behavior-chain',?,"
+                         "'pr_review','acme/app','7','reviewer',?)", (id_, time() - 3600, str(process.pid), "a" * 40))
+        with patch.object(agent_interface, "STOP_COMMAND_MARK", "agent-interface"):
+            with self.assertRaises(RuntimeError):
+                agent_interface.stop_call(id_)
+        self.assertIsNone(process.poll())
+        with agent_interface.db() as conn:
+            self.assertEqual(conn.execute("select status from calls where id=?", (id_,)).fetchone()["status"], "running")
