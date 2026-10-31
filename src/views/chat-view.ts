@@ -69,11 +69,9 @@ import { RELOADED_RELEASE_KEY } from '../self-update-reload'
 import type { SelfChange, SelfUpdateStatus } from '../self-update-types'
 import { POISE_REPOSITORY } from '../poise-repository'
 
-// The build watch is app-wide (it guards every view), but it has to start
-// somewhere main.ts already imports; this module is that place until the
-// bootstrap moves into main.ts. Installing twice is a no-op.
-installSelfUpdateWatch()
-
+// The build watch is app-wide: the bootstrap (`src/main.ts`) installs it
+// before either interface loads. The calls below only ask the installed
+// watch to poll; installing twice is a no-op.
 interface SessionEntry {
   record: SessionRecord
   model: TranscriptModel

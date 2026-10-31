@@ -665,6 +665,15 @@ function onChange(event: Event): void {
 // ── Lifecycle ──────────────────────────────────────────────────────────
 
 let returnNotice: { text: string, tone: 'info' | 'error' } | null = null
+/** Set once an OAuth return is finished. The bootstrap finishes it before
+ *  classic's entry runs, so classic reads this instead of the consumed
+ *  address. */
+let oauthReturnFinished = false
+
+/** Whether an Extensions OAuth return was finished this load. */
+export function extensionSignInReturnFinished(): boolean {
+  return oauthReturnFinished
+}
 
 /** The provider sends the browser back to /extensions/oauth?code&state:
  *  finish the sign-in, return to `/`, and open Extensions on that server. */
@@ -680,6 +689,7 @@ export async function finishExtensionSignIn(): Promise<boolean> {
   } catch (error) {
     returnNotice = { text: (error as Error).message, tone: 'error' }
   }
+  oauthReturnFinished = true
   return true
 }
 
