@@ -10,6 +10,7 @@ import type { ChainRuntimeOperations, ChainSeed } from './behavior-chain-runtime
 import { organizationArgs, organizationForRepository, type Organization } from './organizations'
 import { getBehaviorChainSettings, getSettings } from './settings'
 import { attributedNativeAction } from './behavior-chain-action'
+import { resourceReleaseProven } from './behavior-resource-receipt'
 import { runFile, spawnDetached } from './process'
 
 type Roster = Pick<ChainObservation, 'issueReviewers' | 'prReviewers' | 'implementer' | 'repairer' | 'approver'>
@@ -193,7 +194,8 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         const inspected = await github(chain.repository, ['--issue-work', issueRef, '--mode', 'inspect', '--branch', chain.branch,
           '--invocation-id', String(interruptedWork.evidence!.callId), '--replies-json', JSON.stringify(replies), ...actor])
         observation.workPublication = { callId: String(interruptedWork.evidence!.callId), repliesComplete: !replies.length || inspected.replies_complete === true,
-          resumable: artifact.replies_started === false && artifact.publication_head === observation.publication.head_sha,
+          resumable: resourceReleaseProven(interruptedWork.evidence!, true)
+            && artifact.replies_started === false && artifact.publication_head === observation.publication.head_sha,
           planSha: String(artifact.plan_sha) }
       }
       const reviewer = ['--token-user', chain.reviewer]

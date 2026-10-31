@@ -11,7 +11,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 import agent_interface as api
-from agent_interface import issue_review, review_budget, review_receipt
+from agent_interface import issue_review, review_budget, review_receipt, resource_ownership
 
 CALL = "a" * 32
 HEAD = "b" * 40
@@ -25,9 +25,10 @@ class ManagedReceipts(TestCase):
         self.conn = sqlite3.connect(self.path)
         self.addCleanup(self.conn.close)
         self.conn.execute("create table calls (id text primary key, source text, status text, behavior text, error_code text, artifact text, "
-                          "action text, outcome text, head_sha text, resources_settled_at real, action_plan text)")
+                          "action text, outcome text, head_sha text, resources_settled_at real, action_plan text, resource_ownership text)")
         self.conn.execute("insert into calls(id,source,status,behavior,artifact) values(?, 'poise:behavior-chain','running','pr_review',?)",
                           (CALL, json.dumps({"phase": "reviewing", "review_response": {"head_sha": HEAD, "completed_at": 1}})))
+        self.conn.execute("update calls set resource_ownership=?", (resource_ownership.initial(),))
         self.conn.commit()
         self.addCleanup(patch.stopall)
         patch.dict(os.environ, {"AGENT_INTERFACE_RECEIPT_DB": str(self.path), "AGENT_INTERFACE_RECEIPT_CALL": CALL}).start()

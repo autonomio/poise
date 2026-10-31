@@ -254,7 +254,8 @@ describe('native admission and recovery', () => {
     let current = record(journal, chain, { type: 'invocation.admitted', invocation: pending })
     current = record(journal, current, { type: 'invocation.uncertain', invocationId: pending.id, reason: 'submission response lost' })
     current = record(journal, current, { type: 'invocation.reconciled', invocationId: pending.id,
-      evidence: { callId: nativeId, resources_settled_at: new Date(now).toISOString(), completedAt: now } })
+      evidence: { callId: nativeId, resources_settled_at: new Date(now).toISOString(), completedAt: now,
+        resource_ownership: { version: 1, roots: [], errors: [] } } })
     obs.pull!.reviewReceipts = [{ id: 91, head: HEAD, state: 'COMMENTED', invocation: nativeId, submittedAt: now - 1000 }]
     const runtime = new BehaviorChainRuntime(journal, operations({ observe: async () => obs, launch: async () => { throw new Error('duplicate review dispatch') } }))
     await runtime.run()
@@ -272,10 +273,13 @@ describe('native admission and recovery', () => {
     const { journal, chain } = setup(); const obs = observation()
     const pending = invocation('existing-review', 'review-issue', chainBasis(['issue', obs.issue.revision]))
     record(journal, chain, { type: 'invocation.admitted', invocation: pending })
-    const call = { id: 'a'.repeat(32), correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'reviewer',
+    const call: LogEntry = { id: 'a'.repeat(32), correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'reviewer',
+      pr_id: '7', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(),
+      time_elapsed: '1s', head_sha: null, expected_head: null, response: null, error: '',
       repo: 'Example/Repo', behavior: 'issue_review', status: 'completed', outcome: 'commented', action: 'commented',
       issue_revision: obs.issue.revision, resources_settled_at: new Date(NOW).toISOString(),
-      receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer' }] } as LogEntry
+      resource_ownership: { version: 1, roots: [], errors: [] },
+      receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer', url: null }] }
     const runtime = new BehaviorChainRuntime(journal, operations({ discover: async () => { throw new Error('intake is stale') },
       readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
     await expect(runtime.run()).rejects.toThrow('intake is stale')
@@ -329,10 +333,13 @@ describe('native admission and recovery', () => {
       observe: async () => { observations++; return { ...obs, checkedAt: Date.now() } },
       launch: async (invocation) => { launched.push(invocation.behavior); running = invocation; return true },
       readInvocations: async () => ({ quarantined: [], entries: running ? [{ id: 'a'.repeat(32), correlation_id: running.id,
+        pr_id: '7', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(),
+        time_elapsed: '1s', head_sha: null, expected_head: null, response: null, error: '',
         source: 'poise:behavior-chain', repo: 'Example/Repo', actor: 'reviewer', behavior: 'issue_review',
         status: completed ? 'completed' : 'running', action: completed ? 'commented' : null, outcome: completed ? 'commented' : null,
-        issue_revision: obs.issue.revision, receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer' }],
+        issue_revision: obs.issue.revision, receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer', url: null }],
         resources_settled_at: completed ? new Date().toISOString() : null,
+        resource_ownership: { version: 1, roots: [], errors: [] },
       } as LogEntry] : [] }),
     }))
     await runtime.run()
@@ -418,6 +425,7 @@ describe('native admission and recovery', () => {
     const callId = 'a'.repeat(32)
     const call: LogEntry = { id: callId, correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'author', repo: 'Example/Repo', behavior: 'repair_pr',
       status: 'failed', action: null, outcome: null, resources_settled_at: new Date(NOW).toISOString(),
+      resource_ownership: { version: 1, roots: [], errors: [] },
       pr_id: '21', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(), time_elapsed: '1s',
       head_sha: null, expected_head: HEAD, response: null, error: 'PR head confirmation timed out',
       artifact: { phase: 'publishing', plan_sha: 'b'.repeat(64) } }
@@ -431,6 +439,12 @@ describe('native admission and recovery', () => {
         expect(journal.read(chain.id)!.invocations[0].evidence).toMatchObject({ publicationResume: { callId, head: HEAD } })
         resumed++; throw new Error('completion response lost')
       }, launch: async () => { throw new Error('must not launch a replacement worker') } }))
+    const releasedAt = call.resources_settled_at
+    call.resources_settled_at = null
+    await runtime.run()
+    expect(resumed).toBe(0)
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    call.resources_settled_at = releasedAt
     await runtime.run()
     expect(resumed).toBe(1)
     expect(journal.read(chain.id)!.invocations).toHaveLength(1)

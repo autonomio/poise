@@ -1234,6 +1234,19 @@ shape and native resource-release timestamp before the journal can settle its
 reservation. Closed-target native resource waits are separate from public
 GitHub recheck times; unrelated open-PR review/approval stays eligible.
 
+Native Caller receipts also carry append-only resource ownership outside
+publication artifacts. Normal cleanup acknowledges pinned directory identities;
+uncertain process/disk state retains its original reservation. The decoder and
+journal-derived capacity reject contradictory release timestamps, including
+historical contradictions on rebuild, without rewriting events. Capacity uses
+an indexed derived pending-resource flag rather than scanning settled history.
+Linux Stop pins a process handle before start/epoch verification and signals
+only its original supervisor. Unsupported/older/unreadable identities refuse
+signals; Chat Stop keeps its external runtime route. Epoch identity does not
+use wall-clock ordering. Neither supervisor loss nor a container replacement
+proves disk reclamation. Complete descendant containment and automatic
+post-loss reclamation remain #806 obligations, with no production changes here.
+
 ## Google document publishing
 
 Google account grants belong to the gateway, partitioned by immutable GitHub

@@ -211,7 +211,8 @@ it.each([false, true])('does not defer original model/resource settlement, with 
     pull_number: 17, merged: true, merge_sha: MERGE, review_complete: false } })
   const call = completedReviewCall(chain.repository, 17, 'a'.repeat(40), chain.reviewer)
   Object.assign(call, { source: 'poise:behavior-chain', correlation_id: 'original-model', status: 'running',
-    action: null, outcome: null, completed_at: null, resources_settled_at: null, artifact: null, review_id: null })
+    action: null, outcome: null, completed_at: null, resources_settled_at: null, artifact: null, review_id: null,
+    resource_ownership: { version: 1, roots: [], errors: [] } })
   let visible = present
   const readInvocations = vi.fn(async () => ({ entries: visible ? [structuredClone(call)] : [], quarantined: [] }))
   const observe = vi.fn(async () => observation())

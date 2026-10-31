@@ -208,7 +208,7 @@ class TestSupervisedProcess(TestCase):
 
     def test_cancel_stops_the_provider_and_signal_resistant_descendant(self):
         with ReviewWatch("/tmp", PR, "bit-mis", HEAD) as watch:
-            pid_file = Path(watch.directory.name) / "child.pid"
+            pid_file = Path(watch.gate_path).parent / "child.pid"
             child_code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
             script = ("import os,subprocess,sys,time; from pathlib import Path; "
                       f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "

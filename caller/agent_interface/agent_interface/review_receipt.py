@@ -152,6 +152,7 @@ def work_publication(head: str, *, start_replies: bool = False) -> None:
     Only a recorded unattempted reply batch can resume after worker settlement.
     A lost POST remains uncertain instead of authorizing another write.
     """
+    from . import resource_ownership
     database, call_id = os.environ.get("AGENT_INTERFACE_RECEIPT_DB"), os.environ.get("AGENT_INTERFACE_RECEIPT_CALL")
     if not database and not call_id:
         return
@@ -159,14 +160,16 @@ def work_publication(head: str, *, start_replies: bool = False) -> None:
         raise RuntimeError("managed work publication lacks its native receipt binding")
     with sqlite3.connect(database, timeout=30) as conn:
         conn.execute("begin immediate")
-        row = conn.execute("select artifact,status,resources_settled_at from calls where id=? and source='poise:behavior-chain' "
+        row = conn.execute("select artifact,status,resources_settled_at,resource_ownership from calls where id=? and source='poise:behavior-chain' "
                            "and behavior in ('implement_issue','repair_pr') and action_plan is not null "
                            "and coalesce(error_code,'') not in ('stopping','stopped')", (call_id,)).fetchone()
         artifact = json.loads(row[0]) if row and row[0] else {}
         if not row or artifact.get("phase") != "publishing" or not artifact.get("plan_sha"):
             raise RuntimeError("work publication lacks its original native action plan")
         if start_replies:
-            if row[1] not in {"running", "failed"} or (row[1] == "failed" and row[2] is None) \
+            if row[1] not in {"running", "failed"} or (row[1] == "failed" and not resource_ownership.publication_released(row[2], row[3], artifact)) \
+                    or (row[1] == "running" and (not resource_ownership.healthy(json.loads(row[3]) if row[3] else None)
+                                                or artifact.get("resource_error"))) \
                     or artifact.get("publication_head") != head or artifact.get("replies_started") is not False:
                 raise RuntimeError("planned replies are already attempted or lack settled native ownership")
             artifact["replies_started"] = True
@@ -185,17 +188,20 @@ def managed_resources(root: Path):
     if not database or not call_id:
         yield
         return
-    from . import issue_review
+    from . import issue_review, resource_ownership
+    root = resource_ownership.allocate(Path(database), call_id, root)
     with sqlite3.connect(database, timeout=30) as conn:
         conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_root',?) where id=?", (str(root), call_id))
     try:
         yield
     finally:
-        issue_review.stop_leftovers(root)
+        resource_ownership.process_check(Path(database), call_id)
         if issue_review._cwd_pids(root, require_complete=True) != []:
+            resource_ownership.failure(Path(database), call_id, "resources_unknown", root)
             with sqlite3.connect(database, timeout=30) as conn:
                 conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_error','resources_unknown') where id=?", (call_id,))
             raise RuntimeError("managed behavior resources could not be proven released")
+        resource_ownership.process_check(Path(database), call_id, complete=True)
 
 
 class SubmissionError(RuntimeError):

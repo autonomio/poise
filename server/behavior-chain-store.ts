@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Database } from 'better-sqlite3'
 import type { BehaviorCutoverState } from '../src/behavior-cutover'
 import { budgetShortfall, type BehaviorResourceBudget, type BehaviorResourceReservation } from './behavior-resources'
+import { nativeResourcesPending } from './behavior-resource-receipt'
 
 const CUTOVER_ID = '@behavior-admission'
 interface CutoverEvent { type: 'admission.changed', state: BehaviorCutoverState }
@@ -62,13 +63,10 @@ interface StoredEvent { sequence: number, chain_id: string, event_id: string, at
 const SHA = /^[0-9a-f]{40}$/i
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
-// The reducer admits at most one unsettled invocation, always the last one.
-// These expressions index derived observation scheduling, never ownership or
-// admission authority. Native receipt eligibility is separate from the
-// GitHub observation schedule reported by API/status readers.
-const LIVE_MODEL_SQL = `json_extract(state, '$.invocations[#-1].state') != 'settled'
-  AND json_type(state, '$.invocations[#-1].model') != 'null'
-  AND json_extract(state, '$.invocations[#-1].evidence.resources_settled_at') IS NULL`
+// Resource occupancy is derived from every original invocation, including
+// contradictory historical releases. Index the projection so settled history
+// cannot turn each capacity/observation read into a full journal scan.
+const LIVE_MODEL_SQL = 'resource_pending = 1'
 const ACTIVE_WORK_SQL = `CASE WHEN (json_extract(state, '$.mergeSha') IS NULL AND json_extract(state, '$.held') IS NULL)
   OR (${LIVE_MODEL_SQL}) THEN 1 ELSE 0 END`
 const RECHECK_AT_SQL = `CASE
@@ -152,6 +150,27 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
  * the effect. Unlike the observational ledger, events are never dropped/pruned. */
 export class BehaviorChainJournal {
   constructor(private readonly db: Database) {
+    db.function('behavior_native_resources_pending', { deterministic: true }, encoded => {
+      if (typeof encoded !== 'string') throw new Error('native capacity lacks its invocation receipt')
+      const value: unknown = JSON.parse(encoded)
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid native capacity invocation')
+      return nativeResourcesPending(value as Record<string, unknown>) ? 1 : 0
+    })
+    db.exec(`CREATE TABLE IF NOT EXISTS behavior_chain_current (
+      chain_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL, merged INTEGER NOT NULL,
+      resource_pending INTEGER NOT NULL DEFAULT 1)`)
+    const columns = db.pragma('table_info(behavior_chain_current)') as { name: string }[]
+    if (!columns.some(column => column.name === 'resource_pending')) {
+      db.transaction(() => {
+        db.exec('ALTER TABLE behavior_chain_current ADD COLUMN resource_pending INTEGER NOT NULL DEFAULT 1')
+        db.exec(`UPDATE behavior_chain_current SET resource_pending = CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(state, '$.invocations') i WHERE behavior_native_resources_pending(i.value) = 1
+        ) THEN 1 ELSE 0 END`)
+      }).immediate()
+    }
+    const index = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'behavior_chain_reconciliation'")
+      .get() as { sql: string } | undefined
+    if (index && !index.sql.includes('resource_pending')) db.exec('DROP INDEX behavior_chain_reconciliation')
     db.exec(`
       CREATE TABLE IF NOT EXISTS behavior_chain_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT, chain_id TEXT NOT NULL,
@@ -167,6 +186,7 @@ export class BehaviorChainJournal {
         chain_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL, merged INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS behavior_chain_active ON behavior_chain_current(merged, chain_id);
+      CREATE INDEX IF NOT EXISTS behavior_chain_resource_pending ON behavior_chain_current(resource_pending, chain_id);
       CREATE INDEX IF NOT EXISTS behavior_chain_pull ON behavior_chain_current(
         lower(json_extract(state, '$.repository')), json_extract(state, '$.observation.publication.pull_number'));
       CREATE INDEX IF NOT EXISTS behavior_chain_branch ON behavior_chain_current(
@@ -249,9 +269,11 @@ export class BehaviorChainJournal {
       const next = reduceChain(current, event, sequence, id)
       this.db.prepare('INSERT INTO behavior_chain_events(sequence, chain_id, event_id, at, payload, state_hash) VALUES (?, ?, ?, ?, ?, ?)')
         .run(sequence, id, eventId, at, payload, chainBasis(next))
-      this.db.prepare(`INSERT INTO behavior_chain_current(chain_id, sequence, state, merged) VALUES (?, ?, ?, ?)
-        ON CONFLICT(chain_id) DO UPDATE SET sequence=excluded.sequence, state=excluded.state, merged=excluded.merged`)
-        .run(id, next.sequence, JSON.stringify(next), next.mergeSha && !next.reviewPending ? 1 : 0)
+      this.db.prepare(`INSERT INTO behavior_chain_current(chain_id, sequence, state, merged, resource_pending) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(chain_id) DO UPDATE SET sequence=excluded.sequence, state=excluded.state, merged=excluded.merged,
+          resource_pending=excluded.resource_pending`)
+        .run(id, next.sequence, JSON.stringify(next), next.mergeSha && !next.reviewPending ? 1 : 0,
+          next.invocations.some(invocation => nativeResourcesPending({ ...invocation })) ? 1 : 0)
       return next
     }).immediate()
   }
@@ -347,6 +369,7 @@ export class BehaviorChainJournal {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('native invocation capacity must be positive')
     return this.db.transaction(() => {
       if (this.cutover().mode === 'draining') return null
+      if (chain.invocations.some(prior => nativeResourcesPending({ ...prior }))) return null
       if (invocation.model !== null && !this.modelCapacityAvailable(capacity)) return null
       if (budget && (budget.memoryBytes !== null || budget.diskBytes !== null) && invocation.model !== null) {
         const reservation = invocation.reservation
@@ -368,8 +391,7 @@ export class BehaviorChainJournal {
 
   liveModelInvocationCount(): number {
     const row = this.db.prepare(`SELECT count(*) AS count FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
-      WHERE c.merged = 0 AND json_extract(i.value, '$.state') != 'settled'
-        AND json_type(i.value, '$.model') != 'null' AND json_extract(i.value, '$.evidence.resources_settled_at') IS NULL`).get() as { count: number }
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
     return row.count
   }
 
@@ -387,8 +409,7 @@ export class BehaviorChainJournal {
       coalesce(sum(CASE WHEN json_extract(i.value, '$.reservation.memoryBytes') IS NULL
         OR json_extract(i.value, '$.reservation.diskBytes') IS NULL THEN 1 ELSE 0 END), 0) AS unaccounted
       FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
-      WHERE c.merged = 0 AND json_extract(i.value, '$.state') != 'settled'
-        AND json_type(i.value, '$.model') != 'null' AND json_extract(i.value, '$.evidence.resources_settled_at') IS NULL`).get() as
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1`).get() as
       { memory: number, disk: number, unaccounted: number }
     if (!Number.isSafeInteger(row.memory) || row.memory < 0 || !Number.isSafeInteger(row.disk) || row.disk < 0
       || !Number.isSafeInteger(row.unaccounted) || row.unaccounted < 0) throw new Error('behavior resource reservations are corrupt')
@@ -422,8 +443,9 @@ export class BehaviorChainJournal {
         if (chainBasis(next) !== hash) throw new Error('behavior journal state hash is invalid')
         states.set(row.chain_id, next)
       }
-      const save = this.db.prepare('INSERT INTO behavior_chain_current(chain_id, sequence, state, merged) VALUES (?, ?, ?, ?)')
-      for (const state of states.values()) save.run(state.id, state.sequence, JSON.stringify(state), state.mergeSha && !state.reviewPending ? 1 : 0)
+      const save = this.db.prepare('INSERT INTO behavior_chain_current(chain_id, sequence, state, merged, resource_pending) VALUES (?, ?, ?, ?, ?)')
+      for (const state of states.values()) save.run(state.id, state.sequence, JSON.stringify(state), state.mergeSha && !state.reviewPending ? 1 : 0,
+        state.invocations.some(invocation => nativeResourcesPending({ ...invocation })) ? 1 : 0)
     }).immediate()
   }
 }

@@ -25,11 +25,27 @@ it writes without a voice guide, says so on stderr, and prints
 
 # Stopping a run
 
-Every call records the process id of the `agent-interface` that runs it.
-`agent-interface --stop CALL_ID` signals that process group (the CLI and the
-provider it started; a governed review stops its provider itself on SIGTERM),
-waits briefly, and closes the row as `failed` with `error_code = stopped` and
-the error "Stopped by user". A call that already finished is left as it is.
+Every local call records its supervisor PID and available kernel start/epoch
+identity before managed work. On Linux, `agent-interface --stop CALL_ID` opens
+a pidfd before checking that identity and signals only through the verified
+handle. SIGTERM lets the supervisor unwind its own provider handlers; escalation
+reaches only that same supervisor. Numeric process groups and command-name
+matches do not authorize signals. Stop closes the row as `failed` with
+`error_code = stopped` and "Stopped by user"; it never releases native resources
+or proves all descendants ended. A call that already finished is left as it is.
+Missing, reused, previous-epoch, unreadable or unsupported identity refuses the
+operation without a signal. This includes older rows and macOS development
+without kernel-pinned handles. The refusal is explicit; no unsafe fallback is
+used. Externally managed Chat turns retain Poise's existing Stop route.
+
+Native per-Call resource receipts live in `resource_ownership`, outside the
+replaceable publication artifact. Directory registration precedes allocation;
+all PR attempt roots and copied credentials use a private recorded Call parent.
+Positive cleanup, including a covering retry after a retained failure, is
+required for settlement. Log reads perform no deletion and never manufacture
+release from PID loss, wall-clock order or path absence. Complete containment
+and post-loss recovery remain pending under #806; see
+[Behavior chain](../../docs/Behavior-chain.md#authority-and-recovery).
 
 # Fencing a closed behavior
 

@@ -3,7 +3,7 @@ import sys
 import tempfile
 from pathlib import Path
 from time import time
-from unittest import TestCase
+from unittest import TestCase, skipUnless
 from unittest.mock import patch
 
 import agent_interface
@@ -25,14 +25,19 @@ class TestStopCall(TestCase):
             self.addCleanup(target.stop)
         agent_interface.init_db()
 
-    def running(self, pid: int) -> str:
+    def running(self, pid: int, *, bind: bool = True) -> str:
         id_ = agent_interface.track("opus-5-max", "prompt")
         with agent_interface.db() as conn:
-            conn.execute("update calls set pid=? where id=?", (str(pid), id_))
+            if bind:
+                conn.execute("update calls set pid=?,process_identity=? where id=?",
+                             (str(pid), agent_interface.process_identity.capture(pid), id_))
+            else:
+                conn.execute("update calls set pid=? where id=?", (str(pid), id_))
         return id_
 
     def sleeper(self) -> subprocess.Popen:
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        self.addCleanup(process.wait)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         return process
 
@@ -42,7 +47,8 @@ class TestStopCall(TestCase):
             row = conn.execute("select pid, status from calls where id=?", (id_,)).fetchone()
         self.assertEqual((row["pid"], row["status"]), (str(agent_interface.os.getpid()), "running"))
 
-    def test_stops_the_process_group_and_finishes_the_row(self):
+    @skipUnless(sys.platform == "linux", "kernel-pinned Stop is a Linux capability")
+    def test_stops_the_verified_supervisor_and_finishes_the_row(self):
         process = self.sleeper()
         id_ = self.running(process.pid)
         started = time()
@@ -61,14 +67,14 @@ class TestStopCall(TestCase):
 
     def test_a_reused_pid_is_never_signalled(self):
         process = self.sleeper()
-        id_ = self.running(process.pid)
-        with patch.object(agent_interface, "STOP_COMMAND_MARK", "agent-interface"):
-            with self.assertRaisesRegex(RuntimeError, "belongs to another process"):
-                agent_interface.stop_call(id_)
+        id_ = self.running(process.pid, bind=False)
+        with self.assertRaisesRegex(RuntimeError, "verified process identity"):
+            agent_interface.stop_call(id_)
         self.assertIsNone(process.poll())
         with agent_interface.db() as conn:
             self.assertEqual(conn.execute("select status from calls where id=?", (id_,)).fetchone()["status"], "running")
 
+    @skipUnless(sys.platform == "linux", "kernel-pinned Stop is a Linux capability")
     def test_a_vanished_process_still_closes_the_row(self):
         process = self.sleeper()
         id_ = self.running(process.pid)

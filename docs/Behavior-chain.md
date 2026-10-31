@@ -141,6 +141,43 @@ Admission-mode transitions use `admission.changed` events under the reserved `@b
 
 Native Call rows and immutable action plans record effect intent before controlled publication. They provide execution evidence to the journal, not a second phase controller. Unique native correlations prevent duplicate processes from executing the same admission. Worker resource settlement is required before a handoff; a terminal model result is insufficient. A restart or interrupted process is reconciled against the original invocation, pushed branch, posted comments and exact-head review receipts.
 
+Log-read recovery never releases native resource ownership from parent death or
+a new container epoch alone. A release timestamp paired with an active cleanup
+error or unknown-resource phase is contradictory and stays quarantined, keeping
+the original reservation. The native finalizer preserves the first recorded
+settlement time; process lifecycle and verified cleanup remain separate facts.
+Caller records native resource ownership separately from publication artifacts.
+Registration precedes allocation and appends across recovery attempts. The
+issue/atomic root and every PR checkout, provider and watch directory have
+pinned filesystem identities. Native issue, atomic and PR work uses one private
+per-Call parent under Caller's data directory, outside the legacy age sweeps;
+temporary credential copies remain inside those registered roots. In service
+mode that directory is on the home volume and survives restart and recreation.
+Normal cleanup uses directory descriptors, records positive reclamation and
+retains the original failure plus an explicit covering recovery time on a
+successful retry. A failed proof write, absent/replaced root or unknown process
+inspection retains ownership. A path scan can veto cleanup; it grants no
+native signal authority. Process-inspection uncertainty is independent of
+replaceable phase fields and cannot be cleared by a later publication phase.
+
+The existing decoder checks these receipts before native settlement. Active
+invocations with older missing ownership remain uncertain; a timestamp alone
+does not release them. Contradictory releases already copied into historical
+events re-hold derived capacity, including after merge, without rewriting any
+event or hash. A one-time projection/index migration preserves bounded capacity
+and reconciliation reads. Ordinary settled historical receipts stay readable.
+Uncertain native receipts retain their original Call evidence and the cleanup
+cause/path for inspection. Publication continuation requires the same positive
+resource predicate and an originally unattempted reply batch.
+
+This containment does not establish complete descendant ownership or automatic
+post-loss reclamation. Same-epoch parent loss, an unreadable identity, incomplete
+allocation or a new epoch without cleanup proof stays held. Removing a named
+directory is not a supported way to manufacture a release. A one-slot lane can
+remain held after such a failure. #806 retains the containment mechanism,
+claimed recovery outside log reads, retention, measured budget enforcement and
+real fault/load acceptance; these remain required before resource readiness.
+
 Known closure blocks all new model requests, worker launch/relaunch and repair
 publication continuation. A durable merge stays closed when a later observation
 has no PR; a closed PR blocks all model behaviors, and a closed seed also blocks

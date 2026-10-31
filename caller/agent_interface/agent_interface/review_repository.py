@@ -3,12 +3,11 @@ import json
 import os
 import signal
 import subprocess
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from threading import current_thread, main_thread
 
-from . import atoms, progress, review_budget
+from . import atoms, progress, review_budget, resource_ownership
 from .process_diagnostic import command_failure, diagnostic_from_stderr, diagnostic_message
 
 INSPECTION_RULE = "Bash(github-interface --review-context --requests-json *)"
@@ -81,7 +80,7 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
             raise ValueError("PR packet target differs from review target")
     except (ValueError, KeyError, TypeError) as error:
         raise atoms.AgentPreflightError(f"cannot prepare review checkout: {error}") from error
-    with _cancellation(), tempfile.TemporaryDirectory(prefix="caller-pr-review-") as work:
+    with _cancellation(), resource_ownership.temporary_directory(prefix="caller-pr-review-") as work:
         root = Path(work) / "repo"
         limit = review_budget.timeout(240, reserve=review_budget.FINAL_CHECK_SECONDS)
         progress.stage("checking_out", "Preparing pinned PR checkout", timeout=limit)
@@ -112,9 +111,7 @@ def prepare(pwd: str, pr: str, actor: str, head: str, packet: str):
                     if "exceeds its file or byte limit" in message or "guidance exceeds its byte limit" in message else None)
             diagnostic = command_failure(error, "checkout", pwd, limit) if isinstance(error, (OSError, subprocess.TimeoutExpired)) else None
             raise atoms.AgentPreflightError(f"cannot inspect review checkout: {error}", code, diagnostic) from error
-        from .review_receipt import managed_resources
-        with managed_resources(Path(work)):
-            yield Repository(root, info)
+        yield Repository(root, info)
 
 
 @contextmanager

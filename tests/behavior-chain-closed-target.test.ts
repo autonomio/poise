@@ -130,7 +130,8 @@ it('admits unrelated work in the same pass after fencing the closed original at 
 it('does not continue uncertain publication after merge but still adopts complete original replies', async () => {
   const { journal, chain, operations, forbidden } = setup('repair-pr', true)
   let current = record(journal, chain, { type: 'invocation.reconciled', invocationId: 'original', evidence: {
-    callId: 'd'.repeat(32), resources_settled_at: new Date().toISOString(), artifact: { replies_started: false } } })
+    callId: 'd'.repeat(32), resources_settled_at: new Date().toISOString(), artifact: { replies_started: false },
+    resource_ownership: { version: 1, roots: [], errors: [] } } })
   current = record(journal, current, { type: 'invocation.uncertain', invocationId: 'original', reason: 'publication acknowledgement lost' })
   let complete = false
   operations.observe = async () => {
@@ -155,7 +156,8 @@ it('keeps a running original and uncertain resource ownership until native settl
   const { journal, chain, calls, operations, forbidden, fenceClosedTarget } = setup('review-pr', true)
   const call = completedReviewCall(chain.repository, 17, HEAD, chain.reviewer)
   Object.assign(call, { source: 'poise:behavior-chain', correlation_id: 'original', status: 'running', completed_at: null,
-    resources_settled_at: null, action: null, outcome: null, artifact: null })
+    resources_settled_at: null, action: null, outcome: null, artifact: null,
+    resource_ownership: { version: 1, roots: [], errors: [] } })
   calls.push(call)
   const runtime = new BehaviorChainRuntime(journal, operations)
   await runtime.run()
