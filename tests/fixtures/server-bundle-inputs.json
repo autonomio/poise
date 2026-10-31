@@ -1,0 +1,20 @@
+[
+  "src/agent-progress.ts",
+  "src/analytics-work-review.ts",
+  "src/behavior-failure-cause.ts",
+  "src/behavior-types.ts",
+  "src/chat-file-reference.ts",
+  "src/chat-manager-settings-types.ts",
+  "src/chat-memories-types.ts",
+  "src/chat-switches.ts",
+  "src/chat-title.ts",
+  "src/clock.ts",
+  "src/edit-proposals.ts",
+  "src/github-quota.ts",
+  "src/jev-draft.ts",
+  "src/jev-types.ts",
+  "src/markdown-syntax.ts",
+  "src/markdown.ts",
+  "src/poise-repository.ts",
+  "src/publishing-review.ts"
+]

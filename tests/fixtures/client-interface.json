@@ -1,0 +1,450 @@
+{
+  "http": [
+    "DELETE /api/chat/sessions/{}",
+    "DELETE /api/current/{}",
+    "DELETE /api/editor/doc/{}",
+    "DELETE /api/extensions/servers/{}",
+    "DELETE /api/publishing/sites/{}",
+    "GET /_poise/api/account",
+    "GET /_poise/api/admin",
+    "GET /_poise/api/devices",
+    "GET /api/accounts",
+    "GET /api/agent-logs",
+    "GET /api/agent-reasoning/{}",
+    "GET /api/agent-response/{}",
+    "GET /api/analytics",
+    "GET /api/analytics/history",
+    "GET /api/behavior-chains",
+    "GET /api/behavior-chains{}",
+    "GET /api/behavior-metrics",
+    "GET /api/behaviors",
+    "GET /api/chat-content/status",
+    "GET /api/chat/agents",
+    "GET /api/chat/file",
+    "GET /api/chat/files",
+    "GET /api/chat/legacy",
+    "GET /api/chat/manager/wake",
+    "GET /api/chat/memories",
+    "GET /api/chat/repo",
+    "GET /api/chat/sessions",
+    "GET /api/chat/sessions/{}",
+    "GET /api/chat/sessions/{}/timers",
+    "GET /api/chat/switchboard",
+    "GET /api/chat/switches",
+    "GET /api/claude-auth",
+    "GET /api/current",
+    "GET /api/editor/doc/{}",
+    "GET /api/editor/doc/{}/annotations",
+    "GET /api/editor/doc/{}/publishing",
+    "GET /api/editor/docs",
+    "GET /api/extensions",
+    "GET /api/extensions/directory",
+    "GET /api/extensions/servers/{}/events",
+    "GET /api/extensions/servers/{}{}",
+    "GET /api/github-quota",
+    "GET /api/google/accounts",
+    "GET /api/health",
+    "GET /api/jev/{}",
+    "GET /api/models",
+    "GET /api/onboarding",
+    "GET /api/organizations",
+    "GET /api/publishing/sites",
+    "GET /api/release",
+    "GET /api/repos",
+    "GET /api/self-update",
+    "GET /api/settings",
+    "GET /api/snippets",
+    "GET /api/storage{}",
+    "GET /api/workspace",
+    "PATCH /api/chat/sessions/{}",
+    "PATCH /api/current/{}",
+    "POST /_poise/api/admin/{}",
+    "POST /_poise/api/devices/pair",
+    "POST /_poise/api/devices/revoke",
+    "POST /_poise/api/{}",
+    "POST /api/agent-replay",
+    "POST /api/agent-stop",
+    "POST /api/behavior-chains",
+    "POST /api/behaviors/{}",
+    "POST /api/chat-content",
+    "POST /api/chat/attachments",
+    "POST /api/chat/sessions",
+    "POST /api/chat/sessions/{}/close",
+    "POST /api/chat/sessions/{}/fork",
+    "POST /api/chat/sessions/{}/handoff",
+    "POST /api/chat/sessions/{}/resume",
+    "POST /api/chat/switchboard/check",
+    "POST /api/chat/switchboard/items/{}/answer",
+    "POST /api/chat/switchboard/items/{}/explain",
+    "POST /api/chat/switchboard/off",
+    "POST /api/chat/switchboard/pause",
+    "POST /api/chat/switchboard/restart",
+    "POST /api/chat/switchboard/start",
+    "POST /api/claude-auth/login",
+    "POST /api/confab/review/pr",
+    "POST /api/current",
+    "POST /api/debate",
+    "POST /api/editor/doc/{}",
+    "POST /api/editor/doc/{}/annotations",
+    "POST /api/editor/doc/{}/google{}",
+    "POST /api/editor/doc/{}/publish",
+    "POST /api/editor/doc/{}/reviews{}",
+    "POST /api/editor/docs",
+    "POST /api/extensions/directory/sync",
+    "POST /api/extensions/import",
+    "POST /api/extensions/oauth",
+    "POST /api/extensions/servers",
+    "POST /api/extensions/servers/{}/sign-in",
+    "POST /api/gh",
+    "POST /api/google/callback",
+    "POST /api/google/connect",
+    "POST /api/google/disconnect",
+    "POST /api/models/presets",
+    "POST /api/models/presets/delete",
+    "POST /api/models/refresh",
+    "POST /api/onboarding",
+    "POST /api/onboarding/github",
+    "POST /api/organizations",
+    "POST /api/organizations/{}/retry",
+    "POST /api/pr-review",
+    "POST /api/publishing/sites",
+    "POST /api/self-update/revert",
+    "POST /api/settings",
+    "POST /api/snippets",
+    "POST /api/snippets/import",
+    "POST /api/storage/maintenance",
+    "PUT /api/chat/manager/wake",
+    "PUT /api/editor/doc/{}",
+    "PUT /api/editor/doc/{}/annotations",
+    "PUT /api/publishing/sites/{}",
+    "PUT /api/snippets"
+  ],
+  "dynamic": [
+    "DELETE publishing.ts :: `{}{}`",
+    "GET chat-client.ts :: path",
+    "GET chat-transcript.ts :: url",
+    "GET claude-auth.ts :: input",
+    "GET current-view.ts :: path",
+    "GET extensions-view.ts :: path",
+    "GET logging.ts :: access.endpoint + '/export?' + loggingParameters(query)",
+    "GET logging.ts :: access.endpoint + suffix + '?' + loggingParameters(query)",
+    "GET notices.ts :: ...args",
+    "GET publishing.ts :: path",
+    "GET swarm-view.ts :: historyUrl(org, historyCursor, search)",
+    "GET swarm-view.ts :: historyUrl(org, null, search)",
+    "GET swarm-view.ts :: url",
+    "GET updating.ts :: entry",
+    "POST google-documents.ts :: googlePath(slug, 'import')",
+    "POST google-documents.ts :: googlePath(slug, 'publish')",
+    "POST google.ts :: googlePath(slug, 'review')",
+    "POST google.ts :: googlePath(slug, 'sync')",
+    "POST google.ts :: path",
+    "POST onboarding.ts :: path",
+    "POST settings.ts :: path",
+    "PUT publishing.ts :: `{}/description`",
+    "WS device-login.ts :: `{}//{}{}?preset=gh`",
+    "WS terminal-panel.ts :: `{}//{}{}?preset={}`"
+  ],
+  "ws": [
+    "/ws/chat",
+    "/ws/terminal"
+  ],
+  "commands": [
+    {
+      "type": "cancel",
+      "fields": [
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "chat.hold",
+      "fields": [
+        "held",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "context.reset",
+      "fields": [
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "edit.decide",
+      "fields": [
+        "decision",
+        "index",
+        "messageId",
+        "sessionId",
+        "turnId",
+        "type"
+      ]
+    },
+    {
+      "type": "permission.respond",
+      "fields": [
+        "id",
+        "optionId",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "poise.change",
+      "fields": [
+        "attachments",
+        "changeId",
+        "mentions",
+        "sessionId",
+        "switches",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "type": "prompt",
+      "fields": [
+        "attachments",
+        "mentions",
+        "sessionId",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "type": "question.answer",
+      "fields": [
+        "answers",
+        "id",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "queue.add",
+      "fields": [
+        "attachments",
+        "effort",
+        "itemId",
+        "mentions",
+        "model",
+        "sessionId",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "type": "queue.remove",
+      "fields": [
+        "itemId",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "queue.update",
+      "fields": [
+        "effort",
+        "itemId",
+        "model",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "revert",
+      "fields": [
+        "diffId",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "session.close",
+      "fields": [
+        "id",
+        "type"
+      ]
+    },
+    {
+      "type": "session.delete",
+      "fields": [
+        "id",
+        "type"
+      ]
+    },
+    {
+      "type": "session.fork",
+      "fields": [
+        "id",
+        "type"
+      ]
+    },
+    {
+      "type": "session.list",
+      "fields": [
+        "type"
+      ]
+    },
+    {
+      "type": "session.new",
+      "fields": [
+        "&NewSessionRequest",
+        "type"
+      ]
+    },
+    {
+      "type": "session.rename",
+      "fields": [
+        "id",
+        "title",
+        "type"
+      ]
+    },
+    {
+      "type": "session.resume",
+      "fields": [
+        "id",
+        "type"
+      ]
+    },
+    {
+      "type": "set_auto_merge",
+      "fields": [
+        "enabled",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "set_mode",
+      "fields": [
+        "mode",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "set_model",
+      "fields": [
+        "effort",
+        "model",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "set_safe_mode",
+      "fields": [
+        "enabled",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "steer",
+      "fields": [
+        "attachments",
+        "mentions",
+        "sessionId",
+        "text",
+        "type"
+      ]
+    },
+    {
+      "type": "subscribe",
+      "fields": [
+        "afterSeq",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "switch.create",
+      "fields": [
+        "content",
+        "name",
+        "revision",
+        "type"
+      ]
+    },
+    {
+      "type": "timer.cancel",
+      "fields": [
+        "timerId",
+        "type"
+      ]
+    },
+    {
+      "type": "timer.create",
+      "fields": [
+        "delayMinutes",
+        "everyMinutes",
+        "label",
+        "message",
+        "sessionId",
+        "type"
+      ]
+    },
+    {
+      "type": "timer.rearm",
+      "fields": [
+        "timerId",
+        "type"
+      ]
+    },
+    {
+      "type": "timers.holdAll",
+      "fields": [
+        "held",
+        "type"
+      ]
+    },
+    {
+      "type": "unsubscribe",
+      "fields": [
+        "sessionId",
+        "type"
+      ]
+    }
+  ],
+  "intersections": {
+    "NewSessionRequest": [
+      "agent",
+      "autoMerge",
+      "branch",
+      "checkout",
+      "context",
+      "deferStart",
+      "effort",
+      "fallbackModel",
+      "model",
+      "repo",
+      "role",
+      "safeMode",
+      "skipLegacy",
+      "subject",
+      "title"
+    ]
+  },
+  "terminalFrames": [
+    {
+      "type": "input",
+      "fields": [
+        "data",
+        "type"
+      ]
+    },
+    {
+      "type": "resize",
+      "fields": [
+        "cols",
+        "rows",
+        "type"
+      ]
+    }
+  ]
+}
