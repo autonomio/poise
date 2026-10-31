@@ -4158,7 +4158,10 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
 
 /* Pulsing-dots indicator while a reply is in flight — Confab's
    thinking pattern, scaled to our scale and tinted to text-tertiary
-   so it reads as ambient activity rather than a status alarm. */
+   so it reads as ambient activity rather than a status alarm. The
+   pulse runs only while the agent is actively working (is-live);
+   waiting on the person or a slot holds the dots still. Opacity and
+   scale only, so it stays on the compositor. */
 .chat-thinking {
   display: inline-flex;
   gap: 4px;
@@ -4170,6 +4173,9 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
   height: 5px;
   background: var(--text-tertiary);
   border-radius: 50%;
+  animation: chat-pulse 1.4s ease-in-out infinite;
+}
+.chat-thinking:not(.is-live) span {
   animation: none;
 }
 .chat-thinking span:nth-child(2) { animation-delay: 0.2s; }

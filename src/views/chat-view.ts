@@ -2792,7 +2792,7 @@ function render(): void {
   const wasAtBottom = distance <= STICK_TO_BOTTOM_PX
   if (e) {
     const subject = e.record.subject
-    transcript.render(e.model, { showActivity, showReasoning, showTools, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
+    transcript.render(e.model, { showActivity, showReasoning, showTools, agent: e.record.agent, running: isRunning(e.record.status) || !!e.model.running, working: e.record.status !== 'waiting' && e.record.status !== 'queued', interruptedTurnId: e.record.interruptedTurnId, sessionId: e.record.id,
       chats: [...sessions.values()].map((entry) => ({ id: entry.record.id, title: entry.record.title, role: entry.record.role })),
       ...(subject && subject.surface !== 'current' ? { edits: { surface: subject.surface, readOnly: true } } : {}) })
   } else {
