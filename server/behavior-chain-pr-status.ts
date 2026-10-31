@@ -1,4 +1,4 @@
-import { CHAIN_OBSERVATION_MAX_AGE_MS, chainReviewResponse, type ChainObservation } from './behavior-chain-decision'
+import { CHAIN_OBSERVATION_MAX_AGE_MS, chainReviewResponse, lastChainQueueInvocation, type ChainObservation } from './behavior-chain-decision'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from './behavior-chain-store'
 import { matchingNativeActionReceipt, type NativeActionReceipt } from './behavior-chain-action'
 import type { PrBlockerId, PrStatusRow, PrStatusVerdict } from './behavior-pr-status'
@@ -47,8 +47,9 @@ export function projectChainPrStatus(chain: BehaviorChain, pr: DatastorePr, org:
   const newerQueue = !!originalQueue && !!observation && responseAt > observation.checkedAt && responseAt <= now
     && now - responseAt <= CHAIN_OBSERVATION_MAX_AGE_MS
   const entry = fresh && pull?.queueEntry ? pull.queueEntry : newerQueue ? String(queueProof!.result.queue_entry_id) : null
-  const ejected = fresh && !entry && !!pull?.queueRemoval
-    && (!originalQueue || pull.queueRemoval.at >= originalQueue.admittedAt)
+  const participation = lastChainQueueInvocation(chain)
+  const ejected = fresh && !entry && !!pull?.queueRemoval && participation?.evidence?.head_sha === pull.head
+    && pull.queueRemoval.at >= participation.admittedAt
   const queue: PrStatusRow['queue'] = { state: entry ? 'queued' : ejected ? 'ejected' : fresh ? 'not_queued' : 'unknown',
     entryId: entry, since: entry ? new Date(newerQueue ? responseAt : observation!.checkedAt).toISOString()
       : ejected ? new Date(pull!.queueRemoval!.at).toISOString() : null }

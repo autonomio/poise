@@ -146,8 +146,16 @@ it.each(['switch', 'phase-pause', 'release', 'repository-skip'] as const)('repor
 
 it('reports the actual queue rejection and retains blocker age across repeated observations', async () => {
   const { journal, chain, obs, status } = await setup()
+  let queued = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'rejected-queue', behavior: 'merge-pr',
+    actor: chain.reviewer, model: null, slot: null, basis: 'queue', admittedAt: obs.checkedAt - 1,
+    request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', String(pr.number),
+      '--expected-head', HEAD, '--token-user', chain.reviewer] } } })
+  const proof = nativeActionReceipt(queued, queued.invocations[0], { action: 'merge_if_ready', repository: pr.repo,
+    pull_number: pr.number, head_sha: HEAD, outcome: 'enqueued', queue_entry_id: 'rejected-entry' })
+  queued = record(journal, queued, { type: 'invocation.settled', invocationId: 'rejected-queue', callId: null,
+    outcome: 'enqueued', evidence: nativeActionSettlement(proof) })
   obs.pull!.queueRemoval = { id: 'rejected-entry', reason: 'failed_checks', at: obs.checkedAt, actor: null }
-  const current = record(journal, chain, { type: 'chain.observed', observation: obs })
+  const current = record(journal, queued, { type: 'chain.observed', observation: obs })
   const first = await status.readPrStatus(50, obs.checkedAt)
   expect(first.rows[0]).toMatchObject({ queue: { state: 'ejected' }, blocker: { id: 'awaiting_author' } })
   expect(first.rows[0].blocker.line).toContain('failed_checks')
@@ -155,6 +163,25 @@ it('reports the actual queue rejection and retains blocker age across repeated o
   record(journal, current, { type: 'chain.observed', observation: obs })
   const repeated = await status.readPrStatus(50, obs.checkedAt)
   expect(repeated.rows[0].blocker.since).toBe(first.rows[0].blocker.since)
+})
+
+it.each(['never-enqueued', 'old-head', 'earlier-removal'] as const)('does not let %s queue history hide the current head CI blocker', async (kind) => {
+  const { journal, chain, obs, status } = await setup()
+  let current = chain
+  if (kind !== 'never-enqueued') {
+    current = record(journal, current, { type: 'invocation.admitted', invocation: { id: 'earlier-queue', behavior: 'merge-pr',
+      actor: chain.reviewer, model: null, slot: null, basis: 'queue', admittedAt: obs.checkedAt,
+      request: { command: 'github-interface', cwd: '/fixture', argv: [] } } })
+    // Historical queue participation remains usable without inventing an
+    // original action response for an admission that predates that receipt.
+    current = record(journal, current, { type: 'invocation.settled', invocationId: 'earlier-queue', callId: null,
+      outcome: 'enqueued', evidence: { status: 'completed', outcome: 'enqueued', head_sha: kind === 'old-head' ? 'd'.repeat(40) : HEAD } })
+  }
+  obs.pull!.queueRemoval = { id: 'old-removal', reason: 'failed_checks', at: obs.checkedAt - (kind === 'earlier-removal' ? 1 : 0), actor: null }
+  record(journal, current, { type: 'chain.observed', observation: obs })
+  const row = (await status.readPrStatus(50)).rows[0]
+  expect(row.queue.state).toBe('not_queued')
+  expect(row.blocker).toMatchObject({ id: 'ci_pending', line: 'v2 exact-head CI is running' })
 })
 
 it.each(['enqueued', 'in_queue'] as const)('distinguishes the original %s response from somebody else queueing the candidate', async (outcome) => {

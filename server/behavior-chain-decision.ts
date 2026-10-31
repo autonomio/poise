@@ -100,6 +100,16 @@ function reviewComplete(chain: BehaviorChain, behavior: 'review-issue' | 'review
   }) ? 'complete' : 'missing-artifact'
 }
 
+/** Queue participation is separate from attribution of its enqueue mutation. */
+export function lastChainQueueInvocation(chain: BehaviorChain): ChainInvocation | undefined {
+  for (let index = chain.invocations.length - 1; index >= 0; index--) {
+    const invocation = chain.invocations[index]
+    if (invocation.behavior === 'merge-pr' && (invocation.evidence?.status === 'completed'
+      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
+      && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome))) return invocation
+  }
+}
+
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
 export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number): ChainDecision {
@@ -142,12 +152,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   const dismissed = pull.reviewReceipts.find((review) => review.head === pull.head && review.state === 'DISMISSED'
     && chain.invocations.some((invocation) => invocation.behavior === 'approve-pr' && invocation.callId === review.invocation))
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
-  const lastQueue = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'merge-pr'
-    // Observing an existing entry does not attribute its enqueue mutation,
-    // but its subsequent rejection still belongs to this chain's work.
-    && (invocation.evidence?.status === 'completed'
-      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
-    && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome)))
+  const lastQueue = lastChainQueueInvocation(chain)
   let queueVerification: string | null = null
   if (lastQueue?.evidence?.head_sha === pull.head) {
     const removal = pull.queueRemoval
