@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { chainBasis, type BehaviorChain } from '../server/behavior-chain-store'
+import { chainBasis, type BehaviorChain, type ChainInvocation } from '../server/behavior-chain-store'
 import type { Organization } from '../server/organizations'
 
 const mocks = vi.hoisted(() => ({ runFile: vi.fn() }))
@@ -16,6 +16,37 @@ const chain: BehaviorChain = { id: 'example/repo#7', repository: 'example/repo',
   author: 'author', reviewer: 'reviewer', sequence: 1, held: null, waiting: null, resumedAfterSequence: 0,
   mergeSha: null, observation: null, invocations: [] }
 const reviewer = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
+
+function actionOperations() {
+  return nativeChainOperations({ login: 'example' } as Organization, {
+    roster: async () => ({ issueReviewers: [], prReviewers: [], implementer: reviewer, repairer: reviewer, approver: reviewer }),
+    resolve: async () => reviewer, prepare: async () => ({}), borrow: () => () => {}, available: () => true,
+    capacity: () => 3, permitted: () => true, note: () => '', severity: () => 'p2', received: () => {},
+    reviews: async () => 'reviews', existing: async () => new Set(), wake: () => {},
+  })
+}
+
+function mergeInvocation(): ChainInvocation {
+  return { id: 'original-merge', behavior: 'merge-pr', basis: 'merge', actor: 'reviewer', model: null, slot: null,
+    reservation: null, admittedAt: Date.now() - 1000, admissionSequence: 2, state: 'started', callId: null, outcome: null, evidence: null,
+    request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', '21', '--expected-head', HEAD, '--token-user', 'reviewer'] } }
+}
+
+it('retains a returned native mutation response when its process subsequently fails', async () => {
+  const response = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21,
+    head_sha: HEAD, outcome: 'enqueued', queue_entry_id: 'accepted-queue-entry' }
+  mocks.runFile.mockRejectedValueOnce(Object.assign(new Error('process exited after response'), {
+    code: 1, signal: null, stdout: JSON.stringify(response),
+  }))
+  await expect(actionOperations().perform(mergeInvocation())).resolves.toEqual({ ...response,
+    nativeProcessFailure: { code: 1, signal: null } })
+})
+
+it.each(['', 'partial JSON {', '[]'])('preserves the original process failure when stdout is not a valid response: %s', async (stdout) => {
+  const failure = Object.assign(new Error('native timeout after a possible write'), { code: 'ETIMEDOUT', signal: 'SIGTERM', stdout })
+  mocks.runFile.mockRejectedValueOnce(failure)
+  await expect(actionOperations().perform(mergeInvocation())).rejects.toBe(failure)
+})
 
 it('preserves actual review identities, responses and times after an external merge', async () => {
   const completedAt = Date.now() - 5000

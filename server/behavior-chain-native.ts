@@ -9,6 +9,7 @@ import { chainReviewResponse, type ChainDecision, type ChainObservation, type Ch
 import type { ChainRuntimeOperations, ChainSeed } from './behavior-chain-runtime'
 import { organizationArgs, organizationForRepository, type Organization } from './organizations'
 import { getBehaviorChainSettings, getSettings } from './settings'
+import { attributedNativeAction } from './behavior-chain-action'
 import { runFile, spawnDetached } from './process'
 
 type Roster = Pick<ChainObservation, 'issueReviewers' | 'prReviewers' | 'implementer' | 'repairer' | 'approver'>
@@ -347,8 +348,21 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       } catch (error) { release(); throw error }
     },
     async perform(invocation) {
-      const { stdout } = await runFile('github-interface', invocation.request.argv, { cwd: invocation.request.cwd, timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
+      let stdout: string
+      try {
+        ({ stdout } = await runFile('github-interface', invocation.request.argv, { cwd: invocation.request.cwd, timeoutMs: 30_000, maxOutputBytes: 256 * 1024 }))
+      } catch (error) {
+        const failure = error as { stdout?: unknown, code?: unknown, signal?: unknown }
+        if (!attributedNativeAction(invocation) || typeof failure.stdout !== 'string' || !failure.stdout.trim()) throw error
+        let evidence: Record<string, unknown>
+        try { evidence = object(JSON.parse(failure.stdout), 'native action response after process failure') }
+        catch { throw error }
+        // The runtime validates the response against the original admission
+        // before retaining it. A process failure cannot erase accepted work.
+        return { ...evidence, nativeProcessFailure: { code: failure.code ?? null, signal: failure.signal ?? null } }
+      }
       const evidence = object(JSON.parse(stdout), 'native behavior action')
+      if (attributedNativeAction(invocation)) return evidence
       if (evidence.outcome === 'read_failed') return { ...evidence, status: 'failed', action: 'not_started', completedAt: Date.now() }
       const deferred = ['not_ready', 'superseded'].includes(String(evidence.outcome))
         || (invocation.behavior === 'resolve-threads' && evidence.ready_except_conversations !== true)

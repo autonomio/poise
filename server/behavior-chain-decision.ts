@@ -143,7 +143,11 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
     && chain.invocations.some((invocation) => invocation.behavior === 'approve-pr' && invocation.callId === review.invocation))
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
   const lastQueue = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'merge-pr'
-    && invocation.evidence?.status === 'completed' && ['enqueued', 'in_queue'].includes(String(invocation.evidence.outcome)))
+    // Observing an existing entry does not attribute its enqueue mutation,
+    // but its subsequent rejection still belongs to this chain's work.
+    && (invocation.evidence?.status === 'completed'
+      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
+    && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome)))
   let queueVerification: string | null = null
   if (lastQueue?.evidence?.head_sha === pull.head) {
     const removal = pull.queueRemoval
