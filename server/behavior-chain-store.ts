@@ -62,6 +62,25 @@ interface StoredEvent { sequence: number, chain_id: string, event_id: string, at
 const SHA = /^[0-9a-f]{40}$/i
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
+// The reducer admits at most one unsettled invocation, always the last one.
+// These expressions index derived observation scheduling, never ownership or
+// admission authority. API/status readers use the same expression below.
+const LIVE_MODEL_SQL = `json_extract(state, '$.invocations[#-1].state') != 'settled'
+  AND json_type(state, '$.invocations[#-1].model') != 'null'
+  AND json_extract(state, '$.invocations[#-1].evidence.resources_settled_at') IS NULL`
+const ACTIVE_WORK_SQL = `CASE WHEN (json_extract(state, '$.mergeSha') IS NULL AND json_extract(state, '$.held') IS NULL)
+  OR (${LIVE_MODEL_SQL}) THEN 1 ELSE 0 END`
+const RECHECK_AT_SQL = `CASE
+  WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND json_extract(state, '$.reviewPending') IS NOT 1 THEN NULL
+  WHEN (${ACTIVE_WORK_SQL}) = 1 THEN 0
+  WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND json_extract(state, '$.invocations[#-1].state') != 'settled'
+    AND json_extract(state, '$.invocations[#-1].request.command') = 'github-interface'
+    AND json_extract(state, '$.invocations[#-1].behavior') IN ('merge-pr', 'resolve-threads') THEN
+      CASE WHEN json_type(state, '$.invocations[#-1].evidence.nativeActionReceipt') IS NULL THEN NULL ELSE 0 END
+  WHEN json_extract(state, '$.observation.checkedAt') IS NULL THEN 0
+  ELSE json_extract(state, '$.observation.checkedAt') + min(86400000, max(120000,
+    json_extract(state, '$.observation.checkedAt') - coalesce(json_extract(state, '$.observation.pull.mergedAt'),
+      json_extract(state, '$.invocations[0].admittedAt'), 0))) END`
 
 export function chainIdentity(repository: string, issue: number): string {
   if (!REPOSITORY.test(repository) || !Number.isSafeInteger(issue) || issue < 1) throw new Error('invalid behavior chain target')
@@ -151,6 +170,8 @@ export class BehaviorChainJournal {
         lower(json_extract(state, '$.repository')), json_extract(state, '$.observation.publication.pull_number'));
       CREATE INDEX IF NOT EXISTS behavior_chain_branch ON behavior_chain_current(
         lower(json_extract(state, '$.repository')), merged, json_extract(state, '$.branch'));
+      CREATE INDEX IF NOT EXISTS behavior_chain_reconciliation ON behavior_chain_current(
+        merged, (${ACTIVE_WORK_SQL}), (${RECHECK_AT_SQL}), chain_id);
     `)
   }
 
@@ -236,6 +257,23 @@ export class BehaviorChainJournal {
 
   active(after = '', limit = 100): BehaviorChain[] {
     return this.page(after, limit, false)
+  }
+
+  /** Ownership pages stay unchanged. Quiescent history cannot consume the
+   * normal-work page, including when its scheduled recheck becomes due. */
+  reconcilable(after: string, now: number, deferred: boolean, limit = 100): BehaviorChain[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(now) || now < 0) throw new Error('invalid behavior reconciliation page')
+    const rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current WHERE merged = 0
+      AND (${ACTIVE_WORK_SQL}) = ? AND (${RECHECK_AT_SQL}) <= ? AND chain_id > ? ORDER BY chain_id LIMIT ?`)
+      .all(deferred ? 0 : 1, now, after, limit) as Array<{ chain_id: string }>
+    return rows.map((row) => this.read(row.chain_id)!)
+  }
+
+  reconciliationAt(chain: BehaviorChain): number | null {
+    const row = this.db.prepare(`SELECT (${RECHECK_AT_SQL}) AS at FROM behavior_chain_current WHERE chain_id = ? AND sequence = ?`)
+      .get(chain.id, chain.sequence) as { at: number | null } | undefined
+    if (!row) throw new Error('behavior chain changed while reading its reconciliation schedule')
+    return row.at
   }
 
   /** Original recorded context/panel, never today's settings or a later

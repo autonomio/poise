@@ -47,6 +47,7 @@ function receipt(call: LogEntry): Record<string, unknown> {
 export class BehaviorChainRuntime {
   private running = false
   private cursor = ''
+  private reconciliationCursor = ''
 
   constructor(readonly journal: BehaviorChainJournal, private readonly operations: ChainRuntimeOperations) {}
 
@@ -118,102 +119,122 @@ export class BehaviorChainRuntime {
         console.error('[behavior-chain] intake failed; admitted chains continue', intakeError)
       }
       const began = Date.now()
-      let page = this.journal.active(this.cursor)
-      if (!page.length && this.cursor) { this.cursor = ''; page = this.journal.active() }
-      if (!page.length) { this.cursor = ''; if (intakeError) throw intakeError; return }
-      const pending = page.flatMap((chain) => chain.invocations.filter((invocation) => invocation.state !== 'settled' && invocation.model !== null))
-      const snapshot = pending.length ? await this.operations.readInvocations(pending.map((invocation) => invocation.id)) : { entries: [], quarantined: [] }
-      for (let chain of page) {
+      let observationError: Error | null = null
+      for (const deferred of [false, true]) {
         if (Date.now() - began > 45_000) break
-        this.cursor = chain.id
-        if (!this.operations.ownsRepository(chain.repository)) continue
-        chain = await this.reconcile(chain, snapshot)
-        const owned = chain.invocations.find((invocation) => invocation.state !== 'settled' && invocation.model !== null)
-        const call = owned ? snapshot.entries.find((entry) => entry.correlation_id === owned.id) : null
-        if (owned && call && (call.status === 'running' || !call.resources_settled_at || !Number.isFinite(Date.parse(call.resources_settled_at)))) {
-          // The authoritative admission already owns this invocation. Only
-          // its native settlement can advance it; rereading GitHub while it
-          // runs adds no decision evidence and burns shared API quota.
-          continue
+        const cursorKey = deferred ? 'reconciliationCursor' : 'cursor'
+        let page = this.journal.reconcilable(this[cursorKey], Date.now(), deferred)
+        if (!page.length && this[cursorKey]) {
+          this[cursorKey] = ''
+          page = this.journal.reconcilable('', Date.now(), deferred)
         }
-        const observation = await this.operations.observe(chain)
-        chain = this.append(chain, { type: 'chain.observed', observation })
-        if (observation.pull?.merged && observation.pull.mergeSha && !chain.mergeSha) {
-          chain = this.append(chain, { type: 'chain.merged', mergeSha: observation.pull.mergeSha, evidence: { repository: chain.repository,
-            pull_number: observation.pull.number, merged: true, merge_sha: observation.pull.mergeSha, review_complete: false } })
-        }
-        const pendingInvocation = chain.invocations.find((invocation) => invocation.state !== 'settled')
-        if (pendingInvocation) {
-          await this.recover(chain, pendingInvocation, observation, snapshot)
-          continue
-        }
-        const mergeBasis = observation.pull?.merged
-          ? this.journal.preMergeObservation(chain.id, observation.pull.mergedAt ?? Number.NaN) as ChainObservation | null : null
-        const decision = decideBehaviorChain(chain, observation, Date.now(), mergeBasis)
-        if (decision.kind === 'complete') {
-          this.append(chain, { type: 'chain.merged', mergeSha: decision.mergeSha, evidence: { repository: chain.repository,
-            pull_number: observation.pull!.number, merged: true, merge_sha: decision.mergeSha, review_complete: true } })
-        } else if (decision.kind === 'hold') this.append(chain, { type: 'chain.held', reason: decision.reason })
-        else if (decision.kind === 'invoke' && this.operations.enabled() && (!decision.reviewer || this.operations.available()) && this.operations.permitted(chain, decision)) {
-          if (decision.reviewer && !this.journal.modelCapacityAvailable(this.operations.capacity())) {
-            const reason = 'shared native invocation capacity is occupied'
-            if (chain.waiting !== reason) this.append(chain, { type: 'chain.waiting', reason })
+        if (!page.length) { this[cursorKey] = ''; continue }
+        const pending = page.flatMap((chain) => chain.invocations.filter((invocation) => invocation.state !== 'settled' && invocation.model !== null))
+        const snapshot = pending.length ? await this.operations.readInvocations(pending.map((invocation) => invocation.id)) : { entries: [], quarantined: [] }
+        for (let chain of page) {
+          if (Date.now() - began > 45_000) break
+          this[cursorKey] = chain.id
+          if (!this.operations.ownsRepository(chain.repository)) continue
+          chain = await this.reconcile(chain, snapshot)
+          const direct = chain.invocations.find((invocation) => invocation.state !== 'settled' && attributedNativeAction(invocation))
+          if (chain.mergeSha && direct && this.recoverNativeAction(chain, direct)) continue
+          const owned = chain.invocations.find((invocation) => invocation.state !== 'settled' && invocation.model !== null)
+          const call = owned ? snapshot.entries.find((entry) => entry.correlation_id === owned.id) : null
+          if (owned && call && (call.status === 'running' || !call.resources_settled_at || !Number.isFinite(Date.parse(call.resources_settled_at)))) {
+            // The authoritative admission already owns this invocation. Only
+            // its native settlement can advance it; rereading GitHub while it
+            // runs adds no decision evidence and burns shared API quota.
             continue
           }
-          // Resource-aware admission precedes provider preparation like the
-          // count check, so blocked work holds no native agent session and
-          // consumes no provider probe. Unset budgets skip every probe.
-          const resources = decision.reviewer ? readBehaviorResourceAdmission() : null
-          if (resources) {
-            const exhausted = this.resourceWaitReason(resources)
-            if (exhausted) {
-              if (chain.waiting !== exhausted) this.append(chain, { type: 'chain.waiting', reason: exhausted })
-              continue
-            }
-            try {
-              const cramped = headroomShortfall((this.operations.measureHeadroom ?? measureBehaviorHeadroom)(), resources.reservation)
-              if (cramped) {
-                if (chain.waiting !== cramped) this.append(chain, { type: 'chain.waiting', reason: cramped })
-                continue
-              }
-            } catch (error) {
-              const reason = error instanceof Error ? error.message : String(error)
+          let observation: ChainObservation
+          try { observation = await this.operations.observe(chain) }
+          catch (error) {
+            observationError ??= new Error(`behavior observation failed for ${chain.id}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+            continue
+          }
+          chain = this.append(chain, { type: 'chain.observed', observation })
+          if (observation.pull?.merged && observation.pull.mergeSha && !chain.mergeSha) {
+            chain = this.append(chain, { type: 'chain.merged', mergeSha: observation.pull.mergeSha, evidence: { repository: chain.repository,
+              pull_number: observation.pull.number, merged: true, merge_sha: observation.pull.mergeSha, review_complete: false } })
+          }
+          const pendingInvocation = chain.invocations.find((invocation) => invocation.state !== 'settled')
+          if (pendingInvocation) {
+            await this.recover(chain, pendingInvocation, observation, snapshot)
+            continue
+          }
+          const mergeBasis = observation.pull?.merged
+            ? this.journal.preMergeObservation(chain.id, observation.pull.mergedAt ?? Number.NaN) as ChainObservation | null : null
+          const decision = decideBehaviorChain(chain, observation, Date.now(), mergeBasis)
+          if (decision.kind === 'complete') {
+            this.append(chain, { type: 'chain.merged', mergeSha: decision.mergeSha, evidence: { repository: chain.repository,
+              pull_number: observation.pull!.number, merged: true, merge_sha: decision.mergeSha, review_complete: true } })
+          } else if (decision.kind === 'hold') {
+            if (!chain.held) this.append(chain, { type: 'chain.held', reason: decision.reason })
+          } else if (decision.kind === 'invoke' && this.operations.enabled() && (!decision.reviewer || this.operations.available()) && this.operations.permitted(chain, decision)) {
+            if (decision.reviewer && !this.journal.modelCapacityAvailable(this.operations.capacity())) {
+              const reason = 'shared native invocation capacity is occupied'
               if (chain.waiting !== reason) this.append(chain, { type: 'chain.waiting', reason })
               continue
             }
+            // Resource-aware admission precedes provider preparation like the
+            // count check, so blocked work holds no native agent session and
+            // consumes no provider probe. Unset budgets skip every probe.
+            const resources = decision.reviewer ? readBehaviorResourceAdmission() : null
+            if (resources) {
+              const exhausted = this.resourceWaitReason(resources)
+              if (exhausted) {
+                if (chain.waiting !== exhausted) this.append(chain, { type: 'chain.waiting', reason: exhausted })
+                continue
+              }
+              try {
+                const cramped = headroomShortfall((this.operations.measureHeadroom ?? measureBehaviorHeadroom)(), resources.reservation)
+                if (cramped) {
+                  if (chain.waiting !== cramped) this.append(chain, { type: 'chain.waiting', reason: cramped })
+                  continue
+                }
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error)
+                if (chain.waiting !== reason) this.append(chain, { type: 'chain.waiting', reason })
+                continue
+              }
+            }
+            const accounts = this.operations.accounts()
+            if (accounts.author.toLowerCase() !== chain.author.toLowerCase() || accounts.reviewer.toLowerCase() !== chain.reviewer.toLowerCase()) {
+              this.append(chain, { type: 'chain.held', reason: 'configured accounts changed; existing chain ownership needs a decision' })
+              continue
+            }
+            const id = randomUUID()
+            const request = await this.operations.request(chain, observation, decision, id)
+            if (!request) {
+              this.append(chain, { type: 'chain.waiting', reason: `${decision.behavior} is waiting for native provider backoff` })
+              continue
+            }
+            // Preparation can await provider/auth/configuration. Recheck admission
+            // at the last boundary, before committing authority for an effect.
+            if (!this.operations.enabled() || !this.operations.permitted(chain, decision)) continue
+            const admitted = this.journal.admitInvocation(chain, randomUUID(), { id, behavior: decision.behavior, basis: decision.basis,
+              actor: decision.actor, model: request.command === 'agent-interface' ? request.argv[request.argv.indexOf('--model') + 1] : null, slot: decision.reviewer?.slot ?? null,
+              ...(resources ? { reservation: resources.reservation } : {}),
+              admittedAt: Date.now(), request }, this.operations.capacity(), resources?.budget ?? null)
+            if (!admitted) {
+              const reason = !this.journal.modelCapacityAvailable(this.operations.capacity()) ? 'shared native invocation capacity is occupied'
+                : resources ? this.resourceWaitReason(resources) ?? 'shared native invocation capacity is occupied'
+                : 'shared native invocation capacity is occupied'
+              this.append(chain, { type: 'chain.waiting', reason })
+              continue
+            }
+            chain = admitted
+            await this.start(chain, chain.invocations.at(-1)!)
+          } else {
+            const reason = decision.kind === 'wait' ? decision.reason : !this.operations.enabled() ? 'behavior chain admissions are paused'
+              : !this.operations.available() ? 'waiting for the shared native behavior capacity' : `${decision.behavior} is disabled or held by its behavior controls`
+            if (reason !== chain.waiting) this.append(chain, { type: 'chain.waiting', reason })
           }
-          const accounts = this.operations.accounts()
-          if (accounts.author.toLowerCase() !== chain.author.toLowerCase() || accounts.reviewer.toLowerCase() !== chain.reviewer.toLowerCase()) {
-            this.append(chain, { type: 'chain.held', reason: 'configured accounts changed; existing chain ownership needs a decision' })
-            continue
-          }
-          const id = randomUUID()
-          const request = await this.operations.request(chain, observation, decision, id)
-          if (!request) {
-            this.append(chain, { type: 'chain.waiting', reason: `${decision.behavior} is waiting for native provider backoff` })
-            continue
-          }
-          // Preparation can await provider/auth/configuration. Recheck admission
-          // at the last boundary, before committing authority for an effect.
-          if (!this.operations.enabled() || !this.operations.permitted(chain, decision)) continue
-          const admitted = this.journal.admitInvocation(chain, randomUUID(), { id, behavior: decision.behavior, basis: decision.basis,
-            actor: decision.actor, model: request.command === 'agent-interface' ? request.argv[request.argv.indexOf('--model') + 1] : null, slot: decision.reviewer?.slot ?? null,
-            ...(resources ? { reservation: resources.reservation } : {}),
-            admittedAt: Date.now(), request }, this.operations.capacity(), resources?.budget ?? null)
-          if (!admitted) {
-            const reason = !this.journal.modelCapacityAvailable(this.operations.capacity()) ? 'shared native invocation capacity is occupied'
-              : resources ? this.resourceWaitReason(resources) ?? 'shared native invocation capacity is occupied'
-              : 'shared native invocation capacity is occupied'
-            this.append(chain, { type: 'chain.waiting', reason })
-            continue
-          }
-          chain = admitted
-          await this.start(chain, chain.invocations.at(-1)!)
-        } else {
-          const reason = decision.kind === 'wait' ? decision.reason : !this.operations.enabled() ? 'behavior chain admissions are paused'
-            : !this.operations.available() ? 'waiting for the shared native behavior capacity' : `${decision.behavior} is disabled or held by its behavior controls`
-          if (reason !== chain.waiting) this.append(chain, { type: 'chain.waiting', reason })
         }
+      }
+      if (observationError) {
+        if (intakeError) throw new AggregateError([intakeError, observationError], `${intakeError.message}; ${observationError.message}`)
+        throw observationError
       }
       if (intakeError) throw intakeError
     } finally {
@@ -289,6 +310,18 @@ export class BehaviorChainRuntime {
     }
   }
 
+  private recoverNativeAction(chain: BehaviorChain, invocation: ChainInvocation): boolean {
+    if (!attributedNativeAction(invocation)) return false
+    const proof = matchingNativeActionReceipt(chain, invocation)
+    if (proof) {
+      const evidence = nativeActionSettlement(proof)
+      this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
+        outcome: String(evidence.outcome), evidence })
+      this.operations.wake()
+    }
+    return true
+  }
+
   private async recover(chain: BehaviorChain, invocation: ChainInvocation, observation: ChainObservation, snapshot: AgentLogSnapshot): Promise<void> {
     const nativeId = invocation.evidence?.callId
     const publishedReview = observation.reviewPublication
@@ -344,16 +377,7 @@ export class BehaviorChainRuntime {
       return
     }
     if (invocation.request.command === 'github-interface') {
-      if (attributedNativeAction(invocation)) {
-        const proof = matchingNativeActionReceipt(chain, invocation)
-        if (proof) {
-          const evidence = nativeActionSettlement(proof)
-          this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
-            outcome: String(evidence.outcome), evidence })
-          this.operations.wake()
-        }
-        return
-      }
+      if (this.recoverNativeAction(chain, invocation)) return
       let evidence: Record<string, unknown> | null = null
       if (invocation.behavior === 'rerun-grey-ci' && observation.greyRecovery?.invocationId === invocation.id
         && ['rerun_observed', 'superseded'].includes(String(observation.greyRecovery.receipt.outcome))) {
