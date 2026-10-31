@@ -1094,6 +1094,32 @@ test('creates a session from the dialog with a pending entry before the server a
   await expect(input(page)).toBeEnabled()
 })
 
+test('deleting a pending creation removes the session that arrives late', async ({ page }) => {
+  const state = makeState([], {})
+  let release: () => void = () => {}
+  state.createDelay = () => new Promise<void>((r) => { release = r })
+  await installRoutes(page, state)
+  await installSocket(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New session' }).click()
+  const dialog = page.getByRole('dialog', { name: 'New session' })
+  await dialog.getByRole('button', { name: 'Create' }).click()
+  // Delete the placeholder while the POST is held.
+  const row = page.locator('.chat-session-item.pending')
+  await expect(row).toHaveCount(1)
+  await row.hover()
+  await row.locator('.chat-session-delete').click()
+  await expect(row.locator('.chat-session-delete')).toHaveText('Sure?')
+  await row.locator('.chat-session-delete').click()
+  await expect(page.locator('.chat-session-item')).toHaveCount(0)
+  release()
+  // The late arrival is deleted server-side and never surfaces; the dialog
+  // stays closed because the deletion was the person's own doing.
+  await expect.poll(() => state.calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual(['/api/chat/sessions/new-1'])
+  await expect(page.locator('.chat-session-item')).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0)
+})
+
 test('offers an explicit fallback choice when the default provider is not signed in, and shows create errors', async ({ page }) => {
   const state = makeState([], {})
   state.agents = { ...AGENTS, defaults: { ...AGENTS.defaults, fallbackReason: 'Claude is not signed in' } }
