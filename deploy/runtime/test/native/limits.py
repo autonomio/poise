@@ -143,8 +143,8 @@ try:
                             disk += node.st_blocks * 512
                 observations.append({'at': time.monotonic(), 'rssBytes': rss, 'openAllocatedBytes': disk})
                 observed_overrun |= rss > 256 * MiB if mode == 'memory' else disk > 8 * MiB
-            except (FileNotFoundError, ProcessLookupError, StopIteration):
-                pass  # Retained samples, not absence, establish the overrun.
+            except (FileNotFoundError, ProcessLookupError, StopIteration, PermissionError) as error:
+                observations.append({'at': time.monotonic(), 'coverage': 'unavailable', 'error': str(error)[:300]})
         heartbeat = Path(other['root']) / 'heartbeat'
         assert neighbor.poll() is None and heartbeat.exists()
         assert time.monotonic() - float(heartbeat.read_text()) < 2
@@ -154,6 +154,7 @@ try:
                               'initialRssBytes': initial_memory, 'samples': observations, 'neighborAlive': True}), flush=True)
             break
         if not baseline and row['resources_settled_at']:
+            assert initial_memory is not None and initial_memory < 256 * MiB
             assert ownership['namespace']['state'] == 'settled'
             guard = json.loads(row['resource_guard'])
             failure = guard['failure']
@@ -161,11 +162,17 @@ try:
             assert row['error_code'] == expected, row
             assert failure['signalMonotonic'] - failure['observedMonotonic'] <= 2, failure
             assert time.monotonic() - failure['observedMonotonic'] <= 10, failure
+            if mode == 'memory':
+                assert guard['peakMemoryBytes'] <= 256 * MiB + 192 * MiB, guard
+                assert max(sample.get('rssBytes', 0) for sample in observations) <= 256 * MiB + 192 * MiB
+            elif mode != 'unavailable':
+                assert guard['peakDiskBytes'] <= 8 * MiB + 8 * MiB, guard
+                assert max(sample.get('openAllocatedBytes', 0) for sample in observations) <= 8 * MiB + 8 * MiB
             assert not root.exists(), root
             assert row['action'] is None and row['outcome'] is None
             print(json.dumps({'kind': 'actual-live-resource-stop', 'mode': mode, 'call': call,
                               'initialRssBytes': initial_memory, 'samples': observations, 'receipt': api.logs_selected({'latest': [], 'ids': [call], 'correlations': []}),
-                              'neighborAlive': True, 'emptyObservedMonotonic': time.monotonic()}), flush=True)
+                              'headroom': headroom, 'neighborAlive': True, 'emptyObservedMonotonic': time.monotonic()}), flush=True)
             break
         if not baseline and worker.poll() is not None and not row['resources_settled_at']:
             raise AssertionError({'row': row, 'stdout': worker.stdout.read(), 'stderr': worker.stderr.read()})
