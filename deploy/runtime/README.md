@@ -61,6 +61,21 @@ running `entrypoint.sh`. That script
 
 The health check is `GET /api/service/health` over loopback.
 
+The supervisor also retains native cleanup witnesses across Poise release
+switches. The private controller and supported-runtime gate are defined in
+[Service architecture](../../docs/Service-architecture.md#workspace-behavior-observation).
+Unsupported hosts retain v1; the image does not enable v2 or configure a host
+runtime automatically.
+
+`deploy/runtime/test/native-cleanup.sh IMAGE runsc` checks the actual service
+entrypoint/gate and kernel teardown, sanitizer semantics and native Caller
+resource serialization under the shipped uid/capability/security settings.
+`... IMAGE runc` separately checks refusal under Docker's default profile.
+The Runtime image workflow installs a pinned runsc only on its disposable CI
+runner. Tests use isolated tmpfs state, no network, no provider identities or
+GitHub actions. They are component proof; the frozen real-provider campaign
+remains separate.
+
 ## Provider CLIs
 
 `install-clis.sh` installs each CLI missing from `~/.local/bin` with its

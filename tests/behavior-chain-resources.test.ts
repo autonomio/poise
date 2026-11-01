@@ -53,6 +53,7 @@ function operations(overrides: Partial<ChainRuntimeOperations> = {}): ChainRunti
     measureHeadroom: () => ({ freeMemoryBytes: 100, freeDiskBytes: 100, diskPath: '/fixture' }),
     request: async () => ({ command: 'agent-interface', argv: ['--model', 'fixture-model'], cwd: '/fixture' }),
     launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') },
+    readActionResult: async () => { throw new Error('unexpected native response read') },
     fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') },
     wake: () => {}, ...overrides }
 }

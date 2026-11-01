@@ -100,7 +100,13 @@ class ResourceOwnershipCase(TestCase):
     def run_finalizer(self, execute, correlation="resource-contract"):
         argv = ["agent-interface", "--issue-review", "acme/app#7", "--source", "poise:behavior-chain",
                 "--correlation-id", correlation]
-        with patch.object(sys, "argv", argv), patch.object(api, "_main", side_effect=execute):
+        def legacy_receipt():
+            # These retain the version-1 historical/library receipt contract.
+            # Physical namespace delivery has separate native Call tests.
+            with patch.object(api, "_native_cli", False):
+                execute()
+
+        with patch.object(sys, "argv", argv), patch.object(api, "_main", side_effect=legacy_receipt):
             api.main()
 
     def test_normal_deletion_failure_and_all_four_log_reads_keep_original_publication_and_ownership(self):

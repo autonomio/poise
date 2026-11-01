@@ -1,0 +1,170 @@
+"""Real SQLite receipt transitions; not provider/workflow acceptance."""
+import json
+import sqlite3
+import sys
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+import agent_interface as api
+from agent_interface import native_namespace, resource_ownership as ownership
+
+
+@pytest.fixture
+def database(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "DB", tmp_path / "calls.sqlite3")
+    monkeypatch.setattr(api, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api, "RESPONSES", tmp_path / "responses")
+    monkeypatch.setattr(api, "_native_cli", False)
+    api.init_db()
+    return tmp_path
+
+
+def claim(correlation="original-native"):
+    return api.track("fixture", "original prompt", pr_id="7", repo="example/repo", actor="reviewer",
+                     behavior="issue_review", source="poise:behavior-chain", correlation_id=correlation)
+
+
+def state(call):
+    with api.db() as conn:
+        return ownership.read(conn, call)
+
+
+def requested():
+    call = claim()
+    with api.db() as conn:
+        conn.execute("update calls set resource_ownership=? where id=?", (ownership.initial(call, "original-native"), call))
+    scope = SimpleNamespace(key={"callId": call, "correlation": "original-native", "token": "b" * 32},
+        address={"version": 1, "instance": "c" * 32, "path": "/tmp/poise-native-test-only/control.sock"},
+        binding={"pid": 104, "start": "12", "namespace": "pid:[91]", "owner": {"pid": 102, "start": "10"},
+                 "holder": {"pid": 103, "start": "11"},
+                 "epoch": {"boot": "test-epoch", "init_start": "1", "namespace_dev": "2", "namespace_ino": "3"}},
+        read=lambda: {"empty": True})
+    with api.db() as conn:
+        identity = {"version": 1, "pid": 102, "start": "10", "epoch": scope.binding["epoch"]}
+        conn.execute("update calls set pid='102',process_identity=? where id=?", (json.dumps(identity), call))
+    return call, scope
+
+
+def register(call, scope):
+    ownership.request_namespace(api.DB, call, scope)
+    ownership.register_namespace(api.DB, call, {"controller": scope.address, **scope.key, "binding": scope.binding})
+
+
+def test_physical_cli_wins_original_claim_before_contacting_controller(database, monkeypatch):
+    observed = []
+
+    def unsupported(call, correlation):
+        receipt = state(call)
+        assert receipt == {"version": 2, "roots": [], "errors": [],
+                           "namespace": {"state": "requested", "callId": call, "correlation": correlation}}
+        with api.db() as conn:
+            assert conn.execute("select namespace_control from calls where id=?", (call,)).fetchone()[0] is None
+        observed.append(call)
+        raise native_namespace.NamespaceUnavailable("unsupported test host")
+
+    monkeypatch.setattr(native_namespace, "Namespace", unsupported)
+    monkeypatch.setattr(api, "_main", claim)
+    monkeypatch.setattr(sys, "argv", ["agent-interface", "--issue-review", "example/repo#7", "--source", "poise:behavior-chain",
+                                      "--correlation-id", "original-native"])
+    with pytest.raises(native_namespace.NamespaceUnavailable, match="unsupported test host"):
+        api.main()
+    assert len(observed) == 1
+    receipt = state(observed[0])
+    assert receipt["namespace"]["state"] == "not_started"
+    assert receipt["namespace"]["no_effect"] == "original-no-go"
+    assert ownership.released(receipt)
+    with api.db() as conn:
+        row = conn.execute("select * from calls where id=?", (observed[0],)).fetchone()
+    assert row["status"] == "failed" and row["action"] == "not_started"
+    assert float(row["resources_settled_at"]) >= receipt["namespace"]["settled_at"]
+    assert not (database / "native-resources").exists()
+
+
+def test_duplicate_claim_never_allocates_or_contacts_controller(database, monkeypatch):
+    original = claim()
+    before = state(original)
+    monkeypatch.setattr(api, "_native_cli", True)
+    with patch.object(api, "_enter_native_call", side_effect=AssertionError("duplicate reached kernel boundary")) as enter:
+        with pytest.raises(sqlite3.IntegrityError):
+            claim()
+        enter.assert_not_called()
+    assert state(original) == before
+
+
+def test_private_controller_precedes_registration_and_never_enters_public_logs(database):
+    call, scope = requested()
+    with pytest.raises(RuntimeError, match="private controller"):
+        ownership.register_namespace(api.DB, call, {"controller": scope.address, **scope.key, "binding": scope.binding})
+    register(call, scope)
+    assert state(call)["namespace"]["binding"] == scope.binding
+    public = json.dumps(api.logs_selected({"latest": [], "ids": [call]}))
+    assert scope.key["token"] not in public and scope.address["path"] not in public
+    assert scope.address["instance"] in public
+    assert not ownership.released(state(call))
+
+
+def test_positive_original_settlement_preserves_first_stamp_and_all_evidence(database):
+    call, scope = requested()
+    register(call, scope)
+    ownership.failure(api.DB, call, "resources_unknown")
+    ownership.settle_namespace(api.DB, call, scope)
+    first = state(call)
+    ownership.settle_namespace(api.DB, call, scope)
+    assert state(call) == first
+    assert first["namespace"]["state"] == "settled"
+    assert first["errors"][0]["cause"] == "resources_unknown"
+    assert not ownership.released(first)
+    with api.db() as conn:
+        assert conn.execute("select resources_settled_at from calls where id=?", (call,)).fetchone()[0] is None
+
+
+def test_nonempty_or_lost_witness_cannot_settle_a_terminal_result(database):
+    call, scope = requested()
+    register(call, scope)
+    api.finish(call, "completed", outcome="commented", action="commented")
+    before = state(call)
+    scope.read = lambda: {"empty": False}
+    with pytest.raises(RuntimeError, match="still owns processes"):
+        ownership.settle_namespace(api.DB, call, scope)
+    with patch.object(scope, "read", side_effect=OSError("original witness lost")):
+        with pytest.raises(OSError, match="original witness lost"):
+            ownership.settle_namespace(api.DB, call, scope)
+    assert state(call) == before
+    assert not ownership.released(before)
+
+
+def test_foreign_binding_and_allocated_no_go_never_release(database):
+    call, scope = requested()
+    register(call, scope)
+    with patch.object(scope, "binding", {**scope.binding, "pid": 999}):
+        with pytest.raises(RuntimeError, match="original namespace"):
+            ownership.settle_namespace(api.DB, call, scope)
+    with pytest.raises(RuntimeError, match="no-GO"):
+        ownership.namespace_not_started(api.DB, call)
+    assert state(call)["namespace"]["state"] == "active"
+
+
+@pytest.mark.parametrize("code,severity", [(0, "warning"), (1, "error")])
+def test_preparation_diagnostic_survives_terminal_result(database, monkeypatch, code, severity):
+    call = claim()
+    evidence = {"version": 1, "source": "caller", "severity": severity, "operation": "provider.cli_update",
+                "phase": "launcher_verification", "outcome": "unavailable", "message": "Updater unavailable",
+                "stderr": "redacted updater cause", "stderr_truncated": False}
+    monkeypatch.setattr(api, "CATALOG", SimpleNamespace(resolve=lambda model: SimpleNamespace(provider="codex")))
+    monkeypatch.setattr(sys, "argv", ["agent-interface", "--issue-review", "example/repo#7", "--model", "fixture"])
+    monkeypatch.setenv("POISE_NATIVE_NODE", "/pinned/node")
+    monkeypatch.setenv("POISE_NATIVE_PREPARE", "/pinned/prepare.mjs")
+    monkeypatch.setattr(ownership, "allocate", lambda *args: database / "preparation")
+    monkeypatch.setattr(ownership, "cleanup", lambda *args: True)
+    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=code,
+                       stdout=json.dumps({"version": 1, "env": {}, "diagnostic": evidence})))
+    if code:
+        with pytest.raises(RuntimeError, match="Updater unavailable"):
+            api._prepare_native_clis(call)
+    else:
+        api._prepare_native_clis(call)
+    api.finish(call, "failed" if code else "completed")
+    public = api.logs_selected({"latest": [], "ids": [call]})[0]
+    assert public["diagnostic"] == {**evidence, "call_id": call}

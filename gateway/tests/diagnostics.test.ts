@@ -73,6 +73,12 @@ function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
 }
 
 describe('one diagnostic contract', () => {
+  it('keeps a nonfatal Caller preparation warning at warning severity', () => {
+    const input = callerDiagnostic({ id: 'a'.repeat(32), status: 'completed', diagnostic: { version: 1,
+      severity: 'warning', operation: 'provider.cli_update', phase: 'launcher_verification', message: 'Updater unavailable; retained launcher usable' } }, 'alice')!
+    expect(normalize(input, NOW)).toMatchObject({ severity: 'warning', source: 'caller', operation: 'provider.cli_update' })
+  })
+
   it('preserves typed source and Caller identities through short-secret redaction and backfill', async () => {
     const callId = 'a1'.repeat(16); const correlationId = 'ab12cd34-ab12-cd34-ab12-cd34ab12cd34'
     const input = callerDiagnostic({ id: callId, correlation_id: correlationId, completed_at: new Date(NOW).toISOString(),

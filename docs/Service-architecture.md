@@ -369,6 +369,12 @@ its own instead of refusing with dirty_unowned.
   75, it starts the release named in `~/.poise/releases/next` and makes it
   current. A release that exits on its own within a minute of starting is
   marked failed and never run again; the image's own release takes over.
+  On Linux the same supervisor owns the private native-cleanup controller.
+  Its uid-only Unix socket and random generation are passed to Poise and
+  Caller as `POISE_NATIVE_CONTROL`; neither the address nor per-Call tokens
+  are public API fields. Its original kernel witnesses survive Poise release
+  replacement, but never a supervisor/container replacement. Controller loss
+  leaves resource settlement unknown; replacement cannot manufacture proof.
 - **Installing.** For a running workspace whose image has the new image's
   base, the gateway runs `install-release.sh` in a short-lived container of
   the new image, as uid 10001 with the workspace's home volume and no
@@ -1244,8 +1250,33 @@ Linux Stop pins a process handle before start/epoch verification and signals
 only its original supervisor. Unsupported/older/unreadable identities refuse
 signals; Chat Stop keeps its external runtime route. Epoch identity does not
 use wall-clock ordering. Neither supervisor loss nor a container replacement
-proves disk reclamation. Complete descendant containment and automatic
-post-loss reclamation remain #806 obligations, with no production changes here.
+proves disk reclamation.
+
+New physical v2 Calls require a namespace-capable Linux host. The existing
+supervisor retains the original private procfs view before the original Call
+permits execution. The whole Call runs inside that boundary: CLI preparation,
+checkout/build/test/provider children, publication and fixed direct GitHub
+actions. PID 1 reaps descendants; Caller continues as PID 2 with all capabilities
+dropped and no-new-privileges preserved. Session changes, double forks and
+nested PID namespaces do not escape the boundary. Original parent/holder loss
+terminates the namespace. Neither init exit nor a queued kill proves settlement:
+the retained original kernel view must positively become empty, including
+unreaped entries, before normal pinned disk cleanup can acknowledge release.
+The original Call, epoch, outer process identities and immutable action receipt
+remain separate requirements. Missing witnesses or conflicting evidence retain
+the reservation; the first positive settlement time is never refreshed.
+
+The existing behavior request/tick performs a bounded internal capability
+check, with at most one setup probe and no new timer. Cutover and native
+admission require its positive result; Settings exposes checking, supported,
+unsupported or unavailable. An unsupported setup stays on v1. A v2 setup that
+loses support pauses new admissions rather than reopening v1 ownership.
+Mac development and default Docker security settings remain supported for v1;
+this does not change the gateway's optional runtime setting or any production
+configuration. The runtime image tests exercise actual runsc and default-Docker
+profiles separately; stand-in providers are not real workflow acceptance.
+Automatic post-loss disk/lease reclamation, retention, post-admission budget
+enforcement and the frozen real-provider campaign remain #806 obligations.
 
 ## Google document publishing
 

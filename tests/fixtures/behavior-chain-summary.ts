@@ -53,7 +53,7 @@ export function chainSummaryFixture(state: 'unmerged' | 'pending-active' | 'pend
     const semaphore = new CheckSemaphore(() => 4)
     const processSlots = semaphore.stats()
     if (JSON.stringify(journal.history(chain.id)) !== JSON.stringify(before)) throw new Error('summary fixture changed historical authority')
-    return { chains: [summary], next: null, runtime: [], cutover: { ...cutover, blockers: [] },
+    return { chains: [summary], next: null, runtime: [], cutover: { ...cutover, blockers: [], support: { status: 'supported', error: null } },
       settings: { enabled: false, seedMode: 'label', label: 'work-ready' },
       capacity: { status: 'available', reservedModelInvocations: journal.liveModelInvocationCount(), modelInvocationLimit: semaphore.laneCapacity('behavior'),
         processLocal: { behaviorRunning: processSlots.behaviorRunning, allRunning: processSlots.running, cap: processSlots.cap },

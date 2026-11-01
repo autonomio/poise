@@ -23,12 +23,12 @@ export interface LogEntry {
   time_elapsed: string
   status: string
   progress?: ModelProgress | null
-  outcome: 'clean' | 'changes_requested' | 'approved' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | 'target_closed' | null
+  outcome: 'clean' | 'changes_requested' | 'approved' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | 'target_closed' | 'native_action' | null
   head_sha: string | null
   expected_head: string | null
   source: string | null
   correlation_id: string | null
-  action: 'reviewed_clean' | 'requested_changes' | 'approved' | 'not_started' | 'commented' | 'published' | 'no_changes' | null
+  action: 'reviewed_clean' | 'requested_changes' | 'approved' | 'not_started' | 'commented' | 'published' | 'no_changes' | 'native_action' | null
   response: string | null // upstream 8-char availability marker; read by full `id`
   error: string
   review_policy?: string | null
@@ -209,16 +209,34 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const errorCode = optionalString('error_code')
   const resourcesSettledAt = optionalString('resources_settled_at')
   const resourceOwnership = row.resource_ownership == null ? null : parseResourceOwnership(row.resource_ownership)
+  if (resourceOwnership?.version === 2 && (resourceOwnership.namespace?.callId !== row.id
+    || resourceOwnership.namespace?.correlation !== correlationId)) {
+    throw new Error(`agent-interface log row ${index} has resource ownership from another invocation`)
+  }
   const preflightFailed = status === 'failed'
     && action === 'not_started'
     && outcome === 'preflight_failed'
     && headSha === null
   const issueReview = behavior === ISSUE_REVIEW_BEHAVIOR
   const atomicWork = behavior === 'implement_issue' || behavior === 'repair_pr'
+  const nativeAction = source === 'poise:behavior-chain' && ['native_action', 'native_publication'].includes(behavior ?? '')
+  if (nativeAction && (row.model !== 'native-action' || resourceOwnership?.version !== 2)) {
+    throw new Error(`agent-interface log row ${index} lacks its native action resource boundary`)
+  }
   const artifact = row.artifact === null || row.artifact === undefined ? null : row.artifact
   const managedReview = behavior === 'pr_review' || behavior === 'pr_approve' || (source === 'poise:behavior-chain' && issueReview)
-  if (artifact !== null && ((!atomicWork && !managedReview) || typeof artifact !== 'object' || Array.isArray(artifact)
+  if (artifact !== null && ((!atomicWork && !managedReview && !nativeAction) || typeof artifact !== 'object' || Array.isArray(artifact)
     || Buffer.byteLength(JSON.stringify(artifact)) > 128 * 1024)) throw new Error(`agent-interface log row ${index} has an invalid atomic artifact`)
+  if (nativeAction && artifact !== null) {
+    const value = artifact as Record<string, unknown>
+    if (!['preparing_native_action', 'performing_native_action', 'received_native_action'].includes(String(value.phase))
+      || typeof value.request_sha !== 'string' || !/^[0-9a-f]{64}$/.test(value.request_sha)
+      || Object.keys(value).some(key => !['phase', 'request_sha', 'response_sha'].includes(key))
+      || value.response_sha !== undefined && (value.phase !== 'received_native_action'
+        || typeof value.response_sha !== 'string' || !/^[0-9a-f]{64}$/.test(value.response_sha))) {
+      throw new Error(`agent-interface log row ${index} has an invalid native action receipt`)
+    }
+  }
   if (resourceReleaseContradicted({ resources_settled_at: resourcesSettledAt, artifact, resource_ownership: resourceOwnership })) {
     throw new Error(`agent-interface log row ${index} has contradictory resource-release evidence`)
   }
@@ -240,11 +258,13 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     || !Number.isFinite(Date.parse(startedAt))
     || (startedAtPrecise !== null && !Number.isFinite(Date.parse(startedAtPrecise)))
     || (completedAt !== null && !Number.isFinite(Date.parse(completedAt)))
-    || !['clean', 'changes_requested', 'approved', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', 'target_closed', null].includes(outcome)
+    || !['clean', 'changes_requested', 'approved', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', 'target_closed', 'native_action', null].includes(outcome)
     || (outcome === 'target_closed' && !closedFence)
     || (headSha !== null && !/^[0-9a-f]{40}$/.test(headSha))
     || (expectedHead !== null && !/^[0-9a-f]{40}$/.test(expectedHead))
-    || !['reviewed_clean', 'requested_changes', 'approved', 'not_started', 'commented', 'published', 'no_changes', null].includes(action)
+    || !['reviewed_clean', 'requested_changes', 'approved', 'not_started', 'commented', 'published', 'no_changes', 'native_action', null].includes(action)
+    || (action === 'native_action' || outcome === 'native_action') && (!nativeAction || action !== 'native_action'
+      || outcome !== 'native_action' || status !== 'completed' || !(artifact as Record<string, unknown> | null)?.response_sha)
     || ((action === 'published' || action === 'no_changes' || outcome === 'published' || outcome === 'no_changes') && !atomicWork)
     || ((action === 'commented' || outcome === 'commented') && !issueReview)
     || ((action === 'not_started' || outcome === 'preflight_failed') && !preflightFailed && !closedFence)

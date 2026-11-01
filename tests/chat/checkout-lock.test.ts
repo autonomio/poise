@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { CheckoutLease, LEASE_MS, canonicalCheckout, checkoutLockPath } from '../../server/chat/checkout-lock'
 import { pgidAlive, pidAlive, processStartTime, spawnWorker, workerIdentityMatches } from '../../server/chat/worker'
@@ -36,6 +36,30 @@ function readRow(): any {
   const db = new Database(checkoutLockPath(canonicalCheckout(checkout)))
   try { return db.prepare('SELECT * FROM lease WHERE id = 1').get() } finally { db.close() }
 }
+
+it('retains native ownership across expiry, dead outer IDs and token-based legacy recovery', () => {
+  const original = lease('native-boundary')
+  expect(original.tryAcquire().acquired).toBe(true)
+  const token = original.currentToken!
+  const path = checkoutLockPath(canonicalCheckout(checkout))
+  const database = new Database(path)
+  try {
+    database.prepare('UPDATE lease SET native_call=?, host_pid=104, worker_pid=106, worker_pgid=NULL, worker_ident=?, lease_until=0')
+      .run('a'.repeat(32), `native:${'a'.repeat(32)}`)
+    const pid = vi.fn(() => false), pgid = vi.fn(() => false)
+    const next = lease('chat-neighbor', { pidAlive: pid, pgidAlive: pgid })
+    pid.mockClear(); pgid.mockClear()
+    expect(next.tryAcquire()).toMatchObject({ acquired: false, orphan: false, reason: 'native_invocation' })
+    expect(next.adoptLiveWorker({ workerPid: 106, workerPgid: 106, workerIdent: `native:${'a'.repeat(32)}`, ownerId: 'native-boundary' })).toBe(false)
+    expect(pid).not.toHaveBeenCalled(); expect(pgid).not.toHaveBeenCalled()
+    expect(CheckoutLease.releaseByToken(checkout, token)).toBe(false)
+    expect(original.release()).toBe(false)
+    expect(readRow().native_call).toBe('a'.repeat(32))
+  } finally {
+    database.prepare('DELETE FROM lease WHERE token=?').run(token)
+    database.close()
+  }
+})
 
 function python(args: string[]): Promise<{ code: number | null, stdout: string }> {
   return new Promise((resolvePromise) => {

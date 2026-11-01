@@ -1,10 +1,11 @@
-"""Per-checkout writer lease shared with Poise (poise-contract.md §1).
+"""Per-checkout writer lease shared with Poise (docs/Chat-v1.md).
 
 One SQLite file per repository checkout under ~/.poise/locks, one row, held by
 whoever mutates that checkout: a Poise Chat turn or Caller's fix-failing-ci
 worker. The acquisition token is the only re-entry key; a live holder process
 always blocks; a stale row is recovered only when nothing in its registered
-worker group lives. The native agent never runs outside a registered group.
+worker group lives. Native v2 rows instead retain their original kernel scope
+and cannot be adopted, expired or signalled by the legacy recovery path.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from threading import Event, Thread, current_thread, main_thread
 from time import monotonic, sleep, time
 from uuid import uuid4
 
+from . import native_namespace
 from .provider_progress import ProviderStream
 from .review_watch import RateLimitAbort
 
@@ -46,6 +48,7 @@ SCHEMA = """create table if not exists lease (
   instance       text    not null,
   host_pid       integer not null,
   host_start     text,
+  native_call    text,
   worker_pid     integer,
   worker_pgid    integer,
   worker_ident   text,
@@ -95,6 +98,12 @@ def connect(path: Path) -> sqlite3.Connection:
     if "host_start" not in columns:
         try:
             conn.execute("alter table lease add column host_start text")
+        except sqlite3.OperationalError as error:
+            if "duplicate column name" not in str(error).lower():
+                raise
+    if "native_call" not in columns:
+        try:
+            conn.execute("alter table lease add column native_call text")
         except sqlite3.OperationalError as error:
             if "duplicate column name" not in str(error).lower():
                 raise
@@ -182,7 +191,10 @@ def try_acquire(
 ) -> tuple[str, sqlite3.Row | None]:
     """One immediate transaction: 'acquired', 'busy' or 'orphan', with the row seen."""
     now = now_ms()
-    mine = (token, checkout, owner_kind, owner_id, owner_label, instance, os.getpid(), branch, stamp(), stamp(), now + LEASE_MS)
+    native = native_namespace.active()
+    host_pid = native.binding["owner"]["pid"] if native else os.getpid()
+    call_id = native.key["callId"] if native else None
+    mine = (token, checkout, owner_kind, owner_id, owner_label, instance, host_pid, branch, stamp(), stamp(), now + LEASE_MS)
     conn.execute("begin immediate")
     try:
         row = conn.execute("select * from lease where id = 1").fetchone()
@@ -193,11 +205,18 @@ def try_acquire(
                    values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 mine,
             )
+            if native:
+                conn.execute("update lease set native_call=?,host_start=?,worker_pid=?,worker_ident=? where id=1 and token=?",
+                             (call_id, native.binding["owner"]["start"], native.binding["pid"], f"native:{call_id}", token))
             return "acquired", None
-        if row["token"] == token:
+        if row["token"] == token and row["native_call"] == call_id:
             conn.execute("update lease set heartbeat_at = ?, lease_until = ? where id = 1 and token = ?",
                          (stamp(), now + LEASE_MS, token))
             return "acquired", row
+        # Inner namespace numeric IDs cannot inspect or signal an outer
+        # holder. A retained native hold is never recovered as a legacy group.
+        if native or row["native_call"] is not None:
+            return "native_busy", row
         if pid_alive(row["host_pid"]) or row["lease_until"] >= now:
             return "busy", row
         if pgid_alive(row["worker_pgid"]) or pid_alive(row["worker_pid"]):
@@ -260,6 +279,8 @@ class Lease:
                 holder = row["owner_label"]
                 if state == "orphan":
                     holder += f" (worker group {row['worker_pgid']} still alive after its holder died)"
+                if state == "native_busy":
+                    raise LockBusy(f"checkout {self.checkout} retains another invocation's ownership: {holder}")
                 if monotonic() >= deadline:
                     raise LockBusy(f"checkout {self.checkout} is in use by {holder}; gave up after {int(timeout)}s")
                 if abort is None:
@@ -292,6 +313,9 @@ class Lease:
             raise LeaseLost(f"checkout lease for {self.checkout} was taken over by another writer")
 
     def register_worker(self, pid: int, pgid: int, ident: str) -> None:
+        native = native_namespace.active()
+        if native:
+            pid, pgid, ident = native.binding["pid"], None, f"native:{native.key['callId']}"
         conn = connect(self.path)
         try:
             self._own(conn, "update lease set worker_pid = ?, worker_pgid = ?, worker_ident = ?, heartbeat_at = ?, lease_until = ? where id = 1 and token = ?",
@@ -341,11 +365,19 @@ class Lease:
         self.stop_heartbeat()
         if not self.held:
             return False
+        native = native_namespace.active()
+        if native:
+            try:
+                native.require_idle()
+            except (OSError, RuntimeError, TimeoutError) as error:
+                self.retain(f"native checkout settlement is unverified: {error}")
+                raise WorkerOrphaned(self.retained) from error
         conn = connect(self.path)
         try:
             conn.execute("begin immediate")
             try:
-                changed = conn.execute("delete from lease where id = 1 and token = ?", (self.token,)).rowcount
+                changed = conn.execute("delete from lease where id = 1 and token = ? and native_call is ?",
+                                       (self.token, native.key["callId"] if native else None)).rowcount
             finally:
                 conn.execute("commit")
         finally:

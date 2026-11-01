@@ -45,9 +45,27 @@ The normal finalizer also verifies the process nonce committed by the original
 unique Call claim; a later failed launch cannot borrow that claim by PID reuse.
 Positive cleanup, including a covering retry after a retained failure, is
 required for settlement. Log reads perform no deletion and never manufacture
-release from PID loss, wall-clock order or path absence. Complete containment
-and post-loss recovery remain pending under #806; see
-[Behavior chain](../../docs/Behavior-chain.md#authority-and-recovery).
+release from PID loss, wall-clock order or path absence. Physical v2 CLI calls
+register the original private namespace with the existing workspace supervisor
+before preparation or a helper/provider starts. Only the original retained
+kernel view can certify process settlement before normal pinned disk cleanup.
+The [service contract](../../docs/Service-architecture.md#workspace-behavior-observation)
+defines support, teardown and uncertainty; automatic post-loss disk/lease
+reclamation and complete resource acceptance remain pending under #806.
+
+Poise's internal `--native-action` admits only the existing fixed merge,
+conversation-resolution, grey-CI and issue-publication-completion commands.
+It preserves the immutable logical request while giving the physical action
+its own Call, correlation, scratch root and resource receipt. Accepted JSON is
+fsynced before terminal status; Stop or a lost terminal write cannot erase it
+or authorize a repeated mutation. The internal publication continuation also
+has a physical Call and reuses the original repair's guarded publication plan.
+`--native-capability` creates no Call or workflow: it verifies namespace setup
+and positive teardown through the same private controller. Direct Python
+library/unit calls retain historical receipts and are not physical CLI proof.
+Provider preparation now runs inside the original physical Call; nonfatal
+updater warnings retain warning severity in the existing diagnostic stream,
+and missing verified launchers fail with their preparation diagnostic.
 
 # Fencing a closed behavior
 

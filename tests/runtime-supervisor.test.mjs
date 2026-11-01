@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FAILED_START_MS, supervisor, UPDATE_EXIT_CODE } from '../deploy/runtime/supervisor.mjs'
+import { FAILED_START_MS, openNamespaceWitness, supervisor, UPDATE_EXIT_CODE } from '../deploy/runtime/supervisor.mjs'
 
 // The workspace supervisor (deploy/runtime/supervisor.mjs): which release it
 // runs, how it switches without stopping the container, and what it does
@@ -32,10 +32,11 @@ async function pointer(name, value) {
   await writeFile(join(home, '.poise', 'releases', name), `${value}\n`)
 }
 
-function supervise(diagnostic) {
+function supervise(diagnostic, nativeControlFactory = null) {
   return supervisor({
     home,
     diagnostic,
+    nativeControlFactory,
     image: IMAGE,
     base: 'B',
     env: { HOME: home, PATH: `${home}/.local/bin:/opt/caller/venv/bin:/usr/bin:/bin` },
@@ -65,7 +66,47 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
+describe('native namespace evidence', () => {
+  const epoch = { boot: 'unavailable-test-kernel', init_start: '0', namespace_dev: '0', namespace_ino: '1' }
+  const owner = { pid: 3, start: '0' }
+  const holder = { pid: 4, start: '0' }
+  it.each([
+    { pid: 0, start: '1', namespace: 'pid:[2]' },
+    { pid: '2', start: '1', namespace: 'pid:[2]' },
+    { pid: 2, start: 1, namespace: 'pid:[2]' },
+    { pid: 2, start: 'unknown', namespace: 'pid:[2]' },
+    { pid: 2, start: '1', namespace: '../another-scope' },
+    { pid: 2, start: '1', namespace: 'pid:[2]', owner: { pid: 2, start: '1' } },
+    { pid: 2, start: '1', namespace: 'pid:[2]', holder: { pid: 4, start: 0 } },
+  ])('refuses invalid ownership instead of manufacturing empty evidence: %j', (identity) => {
+    expect(() => openNamespaceWitness({ owner, holder, ...identity, epoch })).toThrow('Invalid native namespace identity')
+  })
+
+  it('refuses unavailable or mismatched kernel evidence instead of returning an empty namespace', () => {
+    expect(() => openNamespaceWitness({ pid: process.pid, start: '0', namespace: 'pid:[1]', epoch, owner, holder })).toThrow()
+  })
+})
+
 describe('the workspace supervisor', () => {
+  it('keeps one native controller through a Poise release switch and closes it only at supervisor exit', async () => {
+    const close = vi.fn(async () => {})
+    const address = { version: 1, instance: 'a'.repeat(32), path: '/tmp/component/control.sock' }
+    const factory = vi.fn(async () => ({ address, close }))
+    const instance = supervise(null, factory)
+    const running = instance.run()
+    const first = await nth(0)
+    expect(JSON.parse(first.env.POISE_NATIVE_CONTROL)).toEqual(address)
+    first.child.exit(UPDATE_EXIT_CODE)
+    const second = await nth(1)
+    expect(second.env.POISE_NATIVE_CONTROL).toBe(first.env.POISE_NATIVE_CONTROL)
+    expect(factory).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
+    instance.stop('SIGTERM')
+    second.child.exit(0)
+    expect(await running).toBe(0)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
   it('runs the image\'s release, then switches to the one a switch named when Poise exits to switch', async () => {
     const instance = supervise()
     const running = instance.run()

@@ -3,6 +3,12 @@ import { parseProcessDiagnostic } from '../server/process-diagnostic'
 
 afterEach(() => vi.unstubAllEnvs())
 
+it('retains nonfatal launcher preparation warnings through the existing diagnostic decoder', () => {
+  expect(parseProcessDiagnostic({ version: 1, source: 'caller', severity: 'warning', operation: 'provider.cli_update',
+    phase: 'launcher_verification', outcome: 'unavailable', message: 'Retained launcher is usable', stderr: '', stderr_truncated: false }))
+    .toMatchObject({ severity: 'warning', operation: 'provider.cli_update', context: { message: 'Retained launcher is usable' } })
+})
+
 it('retains multiline causal evidence and explicit missing context, excluding arbitrary content', () => {
   const event = parseProcessDiagnostic({ version: 1, source: 'caller', severity: 'error', operation: 'fetch', phase: 'checkout',
     outcome: 'exit', stderr: 'fatal: missing ref\nremote: explanation', stderr_truncated: false,

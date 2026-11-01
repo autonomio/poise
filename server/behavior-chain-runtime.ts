@@ -25,8 +25,9 @@ export interface ChainRuntimeOperations {
   permitted(chain: BehaviorChain, decision: Extract<ChainDecision, { kind: 'invoke' }>): boolean
   request(chain: BehaviorChain, observation: ChainObservation, decision: Extract<ChainDecision, { kind: 'invoke' }>, id: string): Promise<ChainInvocation['request'] | null>
   launch(invocation: ChainInvocation, onExit: (result?: DetachedProcessExit) => void, allowed: () => boolean): Promise<boolean>
-  perform(invocation: ChainInvocation): Promise<Record<string, unknown>>
-  resumePublication(invocation: ChainInvocation, head: string): Promise<Record<string, unknown>>
+  perform(invocation: ChainInvocation, chain: BehaviorChain): Promise<Record<string, unknown>>
+  readActionResult(invocation: ChainInvocation, call: LogEntry): Promise<Record<string, unknown>>
+  resumePublication(invocation: ChainInvocation, head: string, correlation: string): Promise<Record<string, unknown>>
   /** True only when Caller won the original correlation without a worker. */
   fenceClosedTarget(chain: BehaviorChain, invocation: ChainInvocation): Promise<boolean>
   wake(): void
@@ -34,7 +35,8 @@ export interface ChainRuntimeOperations {
 
 function nativeBehavior(behavior: ChainInvocation['behavior']): string | null {
   return ({ 'review-issue': 'issue_review', 'review-pr': 'pr_review', 'approve-pr': 'pr_approve',
-    'implement-issue': 'implement_issue', 'repair-pr': 'repair_pr' } as Partial<Record<ChainInvocation['behavior'], string>>)[behavior] ?? null
+    'implement-issue': 'implement_issue', 'repair-pr': 'repair_pr', 'merge-pr': 'native_action',
+    'resolve-threads': 'native_action', 'rerun-grey-ci': 'native_action', 'publish-issue': 'native_action' } as Partial<Record<ChainInvocation['behavior'], string>>)[behavior] ?? null
 }
 
 function receipt(call: LogEntry): Record<string, unknown> {
@@ -146,13 +148,17 @@ export class BehaviorChainRuntime {
           page = this.journal.reconcilable('', Date.now(), deferred)
         }
         if (!page.length) { this[cursorKey] = ''; continue }
-        const pending = page.flatMap((chain) => chain.invocations.filter((invocation) => invocation.state !== 'settled' && invocation.model !== null))
-        const snapshot = pending.length ? await this.operations.readInvocations(pending.map((invocation) => invocation.id)) : { entries: [], quarantined: [] }
+        const pending = page.flatMap((chain) => chain.invocations.filter((invocation) => invocation.state !== 'settled'))
+        const correlations = pending.flatMap(invocation => {
+          const resume = invocation.evidence?.publicationResume as { correlation?: unknown } | undefined
+          return [invocation.id, ...(typeof resume?.correlation === 'string' ? [resume.correlation] : [])]
+        })
+        const snapshot = pending.length ? await this.operations.readInvocations(correlations) : { entries: [], quarantined: [] }
         for (let chain of page) {
           if (Date.now() - began > 45_000) break
           this[cursorKey] = chain.id
           if (!this.operations.ownsRepository(chain.repository)) continue
-          const contradicted = chain.invocations.find(invocation => invocation.model !== null && invocation.evidence
+          const contradicted = chain.invocations.find(invocation => invocation.evidence
             && resourceReleaseContradicted(invocation.evidence))
           if (contradicted) {
             const cause = `Invocation ${contradicted.id} has contradictory resource-release evidence; ownership remains held`
@@ -163,9 +169,12 @@ export class BehaviorChainRuntime {
           chain = await this.reconcile(chain, snapshot)
           const direct = chain.invocations.find((invocation) => invocation.state !== 'settled' && attributedNativeAction(invocation))
           if (chain.mergeSha && direct && this.recoverNativeAction(chain, direct)) continue
-          const owned = chain.invocations.find((invocation) => invocation.state !== 'settled' && invocation.model !== null)
+          const owned = chain.invocations.find((invocation) => invocation.state !== 'settled'
+            && (invocation.model !== null || invocation.request.nativeResources === 2 || invocation.evidence?.nativeCallId))
           const call = owned ? snapshot.entries.find((entry) => entry.correlation_id === owned.id) : null
           const released = owned ? resourceReleaseProven(owned.evidence ?? {}, true) : false
+          if (owned?.evidence?.publicationResume && typeof (owned.evidence.publicationResume as { correlation?: unknown }).correlation === 'string'
+            && !resourceReleaseProven(owned.evidence.publicationReceipt as Record<string, unknown> ?? {}, true)) continue
           if (owned && !call && closedChainTarget(chain, chain.observation as ChainObservation | null, owned.behavior)
             && !released) {
             try { await this.closeRecovery(chain, owned, chain.observation as ChainObservation | null, snapshot) }
@@ -220,7 +229,7 @@ export class BehaviorChainRuntime {
             // Resource-aware admission precedes provider preparation like the
             // count check, so blocked work holds no native agent session and
             // consumes no provider probe. Unset budgets skip every probe.
-            const resources = decision.reviewer ? readBehaviorResourceAdmission() : null
+            const resources = readBehaviorResourceAdmission()
             if (resources) {
               const exhausted = this.resourceWaitReason(resources)
               if (exhausted) {
@@ -285,7 +294,31 @@ export class BehaviorChainRuntime {
 
   private async reconcile(chain: BehaviorChain, snapshot: AgentLogSnapshot): Promise<BehaviorChain> {
     const invocation = chain.invocations.find((candidate) => candidate.state !== 'settled')
-    if (!invocation || invocation.model === null) return chain
+    if (!invocation) return chain
+    let publicationPending = false
+    const resume = invocation.evidence?.publicationResume as { correlation?: unknown, callId?: unknown, head?: unknown, plan?: unknown } | undefined
+    if (typeof resume?.correlation === 'string') {
+      const matches = snapshot.entries.filter(call => call.correlation_id === resume.correlation)
+      if (matches.length > 1 || snapshot.quarantined.some(row => !row.correlationId || row.correlationId === resume.correlation)) {
+        throw new Error('native publication completion evidence is ambiguous or quarantined')
+      }
+      const continuation = matches[0]
+      if (!continuation) publicationPending = true
+      else {
+        if (continuation.source !== 'poise:behavior-chain' || continuation.behavior !== 'native_publication'
+        || continuation.repo !== chain.repository || continuation.actor !== invocation.actor || continuation.expected_head !== resume.head
+        || continuation.artifact?.request_sha && continuation.artifact.request_sha !== chainBasis({ kind: 'native_publication',
+          call_id: resume.callId, digest: resume.plan, head: resume.head })) throw new Error('native publication differs from its original completion request')
+        const publicationReceipt = { ...receipt(continuation), callId: continuation.id }
+        if (chainBasis(invocation.evidence?.publicationReceipt ?? null) !== chainBasis(publicationReceipt)) {
+          chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { publicationReceipt } })
+        }
+        if (['stopped', 'stopping'].includes(continuation.error_code || '') && !chain.held) {
+          chain = this.append(chain, { type: 'chain.held', reason: 'native publication completion was stopped by the person' })
+        }
+        publicationPending = !nativeResourcesReleased(continuation)
+      }
+    }
     if (snapshot.quarantined.some((row) => row.correlationId === invocation.id || !row.correlationId)) {
       return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
         reason: 'native call evidence is quarantined; absence cannot authorize another effect' })
@@ -297,11 +330,17 @@ export class BehaviorChainRuntime {
     const call = calls[0]
     if (call.source !== 'poise:behavior-chain' || call.actor !== invocation.actor || call.repo !== chain.repository
       || call.behavior !== nativeBehavior(invocation.behavior)) throw new Error(`native receipt conflicts with behavior admission ${invocation.id}`)
+    if (invocation.model === null && (call.model !== 'native-action'
+      || invocation.evidence?.nativeCallId && invocation.evidence.nativeCallId !== call.id
+      || call.pr_id !== invocation.request.argv[1]?.replace(/^#/, '')
+      || call.expected_head !== invocation.request.argv[invocation.request.argv.indexOf('--expected-head') + 1])) {
+      throw new Error(`native action target conflicts with behavior admission ${invocation.id}`)
+    }
     if (call.status === 'running') return chain
     const stopped = ['stopped', 'stopping'].includes(call.error_code || '')
     if (stopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
     if (!nativeResourcesReleased(call)) {
-      const evidence = { ...receipt(call), callId: call.id }
+      const evidence = { ...receipt(call), callId: call.id, ...(invocation.model === null ? { nativeCallId: call.id } : {}) }
       if (!sameReceipt(invocation.evidence, evidence)) {
         chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
       }
@@ -313,6 +352,51 @@ export class BehaviorChainRuntime {
       const reason = `native invocation ended without proof that its worker resources were released${cause}`
       return invocation.state === 'uncertain' && invocation.outcome === reason ? chain
         : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id, reason })
+    }
+    if (publicationPending) {
+      const evidence = { ...receipt(call), callId: call.id }
+      return sameReceipt(invocation.evidence, evidence) ? chain
+        : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
+    }
+    if (invocation.model === null) {
+      this.operations.received(invocation, call)
+      const physical = { ...receipt(call), nativeCallId: call.id }
+      if (call.artifact?.request_sha && call.artifact.request_sha !== chainBasis(invocation.request)) {
+        throw new Error('native action Call conflicts with its immutable journal request')
+      }
+      const responded = call.artifact?.phase === 'received_native_action' && typeof call.artifact.response_sha === 'string' && !!call.response
+      if (call.status === 'failed' && call.action === 'not_started' && !responded) {
+        this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
+          outcome: call.outcome || 'preflight_failed', evidence: physical })
+        this.operations.wake()
+        return this.current(chain)
+      }
+      if (call.status !== 'completed' && !responded) {
+        if (!sameReceipt(invocation.evidence, physical)) chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: physical })
+        return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
+          reason: 'native action ended without its accepted response; the original effect remains uncertain' })
+      }
+      const result = await this.operations.readActionResult(invocation, call)
+      let evidence = { ...result }
+      if (attributedNativeAction(invocation)) {
+        const original = matchingNativeActionReceipt(chain, invocation)
+        const proof = nativeActionReceipt(chain, invocation, result, original?.observedAt ?? Date.now())
+        if (original && chainBasis(proof) !== chainBasis(original)) throw new Error('native action response conflicts with its first accepted receipt')
+        evidence = nativeActionSettlement(proof)
+      } else if (result.nativeProcessFailure) {
+        chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { ...physical, nativeActionResult: result } })
+        return this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
+          reason: 'native action returned a response with process failure; its original effect remains uncertain' })
+      } else if (result.outcome === 'read_failed') {
+        evidence = { ...result, status: 'failed', action: 'not_started', completedAt: Date.now() }
+      } else if (['not_ready', 'superseded'].includes(String(result.outcome))
+        || invocation.behavior === 'resolve-threads' && result.ready_except_conversations !== true) {
+        evidence = { ...result, status: 'deferred', action: 'not_started', completedAt: Date.now() }
+      }
+      this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
+        outcome: String(evidence.outcome || evidence.action), evidence: { ...physical, nativeCallStatus: call.status, status: 'completed', ...evidence } })
+      this.operations.wake()
+      return this.current(chain)
     }
     if (call.status === 'failed' && call.action !== 'not_started' && ['implement-issue', 'repair-pr', 'review-issue', 'review-pr', 'approve-pr'].includes(invocation.behavior)) {
       if (invocation.state === 'uncertain' && invocation.evidence?.callId === call.id) {
@@ -349,7 +433,18 @@ export class BehaviorChainRuntime {
       }
     } else {
       try {
-        let evidence = await this.operations.perform(invocation)
+        let evidence = await this.operations.perform(invocation, chain)
+        if (invocation.request.nativeResources === 2 && !evidence.nativeCallId) throw new Error('native action lacks its physical Call ownership')
+        if (evidence.nativeCallId) {
+          const physical = { nativeCallId: evidence.nativeCallId,
+            ...(evidence.nativeOuterProcessFailure ? { nativeOuterProcessFailure: evidence.nativeOuterProcessFailure } : {}) }
+          const retained = attributedNativeAction(invocation)
+            ? { nativeActionReceipt: nativeActionReceipt(chain, invocation, evidence) }
+            : { nativeActionResult: evidence }
+          this.append(this.current(chain), { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { ...physical, ...retained } })
+          this.operations.wake()
+          return
+        }
         if (attributedNativeAction(invocation)) {
           const proof = nativeActionReceipt(chain, invocation, evidence)
           this.append(this.current(chain), { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { nativeActionReceipt: proof } })
@@ -368,9 +463,12 @@ export class BehaviorChainRuntime {
     if (!attributedNativeAction(invocation)) return false
     const proof = matchingNativeActionReceipt(chain, invocation)
     if (proof) {
+      if ((invocation.request.nativeResources === 2 || invocation.evidence?.nativeCallId)
+        && !resourceReleaseProven(invocation.evidence ?? {}, true)) return true
       const evidence = nativeActionSettlement(proof)
-      this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
-        outcome: String(evidence.outcome), evidence })
+      this.append(chain, { type: 'invocation.settled', invocationId: invocation.id,
+        callId: typeof invocation.evidence?.nativeCallId === 'string' ? invocation.evidence.nativeCallId : null,
+        outcome: String(evidence.outcome), evidence: { ...invocation.evidence, ...evidence } })
       this.operations.wake()
     }
     return true
@@ -423,7 +521,10 @@ export class BehaviorChainRuntime {
   private async recover(chain: BehaviorChain, invocation: ChainInvocation, observation: ChainObservation, snapshot: AgentLogSnapshot): Promise<void> {
     const nativeId = invocation.evidence?.callId
     const publishedReview = observation.reviewPublication
-    const resourcesSettled = resourceReleaseProven(invocation.evidence ?? {}, true)
+    const resume = invocation.evidence?.publicationResume as { correlation?: unknown } | undefined
+    const publicationReleased = typeof resume?.correlation !== 'string'
+      || resourceReleaseProven(invocation.evidence?.publicationReceipt as Record<string, unknown> ?? {}, true)
+    const resourcesSettled = resourceReleaseProven(invocation.evidence ?? {}, true) && publicationReleased
     if (resourcesSettled && invocation.state === 'uncertain' && publishedReview && publishedReview.callId === nativeId && publishedReview.complete) {
       this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: publishedReview.callId, outcome: 'commented',
         evidence: { ...invocation.evidence, status: 'completed', action: 'commented', outcome: 'commented',
@@ -459,12 +560,16 @@ export class BehaviorChainRuntime {
     if (resourcesSettled && invocation.state === 'uncertain' && typeof nativeId === 'string'
       && invocation.behavior === 'repair-pr' && observation.workPublication?.callId === nativeId
       && !observation.workPublication.repliesComplete && observation.workPublication.resumable
+      && (typeof resume?.correlation !== 'string'
+        || (invocation.evidence?.publicationReceipt as Record<string, unknown> | undefined)?.action === 'not_started')
       && nativeId === observation.publication.head_invocation && observation.publication.head_sha
       && this.allowed(chain, invocation)) {
+      const correlation = randomUUID()
       const current = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id,
-        evidence: { publicationResume: { callId: nativeId, head: observation.publication.head_sha, plan: observation.workPublication.planSha } } })
+        evidence: { publicationResume: { callId: nativeId, head: observation.publication.head_sha,
+          plan: observation.workPublication.planSha, correlation }, publicationReceipt: null } })
       try {
-        await this.operations.resumePublication(current.invocations.find((item) => item.id === invocation.id)!, observation.publication.head_sha)
+        await this.operations.resumePublication(current.invocations.find((item) => item.id === invocation.id)!, observation.publication.head_sha, correlation)
         this.operations.wake()
       } catch (error) {
         this.append(this.current(chain), { type: 'invocation.reconciled', invocationId: invocation.id,

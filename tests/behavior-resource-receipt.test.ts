@@ -3,8 +3,39 @@ import { parseResourceOwnership, resourceOwnershipReleased, resourceReleaseProve
 
 const ROOT = { path: '/isolated/call', state: 'reclaimed', device: '1', inode: '2', parent_device: '1', parent_inode: '3', reclaimed_at: 10 }
 const OWNED = { version: 1, roots: [ROOT], errors: [] }
+const NAMESPACE = { state: 'active', callId: 'a'.repeat(32), correlation: 'original-native',
+  controller: { version: 1, instance: 'b'.repeat(32) },
+  binding: { pid: 104, start: '12', namespace: 'pid:[91]', owner: { pid: 102, start: '10' }, holder: { pid: 103, start: '11' },
+    epoch: { boot: 'test-epoch', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } }
 
 describe('native resource receipt boundary', () => {
+  it('requires original namespace settlement independently of completed disk cleanup', () => {
+    const active = { ...OWNED, version: 2, namespace: NAMESPACE }
+    const evidence = { resources_settled_at: new Date(20_000).toISOString() }
+    expect(resourceReleaseProven({ ...evidence, resource_ownership: active }, true)).toBe(false)
+    const settled = { ...active, namespace: { ...NAMESPACE, state: 'settled', settled_at: 15 } }
+    expect(resourceReleaseProven({ ...evidence, resource_ownership: settled }, true)).toBe(true)
+    expect(resourceReleaseProven({ ...evidence, resources_settled_at: new Date(14_000).toISOString(), resource_ownership: settled }, true)).toBe(false)
+    expect(parseResourceOwnership(OWNED)).toEqual(OWNED)
+  })
+
+  it('accepts only the original explicit never-started proof with no allocated root', () => {
+    const value = { version: 2, roots: [], errors: [], namespace: { state: 'not_started', callId: NAMESPACE.callId,
+      correlation: NAMESPACE.correlation, no_effect: 'original-no-go', settled_at: 15 } }
+    expect(resourceOwnershipReleased(parseResourceOwnership(value))).toBe(true)
+    expect(() => parseResourceOwnership({ ...value, roots: [ROOT] })).toThrow(/resource/)
+    expect(() => parseResourceOwnership({ ...value, namespace: { ...value.namespace, no_effect: 'parent-gone' } })).toThrow(/resource/)
+  })
+
+  it.each([
+    { state: 'settled' }, { state: 'active', settled_at: 15 }, { token: 'private' },
+    { controller: { ...NAMESPACE.controller, path: '/private/control.sock' } },
+    { binding: { ...NAMESPACE.binding, owner: NAMESPACE.binding.holder } },
+    { binding: { ...NAMESPACE.binding, start: 12 } }, { callId: 'another-call' }, { correlation: 'bad#correlation' },
+  ])('rejects contradictory or private namespace fields: %j', change => {
+    expect(() => parseResourceOwnership({ ...OWNED, version: 2, namespace: { ...NAMESPACE, ...change } })).toThrow(/resource/)
+  })
+
   it('requires positive reclamation rather than a terminal phase or release timestamp alone', () => {
     const stamp = { resources_settled_at: new Date().toISOString() }
     expect(resourceReleaseProven(stamp, true)).toBe(false)

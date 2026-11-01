@@ -296,6 +296,15 @@ acquired the lease — the pid plus its start time — so a pid the operating
 system reused after a restart never pins a dead lease.
 A Poise-side filesystem operation must finish before the lease is released;
 killing an agent cannot cancel filesystem work already executing in Poise.
+For a v2 native behavior, the shared lease also records `native_call`, the
+original Caller Call ID. Its host and worker PIDs describe the outer Caller
+and its namespace init in the workspace's process view; inner provider PIDs
+are never exposed as workspace PIDs. Chat and legacy Caller cannot adopt,
+signal, expire or remove such a lease, including by a retained token. The
+original native Caller releases it only after its retained namespace witness
+contains just the trusted reaper and Caller continuation. Any other member or
+unavailable witness retains the hold. Post-loss disk/lease reclamation is
+separate from this normal release; process disappearance grants no takeover.
 Background Git inspections skip optional index-cache writes, so cancelling a
 read cannot leave that cache's lock blocking the next chat. Git writes retain
 their normal locks and the registered worker gate.

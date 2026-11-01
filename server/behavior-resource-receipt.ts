@@ -1,21 +1,63 @@
 /** Caller resource metadata. Publication phases cannot replace this receipt. */
 export interface ResourceOwnershipReceipt {
-  version: 1
+  version: 1 | 2
   roots: { path: string, state: 'registered' | 'allocated' | 'reclaimed', device?: string, inode?: string,
     parent_device?: string, parent_inode?: string, reclaimed_at?: number, recovered_at?: number }[]
   errors: { cause: string, path: string | null, at: number }[]
   process_pending?: boolean
+  namespace?: NativeNamespaceReceipt
+}
+
+interface NativeNamespaceReceipt {
+  state: 'requested' | 'active' | 'settled' | 'not_started'
+  callId: string
+  correlation: string
+  controller?: { version: 1, instance: string }
+  binding?: { pid: number, start: string, namespace: string, owner: { pid: number, start: string },
+    holder: { pid: number, start: string }, epoch: { boot: string, init_start: string, namespace_dev: string, namespace_ino: string } }
+  settled_at?: number
+  no_effect?: 'original-no-go'
 }
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 function time(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0 }
+function keys(value: Record<string, unknown>, allowed: string[]): boolean { return Object.keys(value).every(key => allowed.includes(key)) }
+function decimal(value: unknown): boolean { return typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) }
+function processIdentity(value: unknown): value is { pid: number, start: string } {
+  return object(value) && keys(value, ['pid', 'start']) && Number.isSafeInteger(value.pid) && Number(value.pid) >= 2 && decimal(value.start)
+}
+
+function namespaceReceipt(value: unknown): value is NativeNamespaceReceipt {
+  if (!object(value) || typeof value.callId !== 'string' || !/^[0-9a-f]{32}$/.test(value.callId)
+    || typeof value.correlation !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(value.correlation)) return false
+  const base = ['state', 'callId', 'correlation']
+  if (value.state === 'requested') return keys(value, base)
+  if (value.state === 'not_started') return keys(value, [...base, 'no_effect', 'settled_at'])
+    && value.no_effect === 'original-no-go' && time(value.settled_at)
+  if (!['active', 'settled'].includes(String(value.state))
+    || !keys(value, [...base, 'binding', 'controller', ...(value.state === 'settled' ? ['settled_at'] : [])])
+    || value.state === 'settled' && !time(value.settled_at)) return false
+  const controller = value.controller, binding = value.binding
+  if (!object(controller) || !keys(controller, ['version', 'instance']) || controller.version !== 1
+    || typeof controller.instance !== 'string' || !/^[0-9a-f]{32}$/.test(controller.instance)
+    || !object(binding) || !keys(binding, ['pid', 'start', 'namespace', 'owner', 'holder', 'epoch'])
+    || !Number.isSafeInteger(binding.pid) || Number(binding.pid) < 2 || !decimal(binding.start)
+    || typeof binding.namespace !== 'string' || !/^pid:\[[1-9][0-9]{0,19}\]$/.test(binding.namespace)
+    || !processIdentity(binding.owner) || !processIdentity(binding.holder)
+    || new Set([binding.pid, binding.owner.pid, binding.holder.pid]).size !== 3) return false
+  const epoch = binding.epoch
+  return object(epoch) && keys(epoch, ['boot', 'init_start', 'namespace_dev', 'namespace_ino'])
+    && typeof epoch.boot === 'string' && epoch.boot.length > 0 && epoch.boot.length <= 128
+    && ['init_start', 'namespace_dev', 'namespace_ino'].every(key => decimal(epoch[key]))
+}
 
 export function parseResourceOwnership(value: unknown): ResourceOwnershipReceipt {
-  if (!object(value) || value.version !== 1 || !Array.isArray(value.roots) || !Array.isArray(value.errors)
+  if (!object(value) || value.version !== 1 && value.version !== 2 || !Array.isArray(value.roots) || !Array.isArray(value.errors)
     || (value.process_pending !== undefined && typeof value.process_pending !== 'boolean')
-    || Object.keys(value).some(key => !['version', 'roots', 'errors', 'process_pending'].includes(key))
+    || Object.keys(value).some(key => !['version', 'roots', 'errors', 'process_pending', ...(value.version === 2 ? ['namespace'] : [])].includes(key))
+    || value.version === 2 && (!namespaceReceipt(value.namespace) || value.namespace.state === 'not_started' && value.roots.length > 0)
     || Buffer.byteLength(JSON.stringify(value)) > 128 * 1024) throw new Error('invalid native resource ownership')
   const paths = new Set<string>()
   for (const root of value.roots) {
@@ -41,6 +83,7 @@ export function parseResourceOwnership(value: unknown): ResourceOwnershipReceipt
 
 export function resourceOwnershipReleased(value: ResourceOwnershipReceipt): boolean {
   if (value.process_pending || value.roots.some(root => root.state !== 'reclaimed')) return false
+  if (value.version === 2 && !['settled', 'not_started'].includes(value.namespace?.state ?? '')) return false
   return value.errors.every(error => error.cause !== 'resources_unknown' && error.path !== null
     && (value.roots.find(root => root.path === error.path)?.recovered_at ?? 0) >= error.at)
 }
@@ -50,7 +93,12 @@ export function resourceReleaseContradicted(evidence: Record<string, unknown>): 
   const artifact = evidence.artifact
   if (object(artifact) && (artifact.resource_error != null || artifact.phase === 'resources_unknown')) return true
   if (evidence.resource_ownership != null) {
-    try { return !resourceOwnershipReleased(parseResourceOwnership(evidence.resource_ownership)) }
+    try {
+      const ownership = parseResourceOwnership(evidence.resource_ownership)
+      return !resourceOwnershipReleased(ownership) || ownership.version === 2
+        && (!ownership.namespace?.settled_at || typeof evidence.resources_settled_at !== 'string'
+          || Date.parse(evidence.resources_settled_at) < ownership.namespace.settled_at * 1000)
+    }
     catch { return true }
   }
   return false
@@ -63,8 +111,14 @@ export function resourceReleaseProven(evidence: Record<string, unknown>, require
 }
 
 export function nativeResourcesPending(invocation: Record<string, unknown>): boolean {
-  if (invocation.model === null) return false
   const evidence = object(invocation.evidence) ? invocation.evidence : {}
+  if (object(evidence.publicationResume) && typeof evidence.publicationResume.correlation === 'string'
+    && (!object(evidence.publicationReceipt) || !resourceReleaseProven(evidence.publicationReceipt, true))) return true
+  const request = object(invocation.request) ? invocation.request : {}
+  if (invocation.model === null && request.nativeResources !== 2 && !evidence.nativeCallId && !evidence.resource_ownership) return false
+  if (request.nativeResources === 2 || evidence.nativeCallId || object(evidence.resource_ownership) && evidence.resource_ownership.version === 2) {
+    return !resourceReleaseProven(evidence, true)
+  }
   // Older terminal journal records remain readable. Contradictory release
   // evidence is re-held in derived capacity without rewriting any event/hash.
   return invocation.state === 'settled' ? resourceReleaseContradicted(evidence) : !resourceReleaseProven(evidence, true)

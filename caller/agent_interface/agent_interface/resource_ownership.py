@@ -17,8 +17,13 @@ from time import time
 from uuid import uuid4
 
 
-def initial() -> str:
-    return json.dumps({"version": 1, "roots": [], "errors": []})
+def initial(call_id: str | None = None, correlation: str | None = None) -> str:
+    value = {"version": 1, "roots": [], "errors": []}
+    if call_id is not None or correlation is not None:
+        if not call_id or not correlation:
+            raise ValueError("native namespace requires its original Call and correlation")
+        value.update(version=2, namespace={"state": "requested", "callId": call_id, "correlation": correlation})
+    return json.dumps(value)
 
 
 def call_directory(database: Path, call_id: str) -> Path:
@@ -35,9 +40,12 @@ def _database(path: Path):
 def read(conn: sqlite3.Connection, call_id: str) -> dict:
     row = conn.execute("select resource_ownership from calls where id=? and source='poise:behavior-chain'", (call_id,)).fetchone()
     value = json.loads(row[0]) if row and row[0] else None
-    if not isinstance(value, dict) or value.get("version") != 1 \
+    if not isinstance(value, dict) or value.get("version") not in (1, 2) \
             or not isinstance(value.get("roots"), list) or not isinstance(value.get("errors"), list):
         raise RuntimeError("native Call lacks its durable resource ownership")
+    if value["version"] == 2 and (not isinstance(value.get("namespace"), dict)
+                                  or value["namespace"].get("callId") != call_id):
+        raise RuntimeError("native Call lacks its original namespace ownership")
     return value
 
 
@@ -48,6 +56,79 @@ def _write(conn: sqlite3.Connection, call_id: str, value: dict) -> None:
     if conn.execute("update calls set resource_ownership=? where id=? and resources_settled_at is null",
                     (encoded, call_id)).rowcount != 1:
         raise RuntimeError("native Call no longer owns unsettled resources")
+
+
+def request_namespace(database: Path, call_id: str, scope) -> None:
+    with _database(database) as conn:
+        conn.execute("begin immediate")
+        value = read(conn, call_id)
+        namespace = value.get("namespace")
+        if not namespace or namespace != {"state": "requested", "callId": call_id, "correlation": scope.key["correlation"]}:
+            raise RuntimeError("native namespace request differs from its original claim")
+        # The socket address and retirement token are private Caller state.
+        # They never enter the public log DTO or canonical journal evidence.
+        changed = conn.execute("update calls set namespace_control=? where id=? and namespace_control is null "
+                               "and status='running' and resources_settled_at is null",
+                               (json.dumps({"address": scope.address, **scope.key}), call_id)).rowcount
+        if changed != 1:
+            raise RuntimeError("native namespace already has an original controller")
+
+
+def register_namespace(database: Path, call_id: str, receipt: dict) -> None:
+    with _database(database) as conn:
+        conn.execute("begin immediate")
+        value = read(conn, call_id)
+        namespace = value.get("namespace")
+        if not namespace or namespace["state"] != "requested" or namespace["callId"] != receipt["callId"] \
+                or namespace["correlation"] != receipt["correlation"] or value["roots"]:
+            raise RuntimeError("native namespace registration conflicts with its original admission")
+        row = conn.execute("select namespace_control,process_identity,pid from calls where id=?", (call_id,)).fetchone()
+        expected = {"address": receipt["controller"], **{key: receipt[key] for key in ("callId", "correlation", "token")}}
+        if row is None or json.loads(row[0] or "null") != expected:
+            raise RuntimeError("native namespace registration lacks its original private controller")
+        original = json.loads(row[1] or "null")
+        binding = receipt["binding"]
+        if not isinstance(original, dict) or not isinstance(original.get("epoch"), dict) \
+                or binding.get("owner") != {"pid": int(row[2]), "start": original.get("start")} \
+                or binding.get("epoch") != {key: str(value) for key, value in original["epoch"].items()}:
+            raise RuntimeError("native namespace does not belong to its original Caller identity")
+        namespace.update(state="active", controller={"version": 1, "instance": receipt["controller"]["instance"]},
+                         binding=receipt["binding"])
+        _write(conn, call_id, value)
+
+
+def settle_namespace(database: Path, call_id: str, scope) -> None:
+    # Callers must observe the original retained witness immediately before
+    # committing. A missing/replaced controller cannot certify settlement.
+    if not scope.read()["empty"]:
+        raise RuntimeError("native namespace still owns processes")
+    with _database(database) as conn:
+        conn.execute("begin immediate")
+        value = read(conn, call_id)
+        namespace = value.get("namespace")
+        if not namespace or namespace["state"] not in ("active", "settled") \
+                or namespace.get("binding") != scope.binding or namespace["correlation"] != scope.key["correlation"] \
+                or namespace.get("controller") != {"version": 1, "instance": scope.address["instance"]}:
+            raise RuntimeError("native settlement differs from its original namespace")
+        if namespace["state"] == "active":
+            namespace.update(state="settled", settled_at=int(time() * 1000) / 1000)
+            value["process_pending"] = False
+            _write(conn, call_id, value)
+
+
+def namespace_not_started(database: Path, call_id: str) -> None:
+    from . import process_identity
+    with _database(database) as conn:
+        conn.execute("begin immediate")
+        value = read(conn, call_id)
+        namespace = value.get("namespace")
+        if not namespace or namespace["state"] != "requested" or value["roots"]:
+            raise RuntimeError("native no-GO evidence conflicts with allocated resources")
+        row = conn.execute("select process_identity from calls where id=?", (call_id,)).fetchone()
+        if not row or not process_identity.owns_registration(row[0]):
+            raise RuntimeError("native no-GO evidence requires its original Caller")
+        namespace.update(state="not_started", no_effect="original-no-go", settled_at=int(time() * 1000) / 1000)
+        _write(conn, call_id, value)
 
 
 def binding() -> tuple[Path, str] | None:
@@ -109,8 +190,11 @@ def released(value: dict | None) -> bool:
 
 
 def healthy(value: dict | None) -> bool:
-    if not isinstance(value, dict) or value.get("version") != 1 or value.get("process_pending") is True \
+    if not isinstance(value, dict) or value.get("version") not in (1, 2) or value.get("process_pending") is True \
             or not isinstance(value.get("roots"), list) or not isinstance(value.get("errors"), list):
+        return False
+    if value["version"] == 2 and (not isinstance(value.get("namespace"), dict)
+                                  or value["namespace"].get("state") not in ("settled", "not_started")):
         return False
     roots = {entry["path"]: entry for entry in value["roots"]}
     return all(item.get("cause") != "resources_unknown" and item.get("path") in roots
@@ -155,7 +239,7 @@ def _remove_directory(parent_fd: int, name: str, device: int, inode: int) -> Non
 
 
 def cleanup(database: Path, call_id: str, root: Path) -> bool:
-    from . import issue_review
+    from . import issue_review, native_namespace
     root = root.parent.resolve() / root.name
     with _database(database) as conn:
         value = read(conn, call_id)
@@ -167,6 +251,13 @@ def cleanup(database: Path, call_id: str, root: Path) -> bool:
     if entry["state"] == "reclaimed":
         return True
     try:
+        if value["version"] == 2 and value["namespace"]["state"] == "active":
+            scope = native_namespace.active()
+            if scope is None or scope.key["callId"] != call_id:
+                raise RuntimeError("native disk cleanup lacks its original live or settled namespace")
+            scope.require_idle()
+        elif value["version"] == 2 and value["namespace"]["state"] != "settled":
+            raise RuntimeError("native disk cleanup lacks process settlement")
         if entry["state"] != "allocated":
             raise RuntimeError("native resource allocation identity is incomplete")
         parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -177,9 +268,10 @@ def cleanup(database: Path, call_id: str, root: Path) -> bool:
                     (entry["parent_device"], entry["parent_inode"], entry["device"], entry["inode"]) \
                     or not stat.S_ISDIR(node.st_mode):
                 raise RuntimeError("native resource directory identity changed")
-            # Provider/group shutdown is owned by its supervisor. A path scan
-            # can veto cleanup, but never authorizes a signal to a found PID.
-            if issue_review._cwd_pids(root, require_complete=True) != []:
+            # Historical Calls retain their path-scan veto. A version-2 Call
+            # uses its original namespace proof; cleanup must not launch an
+            # unowned ps helper after that boundary has already ended.
+            if value["version"] == 1 and issue_review._cwd_pids(root, require_complete=True) != []:
                 raise RuntimeError("native resource directory still has unverified processes")
             _remove_directory(parent_fd, root.name, node.st_dev, node.st_ino)
         finally:

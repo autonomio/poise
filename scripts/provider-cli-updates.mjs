@@ -96,8 +96,8 @@ const versionOf = output => {
 async function readReceipt(path) {
   try { return JSON.parse(await readFile(path, 'utf8')) } catch { return null }
 }
-async function saveReceipt(path, result) {
-  const staged = `${path}.${randomUUID()}.tmp`
+async function saveReceipt(path, result, stagingRoot) {
+  const staged = stagingRoot ? join(stagingRoot, `${randomUUID()}.tmp`) : `${path}.${randomUUID()}.tmp`
   await writeFile(staged, JSON.stringify(result) + '\n', { mode: 0o600 })
   await rename(staged, path)
 }
@@ -113,7 +113,7 @@ async function acquireLock(path, timeoutMs = CLI_UPDATE_TIMEOUT_MS + 30_000) {
 
 // npm replaces its native dependencies in place. Keep each admitted worker
 // on a verified package copy, including helper binaries, across later updates.
-async function codexLaunchSnapshot(resolved, version, root, run, env, remaining) {
+async function codexLaunchSnapshot(resolved, version, root, run, env, remaining, stagingRoot) {
   const destination = join(root, `codex-${hash(resolved).slice(0, 16)}-${version}`)
   const launcher = join(destination, 'bin', 'codex.js')
   const verify = async path => {
@@ -122,7 +122,7 @@ async function codexLaunchSnapshot(resolved, version, root, run, env, remaining)
   }
   try { await access(destination) } catch (error) {
     if (error.code !== 'ENOENT') throw error
-    const staged = `${destination}.${randomUUID()}.tmp`
+    const staged = stagingRoot ? join(stagingRoot, `codex-${randomUUID()}.tmp`) : `${destination}.${randomUUID()}.tmp`
     try {
       await cp(dirname(dirname(resolved)), staged, { recursive: true, dereference: true })
       await verify(join(staged, 'bin', 'codex.js'))
@@ -130,7 +130,7 @@ async function codexLaunchSnapshot(resolved, version, root, run, env, remaining)
     } finally { await rm(staged, { recursive: true, force: true }) }
   }
   await verify(launcher)
-  await saveReceipt(join(root, `codex-${hash(resolved).slice(0, 16)}.launcher.json`), { version, path: launcher })
+  await saveReceipt(join(root, `codex-${hash(resolved).slice(0, 16)}.launcher.json`), { version, path: launcher }, stagingRoot)
   return launcher
 }
 
@@ -171,7 +171,7 @@ async function update(provider, options, requestedAt) {
     try { before = await version(); result.before = before } catch { /* an incomplete npm install may be repairable */ }
     const npmCodex = provider === 'codex' && resolved.endsWith('/lib/node_modules/@openai/codex/bin/codex.js')
     if (before) result.launchPath = npmCodex
-      ? await codexLaunchSnapshot(resolved, before, root, run, env, remaining) : path
+      ? await codexLaunchSnapshot(resolved, before, root, run, env, remaining, options.stagingRoot) : path
     if (result.launchPath) result.launchVersion = before
     if (npmCodex && !before) {
       const retained = await readReceipt(join(root, `codex-${hash(resolved).slice(0, 16)}.launcher.json`))
@@ -206,11 +206,11 @@ async function update(provider, options, requestedAt) {
     const advertised = registryVersion || /(?:Version:|updated[^\n]*?to(?: version)?)[ \t]+(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)/i.exec(output.stdout + '\n' + output.stderr)?.[1]
     if (advertised && advertised !== after && !(provider === 'muse' && after.startsWith(advertised + '-R'))) throw new Error(`The updater installed ${advertised}, but Poise's launcher still reports ${after}; check duplicate CLI installations on PATH`)
     result.launchPath = npmCodex
-      ? await codexLaunchSnapshot(resolved, after, root, run, env, remaining) : path
+      ? await codexLaunchSnapshot(resolved, after, root, run, env, remaining, options.stagingRoot) : path
     result.launchVersion = after
     result.status = before === after ? 'current' : 'updated'
     result.checkedAt = new Date().toISOString()
-    await saveReceipt(receipt, result)
+    await saveReceipt(receipt, result, options.stagingRoot)
   } catch (error) {
     result.status = 'unavailable'
     result.error = redact(error instanceof Error ? error.message : String(error), environmentSecrets(source))
