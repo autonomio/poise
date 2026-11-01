@@ -150,3 +150,9 @@ def test_spawn_rejection_is_explicitly_not_started(tmp_path, monkeypatch):
     monkeypatch.setattr(native_action.subprocess, "Popen", missing)
     with pytest.raises(native_action.NotStarted):
         native_action.execute(["--merge-if-ready", "7"], tmp_path)
+
+
+def test_unmapped_signal_cannot_erase_an_accepted_response():
+    assert native_action.process_failure(7) == {"code": 7, "signal": None}
+    assert native_action.process_failure(-9) == {"code": None, "signal": "SIGKILL"}
+    assert native_action.process_failure(-35) == {"code": None, "signal": "SIG35"}

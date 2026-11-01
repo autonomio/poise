@@ -1277,8 +1277,7 @@ def run_native_action(argv: list[str], cwd: str, repository: str, actor: str, co
         started = True
         result, code = native_action.execute(argv, physical)
         if code:
-            result = {**result, "nativeProcessFailure": {"code": code if code >= 0 else None,
-                "signal": signal.Signals(-code).name if code < 0 else None}}
+            result = {**result, "nativeProcessFailure": native_action.process_failure(code)}
         response = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         _native_action_artifact(id_, "received_native_action", request_sha, response)
         finish(id_, "completed", response=response, outcome="native_action", action="native_action", head_sha=head)

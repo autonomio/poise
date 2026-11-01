@@ -5,6 +5,7 @@ import json
 import os
 import re
 import selectors
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,16 @@ class ActionFailure(RuntimeError):
     def __init__(self, message: str, diagnostic: dict):
         super().__init__(message)
         self.diagnostic = diagnostic
+
+
+def process_failure(code: int) -> dict:
+    if code >= 0:
+        return {"code": code, "signal": None}
+    try:
+        name = signal.Signals(-code).name
+    except ValueError:
+        name = f"SIG{-code}"  # Preserve real-time signals without a Python enum member.
+    return {"code": None, "signal": name}
 
 
 def argument(argv: list[str], flag: str) -> str:
