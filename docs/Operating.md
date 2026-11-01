@@ -887,6 +887,11 @@ return-to-idle evidence must include it. Antigravity's external history layout
 is not established by these categories, so this inventory cannot establish
 complete provider-disk coverage for an unexercised Antigravity run.
 
+Reclamation still requires the original filesystem's positive unlink proof.
+Persistent-home backends can retain a link count of one after unlink; an
+unaccepted or unavailable proof retains capacity. Retention checks alone do not
+establish return-to-idle on those backends.
+
 New native atomic checkout gates live inside their original owned Call root and
 are reclaimed with that root after positive process settlement. Codex issue
 review and implementation/repair commands reuse structured review's isolated
