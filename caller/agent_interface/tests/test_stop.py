@@ -48,11 +48,21 @@ class TestStopCall(TestCase):
         self.assertEqual((row["pid"], row["status"]), (str(agent_interface.os.getpid()), "running"))
 
     @skipUnless(sys.platform == "linux", "kernel-pinned Stop is a Linux capability")
-    def test_stops_the_verified_supervisor_and_finishes_the_row(self):
+    def test_stops_the_verified_supervisor_without_access_to_init_namespace(self):
         process = self.sleeper()
-        id_ = self.running(process.pid)
-        started = time()
-        result = agent_interface.stop_call(id_)
+        original_stat = Path.stat
+
+        def stat(path, *args, **kwargs):
+            if str(path) == "/proc/1/ns/pid":
+                raise PermissionError("init belongs to another user")
+            return original_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", new=stat):
+            id_ = self.running(process.pid)
+            agent_interface.process_identity.decode(
+                agent_interface.process_identity.capture(process.pid), process.pid)
+            started = time()
+            result = agent_interface.stop_call(id_)
         self.assertEqual(result, {"id": id_, "stopped": True, "status": "failed", "error_code": "stopped"})
         self.assertIsNotNone(process.wait(timeout=5))
         with agent_interface.db() as conn:

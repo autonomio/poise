@@ -2,6 +2,7 @@ import errno
 import json
 import os
 import signal
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -21,6 +22,18 @@ class ProcessIdentityCase(TestCase):
                 patch.object(process_identity, "_start") as start:
             self.assertEqual(process_identity.state(self.encoded, 42), "different")
             start.assert_not_called()
+
+    def test_epoch_does_not_require_dereferencing_another_users_namespace(self):
+        def stat(path):
+            if str(path) == "/proc/1/ns/pid":
+                raise PermissionError("init belongs to another user")
+            self.assertEqual(str(path), "/proc/self/ns/pid")
+            return SimpleNamespace(st_dev=1, st_ino=2)
+
+        with patch.object(process_identity.Path, "stat", new=stat), \
+                patch.object(process_identity.Path, "read_text", return_value="boot-a"), \
+                patch.object(process_identity, "_start", return_value="10"):
+            self.assertEqual(process_identity.epoch(), self.epoch)
 
     def test_normal_finalization_requires_this_process_original_registration(self):
         encoded = process_identity.capture(os.getpid())

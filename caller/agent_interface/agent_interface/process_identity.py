@@ -27,7 +27,7 @@ def _start(pid: int) -> str:
 
 
 def epoch() -> dict:
-    namespace = Path("/proc/1/ns/pid").stat()
+    namespace = Path("/proc/self/ns/pid").stat()
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     if not boot:
         raise ValueError("boot identity is empty")
