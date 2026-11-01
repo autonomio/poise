@@ -703,6 +703,10 @@ pass (`workspace.upgrade.aborted`, `workspace.upgrade.native-pending`). This kee
 the original cleanup witnesses alive. Older workspaces can still upgrade when
 cooperatively idle. Abrupt container loss without original cleanup proof keeps
 the disk and reservation held; a restart cannot prove reclamation.
+Pending or unknown native cleanup without a live Caller releases the drain
+immediately, without activation or waiting out its deadline. Later upgrade passes
+retry the same check while ordinary maintenance retries cleanup; a permanent
+resource hold cannot continuously drain Chat.
 After starting the replacement the gateway
 waits for its health before declaring the upgrade finished, within the two-minute
 idle-to-ready bound; past it the miss is recorded (`workspace.upgrade.ready.missed`),

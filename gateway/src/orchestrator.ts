@@ -677,8 +677,7 @@ export class Orchestrator {
     let recreated = false
     // Whether a drain POST left the gateway, visible even when drain() throws before returning.
     const dispatched = { value: false }
-    const abortUnknown = async (): Promise<void> => {
-      const reason = 'the drain timed out without confirmed admission and idleness'
+    const abortUnknown = async (reason = 'the drain timed out without confirmed admission and idleness'): Promise<void> => {
       await this.releaseDrain(handle, login, reason)
       // A failed admission is a deferred update, not routine: it warns so the owner can see it.
       this.deps.log.warn('workspace.upgrade.aborted', { handle, reason,
@@ -795,6 +794,11 @@ export class Orchestrator {
         if (result.observed) admitted = result.admitted
         if (!result.idle) sawDown = sawDown || result.sawDown
         lastCounts = result.lastCounts ?? lastCounts
+        if (result.nativePending) {
+          this.deps.log.warn('workspace.upgrade.native-pending', { handle })
+          await abortUnknown('native cleanup remains pending or unknown without a live Caller; deferred to the next upgrade pass')
+          return
+        }
         if (result.idle) {
           drainedIdle = true
         } else if ((confirmedBusy && admitted) || sawDown) {
@@ -894,7 +898,7 @@ export class Orchestrator {
    * answer showing it off un-admits, and a round with no usable answer leaves it alone.
    */
   private async drain(handle: string, login: string, deadline: number, dispatched: { value: boolean }): Promise<{
-    idle: boolean; attempted: boolean; confirmedBusy: boolean; admitted: boolean; observed: boolean; sawDown: boolean;
+    idle: boolean; nativePending: boolean; attempted: boolean; confirmedBusy: boolean; admitted: boolean; observed: boolean; sawDown: boolean;
     lastCounts: { activeChatTurns: number; runningCallerCalls: number; backgroundWork: number } | null
   }> {
     const { config, log, now } = this.deps
@@ -906,7 +910,10 @@ export class Orchestrator {
     let sawDown = false
     let sawDraining = false
     const lastCounts: { counts: { activeChatTurns: number; runningCallerCalls: number; backgroundWork: number } | null } = { counts: null }
-    const done = (idle: boolean) => ({ idle, attempted: dispatched.value, confirmedBusy, admitted, observed, sawDown, lastCounts: lastCounts.counts })
+    const done = (idle: boolean, nativePending = false) => ({ idle, nativePending, attempted: dispatched.value, confirmedBusy, admitted, observed, sawDown, lastCounts: lastCounts.counts })
+    // Original cleanup may be permanently held after controller loss. It must not subject Chat
+    // to a full drain deadline on every upgrade pass; existing maintenance can retry without it.
+    const pendingCleanup = (health: ServiceHealth): boolean => !health.idle && health.unsettledNativeCalls !== 0 && health.runningCallerCalls === 0
     const waiting = (health: ServiceHealth): void => {
       log.info('workspace.drain.waiting', {
         handle,
@@ -967,6 +974,7 @@ export class Orchestrator {
         this.lifecycle('workspace.drain.requested', handle, counts(health))
         note(health)
         if (health.idle) return done(true)
+        if (pendingCleanup(health)) return done(false, true)
       }
     } catch (error) {
       if (error instanceof WorkspaceNetworkError) throw error
@@ -985,6 +993,7 @@ export class Orchestrator {
           else {
             if (!admitted) this.lifecycle('workspace.drain.requested', handle, counts(health))
             note(health)
+            if (pendingCleanup(health)) return done(false, true)
             if (health.idle) {
               this.lifecycle('workspace.drain.idle', handle)
               return done(true)
@@ -994,6 +1003,7 @@ export class Orchestrator {
         } else {
           const health = await this.serviceCall(handle, login, 'GET', '/api/service/health')
           note(health)
+          if (health.ok && health.draining && pendingCleanup(health)) return done(false, true)
           // Idle behind an applied drain finishes; idle without one waits for a renewal to admit.
           // A lifted drain re-applies on renewal, so waiting costs one renew cycle, never safety.
           if (health.ok && health.idle && health.draining) {

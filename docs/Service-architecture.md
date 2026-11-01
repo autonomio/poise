@@ -619,11 +619,14 @@ assertion may only resume, and anything else is refused with 403):
   recreates the container. Past the budget, cutting confirmed busy work requires
   a fresh admitted drain answer with `unsettledNativeCalls: 0` and no Caller or
   background work. This covers launches still before their Call registration.
-  Positive, null
-  or missing native counts, unreachable workspaces and unconfirmed drain answers
+  Positive, null or missing native counts, unreachable workspaces and unconfirmed drain answers
   abort replacement, preserving the original supervisor's cleanup witnesses and
   releasing its drain for the next pass (`workspace.upgrade.aborted`). While it
-  waits it logs `workspace.drain.waiting` at each renew with the counters and the
+  has pending or unknown native cleanup but no live Caller, it defers immediately
+  and releases the drain without activation or waiting out the deadline. Existing
+  maintenance retries cleanup independently; a permanent hold cannot keep Chat
+  continuously drained across upgrade passes. While waiting for live work, the gateway
+  logs `workspace.drain.waiting` at each renew with the counters and the
   time left, `workspace.drain.lifted` when a drain it saw on is gone while the
   workspace still isn't idle, and `workspace.drain.timeout` with the last known
   counters. After starting the replacement the gateway waits for its health before

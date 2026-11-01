@@ -513,6 +513,23 @@ describe('image upgrades', () => {
     expect(h.docker.containers.get('poise-ws-alice')).toMatchObject({ imageId: CURRENT_IMAGE_ID, running: true })
   })
 
+  it.each([1, null])('promptly releases repeated drains for held native cleanup (%s), keeping Chat available', async (pending) => {
+    await start({ env: { POISE_DRAIN_TIMEOUT: '7200' } })
+    const before = h.docker.containers.get('poise-ws-alice')?.id
+    h.workspace.health.unsettledNativeCalls = pending
+    h.workspace.health.backgroundWork = 1
+    h.workspace.health.activeChatTurns = 1
+    for (let pass = 0; pass < 3; pass += 1) {
+      await h.orchestrator.upgradePass()
+      expect(h.workspace.health.draining).toBe(false)
+      expect(h.docker.containers.get('poise-ws-alice')?.id).toBe(before)
+    }
+    expect(h.docker.tasks).toHaveLength(0)
+    expect(events(h.logs, 'workspace.drain.timeout')).toHaveLength(0)
+    expect(h.workspace.serviceRequests.filter(request => request.url === '/api/service/drain')).toHaveLength(3)
+    expect(h.workspace.serviceRequests.filter(request => request.url === '/api/service/resume')).toHaveLength(3)
+  }, 5000)
+
   it('notices a drain lifted while it waits instead of silently draining again', async () => {
     await start({ drainRenewMs: 200 })
     h.workspace.health.runningCallerCalls = 1
