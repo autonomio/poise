@@ -137,3 +137,12 @@ def response(path: Path, responses: Path) -> Path:
             or any(char not in "0123456789abcdef" for char in path.stem):
         raise RuntimeError("Caller response differs from its original metadata directory")
     return directory(responses, responses=True) / path.name
+
+
+def response_name(path: Path) -> str:
+    return str(path.resolve() if _store() is None else path.absolute())
+
+
+def open_responses(path: Path) -> int:
+    bound = directory(path, responses=True)
+    return os.open(bound, os.O_RDONLY | os.O_DIRECTORY | (os.O_NOFOLLOW if _store() is None else 0))

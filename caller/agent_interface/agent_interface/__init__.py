@@ -547,7 +547,7 @@ def finish(
     # First terminal writer wins: a worker finishing after stop/reap must not
     # overwrite stopped/interrupted. The loser keeps its response file out of
     # the row and reports the existing state.
-    path = str((RESPONSES / f"{id_}.txt").absolute()) if response else None
+    path = caller_store.response_name(RESPONSES / f"{id_}.txt") if response else None
     ended_at = time()
     with db() as conn:
         persisted = False
@@ -1242,7 +1242,7 @@ def _native_action_artifact(call_id: str, phase: str, request_sha: str, response
     path = None
     if response is not None:
         artifact["response_sha"] = hashlib.sha256(response.encode()).hexdigest()
-        directory = os.open(caller_store.directory(RESPONSES, responses=True), os.O_RDONLY | os.O_DIRECTORY)
+        directory = caller_store.open_responses(RESPONSES)
         try:
             name = f"{call_id}.txt"
             try:
@@ -1258,7 +1258,7 @@ def _native_action_artifact(call_id: str, phase: str, request_sha: str, response
                     output.flush()
                     os.fsync(output.fileno())
             os.fsync(directory)
-            path = str((RESPONSES / name).absolute())
+            path = caller_store.response_name(RESPONSES / name)
         finally:
             os.close(directory)
     with db() as conn:
