@@ -1,8 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { NOW, session, installRoutes, installSocket, makeState, input, timersData, timerView, wakeData } from './fixtures/chat'
 import type { TimerSummary } from '../../server/chat/protocol'
 
 test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(Date.parse(NOW))
   await page.addInitScript(() => {
     if (!sessionStorage.getItem('chat-fixture-initialized')) {
       localStorage.clear()
@@ -159,11 +160,19 @@ test('marks /manager as built in, edits it without a Delete, and refuses it in r
   expect(sock.framesOf('context.reset')).toEqual([])
 })
 
-test('sets the wake interval from the Manager\'s header and Settings and shows its cost and state', async ({ page }) => {
+const WAKE_CLOCK_CASES = [
+  { name: 'same day', now: '2026-10-31T12:00:00Z', hour: '13:00', five: '12:05', failure: '11:50', thirty: '12:30' },
+  { name: 'across midnight', now: '2026-10-31T23:30:00Z', hour: '1 Nov 00:30', five: '23:35', failure: '23:20', thirty: '1 Nov 00:00' },
+] as const
+
+async function checkWakeControls(page: Page, clock: typeof WAKE_CLOCK_CASES[number]): Promise<void> {
+  const now = Date.parse(clock.now)
+  await page.clock.setFixedTime(now)
   const manager = session({ id: 'm1', title: 'Manager', role: 'manager', createdAt: NOW })
   const state = makeState([manager, session({ id: 's2', title: 'Second', createdAt: '2026-09-18T10:00:00.000Z' })])
+  state.wakeNow = now
   state.settings.timezone = 'UTC'
-  state.wake = wakeData()
+  state.wake = wakeData(now)
   await installRoutes(page, state)
   const sock = await installSocket(page, state)
   await page.goto('/')
@@ -175,14 +184,14 @@ test('sets the wake interval from the Manager\'s header and Settings and shows i
   await expect(wake).toBeVisible()
   await expect(wake.locator('option')).toHaveText(['60 min', '30 min', '15 min', '10 min', '5 min'])
   await expect(wake).toHaveValue('60')
-  await expect(status).toHaveText(/Up to 24 turns a day · next \d\d:\d\d/)
+  await expect(status).toHaveText(`Up to 24 turns a day · next ${clock.hour}`)
 
   // Choosing an option saves at once, with no other click.
   await wake.selectOption('5')
   await expect.poll(() => state.calls.find(call => call.method === 'PUT' && call.path === '/api/chat/manager/wake')?.body)
     .toMatchObject({ everyMinutes: 5, revision: 1 })
   await expect(wake).toHaveValue('5')
-  await expect(status).toHaveText(/Up to 288 turns a day · next \d\d:\d\d/)
+  await expect(status).toHaveText(`Up to 288 turns a day · next ${clock.five}`)
 
   // The select stays enabled while the Manager runs.
   state.sessions[0] = { ...manager, status: 'running', lastSeq: 1 }
@@ -193,19 +202,19 @@ test('sets the wake interval from the Manager\'s header and Settings and shows i
   // Every status line renders from its fixture state.
   const wakeSummary = (overrides: Partial<TimerSummary> = {}): TimerSummary => ({ id: 'wake-1', sessionId: 'm1',
     label: 'Scheduled wake-up', preview: 'Scheduled wake-up', schedule: { kind: 'every', minutes: 5 },
-    nextAt: new Date(Date.now() + 5 * 60_000).toISOString(), notBefore: null, state: 'active',
+    nextAt: new Date(now + 5 * 60_000).toISOString(), notBefore: null, state: 'active',
     setBy: { kind: 'person' }, failures: 0, skipped: 0, createdAt: NOW, system: 'manager-wake', ...overrides })
   const refreshWake = async () => {
     sock.push('m1', { type: 'timer.changed', timer: wakeSummary(), change: 'updated', by: { kind: 'person' } })
   }
-  state.wake = wakeData({ everyMinutes: 5, revision: 2, timer: null, pendingOn: 'charter' })
+  state.wake = wakeData(now, { everyMinutes: 5, revision: 2, timer: null, pendingOn: 'charter' })
   await refreshWake()
   await expect(status).toHaveText('Up to 288 turns a day · wake-ups start when the /manager snippet has text')
-  state.wake = wakeData({ everyMinutes: 5, revision: 2, timer: null, pendingOn: 'manager' })
+  state.wake = wakeData(now, { everyMinutes: 5, revision: 2, timer: null, pendingOn: 'manager' })
   await refreshWake()
   await expect(status).toHaveText('Up to 288 turns a day · wake-ups start when you create a Manager')
-  state.wake = wakeData({ everyMinutes: 5, revision: 2,
-    timer: { id: 'wake-1', state: 'active', nextAt: new Date(Date.now() + 5 * 60_000).toISOString(), waitingFor: 'running' } })
+  state.wake = wakeData(now, { everyMinutes: 5, revision: 2,
+    timer: { id: 'wake-1', state: 'active', nextAt: new Date(now + 5 * 60_000).toISOString(), waitingFor: 'running' } })
   await refreshWake()
   await expect(status).toHaveText('Up to 288 turns a day · due now · waiting: chat is running')
   state.wake!.timer!.waitingFor = 'model'
@@ -216,20 +225,21 @@ test('sets the wake interval from the Manager\'s header and Settings and shows i
     ['person_held', 'On hold: you put the Manager on hold'],
     ['all_held', 'On hold: all timers are on hold'],
   ] as const) {
-    state.wake = wakeData({ everyMinutes: 5, revision: 2,
-      timer: { id: 'wake-1', state: 'held', reason, nextAt: new Date(Date.now() + 5 * 60_000).toISOString() } })
+    state.wake = wakeData(now, { everyMinutes: 5, revision: 2,
+      timer: { id: 'wake-1', state: 'held', reason, nextAt: new Date(now + 5 * 60_000).toISOString() } })
     await refreshWake()
     await expect(status).toHaveText(line)
   }
 
   // A failed last wake shows the error and the next time.
-  state.wake = wakeData({ everyMinutes: 5, revision: 2, lastFailure: { at: new Date().toISOString(), error: 'wake boom' } })
+  state.wake = wakeData(now, { everyMinutes: 5, revision: 2, lastFailure: { at: new Date(now - 10 * 60_000).toISOString(), error: 'wake boom' } })
   await refreshWake()
-  await expect(status).toHaveText(/Up to 288 turns a day · last wake-up failed at \d\d:\d\d: wake boom · next \d\d:\d\d/)
+  await expect(status).toHaveText(`Up to 288 turns a day · last wake-up failed at ${clock.failure}: wake boom · next ${clock.hour}`)
 
   // The Timers panel shows the wake-up with its note and no Cancel or Re-arm.
   state.timers = { m1: timersData({ timers: [timerView({ id: 'wake-1', sessionId: 'm1', label: 'Scheduled wake-up',
-    message: 'Scheduled wake-up', schedule: { kind: 'every', minutes: 5 }, setBy: { kind: 'person' }, system: 'manager-wake' })] }) }
+    message: 'Scheduled wake-up', schedule: { kind: 'every', minutes: 5 }, nextAt: new Date(now + 5 * 60_000).toISOString(),
+    setBy: { kind: 'person' }, system: 'manager-wake' })], scheduler: { running: true, lastTickAt: new Date(now).toISOString() } }) }
   await page.getByRole('button', { name: 'Timers', exact: true }).click()
   const pane = page.locator('#chat-timers-pane')
   await expect(pane).toBeVisible()
@@ -284,22 +294,34 @@ test('sets the wake interval from the Manager\'s header and Settings and shows i
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.locator('[data-settings="general"]').click()
   const mirror = page.locator('#st-manager-wake')
+  const mirrorStatus = page.locator('.st-manager-wake-status')
   await expect(mirror).toBeVisible()
   await expect(mirror).toHaveValue('5')
+  await expect(mirrorStatus).toHaveText(`Up to 288 turns a day · last wake-up failed at ${clock.failure}: wake boom · next ${clock.hour}`)
   await expect(page.locator('#settings-panel')).toContainText("The Manager's standing instructions are the /manager snippet, edited in Snippets.")
   await mirror.selectOption('30')
   await expect.poll(() => state.calls.filter(call => call.method === 'PUT' && call.path === '/api/chat/manager/wake').at(-1)?.body)
     .toMatchObject({ everyMinutes: 30, revision: 2 })
   await expect(mirror).toHaveValue('30')
+  await expect(mirrorStatus).toHaveText(`Up to 48 turns a day · last wake-up failed at ${clock.failure}: wake boom · next ${clock.thirty}`)
 
   // The New session dialog names the wake-up while no Manager exists.
   state.sessions = [session({ id: 's1', title: 'Only', createdAt: NOW })]
-  state.wake = wakeData({ everyMinutes: 60, revision: 1 })
+  state.wake = wakeData(now, { everyMinutes: 60, revision: 1 })
   state.calls.length = 0
   await page.goto('/')
   await page.getByRole('button', { name: 'New session' }).click()
   await expect(page.locator('.chat-dialog-manager-wake'))
     .toHaveText("Wakes every 60 minutes (up to 24 turns a day). Change it in the Manager's header.")
+}
+
+test.describe('Manager wake clock', () => {
+  test.use({ timezoneId: 'Pacific/Kiritimati' })
+  for (const clock of WAKE_CLOCK_CASES) {
+    test(`sets the wake interval from the Manager's header and Settings and shows its cost and state (${clock.name})`, async ({ page }) => {
+      await checkWakeControls(page, clock)
+    })
+  }
 })
 
 test('shows the retired-model notice in the Manager header', async ({ page }) => {
