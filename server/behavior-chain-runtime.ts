@@ -4,7 +4,7 @@ import { resourceReleaseContradicted, resourceReleaseProven } from './behavior-r
 import type { DetachedProcessExit } from './process'
 import { chainReviewResponse, closedChainTarget, decideBehaviorChain, type ChainDecision, type ChainObservation } from './behavior-chain-decision'
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainEvent, type ChainInvocation } from './behavior-chain-store'
-import { budgetShortfall, headroomShortfall, measureBehaviorHeadroom, readBehaviorResourceAdmission,
+import { budgetShortfall, executionLimits, headroomShortfall, measureBehaviorHeadroom, readBehaviorResourceAdmission,
   type BehaviorResourceAdmission, type BehaviorResourceHeadroom } from './behavior-resources'
 import { attributedNativeAction, matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement } from './behavior-chain-action'
 
@@ -45,6 +45,7 @@ function receipt(call: LogEntry): Record<string, unknown> {
     issue_revision: call.issue_revision ?? null,
     resources_settled_at: call.resources_settled_at ?? null,
     resource_ownership: call.resource_ownership ?? null,
+    ...(call.resource_guard ? { resource_guard: call.resource_guard } : {}),
     error: call.error, error_code: call.error_code ?? null, completedAt: call.completed_at ? Date.parse(call.completed_at) : null }
 }
 
@@ -254,10 +255,15 @@ export class BehaviorChainRuntime {
               continue
             }
             const id = randomUUID()
-            const request = await this.operations.request(chain, observation, decision, id)
+            let request = await this.operations.request(chain, observation, decision, id)
             if (!request) {
               this.append(chain, { type: 'chain.waiting', reason: `${decision.behavior} is waiting for native provider backoff` })
               continue
+            }
+            if (resources) {
+              const resourceLimits = executionLimits(resources)
+              request = { ...request, resourceLimits, ...(request.command === 'agent-interface'
+                ? { argv: [...request.argv, '--resource-limits-json', JSON.stringify(resourceLimits)] } : {}) }
             }
             // Preparation can await provider/auth/configuration. Recheck admission
             // at the last boundary, before committing authority for an effect.
@@ -305,10 +311,15 @@ export class BehaviorChainRuntime {
       const continuation = matches[0]
       if (!continuation) publicationPending = true
       else {
+        if (invocation.request.resourceLimits
+          && chainBasis(continuation.resource_guard?.limits ?? null) !== chainBasis(invocation.request.resourceLimits)) {
+          throw new Error('native publication resource ceilings differ from their original admission')
+        }
         if (continuation.source !== 'poise:behavior-chain' || continuation.behavior !== 'native_publication'
         || continuation.repo !== chain.repository || continuation.actor !== invocation.actor || continuation.expected_head !== resume.head
         || continuation.artifact?.request_sha && continuation.artifact.request_sha !== chainBasis({ kind: 'native_publication',
-          call_id: resume.callId, digest: resume.plan, head: resume.head })) throw new Error('native publication differs from its original completion request')
+          call_id: resume.callId, digest: resume.plan, head: resume.head,
+          ...(invocation.request.resourceLimits ? { resourceLimits: invocation.request.resourceLimits } : {}) })) throw new Error('native publication differs from its original completion request')
         const publicationReceipt = { ...receipt(continuation), callId: continuation.id }
         if (chainBasis(invocation.evidence?.publicationReceipt ?? null) !== chainBasis(publicationReceipt)) {
           chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { publicationReceipt } })
@@ -316,6 +327,7 @@ export class BehaviorChainRuntime {
         if (['stopped', 'stopping'].includes(continuation.error_code || '') && !chain.held) {
           chain = this.append(chain, { type: 'chain.held', reason: 'native publication completion was stopped by the person' })
         }
+        if (continuation.resource_guard?.failure && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: continuation.error })
         publicationPending = !nativeResourcesReleased(continuation)
       }
     }
@@ -328,6 +340,10 @@ export class BehaviorChainRuntime {
     if (calls.length !== 1) return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
       reason: 'multiple native calls claim one admitted invocation' })
     const call = calls[0]
+    if (invocation.request.resourceLimits && call.outcome !== 'target_closed'
+      && chainBasis(call.resource_guard?.limits ?? null) !== chainBasis(invocation.request.resourceLimits)) {
+      throw new Error('native resource ceilings differ from their immutable admission')
+    }
     if (call.source !== 'poise:behavior-chain' || call.actor !== invocation.actor || call.repo !== chain.repository
       || call.behavior !== nativeBehavior(invocation.behavior)) throw new Error(`native receipt conflicts with behavior admission ${invocation.id}`)
     if (invocation.model === null && (call.model !== 'native-action'
@@ -338,6 +354,8 @@ export class BehaviorChainRuntime {
     }
     if (call.status === 'running') return chain
     const stopped = ['stopped', 'stopping'].includes(call.error_code || '')
+    const resourceStopped = ['resource_memory_exceeded', 'resource_disk_exceeded', 'resource_measurement_unavailable'].includes(call.error_code || '')
+    if (resourceStopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: call.error })
     if (stopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
     if (!nativeResourcesReleased(call)) {
       const evidence = { ...receipt(call), callId: call.id, ...(invocation.model === null ? { nativeCallId: call.id } : {}) }

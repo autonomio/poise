@@ -1287,12 +1287,24 @@ checkout paths; ordinary shared leases retain their existing protocol. Codex
 issue/implementation and structured review histories use the same per-invocation
 home, preserving sign-in and structured resume. Older shared state remains
 retained and measured under the [storage retention policy](Operating.md#storage-maintenance).
-Forced-container lifecycle proof, post-admission budget enforcement and the
+Bounded Calls also carry immutable execution ceilings and a separate version-1
+`resource_guard` receipt. Caller samples its original boundary off the service
+event loop; a committed breach or stale measurement kills only its pinned holder
+and holds the chain. This sampled guard neither grants deletion authority nor
+replaces positive release proof. Unbounded/older Calls retain their prior path;
+older readers hold a guarded possible-write failure instead of retrying it as
+preflight work. [Accounting and limits](Behavior-chain.md) define coverage,
+overshoot and the component bounds. Forced-container lifecycle proof and the
 frozen real-provider campaign remain #806 obligations.
 
 Claimed disk recovery uses the same original Call and supervisor directory
-handles. A final unlink is proven by the original held directory's zero link
-count, followed by handle closure; its first certificate survives a cleanup
+handles. A final unlink requires the original held directory's zero link count,
+or an empty held directory whose kernel `getcwd` returns `ENOENT` after a
+successful descriptor-based `chdir`. This handles persistent-home backends that
+retain a link count of one after unlink; a literal ` (deleted)` name cannot
+authorize release. The synchronous controller restores its pinned working
+directory before another request runs. Handle closure follows this positive
+proof; its first certificate survives a cleanup
 worker's death before the Caller receipt commits. Private claim attempts never
 enter journal evidence. A new container or lost supervisor without retained
 positive proof remains held: this child does not satisfy the frozen container

@@ -62,7 +62,8 @@ export class BehaviorResourceRecovery {
             if (continuation.source !== 'poise:behavior-chain' || continuation.actor !== invocation.actor || continuation.repo !== chain.repository
               || continuation.behavior !== 'native_publication' || !('head' in resume) || continuation.expected_head !== resume.head
               || !('callId' in resume) || !('plan' in resume)
-              || continuation.artifact?.request_sha !== chainBasis({ kind: 'native_publication', call_id: resume.callId, digest: resume.plan, head: resume.head })) {
+              || continuation.artifact?.request_sha !== chainBasis({ kind: 'native_publication', call_id: resume.callId, digest: resume.plan, head: resume.head,
+                ...(invocation.request.resourceLimits ? { resourceLimits: invocation.request.resourceLimits } : {}) })) {
               throw new Error('native publication resource receipt differs from its original continuation')
             }
             const prior = invocation.evidence?.publicationReceipt

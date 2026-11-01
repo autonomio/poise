@@ -10,20 +10,30 @@ runtime=$2
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 container=poise-native-component-$runtime-$$
+volume=$container-home
+if docker container inspect "$container" >/dev/null 2>&1 || docker volume inspect "$volume" >/dev/null 2>&1; then
+  echo 'native component resource already exists; refusing reuse' >&2
+  rm -rf "$work"
+  exit 1
+fi
+volume_created=false
 cleanup() {
   if docker container inspect "$container" >/dev/null 2>&1; then
     docker logs "$container"
     docker rm --force --volumes "$container" >/dev/null
   fi
+  if [ "$volume_created" = true ]; then docker volume rm "$volume" >/dev/null; fi
   rm -rf "$work"
 }
 trap cleanup EXIT
 key=$(node "$here/identity.mjs" key "$work/gateway.pem")
+docker volume create --label poise.audit.scope=native-component "$volume" >/dev/null
+volume_created=true
 docker run --detach --name "$container" --label poise.audit.scope=native-component \
   --runtime "$runtime" --user 10001:10001 --init --security-opt no-new-privileges --cap-drop ALL \
   --network none --memory 2g --cpus 2 --pids-limit 256 --read-only \
   --tmpfs /tmp:rw,exec,nosuid,nodev,size=128m \
-  --tmpfs /home/poise:rw,exec,nosuid,nodev,uid=10001,gid=10001,size=256m \
+  --mount "type=volume,source=$volume,target=/home/poise" \
   --mount "type=bind,source=$here/native,target=/contract,readonly" \
   -e POISE_MODE=service -e POISE_WORKSPACE_HANDLE=native-component -e POISE_WORKSPACE_OWNER=Native-Component \
   -e POISE_PUBLIC_ORIGIN=https://native-component.poise.test -e "POISE_GATEWAY_PUBLIC_KEY=$key" \
@@ -49,5 +59,9 @@ if [ "$runtime" = runsc ]; then
   docker exec "$container" /opt/caller/venv/bin/python /contract/receipt.py slow
   for fault in parent-loss before-active deleted-before-ack cleaner-loss partial-root partial-before-mkdir permission-zero unknown-process-error base-replaced data-replaced metadata-pid-collision native-coordination native-coordination-replaced paused-maintenance-tick; do
     docker exec "$container" /opt/caller/venv/bin/python /contract/recovery.py "$fault"
+  done
+  for resource_case in memory disk deleted-home deleted-tmp unavailable; do
+    headroom=$(node "$here/native-headroom.mjs" "$container")
+    docker exec -e "POISE_COMPONENT_HEADROOM=$headroom" "$container" /opt/caller/venv/bin/python /contract/limits.py enforced "$resource_case"
   done
 fi
