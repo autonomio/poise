@@ -694,11 +694,15 @@ turn holds the drain at most 30 minutes: past that the workspace stops it
 with a notice in its transcript, naming the update, and the agent keeps its
 context for the next prompt. Once an admitted drain reports the workspace idle
 the gateway recreates the container on the new image with the same home volume;
-past `POISE_DRAIN_TIMEOUT` seconds (90 minutes by default) it recreates a
-workspace that confirmed busy work behind an admitted drain or that it can no
-longer reach, cutting only work that would not settle, and releases one whose
-drain was never admitted or whose answers only timed out or were refused for
-the next pass (`workspace.upgrade.aborted`). After starting the replacement it
+past `POISE_DRAIN_TIMEOUT` seconds (90 minutes by default), cutting confirmed
+busy work requires a fresh admitted drain reporting zero unsettled native Calls.
+Pending or unknown native cleanup, an older busy answer without that count, or
+an unreachable workspace defers replacement and releases the drain for the next
+pass (`workspace.upgrade.aborted`, `workspace.upgrade.native-pending`). This keeps
+the original cleanup witnesses alive. Older workspaces can still upgrade when
+cooperatively idle. Abrupt container loss without original cleanup proof keeps
+the disk and reservation held; a restart cannot prove reclamation.
+After starting the replacement the gateway
 waits for its health before declaring the upgrade finished, within the two-minute
 idle-to-ready bound; past it the miss is recorded (`workspace.upgrade.ready.missed`),
 a late answer still reports its measured `readyAfterMs`, and one that never answers

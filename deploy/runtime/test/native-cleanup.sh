@@ -29,7 +29,8 @@ trap cleanup EXIT
 key=$(node "$here/identity.mjs" key "$work/gateway.pem")
 docker volume create --label poise.audit.scope=native-component "$volume" >/dev/null
 volume_created=true
-docker run --detach --name "$container" --label poise.audit.scope=native-component \
+start_workspace() {
+  docker run --detach --name "$container" --label poise.audit.scope=native-component \
   --runtime "$runtime" --user 10001:10001 --init --security-opt no-new-privileges --cap-drop ALL \
   --network none --memory 2g --cpus 2 --pids-limit 256 --read-only \
   --tmpfs /tmp:rw,exec,nosuid,nodev,size=128m \
@@ -38,14 +39,16 @@ docker run --detach --name "$container" --label poise.audit.scope=native-compone
   -e POISE_MODE=service -e POISE_WORKSPACE_HANDLE=native-component -e POISE_WORKSPACE_OWNER=Native-Component \
   -e POISE_PUBLIC_ORIGIN=https://native-component.poise.test -e "POISE_GATEWAY_PUBLIC_KEY=$key" \
   -e POISE_SKIP_CLI_BOOTSTRAP=1 "$image" >/dev/null
-healthy=false
-for _ in $(seq 1 90); do
-  if docker exec "$container" curl --fail --silent --max-time 2 http://127.0.0.1:5555/api/service/health >/dev/null; then
-    healthy=true; break
-  fi
-  sleep 1
-done
-[ "$healthy" = true ] || { echo 'actual service did not become healthy' >&2; exit 1; }
+  local healthy=false
+  for _ in $(seq 1 90); do
+    if docker exec "$container" curl --fail --silent --max-time 2 http://127.0.0.1:5555/api/service/health >/dev/null; then
+      healthy=true; break
+    fi
+    sleep 1
+  done
+  [ "$healthy" = true ] || { echo 'actual service did not become healthy' >&2; exit 1; }
+}
+start_workspace
 expected=unsupported
 if [ "$runtime" = runsc ]; then expected=supported; fi
 docker exec "$container" /opt/caller/venv/bin/python /contract/service.py "$expected"
@@ -63,5 +66,12 @@ if [ "$runtime" = runsc ]; then
   for resource_case in memory disk deleted-home deleted-tmp unavailable busy-memory; do
     headroom=$(node "$here/native-headroom.mjs" "$container")
     docker exec -e "POISE_COMPONENT_HEADROOM=$headroom" "$container" /opt/caller/venv/bin/python /contract/limits.py enforced "$resource_case"
+  done
+  for replacement in cooperative abrupt; do
+    docker exec "$container" /opt/caller/venv/bin/python /contract/replacement.py before "$replacement"
+    if [ "$replacement" = cooperative ]; then docker stop "$container" >/dev/null; fi
+    docker rm --force "$container" >/dev/null
+    start_workspace
+    docker exec "$container" /opt/caller/venv/bin/python /contract/replacement.py after "$replacement"
   done
 fi

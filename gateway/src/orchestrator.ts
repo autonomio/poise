@@ -38,6 +38,8 @@ export interface ServiceHealth {
   ok: boolean
   activeChatTurns: number
   runningCallerCalls: number
+  /** Missing on older workspaces; null when their native resource records are unreadable. */
+  unsettledNativeCalls?: number | null
   backgroundWork: number
   /** True only when activeChatTurns, runningCallerCalls and backgroundWork are all 0. */
   idle: boolean
@@ -136,10 +138,19 @@ function parseHealth(text: string, what: string): ServiceHealth {
       `the workspace answered ${what} without ok, activeChatTurns, runningCallerCalls, backgroundWork, idle and draining`,
     )
   }
+  const nativeCalls = value.unsettledNativeCalls
+  if (nativeCalls !== undefined && nativeCalls !== null &&
+      (typeof nativeCalls !== 'number' || !Number.isSafeInteger(nativeCalls) || nativeCalls < 0)) {
+    throw new WorkspaceAnswerError(`the workspace answered ${what} with invalid unsettledNativeCalls`)
+  }
+  if (nativeCalls !== undefined && nativeCalls !== 0 && value.idle) {
+    throw new WorkspaceAnswerError(`the workspace answered ${what} idle with unsettled or unknown native resources`)
+  }
   return {
     ok: value.ok,
     activeChatTurns: value.activeChatTurns,
     runningCallerCalls: value.runningCallerCalls,
+    ...(nativeCalls === undefined ? {} : { unsettledNativeCalls: nativeCalls }),
     backgroundWork: value.backgroundWork,
     idle: value.idle,
     draining: value.draining,
@@ -696,8 +707,8 @@ export class Orchestrator {
           // Activation can restart Poise: a switch queued before the drain fires once the drain leaves it
           // idle, and the Poise it starts holds no drain. So drain again, and stop only a workspace still
           // idle. A drain that timed out on confirmed busy work cuts it anyway; one that only timed out
-          // or was never admitted aborts instead of recreating a slow workspace blind. A workspace that
-          // reaches nothing is down and still gets a new container; one that answers unusably does not.
+          // or was never admitted aborts instead of recreating a slow workspace blind. A forced stop
+          // additionally needs a fresh native-cleanup zero below; lost witnesses cannot be recovered.
           if (running && drainedIdle) {
             this.upgradingPhase = 'recheck'
             const recheck = await this.idleUnderDrain(handle, login)
@@ -718,6 +729,14 @@ export class Orchestrator {
                 if (this.deps.now() >= deadline) drainedIdle = false
                 else return 'needs-drain'
               }
+            }
+          }
+          if (running && !drainedIdle) {
+            const fresh = await this.idleUnderDrain(handle, login)
+            if (fresh.unknown || (!fresh.idle && fresh.unsettledNativeCalls !== 0)) {
+              this.deps.log.warn('workspace.upgrade.native-pending', { handle,
+                unsettledNativeCalls: fresh.unsettledNativeCalls ?? null })
+              return 'abort-unknown'
             }
           }
           this.ready.delete(handle)
@@ -800,7 +819,7 @@ export class Orchestrator {
    * reports the drain as this answer showed it, so the caller learns a lost admission even when the
    * recheck cannot proceed; null when nothing observed it.
    */
-  private async idleUnderDrain(handle: string, login: string): Promise<{ idle: boolean; unknown: boolean; down: boolean; draining: boolean | null }> {
+  private async idleUnderDrain(handle: string, login: string): Promise<{ idle: boolean; unknown: boolean; down: boolean; draining: boolean | null; unsettledNativeCalls?: number | null }> {
     try {
       const health = await this.serviceCall(handle, login, 'POST', '/api/service/drain')
       // The recheck is the last gate before the stop: only an idle answer behind an applied drain lets
@@ -811,7 +830,8 @@ export class Orchestrator {
           activeChatTurns: health.activeChatTurns, runningCallerCalls: health.runningCallerCalls, backgroundWork: health.backgroundWork })
         return { idle: false, unknown: true, down: false, draining: health.ok ? health.draining : null }
       }
-      return { idle: health.idle, unknown: false, down: false, draining: true }
+      return { idle: health.idle, unknown: false, down: false, draining: true,
+        unsettledNativeCalls: health.unsettledNativeCalls }
     } catch (error) {
       if (error instanceof WorkspaceNetworkError) throw error
       this.deps.log.warn('workspace.drain.recheck.failed', { handle, error: errorMessage(error) })
