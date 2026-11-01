@@ -65,7 +65,7 @@ gaps names the violation; docs describe what runs.
 | E9 | Every failure is classified by what a retry depends on: input-determined, dependency-determined, or uncertain side effect. | Gap G3: bounded per-target holds are per-code, with carved-out exceptions. |
 | E10 | Dependency recovery releases every target held on that dependency through one probe per window; input-held targets stay held. | Partial: the reviewer trip is half-open with a single probe per window; per-target dependency holds do not release this way (G3). |
 | E11 | Pipeline health reflects eligible-work age and delivered progress. Targeted holds degrade health. | Gap G4: `scopedBehaviorsRuntimeHealth` returns `ok` while every target is held. |
-| E12 | Every blocked target has an actionable explanation. | Partial: `pr-status` carries a closed blocker vocabulary, but flags are display-only and never alert or release. |
+| E12 | Every blocked target has an actionable explanation. | Partial: `pr-status` schema 2 keeps its closed blocker vocabulary, including canonical chain hold/uncertainty alongside legacy dead letters/quarantine. Flags remain display-only and never alert or release. |
 | E13 | Component failure is distinct from intentional admission pauses, including upgrade drains; each pause exposes owner, progress and deadline. | Gap G8: no shared pause vocabulary with owner/progress/deadline. |
 | E14 | Every operation declares idempotency under a pinned precondition, non-idempotency with receipt reconciliation, or unreconcilable hold-and-escalate. | Gap G9: merge SHA-pinning is unstated; grey-CI, merge and resolve handle the same unknown outcome three ways. |
 
@@ -142,6 +142,7 @@ Current `status: 'ok'` does not meet this definition (G4).
 | Caller `review_submission_failed`, `submission: uncertain`, duplicate-verdict and malformed-verdict paths | Uncertain: reconcile from live receipts before any retry; contract violations hold. |
 | Caller `approval_blocked_unresolved_conversations` | Waiting: the approval guard refused while other reviewers' conversations stay open — nothing approved, retried on backoff while the head is unchanged. Proven no-action failures never adopt another request's review; a superseding head keeps the original disposition. |
 | Caller `review_target_closed` | Native terminal closure: settles the obsolete panel without claiming publication or worker termination. |
+| Caller `target_closed` / `not_started` with the exact `admission_fenced` artifact | Original-correlation fence won before any native worker could start. Only validated native resource-release proof permits journal settlement; an existing Call, malformed row or failed fence command retains ownership. This is neither a review verdict nor a legacy review completion. |
 | Caller `not_started` / `preflight_failed`, `launch_preflight_failed` | No-action proof candidates under E3; missing, conflicting or quarantined evidence stays under Needs you. |
 | Caller `stopped`, `stopping`, `interrupted`, `atomic_work_failed` | User stop holds like a bounded failure; process loss closes direct runs as `interrupted`, outside the success rate with unknown duration. |
 | Server `overloaded`, `rate_limit`, `server_error`, `authentication_failed` | Classifier-only codes Caller never writes; provider 429s arrive as `review_provider_exit` or untyped text (G2). |

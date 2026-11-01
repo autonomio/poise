@@ -165,7 +165,8 @@ class Progress:
                                 self.state["warning"] = None
                     snapshot = {**self.state, "heartbeat_at": stamp()}
                     encoded = json.dumps(snapshot, separators=(",", ":"))
-                connection = sqlite3.connect(self.database, timeout=0.1)
+                from . import caller_store
+                connection = caller_store.connect(self.database, timeout=0.1)
                 try:
                     with connection:
                         connection.execute("update calls set progress=? where id=? and ended_at is null", (encoded, self.call_id))

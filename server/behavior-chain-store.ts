@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { Database } from 'better-sqlite3'
 import type { BehaviorCutoverState } from '../src/behavior-cutover'
+import { budgetShortfall, type BehaviorResourceBudget, type BehaviorResourceReservation } from './behavior-resources'
+import { nativeResourcesPending, resourceReleaseProven } from './behavior-resource-receipt'
 
 const CUTOVER_ID = '@behavior-admission'
 interface CutoverEvent { type: 'admission.changed', state: BehaviorCutoverState }
@@ -13,9 +15,14 @@ export interface ChainInvocation {
   actor: string
   model: string | null
   slot: string | null
+  /** Memory/disk allowance held while this invocation is live, including its
+   *  descendants. Null for quick native actions and admissions that predate
+   *  resource budgets; those never count as free against a bounded budget. */
+  reservation?: BehaviorResourceReservation | null
   admittedAt: number
   admissionSequence: number
-  request: { command: 'agent-interface' | 'github-interface', argv: string[], cwd: string, context?: { head: string, reviewRevision: string, queueRemoval?: string } }
+  request: { command: 'agent-interface' | 'github-interface', argv: string[], cwd: string, nativeResources?: 2,
+    context?: { head: string, reviewRevision: string, queueRemoval?: string } }
   state: 'admitted' | 'started' | 'uncertain' | 'settled'
   callId: string | null
   outcome: string | null
@@ -37,6 +44,9 @@ export interface BehaviorChain {
   observation: Record<string, unknown> | null
   invocations: ChainInvocation[]
 }
+/** Admission payload: the reservation is optional so admissions that predate
+ *  resource budgets and quick native actions without an agent stay valid. */
+export type ChainAdmission = Omit<ChainInvocation, 'state' | 'callId' | 'outcome' | 'evidence' | 'admissionSequence' | 'reservation'> & { reservation?: BehaviorResourceReservation | null }
 export type ChainEvent =
   | { type: 'chain.admitted', repository: string, issue: number, branch: string, author: string, reviewer: string }
   | { type: 'chain.observed', observation: Record<string, unknown> }
@@ -44,9 +54,10 @@ export type ChainEvent =
   | { type: 'chain.waiting', reason: string }
   | { type: 'chain.resumed' }
   | { type: 'chain.merged', mergeSha: string, evidence: Record<string, unknown> }
-  | { type: 'invocation.admitted', invocation: Omit<ChainInvocation, 'state' | 'callId' | 'outcome' | 'evidence' | 'admissionSequence'> }
+  | { type: 'invocation.admitted', invocation: ChainAdmission }
   | { type: 'invocation.started', invocationId: string }
   | { type: 'invocation.reconciled', invocationId: string, evidence: Record<string, unknown> }
+  | { type: 'invocation.resources_reconciled', invocationId: string, evidence: Record<string, unknown> }
   | { type: 'invocation.uncertain', invocationId: string, reason: string }
   | { type: 'invocation.settled', invocationId: string, callId: string | null, outcome: string, evidence: Record<string, unknown> }
 
@@ -54,6 +65,38 @@ interface StoredEvent { sequence: number, chain_id: string, event_id: string, at
 const SHA = /^[0-9a-f]{40}$/i
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
+
+function recordObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function resourceArtifact(prior: unknown, value: unknown): Record<string, unknown> {
+  if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a logical artifact')
+  const original = recordObject(prior) ? prior : {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!['resource_error', 'resource_recovered_at'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+      throw new Error('resource reconciliation cannot change a logical artifact')
+    }
+  }
+  return { ...original, ...value }
+}
+// Resource occupancy is derived from every original invocation, including
+// contradictory historical releases. Index the projection so settled history
+// cannot turn each capacity/observation read into a full journal scan.
+const LIVE_MODEL_SQL = 'resource_pending = 1'
+const ACTIVE_WORK_SQL = `CASE WHEN (json_extract(state, '$.mergeSha') IS NULL AND json_extract(state, '$.held') IS NULL)
+  OR (${LIVE_MODEL_SQL}) THEN 1 ELSE 0 END`
+const RECHECK_AT_SQL = `CASE
+  WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND json_extract(state, '$.reviewPending') IS NOT 1 THEN NULL
+  WHEN (${ACTIVE_WORK_SQL}) = 1 THEN 0
+  WHEN json_extract(state, '$.mergeSha') IS NOT NULL AND json_extract(state, '$.invocations[#-1].state') != 'settled'
+    AND json_extract(state, '$.invocations[#-1].request.command') = 'github-interface'
+    AND json_extract(state, '$.invocations[#-1].behavior') IN ('merge-pr', 'resolve-threads') THEN
+      CASE WHEN json_type(state, '$.invocations[#-1].evidence.nativeActionReceipt') IS NULL THEN NULL ELSE 0 END
+  WHEN json_extract(state, '$.observation.checkedAt') IS NULL THEN 0
+  ELSE json_extract(state, '$.observation.checkedAt') + min(86400000, max(120000,
+    json_extract(state, '$.observation.checkedAt') - coalesce(json_extract(state, '$.observation.pull.mergedAt'),
+      json_extract(state, '$.invocations[0].admittedAt'), 0))) END`
 
 export function chainIdentity(repository: string, issue: number): string {
   if (!REPOSITORY.test(repository) || !Number.isSafeInteger(issue) || issue < 1) throw new Error('invalid behavior chain target')
@@ -91,7 +134,10 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
     if (!invocation.id || !invocation.basis || !invocation.actor || !Number.isSafeInteger(invocation.admittedAt)
       || invocation.admittedAt < 0 || next.invocations.some((prior) => prior.id === invocation.id)
       || next.invocations.some((prior) => prior.state !== 'settled')) throw new Error('behavior chain already owns an invocation or admission is invalid')
-    next.invocations.push({ ...invocation, admissionSequence: sequence, state: 'admitted', callId: null, outcome: null, evidence: null })
+    const reservation = invocation.reservation ?? null
+    if (reservation !== null && (!Number.isSafeInteger(reservation.memoryBytes) || reservation.memoryBytes < 0
+      || !Number.isSafeInteger(reservation.diskBytes) || reservation.diskBytes < 0)) throw new Error('behavior invocation carries an invalid resource reservation')
+    next.invocations.push({ ...invocation, reservation, admissionSequence: sequence, state: 'admitted', callId: null, outcome: null, evidence: null })
     next.waiting = null
   } else {
     const invocation = next.invocations.find((candidate) => candidate.id === event.invocationId)
@@ -99,6 +145,27 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
     if (event.type === 'invocation.started') {
       if (invocation.state !== 'admitted') throw new Error('behavior invocation has already started')
       invocation.state = 'started'
+    } else if (event.type === 'invocation.resources_reconciled') {
+      if (!Object.keys(event.evidence).length || Object.keys(event.evidence).some(key => !['resource_ownership', 'resources_settled_at', 'artifact', 'publicationReceipt'].includes(key))) {
+        throw new Error('resource reconciliation cannot change a behavior outcome')
+      }
+      const evidence = { ...event.evidence }
+      if ('artifact' in evidence) evidence.artifact = resourceArtifact(invocation.evidence?.artifact, evidence.artifact)
+      if ('publicationReceipt' in evidence) {
+        const value = evidence.publicationReceipt
+        if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a publication receipt')
+        const before = invocation.evidence?.publicationReceipt
+        const original = recordObject(before) ? before : {}
+        for (const [key, entry] of Object.entries(value)) {
+          if (!['resource_ownership', 'resources_settled_at', 'artifact'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+            throw new Error('resource reconciliation cannot change a publication outcome')
+          }
+        }
+        evidence.publicationReceipt = { ...original, ...value,
+          ...('artifact' in value ? { artifact: resourceArtifact(original.artifact, value.artifact) } : {}) }
+      }
+      if (!resourceReleaseProven({ ...invocation.evidence, ...evidence }, true)) throw new Error('resource reconciliation requires positive original release proof')
+      invocation.evidence = { ...invocation.evidence, ...evidence }
     } else if (event.type === 'invocation.reconciled') {
       if (invocation.state === 'settled' || !Object.keys(event.evidence).length) throw new Error('invalid invocation reconciliation')
       invocation.evidence = { ...invocation.evidence, ...event.evidence }
@@ -121,12 +188,34 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
  * the effect. Unlike the observational ledger, events are never dropped/pruned. */
 export class BehaviorChainJournal {
   constructor(private readonly db: Database) {
+    db.function('behavior_native_resources_pending', { deterministic: true }, encoded => {
+      if (typeof encoded !== 'string') throw new Error('native capacity lacks its invocation receipt')
+      const value: unknown = JSON.parse(encoded)
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid native capacity invocation')
+      return nativeResourcesPending(value as Record<string, unknown>) ? 1 : 0
+    })
+    db.exec(`CREATE TABLE IF NOT EXISTS behavior_chain_current (
+      chain_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL, merged INTEGER NOT NULL,
+      resource_pending INTEGER NOT NULL DEFAULT 1)`)
+    const columns = db.pragma('table_info(behavior_chain_current)') as { name: string }[]
+    if (!columns.some(column => column.name === 'resource_pending')) {
+      db.transaction(() => {
+        db.exec('ALTER TABLE behavior_chain_current ADD COLUMN resource_pending INTEGER NOT NULL DEFAULT 1')
+        db.exec(`UPDATE behavior_chain_current SET resource_pending = CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(state, '$.invocations') i WHERE behavior_native_resources_pending(i.value) = 1
+        ) THEN 1 ELSE 0 END`)
+      }).immediate()
+    }
+    const index = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'behavior_chain_reconciliation'")
+      .get() as { sql: string } | undefined
+    if (index && !index.sql.includes('resource_pending')) db.exec('DROP INDEX behavior_chain_reconciliation')
     db.exec(`
       CREATE TABLE IF NOT EXISTS behavior_chain_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT, chain_id TEXT NOT NULL,
         event_id TEXT NOT NULL UNIQUE, at INTEGER NOT NULL, payload TEXT NOT NULL, state_hash TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS behavior_chain_history ON behavior_chain_events(chain_id, sequence);
+      CREATE INDEX IF NOT EXISTS behavior_chain_event_kind ON behavior_chain_events(chain_id, json_extract(payload, '$.type'), sequence);
       CREATE TRIGGER IF NOT EXISTS behavior_chain_no_update BEFORE UPDATE ON behavior_chain_events
         BEGIN SELECT RAISE(ABORT, 'behavior chain events are immutable'); END;
       CREATE TRIGGER IF NOT EXISTS behavior_chain_no_delete BEFORE DELETE ON behavior_chain_events
@@ -135,6 +224,13 @@ export class BehaviorChainJournal {
         chain_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL, merged INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS behavior_chain_active ON behavior_chain_current(merged, chain_id);
+      CREATE INDEX IF NOT EXISTS behavior_chain_resource_pending ON behavior_chain_current(resource_pending, chain_id);
+      CREATE INDEX IF NOT EXISTS behavior_chain_pull ON behavior_chain_current(
+        lower(json_extract(state, '$.repository')), json_extract(state, '$.observation.publication.pull_number'));
+      CREATE INDEX IF NOT EXISTS behavior_chain_branch ON behavior_chain_current(
+        lower(json_extract(state, '$.repository')), merged, json_extract(state, '$.branch'));
+      CREATE INDEX IF NOT EXISTS behavior_chain_reconciliation ON behavior_chain_current(
+        merged, (${ACTIVE_WORK_SQL}), (${RECHECK_AT_SQL}), chain_id);
     `)
   }
 
@@ -211,15 +307,83 @@ export class BehaviorChainJournal {
       const next = reduceChain(current, event, sequence, id)
       this.db.prepare('INSERT INTO behavior_chain_events(sequence, chain_id, event_id, at, payload, state_hash) VALUES (?, ?, ?, ?, ?, ?)')
         .run(sequence, id, eventId, at, payload, chainBasis(next))
-      this.db.prepare(`INSERT INTO behavior_chain_current(chain_id, sequence, state, merged) VALUES (?, ?, ?, ?)
-        ON CONFLICT(chain_id) DO UPDATE SET sequence=excluded.sequence, state=excluded.state, merged=excluded.merged`)
-        .run(id, next.sequence, JSON.stringify(next), next.mergeSha && !next.reviewPending ? 1 : 0)
+      this.db.prepare(`INSERT INTO behavior_chain_current(chain_id, sequence, state, merged, resource_pending) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(chain_id) DO UPDATE SET sequence=excluded.sequence, state=excluded.state, merged=excluded.merged,
+          resource_pending=excluded.resource_pending`)
+        .run(id, next.sequence, JSON.stringify(next), next.mergeSha && !next.reviewPending ? 1 : 0,
+          next.invocations.some(invocation => nativeResourcesPending({ ...invocation })) ? 1 : 0)
       return next
     }).immediate()
   }
 
   active(after = '', limit = 100): BehaviorChain[] {
     return this.page(after, limit, false)
+  }
+
+  /** Ownership pages stay unchanged. Quiescent history cannot consume the
+   * normal-work page, including when its scheduled recheck becomes due. */
+  reconcilable(after: string, now: number, deferred: boolean, limit = 100): BehaviorChain[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(now) || now < 0) throw new Error('invalid behavior reconciliation page')
+    const rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current WHERE merged = 0
+      AND (${ACTIVE_WORK_SQL}) = ? AND (${RECHECK_AT_SQL}) <= ? AND chain_id > ? ORDER BY chain_id LIMIT ?`)
+      .all(deferred ? 0 : 1, now, after, limit) as Array<{ chain_id: string }>
+    return rows.map((row) => this.read(row.chain_id)!)
+  }
+
+  reconciliationAt(chain: BehaviorChain): number | null {
+    const row = this.db.prepare(`SELECT CASE WHEN (${LIVE_MODEL_SQL}) AND (
+      json_extract(state, '$.mergeSha') IS NOT NULL
+      OR json_extract(state, '$.observation.pull.merged') = 1
+      OR json_extract(state, '$.observation.pull.state') != 'open'
+      OR (json_extract(state, '$.observation.issue.open') = 0
+        AND json_extract(state, '$.invocations[#-1].behavior') IN ('review-issue', 'implement-issue', 'repair-pr')))
+      THEN NULL ELSE (${RECHECK_AT_SQL}) END AS at FROM behavior_chain_current WHERE chain_id = ? AND sequence = ?`)
+      .get(chain.id, chain.sequence) as { at: number | null } | undefined
+    if (!row) throw new Error('behavior chain changed while reading its reconciliation schedule')
+    return row.at
+  }
+
+  /** Original recorded context/panel, never today's settings or a later
+   * observation of an already-merged target. Old history stays immutable. */
+  preMergeObservation(id: string, mergedAt: number): Record<string, unknown> | null {
+    if (!Number.isSafeInteger(mergedAt) || mergedAt < 0) return null
+    const firstMerge = this.db.prepare(`SELECT sequence FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.merged' ORDER BY sequence LIMIT 1`)
+      .get(id) as { sequence: number } | undefined
+    const row = this.db.prepare(`SELECT payload FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.observed' AND sequence < ?
+        AND at <= ? AND json_extract(payload, '$.observation.checkedAt') <= ?
+        AND json_extract(payload, '$.observation.pull.merged') = 0
+      ORDER BY sequence DESC LIMIT 1`).get(id, firstMerge?.sequence ?? Number.MAX_SAFE_INTEGER, mergedAt, mergedAt) as { payload: string } | undefined
+    return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
+  }
+
+  firstMergedObservation(id: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`SELECT payload FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.observed' AND sequence < (
+        SELECT sequence FROM behavior_chain_events WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.merged'
+        ORDER BY sequence LIMIT 1) ORDER BY sequence DESC LIMIT 1`).get(id, id) as { payload: string } | undefined
+    return row ? (JSON.parse(row.payload) as Extract<ChainEvent, { type: 'chain.observed' }>).observation : null
+  }
+
+  /** Bounded status lookup, including completed chains while the datastore
+   * still lists their PR. The journal hash validates the selected projection. */
+  forPull(repository: string, number: number, identity?: { headRef: string | null, headRepo: string | null }): BehaviorChain | null {
+    let rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current
+      WHERE lower(json_extract(state, '$.repository')) = lower(?)
+        AND json_extract(state, '$.observation.publication.pull_number') = ? LIMIT 2`)
+      .all(repository, number) as Array<{ chain_id: string }>
+    if (!rows.length && identity?.headRef && identity.headRepo?.toLowerCase() === repository.toLowerCase()) {
+      rows = this.db.prepare(`SELECT chain_id FROM behavior_chain_current
+        WHERE merged = 0 AND lower(json_extract(state, '$.repository')) = lower(?) AND json_extract(state, '$.branch') = ? LIMIT 2`)
+        .all(repository, identity.headRef) as Array<{ chain_id: string }>
+    }
+    if (rows.length > 1) throw new Error('multiple behavior chains claim the same pull request')
+    if (!rows.length) return null
+    const chain = this.read(rows[0].chain_id)!
+    const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
+    if (publication?.pull_number != null && publication.pull_number !== number) throw new Error('native branch belongs to a different published pull request')
+    return chain
   }
 
   page(after = '', limit = 100, merged: boolean | null = null): BehaviorChain[] {
@@ -238,22 +402,70 @@ export class BehaviorChainJournal {
     for (const row of this.db.prepare('SELECT chain_id FROM behavior_chain_current').iterate() as Iterable<{ chain_id: string }>) this.read(row.chain_id)
   }
 
-  admitInvocation(chain: BehaviorChain, eventId: string, invocation: Extract<ChainEvent, { type: 'invocation.admitted' }>['invocation'], capacity: number): BehaviorChain | null {
+  admitInvocation(chain: BehaviorChain, eventId: string, invocation: ChainAdmission, capacity: number, budget: BehaviorResourceBudget | null = null): BehaviorChain | null {
     this.durable()
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('native invocation capacity must be positive')
     return this.db.transaction(() => {
       if (this.cutover().mode === 'draining') return null
+      if (chain.invocations.some(prior => nativeResourcesPending({ ...prior }))) return null
       if (invocation.model !== null && !this.modelCapacityAvailable(capacity)) return null
+      if (budget && (budget.memoryBytes !== null || budget.diskBytes !== null)
+        && (invocation.model !== null || invocation.request.nativeResources === 2)) {
+        const reservation = invocation.reservation
+        if (!reservation || !Number.isSafeInteger(reservation.memoryBytes) || reservation.memoryBytes < 0
+          || !Number.isSafeInteger(reservation.diskBytes) || reservation.diskBytes < 0) throw new Error('behavior resource budget is configured but the admission carries no valid reservation')
+        const reserved = this.reservedResources()
+        // Unknown ownership never reads as free: a live invocation that
+        // predates reservations blocks bounded admissions until it settles.
+        if (reserved.unaccounted > 0 || budgetShortfall(budget, reserved, reservation)) return null
+      }
       return this.append(chain.id, eventId, chain.sequence, { type: 'invocation.admitted', invocation })
     }).immediate()
   }
 
   modelCapacityAvailable(capacity: number): boolean {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('native invocation capacity must be positive')
+    return this.liveModelInvocationCount() < capacity
+  }
+
+  liveModelInvocationCount(): number {
     const row = this.db.prepare(`SELECT count(*) AS count FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
-      WHERE c.merged = 0 AND json_extract(i.value, '$.state') != 'settled'
-        AND json_type(i.value, '$.model') != 'null' AND json_extract(i.value, '$.evidence.resources_settled_at') IS NULL`).get() as { count: number }
-    return row.count < capacity
+      WHERE c.resource_pending = 1 AND json_extract(i.value, '$.model') IS NOT NULL
+        AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
+    return row.count
+  }
+
+  /** Includes held/merged historical admissions. It is a resource-only page,
+   * independent of organization readiness and behavior admission controls. */
+  pendingResourcePage(after: { chain: string, position: number }, limit = 16): { chain: BehaviorChain, invocation: ChainInvocation, position: number }[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16 || !Number.isSafeInteger(after.position)) throw new Error('invalid pending resource page')
+    const rows = this.db.prepare(`SELECT c.chain_id AS chain, CAST(i.key AS INTEGER) AS position
+      FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1
+        AND (c.chain_id > ? OR (c.chain_id = ? AND CAST(i.key AS INTEGER) > ?))
+      ORDER BY c.chain_id, CAST(i.key AS INTEGER) LIMIT ?`).all(after.chain, after.chain, after.position, limit) as { chain: string, position: number }[]
+    return rows.map(row => { const chain = this.read(row.chain)!; return { chain, invocation: chain.invocations[row.position], position: row.position } })
+  }
+
+  capacitySnapshot() {
+    return this.db.transaction(() => ({ modelInvocations: this.liveModelInvocationCount(), reservations: this.reservedResources() }))()
+  }
+
+  /** Resource allowances held by live native invocations, over the same
+   *  scope as the count check: verified settlement releases a reservation
+   *  exactly once, while cleanup uncertainty retains it. `unaccounted`
+   *  counts live invocations admitted without a reservation. */
+  reservedResources(): BehaviorResourceReservation & { unaccounted: number } {
+    const row = this.db.prepare(`SELECT coalesce(sum(json_extract(i.value, '$.reservation.memoryBytes')), 0) AS memory,
+      coalesce(sum(json_extract(i.value, '$.reservation.diskBytes')), 0) AS disk,
+      coalesce(sum(CASE WHEN json_extract(i.value, '$.reservation.memoryBytes') IS NULL
+        OR json_extract(i.value, '$.reservation.diskBytes') IS NULL THEN 1 ELSE 0 END), 0) AS unaccounted
+      FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1`).get() as
+      { memory: number, disk: number, unaccounted: number }
+    if (!Number.isSafeInteger(row.memory) || row.memory < 0 || !Number.isSafeInteger(row.disk) || row.disk < 0
+      || !Number.isSafeInteger(row.unaccounted) || row.unaccounted < 0) throw new Error('behavior resource reservations are corrupt')
+    return { memoryBytes: row.memory, diskBytes: row.disk, unaccounted: row.unaccounted }
   }
 
   history(id: string, after = 0, limit = 100): StoredEvent[] {
@@ -271,11 +483,21 @@ export class BehaviorChainJournal {
           if (event.type !== 'admission.changed' || event.state.sequence !== row.sequence || chainBasis(event.state) !== (row as StoredEvent & { state_hash: string }).state_hash) throw new Error('behavior cutover journal is corrupt')
           continue
         }
-        states.set(row.chain_id, reduceChain(states.get(row.chain_id) ?? null, JSON.parse(row.payload) as ChainEvent, row.sequence, row.chain_id))
-        if (chainBasis(states.get(row.chain_id)) !== (row as StoredEvent & { state_hash: string }).state_hash) throw new Error('behavior journal state hash is invalid')
+        const event = JSON.parse(row.payload) as ChainEvent
+        const next = reduceChain(states.get(row.chain_id) ?? null, event, row.sequence, row.chain_id)
+        const hash = (row as StoredEvent & { state_hash: string }).state_hash
+        if (chainBasis(next) !== hash && event.type === 'invocation.admitted' && !Object.hasOwn(event.invocation, 'reservation')) {
+          // Pre-resource admissions omitted this property in both payload
+          // and state. Resource-era payloads may also omit it but hash null.
+          // Only the original immutable hash selects the historical form.
+          delete next.invocations[next.invocations.length - 1].reservation
+        }
+        if (chainBasis(next) !== hash) throw new Error('behavior journal state hash is invalid')
+        states.set(row.chain_id, next)
       }
-      const save = this.db.prepare('INSERT INTO behavior_chain_current(chain_id, sequence, state, merged) VALUES (?, ?, ?, ?)')
-      for (const state of states.values()) save.run(state.id, state.sequence, JSON.stringify(state), state.mergeSha && !state.reviewPending ? 1 : 0)
+      const save = this.db.prepare('INSERT INTO behavior_chain_current(chain_id, sequence, state, merged, resource_pending) VALUES (?, ?, ?, ?, ?)')
+      for (const state of states.values()) save.run(state.id, state.sequence, JSON.stringify(state), state.mergeSha && !state.reviewPending ? 1 : 0,
+        state.invocations.some(invocation => nativeResourcesPending({ ...invocation })) ? 1 : 0)
     }).immediate()
   }
 }

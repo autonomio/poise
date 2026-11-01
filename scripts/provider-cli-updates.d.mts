@@ -17,6 +17,7 @@ export interface CliUpdate {
 export interface UpdateOptions {
   env?: NodeJS.ProcessEnv
   root?: string
+  stagingRoot?: string
   run?: typeof runUpdateCommand
   timeoutMs?: number
   providers?: Provider[]

@@ -1,17 +1,30 @@
 import { mkdir } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { agentInterfaceCwd } from './models'
+import { headroomShortfall, measureBehaviorHeadroom, readBehaviorResourceAdmission, type BehaviorResourceHeadroom } from './behavior-resources'
 import { parseAgentLogStdout, type LogEntry } from './agent-log-parse'
 import { chainBasis, type BehaviorChain, type ChainBehavior, type ChainInvocation } from './behavior-chain-store'
 import { chainReviewResponse, type ChainDecision, type ChainObservation, type ChainReviewer } from './behavior-chain-decision'
 import type { ChainRuntimeOperations, ChainSeed } from './behavior-chain-runtime'
 import { organizationArgs, organizationForRepository, type Organization } from './organizations'
 import { getBehaviorChainSettings, getSettings } from './settings'
+import { attributedNativeAction } from './behavior-chain-action'
+import { resourceReleaseProven } from './behavior-resource-receipt'
 import { runFile, spawnDetached } from './process'
 
 type Roster = Pick<ChainObservation, 'issueReviewers' | 'prReviewers' | 'implementer' | 'repairer' | 'approver'>
 type Invoke = Extract<ChainDecision, { kind: 'invoke' }>
+// Caller contains a 30-second GitHub command in a 60-second execution scope.
+// Leave the outer client room for startup, receipt commits and teardown too.
+const NATIVE_ACTION_TIMEOUT_MS = 120_000
+
+export async function readNativeInvocations(ids: string[]) {
+  const { stdout } = await runFile('agent-interface', ['--logs', '--select', JSON.stringify({ latest: [], ids: [], correlations: ids })],
+    { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 })
+  return parseAgentLogStdout(stdout, 'behavior chain native receipts')
+}
 export interface NativeChainHooks {
   roster(chainKey: string): Promise<Roster>
   resolve(decision: Invoke, chainKey: string): Promise<ChainReviewer | null>
@@ -19,6 +32,7 @@ export interface NativeChainHooks {
   borrow(): (() => void) | null
   available(): boolean
   capacity(): number
+  measureHeadroom?: () => BehaviorResourceHeadroom
   permitted(chain: BehaviorChain, decision: Invoke): boolean
   note(behavior: ChainBehavior): string
   severity(behavior: ChainBehavior): string
@@ -78,6 +92,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
     ownsRepository,
     available: hooks.available,
     capacity: hooks.capacity,
+    measureHeadroom: hooks.measureHeadroom,
     permitted: hooks.permitted,
     wake: hooks.wake,
     received: hooks.received,
@@ -104,11 +119,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       const existing = await hooks.existing(seeds)
       return seeds.filter((seed) => !existing.has(`${seed.repository.toLowerCase()}#${seed.number}`))
     },
-    async readInvocations(ids) {
-      const { stdout } = await runFile('agent-interface', ['--logs', '--select', JSON.stringify({ latest: [], ids: [], correlations: ids })],
-        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 })
-      return parseAgentLogStdout(stdout, 'behavior chain native receipts')
-    },
+    readInvocations: readNativeInvocations,
     async observe(chain): Promise<ChainObservation> {
       if (!ownsRepository(chain.repository)) throw new Error('behavior chain organization is no longer followed')
       const actor = ['--token-user', chain.author]
@@ -189,7 +200,8 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         const inspected = await github(chain.repository, ['--issue-work', issueRef, '--mode', 'inspect', '--branch', chain.branch,
           '--invocation-id', String(interruptedWork.evidence!.callId), '--replies-json', JSON.stringify(replies), ...actor])
         observation.workPublication = { callId: String(interruptedWork.evidence!.callId), repliesComplete: !replies.length || inspected.replies_complete === true,
-          resumable: artifact.replies_started === false && artifact.publication_head === observation.publication.head_sha,
+          resumable: resourceReleaseProven(interruptedWork.evidence!, true)
+            && artifact.replies_started === false && artifact.publication_head === observation.publication.head_sha,
           planSha: String(artifact.plan_sha) }
       }
       const reviewer = ['--token-user', chain.reviewer]
@@ -265,6 +277,8 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         changesRequested: latest?.state === 'CHANGES_REQUESTED' && latest.commit_id === head,
         unresolved: Number(readiness.unresolved_live_conversation_count), approved: readiness.reviewer_approved_current_head,
         ready: readiness.green === true, reviewIds: reviews.filter((review) => review.commit_id === head && review.state !== 'DISMISSED').map((review) => positive(review.id, 'review')),
+        checksState: typeof readiness.checks_state === 'string' ? readiness.checks_state : null,
+        readinessBlockers: readiness.blockers as string[],
         reviewReceipts, reviewContext: state.review_context,
         reviewRevision, greyRuns, pending, failing: failures.map((check) => `${check.name}:${check.conclusion || check.state}`).sort(),
         // The existing readiness primitive already applies the repository's
@@ -298,26 +312,39 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         const plan = await actionPlan(partial?.callId || '', artifact.plan_sha)
         const publication = object(plan.publication, 'publication metadata')
         if (typeof publication.title !== 'string' || typeof publication.body !== 'string' || !partial?.callId || !observation.publication.head_sha) throw new Error('publication recovery lacks its original durable metadata')
-        return { command: 'github-interface', cwd, argv: ['--issue-work', String(chain.issue), '--mode', 'complete', '--branch', chain.branch,
+        return { command: 'github-interface', cwd, nativeResources: 2, argv: ['--issue-work', String(chain.issue), '--mode', 'complete', '--branch', chain.branch,
           '--expected-head', observation.publication.head_sha, '--invocation-id', partial.callId, '--title', publication.title, '--body', publication.body, '--token-user', chain.author] }
       }
       if (!pull) throw new Error('native PR action requires a verified pull request')
       const fixed = ['--expected-head', pull.head, '--token-user', decision.actor]
-      if (decision.behavior === 'resolve-threads') return { command: 'github-interface', cwd, argv: ['--resolve-nonblocking-conversations-if-ready', String(pull.number), '--username', chain.reviewer, ...fixed] }
+      if (decision.behavior === 'resolve-threads') return { command: 'github-interface', cwd, nativeResources: 2, argv: ['--resolve-nonblocking-conversations-if-ready', String(pull.number), '--username', chain.reviewer, ...fixed] }
       if (decision.behavior === 'rerun-grey-ci') {
         const run = pull.greyRuns[0]
         if (!run) throw new Error('grey CI recovery lacks a native workflow identity')
-        return { command: 'github-interface', cwd, argv: ['--rerun-grey-ci-if-ready', String(pull.number), '--run-id', String(run.id), '--run-attempt', String(run.attempt), '--author', chain.author, ...fixed] }
+        return { command: 'github-interface', cwd, nativeResources: 2, argv: ['--rerun-grey-ci-if-ready', String(pull.number), '--run-id', String(run.id), '--run-attempt', String(run.attempt), '--author', chain.author, ...fixed] }
       }
       const reviewed = [...chain.invocations].reverse().find((invocation) => invocation.state === 'settled'
         && invocation.evidence?.status === 'completed' && ['reviewed_clean', 'approved'].includes(String(invocation.evidence.action))
         && chainReviewResponse(chain, invocation, observation, Date.now()))
       if (!reviewed) throw new Error('native merge lacks its retained final-context review response')
       const response = chainReviewResponse(chain, reviewed, observation, Date.now())!
-      return { command: 'github-interface', cwd, argv: ['--merge-if-ready', String(pull.number), '--author', chain.author,
+      return { command: 'github-interface', cwd, nativeResources: 2, argv: ['--merge-if-ready', String(pull.number), '--author', chain.author,
         '--review-response-json', JSON.stringify({ ...response, review_id: reviewed.evidence!.review_id }), ...fixed] }
     },
     async launch(invocation, onExit, allowed) {
+      if (!allowed()) return false
+      // Provider preparation finished after the durable admission, so
+      // re-verify measured headroom at the last boundary before spawn. A
+      // deferral settles as launch_deferred without consuming an attempt;
+      // the next tick's pre-check records the explicit wait reason.
+      const resources = readBehaviorResourceAdmission()
+      if (resources) {
+        try {
+          if (headroomShortfall((hooks.measureHeadroom ?? measureBehaviorHeadroom)(), resources.reservation)) return false
+        } catch {
+          return false
+        }
+      }
       const release = hooks.borrow()
       if (!release) return false
       try {
@@ -329,21 +356,80 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         return true
       } catch (error) { release(); throw error }
     },
-    async perform(invocation) {
-      const { stdout } = await runFile('github-interface', invocation.request.argv, { cwd: invocation.request.cwd, timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
-      const evidence = object(JSON.parse(stdout), 'native behavior action')
+    async fenceClosedTarget(chain, invocation) {
+      const behavior = ({ 'review-issue': 'issue_review', 'implement-issue': 'implement_issue', 'repair-pr': 'repair_pr',
+        'review-pr': 'pr_review', 'approve-pr': 'pr_approve' } as Partial<Record<ChainBehavior, string>>)[invocation.behavior]
+      if (!behavior || invocation.request.command !== 'agent-interface' || !invocation.model) throw new Error('closed-target fence requires the original model invocation')
+      const args = invocation.request.argv
+      const expected = args.includes('--expected-head') ? args[args.indexOf('--expected-head') + 1] : null
+      const target = behavior === 'repair_pr' ? Number(args[args.indexOf('--pull-number') + 1])
+        : ['pr_review', 'pr_approve'].includes(behavior) ? Number(/(?:\/pull\/|^#?)([1-9][0-9]*)$/.exec(args[1])?.[1]) : chain.issue
+      if (!Number.isSafeInteger(target) || target < 1) throw new Error('closed-target fence lacks the original target number')
+      const { stdout } = await runFile('agent-interface', ['--fence-closed-behavior', '--model', invocation.model, '--actor', invocation.actor,
+        '--repo', chain.repository, '--number', String(target), '--behavior', behavior, '--correlation-id', invocation.id,
+        ...(expected ? ['--expected-head', expected] : [])], { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 })
+      const proof = object(JSON.parse(stdout), 'native closed-target fence')
+      if (!/^[0-9a-f]{32}$/.test(String(proof.id)) || !['fenced', 'existing'].includes(String(proof.outcome)) || proof.model !== invocation.model
+        || proof.actor !== invocation.actor || proof.repo !== chain.repository || proof.pr_id !== String(target) || proof.behavior !== behavior
+        || proof.source !== 'poise:behavior-chain' || proof.correlation_id !== invocation.id || proof.expected_head !== expected) throw new Error('native closed-target fence conflicts with its original admission')
+      return proof.outcome === 'fenced'
+    },
+    async perform(invocation, chain) {
+      let stdout: string
+      let processFailure: { code: unknown, signal: unknown } | null = null
+      try {
+        ({ stdout } = await runFile('agent-interface', ['--native-action', '--repository', chain.repository, '--actor', invocation.actor,
+          '--source', 'poise:behavior-chain', '--correlation-id', invocation.id, '--request-cwd', invocation.request.cwd,
+          ...(invocation.request.nativeResources === 2 ? ['--native-resource-v2'] : []), '--', ...invocation.request.argv],
+        { cwd: agentInterfaceCwd(), timeoutMs: NATIVE_ACTION_TIMEOUT_MS, maxOutputBytes: 256 * 1024 }))
+      } catch (error) {
+        const failure = error as { stdout?: unknown, code?: unknown, signal?: unknown }
+        if (!attributedNativeAction(invocation) || typeof failure.stdout !== 'string' || !failure.stdout.trim()) throw error
+        try {
+          const response = object(JSON.parse(failure.stdout), 'native action response after process failure')
+          object(response.result, 'native action result after process failure')
+          if (typeof response.id !== 'string' || !/^[0-9a-f]{32}$/.test(response.id)) throw error
+        }
+        catch { throw error }
+        // The runtime validates the response against the original admission
+        // before retaining it. A process failure cannot erase accepted work.
+        stdout = failure.stdout
+        processFailure = { code: failure.code ?? null, signal: failure.signal ?? null }
+      }
+      const response = object(JSON.parse(stdout), 'native behavior action')
+      if (typeof response.id !== 'string' || !/^[0-9a-f]{32}$/.test(response.id)) throw new Error('native action lacks its original physical Call')
+      const evidence: Record<string, unknown> = { ...object(response.result, 'native action result'), nativeCallId: response.id,
+        ...(processFailure ? { nativeOuterProcessFailure: processFailure } : {}) }
+      if (attributedNativeAction(invocation)) return evidence
       if (evidence.outcome === 'read_failed') return { ...evidence, status: 'failed', action: 'not_started', completedAt: Date.now() }
       const deferred = ['not_ready', 'superseded'].includes(String(evidence.outcome))
         || (invocation.behavior === 'resolve-threads' && evidence.ready_except_conversations !== true)
       return deferred ? { ...evidence, status: 'deferred', action: 'not_started', completedAt: Date.now() } : evidence
     },
-    async resumePublication(invocation, head) {
+    async readActionResult(invocation, call) {
+      if (call.artifact?.request_sha !== chainBasis(invocation.request) || typeof call.artifact.response_sha !== 'string') {
+        throw new Error('native action response differs from its immutable request')
+      }
+      const { stdout } = await runFile('agent-interface', ['--read-response', call.id],
+        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
+      // Caller prints the retained bytes plus one newline. Hash those bytes,
+      // not a JavaScript reserialization (Python's 1.0 is JavaScript's 1).
+      if (!stdout.endsWith('\n') || createHash('sha256').update(stdout.slice(0, -1)).digest('hex') !== call.artifact.response_sha) {
+        throw new Error('native action response differs from its retained digest')
+      }
+      const result = object(JSON.parse(stdout), 'original native action response')
+      return result
+    },
+    async resumePublication(invocation, head, correlation) {
       const callId = invocation.evidence?.callId
       const artifact = object(invocation.evidence?.artifact, 'repair publication receipt')
       if (typeof callId !== 'string' || !/^[0-9a-f]{32}$/.test(callId) || typeof artifact.plan_sha !== 'string') throw new Error('repair lacks its original native publication identity')
-      const { stdout } = await runFile('agent-interface', ['--complete-atomic-publication', callId, artifact.plan_sha, head],
-        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
-      return object(JSON.parse(stdout), 'native repair publication completion')
+      const { stdout } = await runFile('agent-interface', ['--complete-atomic-publication', callId, artifact.plan_sha, head,
+        '--source', 'poise:behavior-chain', '--correlation-id', correlation],
+        { cwd: agentInterfaceCwd(), timeoutMs: NATIVE_ACTION_TIMEOUT_MS, maxOutputBytes: 256 * 1024 })
+      const response = object(JSON.parse(stdout), 'native repair publication completion')
+      if (typeof response.id !== 'string' || !/^[0-9a-f]{32}$/.test(response.id)) throw new Error('native publication lacks its physical Call')
+      return { ...object(response.result, 'native publication result'), nativeCallId: response.id }
     },
   }
 }

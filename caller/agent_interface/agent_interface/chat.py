@@ -12,6 +12,7 @@ from time import time
 from .claude_acl import env as claude_env
 from .claude_acl import settings, tools_arg
 from .model_catalog import CATALOG
+from . import caller_store
 
 DATA_DIR = Path(os.getenv("AGENT_INTERFACE_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 DB = DATA_DIR / "calls.sqlite3"
@@ -32,8 +33,8 @@ def workdir(model: str, session_id: str) -> str:
 
 
 def db():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB, timeout=30)
+    caller_store.directory(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    conn = caller_store.connect(DB, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute(
         "create table if not exists chat_sessions (session_id text, model text, provider_session text, created_at real, updated_at real, primary key (session_id, model))"

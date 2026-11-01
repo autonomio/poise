@@ -158,6 +158,9 @@ const GITHUB_ENV = [
 ]
 
 const MODEL_ENV = [
+  'POISE_NATIVE_CONTROL',
+  'POISE_NATIVE_NODE',
+  'POISE_NATIVE_PREPARE',
   // Non-secret agent-interface controls. These preserve configured wrapper
   // binaries, debate recursion, and Claude's command guard rather than
   // silently falling back to raw provider executables.

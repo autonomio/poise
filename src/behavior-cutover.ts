@@ -3,4 +3,5 @@ export interface BehaviorCutoverState {
   mode: 'v1' | 'draining' | 'v2'
   requestedAt: number | null
   legacyPulls: string[]
+  support?: { status: 'checking' | 'supported' | 'unsupported' | 'unavailable', error: string | null }
 }

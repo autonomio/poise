@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { workspace } from './fixtures/workspace'
 import { BEHAVIORS } from '../../src/behaviors'
 import type { BehaviorCutoverState } from '../../src/behavior-cutover'
+import { chainSummaryFixture } from '../fixtures/behavior-chain-summary'
 
 async function general(page: Page) {
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
@@ -10,6 +11,103 @@ async function general(page: Page) {
 }
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
+
+test('unsupported cleanup refuses v2 while v1 controls stay available, including drain cancellation', async ({ page }) => {
+  await workspace(page)
+  let draining = false
+  const writes: unknown[] = []
+  await page.route('**/api/behavior-chains', async route => {
+    if (route.request().method() === 'POST') {
+      writes.push(route.request().postDataJSON())
+      draining = false
+    }
+    return route.fulfill({ json: { chains: [], next: null, runtime: [],
+      cutover: { mode: draining ? 'draining' : 'v1', sequence: draining ? 1 : 0, requestedAt: null,
+        legacyPulls: [], blockers: [], support: { status: 'unsupported', error: 'unsupported test host' } } } })
+  })
+  const controls = await general(page)
+  await expect(controls.locator('[data-native-support]')).toHaveText('This setup cannot run v2. v1 remains available.')
+  await expect(controls.getByRole('button', { name: 'Switch to v2', exact: true })).toBeDisabled()
+  await expect(controls.locator('[data-cutover-status]')).toHaveText('v1 owns new work')
+  expect(writes).toEqual([])
+  draining = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(controls.getByRole('button', { name: 'Cancel cutover', exact: true })).toBeEnabled()
+  await controls.getByRole('button', { name: 'Cancel cutover', exact: true }).click()
+  await expect.poll(() => writes).toEqual([{ operation: 'cancel-cutover', sequence: 1 }])
+  await expect(controls.locator('[data-cutover-status]')).toHaveText('v1 owns new work')
+})
+
+test('merged chains retain open obligations as reconciliation-only and stale reads disable admission writes', async ({ page }) => {
+  await workspace(page)
+  let complete = false
+  let unavailable = false
+  await page.route('**/api/behavior-chains', route => unavailable
+    ? route.fulfill({ status: 503, json: { error: 'journal unavailable' } })
+    : route.fulfill({ json: chainSummaryFixture(complete ? 'complete' : 'pending-active') }))
+  const controls = await general(page)
+  const list = controls.locator('[data-chain-list]')
+  await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+  await expect(list).toContainText('Review evidence pending')
+  await expect(list).toContainText('repair-pr: uncertain')
+  await expect(list).toContainText('Original native resource release is unverified; Caller reconciliation continues while GitHub observations are deferred')
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+  await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+  await expect(list.getByRole('button', { name: 'History' })).toBeEnabled()
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('1 durable model admission(s) reserved')
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('label work-ready')
+  await expect(controls.locator('[data-chain-capacity]')).toContainText('Admissions paused')
+  await list.scrollIntoViewIfNeeded()
+  await expect(list).toBeVisible()
+  await page.screenshot({ path: 'test-results/behavior-v2-obligations.png', fullPage: true })
+  unavailable = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(controls.getByRole('button', { name: 'v2 active', exact: true })).toBeDisabled()
+  await expect(controls.locator('[data-chain-capacity]')).toHaveText('Atomic behavior capacity unavailable.')
+  unavailable = false
+  complete = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(list).not.toContainText('Review evidence pending')
+  await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+  await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+})
+
+test('unmerged ownership retains its Hold control and unavailable reads disable that write', async ({ page }) => {
+  await workspace(page)
+  let unavailable = false
+  await page.route('**/api/behavior-chains', route => unavailable
+    ? route.fulfill({ status: 503, json: { error: 'journal unavailable' } })
+    : route.fulfill({ json: chainSummaryFixture('unmerged') }))
+  const controls = await general(page)
+  const hold = controls.getByRole('button', { name: 'Hold new invocations' })
+  await expect(hold).toBeEnabled()
+  unavailable = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(hold).toBeDisabled()
+})
+
+for (const state of ['pending-admitted', 'pending-no-invocation', 'pending-original-response', 'historical'] as const) {
+  test(`merged chain controls reflect canonical ${state} evidence without creating review authority`, async ({ page }) => {
+    await workspace(page)
+    await page.route('**/api/behavior-chains', route => route.fulfill({ json: chainSummaryFixture(state) }))
+    const controls = await general(page)
+    const list = controls.locator('[data-chain-list]')
+    await list.scrollIntoViewIfNeeded()
+    await expect(list).toContainText('Merged: aaaaaaaaaaaa')
+    await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+    await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+    if (state === 'pending-admitted' || state === 'pending-original-response') {
+      await expect(list).toContainText(state === 'pending-admitted' ? 'repair-pr: admitted' : 'merge-pr: uncertain')
+      if (state === 'pending-original-response') await expect(list).toContainText('Original action response required; GitHub reads cannot settle this invocation')
+    } else {
+      await expect(list.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0)
+      await expect(list.getByRole('button', { name: 'Hold new invocations' })).toHaveCount(0)
+      await expect(list).toContainText(state === 'historical' ? 'Pre-merge review completion not recorded'
+        : 'Awaiting original pre-merge review evidence; no new invocation can start after merge')
+      if (state === 'pending-no-invocation') await expect(list).toContainText('Next original-evidence observation:')
+    }
+  })
+}
 
 test('one cutover action reports drain, survives reload and reflects actual completion without touching Chats', async ({ page }) => {
   await workspace(page)
@@ -21,7 +119,7 @@ test('one cutover action reports drain, survives reload and reflects actual comp
       writes.push(body)
       cutover = { ...cutover, mode: 'draining', sequence: 1, requestedAt: Date.now() }
     }
-    return route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { ...cutover, blockers: ['1 native Caller invocation(s) still running'] },
+    return route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { ...cutover, support: { status: 'supported', error: null }, blockers: ['1 native Caller invocation(s) still running'] },
       settings: { enabled: cutover.mode === 'v2', seedMode: 'label', label: 'poise' } } })
   })
   const controls = await general(page)
@@ -49,7 +147,7 @@ test('stale cutover and unavailable reads never show a successful activation', a
   await page.route('**/api/behavior-chains', route => route.request().method() === 'POST'
     ? route.fulfill({ status: 409, json: { error: 'behavior cutover changed; reload its current state' } })
     : unavailable ? route.fulfill({ status: 503, json: { error: 'Caller unavailable' } })
-      : route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { mode: 'v1', sequence: 0, legacyPulls: [], blockers: [] } } }))
+      : route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { mode: 'v1', sequence: 0, legacyPulls: [], blockers: [], support: { status: 'supported', error: null } } } }))
   const controls = await general(page)
   await controls.getByRole('button', { name: 'Switch to v2', exact: true }).click()
   await expect(controls.locator('[data-chain-status]')).toContainText('Cutover was not applied')

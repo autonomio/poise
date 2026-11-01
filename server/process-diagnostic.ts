@@ -3,7 +3,7 @@ import { environmentSecrets, redact } from '../gateway/src/diagnostics/redaction
 export interface ProcessDiagnostic {
   version: 1
   source: 'caller'
-  severity: 'error'
+  severity: 'error' | 'warning'
   operation: string
   phase: string
   outcome: string | null
@@ -38,7 +38,7 @@ export function parseProcessDiagnostic(value: unknown): ProcessDiagnostic | null
   if (value == null) return null
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Caller process diagnostic is not an object')
   const row = value as Record<string, unknown>
-  if (row.version !== 1 || row.source !== 'caller' || row.severity !== 'error'
+  if (row.version !== 1 || row.source !== 'caller' || !['error', 'warning'].includes(String(row.severity))
     || !['operation', 'phase'].every((key) => typeof row[key] === 'string')
     || !['outcome', 'stderr'].every((key) => row[key] == null || typeof row[key] === 'string')
     || (row.stderr_truncated != null && typeof row.stderr_truncated !== 'boolean')) throw new Error('Caller process diagnostic is invalid or unsupported')
@@ -46,7 +46,7 @@ export function parseProcessDiagnostic(value: unknown): ProcessDiagnostic | null
   if (fs != null && (typeof fs !== 'object' || Array.isArray(fs))) throw new Error('Caller process diagnostic filesystem is invalid')
   const secrets = environmentSecrets()
   return {
-    version: 1, source: 'caller', severity: 'error', operation: text(String(row.operation), secrets), phase: text(String(row.phase), secrets),
+    version: 1, source: 'caller', severity: row.severity === 'warning' ? 'warning' : 'error', operation: text(String(row.operation), secrets), phase: text(String(row.phase), secrets),
     // Early v1 provider diagnostics omitted these facts. Absence proves neither
     // an empty stderr stream nor an untruncated or safe-to-retry failure.
     outcome: row.outcome == null ? null : text(String(row.outcome), secrets),

@@ -1,6 +1,8 @@
 import { chainBasis, type BehaviorChain, type ChainBehavior, type ChainInvocation } from './behavior-chain-store'
 import { validReviewResponse, type ReviewResponse } from './review-response'
 
+export const CHAIN_OBSERVATION_MAX_AGE_MS = 120_000
+
 export interface ChainReviewer { slot: string, model: string, recovery: string }
 export interface ChainObservation extends Record<string, unknown> {
   checkedAt: number
@@ -25,6 +27,7 @@ export interface ChainObservation extends Record<string, unknown> {
     reviewReceipts: Array<{ id: number, head: string, state: string, invocation: string | null, response?: unknown, submittedAt?: number }>,
     greyRuns: Array<{ id: number, attempt: number }>,
     pending: boolean, failing: string[], conflict: boolean, behind: boolean,
+    checksState?: string | null, readinessBlockers?: string[],
   }
 }
 export type ChainDecision =
@@ -32,6 +35,7 @@ export type ChainDecision =
   | { kind: 'hold', reason: string }
   | { kind: 'complete', mergeSha: string }
   | { kind: 'invoke', behavior: ChainBehavior, basis: string, actor: string, reviewer: ChainReviewer | null, reason: string }
+export interface MergeReviewEvidence { before: ChainObservation | null, firstMerged: ChainObservation | null }
 
 function settled(chain: BehaviorChain, behavior: ChainBehavior, basis: string, slot: string | null): ChainInvocation[] {
   return chain.invocations.filter((invocation) => invocation.behavior === behavior && invocation.basis === basis
@@ -97,17 +101,47 @@ function reviewComplete(chain: BehaviorChain, behavior: 'review-issue' | 'review
   }) ? 'complete' : 'missing-artifact'
 }
 
+/** Queue participation is separate from attribution of its enqueue mutation. */
+export function lastChainQueueInvocation(chain: BehaviorChain): ChainInvocation | undefined {
+  for (let index = chain.invocations.length - 1; index >= 0; index--) {
+    const invocation = chain.invocations[index]
+    if (invocation.behavior === 'merge-pr' && (invocation.evidence?.status === 'completed'
+      || (invocation.evidence?.status === 'deferred' && invocation.evidence.outcome === 'in_queue'))
+      && ['enqueued', 'in_queue'].includes(String(invocation.evidence?.outcome))) return invocation
+  }
+}
+
+/** Closure fences effects, not adoption of original artifacts or receipts. */
+export function closedChainTarget(chain: BehaviorChain, observation: ChainObservation | null, behavior: ChainBehavior): string | null {
+  if (chain.mergeSha) return 'the pull request is confirmed merged'
+  if (observation?.pull && (observation.pull.merged || observation.pull.state !== 'open')) return 'the pull request is closed'
+  if (observation && !observation.issue.open && ['review-issue', 'implement-issue', 'repair-pr'].includes(behavior)) return 'the seed issue is closed'
+  return null
+}
+
 /** No timers, processes, GitHub writes or Chat sessions. The scheduler commits
  * this decision's admission before handing one invocation to native Caller. */
-export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number): ChainDecision {
+export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObservation, now: number,
+  mergeEvidence?: MergeReviewEvidence): ChainDecision {
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
   const pull = observation.pull
-  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > 120_000 || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
+  if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
-    const basis = chainBasis(['pr', pull.head, pull.reviewContext])
-    if (!observation.prReviewers.length || observation.prReviewers.some((reviewer) =>
-      reviewComplete(chain, 'review-pr', basis, reviewer, observation) !== 'complete')) {
+    const mergeBasis = mergeEvidence ? mergeEvidence.before : !chain.mergeSha ? chain.observation as ChainObservation | null : null
+    const first = mergeEvidence ? mergeEvidence.firstMerged : !chain.mergeSha ? observation : null
+    if (!mergeBasis?.pull || mergeBasis.pull.merged !== false || !Number.isFinite(mergeBasis.checkedAt)
+      || typeof pull.mergedAt !== 'number' || !Number.isFinite(pull.mergedAt) || mergeBasis.checkedAt > pull.mergedAt
+      || mergeBasis.pull.number !== pull.number || mergeBasis.pull.head !== pull.head || !mergeBasis.pull.reviewContext
+      || !first?.pull?.merged || first.pull.number !== pull.number || first.pull.head !== pull.head
+      || first.pull.mergeSha !== pull.mergeSha || first.pull.mergedAt !== pull.mergedAt
+      || first.pull.reviewContext !== mergeBasis.pull.reviewContext || pull.reviewContext !== first.pull.reviewContext
+      || !Array.isArray(mergeBasis.prReviewers) || !mergeBasis.prReviewers.length) {
+      return { kind: 'hold', reason: 'confirmed merge retains an open review obligation: original pre-merge review basis is missing or contradictory' }
+    }
+    const original = { ...observation, prReviewers: mergeBasis.prReviewers, pull: { ...pull, reviewContext: mergeBasis.pull.reviewContext } }
+    const basis = chainBasis(['pr', pull.head, original.pull.reviewContext])
+    if (original.prReviewers.some((reviewer) => reviewComplete(chain, 'review-pr', basis, reviewer, original) !== 'complete')) {
       return { kind: 'hold', reason: 'confirmed merge retains an open review obligation: qualifying pre-merge review response is missing' }
     }
     return { kind: 'complete', mergeSha: pull.mergeSha }
@@ -139,8 +173,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   const dismissed = pull.reviewReceipts.find((review) => review.head === pull.head && review.state === 'DISMISSED'
     && chain.invocations.some((invocation) => invocation.behavior === 'approve-pr' && invocation.callId === review.invocation))
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
-  const lastQueue = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'merge-pr'
-    && invocation.evidence?.status === 'completed' && ['enqueued', 'in_queue'].includes(String(invocation.evidence.outcome)))
+  const lastQueue = lastChainQueueInvocation(chain)
   let queueVerification: string | null = null
   if (lastQueue?.evidence?.head_sha === pull.head) {
     const removal = pull.queueRemoval

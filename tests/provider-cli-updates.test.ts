@@ -168,8 +168,11 @@ it('checks npm for the latest Codex on each launch without reinstalling a curren
   expect(run.mock.calls.some(call => call[1][0] === 'install')).toBe(false)
 })
 
-it('keeps admitted Codex launchers usable when npm removes a native dependency mid-update', async () => {
-  const { symlink } = await import('node:fs/promises')
+it.each([false, true])('keeps admitted Codex launchers usable across an interrupted update (registered staging: %s)', async registered => {
+  const { symlink, readdir } = await import('node:fs/promises')
+  const stagingRoot = registered ? join(root, 'call-staging') : undefined
+  if (stagingRoot) await mkdir(stagingRoot)
+  const stagedLaunches: string[] = []
   const packageRoot = join(root, 'prefix/lib/node_modules/@openai/codex')
   const native = join(packageRoot, 'node_modules/native/version')
   const launcher = join(packageRoot, 'bin/codex.js')
@@ -182,6 +185,7 @@ it('keeps admitted Codex launchers usable when npm removes a native dependency m
   await writeFile(join(root, 'bin/npm'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   let failInstall = true
   const run = vi.fn<typeof runUpdateCommand>(async (command, args, options) => {
+    if (stagingRoot && command.startsWith(stagingRoot + '/')) stagedLaunches.push(command)
     if (args[0] === 'view') return { stdout: '"1.1.0"', stderr: '' }
     if (args[0] === 'install') {
       await rm(native, { force: true })
@@ -191,22 +195,26 @@ it('keeps admitted Codex launchers usable when npm removes a native dependency m
     }
     return runUpdateCommand(command, args, options)
   })
-  const failed = await ensureProviderCli('codex', { root, env, run })
+  const failed = await ensureProviderCli('codex', { root, env, run, stagingRoot })
   expect(failed).toMatchObject({ status: 'unavailable', before: '1.0.0', error: 'interrupted npm install' })
   expect(failed.launchPath).not.toBe(join(root, 'bin/codex'))
   const launch = (path: string) => runUpdateCommand(path, ['--version'], { env, cwd: root })
   await expect(launch(launcher)).rejects.toThrow('exited')
   expect((await launch(failed.launchPath!)).stdout.trim()).toBe('1.0.0')
-  const stillFailed = await ensureProviderCli('codex', { root, env, run })
+  const stillFailed = await ensureProviderCli('codex', { root, env, run, stagingRoot })
   expect(stillFailed).toMatchObject({ status: 'unavailable', launchPath: failed.launchPath, launchVersion: '1.0.0' })
   expect(stillFailed.before).toBeUndefined()
   expect((await launch(stillFailed.launchPath!)).stdout.trim()).toBe('1.0.0')
   failInstall = false
-  const repaired = await ensureProviderCli('codex', { root, env, run })
+  const repaired = await ensureProviderCli('codex', { root, env, run, stagingRoot })
   expect(repaired).toMatchObject({ status: 'updated', after: '1.1.0' })
   expect(repaired.launchPath).not.toBe(failed.launchPath)
   expect((await launch(repaired.launchPath!)).stdout.trim()).toBe('1.1.0')
   expect((await launch(failed.launchPath!)).stdout.trim()).toBe('1.0.0')
+  if (stagingRoot) {
+    expect(stagedLaunches.length).toBeGreaterThan(0)
+    expect(await readdir(stagingRoot)).toEqual([])
+  }
   // Real npm/node launches across a failed, a held and a repaired update.
 }, 30_000)
 

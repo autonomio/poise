@@ -369,6 +369,12 @@ its own instead of refusing with dirty_unowned.
   75, it starts the release named in `~/.poise/releases/next` and makes it
   current. A release that exits on its own within a minute of starting is
   marked failed and never run again; the image's own release takes over.
+  On Linux the same supervisor owns the private native-cleanup controller.
+  Its uid-only Unix socket and random generation are passed to Poise and
+  Caller as `POISE_NATIVE_CONTROL`; neither the address nor per-Call tokens
+  are public API fields. Its original kernel witnesses survive Poise release
+  replacement, but never a supervisor/container replacement. Controller loss
+  leaves resource settlement unknown; replacement cannot manufacture proof.
 - **Installing.** For a running workspace whose image has the new image's
   base, the gateway runs `install-release.sh` in a short-lived container of
   the new image, as uid 10001 with the workspace's home volume and no
@@ -591,7 +597,13 @@ assertion may only resume, and anything else is refused with 403):
   - `backgroundWork` counts everything else a restart would cut: the Chat
     runtime's startups, operations and agent processes, process-owned
     background work (behavior ticks, provider CLI updates, the model check),
-    and launches from the browser admitted and still in their handler.
+    launches from the browser admitted and still in their handler, and native
+    Calls whose resource release or cleanup claim remains pending. The Caller
+    count and pending-resource count use one bounded read transaction. Unknown
+    cleanup records keep `idle` false. Cleanup continues on the existing
+    one-minute maintenance opportunity while admissions and behavior ticks are
+    paused, so an ordinary drain preserves original supervisor witnesses until
+    their durable cleanup acknowledgement.
 - `POST /api/service/drain` stops admitting new Chat turns and behavior
   launches, then returns the same fields with the drain on. The gateway treats
   the drain as admitted only when the answer is `ok` and shows `draining`; an
@@ -719,6 +731,11 @@ not use the gateway's discarded OAuth token.
     check. A check with no eligible providers reports every provider skipped
     and succeeds neutrally. The server forwards its own observation to the
     refresh script; the standalone job resolves the same rule itself.
+- `GET /api/ssh-keys` returns `{ keys }`, the public inventory of `~/.ssh`:
+  one entry per private key file (name, permission bits, size) and per public
+  key without a private file, with the `.pub` line and its SHA256 fingerprint
+  when readable. Private files are stated, never opened. A missing `~/.ssh`
+  answers empty; anything else unreadable answers 500.
 - Connect opens a terminal in the browser, inside the workspace, running that
   CLI's own login (`login.label`):
 
@@ -731,9 +748,12 @@ not use the gateway's discarded OAuth token.
   | Muse | `muse login`, which warns it switches Muse to the account login and its subscription quota |
   | Muse API key | `muse auth set --api-key-stdin`, pasted into the terminal; Poise never sees or stores the key |
   | Antigravity | `agy`, which has no login subcommand: it opens its sign-in screen when it starts signed out |
+  | SSH key | the SSH import: a pasted private key lands in `~/.ssh` with 0600 and its `.pub` is derived; Poise never sees or stores the key |
 
   Credentials go straight from the CLI to its own files; Poise never reads them,
   except Muse's auth file for its non-secret fields (which credential it holds).
+  SSH private keys go straight from the import terminal to `~/.ssh`; Poise never
+  opens a private key file.
   In local and service mode, a successful Connect exit records a timestamp in
   Poise's existing `account_logins` map, independently of setup progress. Grok
   and Muse can therefore show the completed sign-in immediately and after a
@@ -745,7 +765,7 @@ not use the gateway's discarded OAuth token.
   including indistinguishable older automatic Antigravity entries, are kept.
   Missing CLIs and failed version probes retain history without showing a
   positive sign-in state. Setup's explicit withdrawal removes the record.
-- `/ws/terminal?preset=<id>|shell|muse-api-key` is browser scope only.
+- `/ws/terminal?preset=<id>|shell|muse-api-key|ssh-key` is browser scope only.
   - Client to server: `{type:"input", data}` and `{type:"resize", cols, rows}`,
     with `cols` from 2 to 500, `rows` from 2 to 200 and frames up to 64 KiB.
   - Server to client: `{type:"output", data}` (base64) and `{type:"exit",
@@ -1185,8 +1205,112 @@ A per-PR status projection is served beside the ledger at guarded, read-only
 `GET /api/behavior-ledger/pr-status` with a `pr-status` loopback CLI
 subcommand. It projects one row per open pull request from already-held
 state (datastore listing, launch ledger, incidents, queue admissions, and
-the merge-prs tick's cached candidate reading) with no new Caller or GitHub
-read and no execution influence. See [Behavior ledger](Behavior-ledger.md).
+the merge-prs tick's cached candidate reading, or the canonical journal for
+chain-owned work) with no new Caller or GitHub read and no execution influence.
+The status reply is version 2 (ordinary ledger replies remain version 1).
+Rows identify v1/v2 ownership; v2 exposes retained merge/review obligations and
+uses nullable verified review-slot counts instead of the legacy review-cap
+counter. Stale chain observations remain unverified and contradictory journal
+evidence fails unavailable. Queue observations do not acquire original enqueue
+attribution, and an owned long-running model invocation remains a current phase
+while GitHub facets await refresh. Chain summaries preserve pending/complete/
+not-recorded review evidence without changing journal payloads or historical
+hashes. Behavior diagnostics add workspace-wide durable `chainCapacity`, with
+mode, effective enablement, saved intake, configured budgets/reservations and
+separate process-local counts. Manager worker-Chat occupancy is nullable when
+unreadable, and its backlog excludes proven chain-owned issues. See
+[Behavior ledger](Behavior-ledger.md) and [Behavior chain](Behavior-chain.md).
+
+Chain/status summaries also expose derived reconciliation timing for quiescent
+ownership. The existing scheduler and indexed journal projection bound GitHub
+rechecks while preserving the public active/merged filters, native resource
+settlement and immutable history. The normal-work page precedes due quiescent
+reconciliation; observation failures remain reported after unrelated progress.
+Merged direct-action recovery reads original journal responses without another
+GitHub observation. The optional `reconciliation` read fields add no write
+operation or authority; a deliberate wait keeps GitHub facets unknown without
+declaring a collector outage. No extra poller, gateway scope or event type is
+introduced. [Bounded reconciliation](Behavior-chain.md#bounded-reconciliation)
+defines the cadence and timestamp units.
+
+Known closed targets cannot start or restart a model behavior or continue
+publication. Never-started admissions settle with explicit no-effect evidence;
+started originals without a Call use the bounded native correlation-fence
+command before normal receipt reconciliation. Existing Calls and uncertain
+resources are never released by closure alone. Merged-chain Hold/Resume writes
+return 409 and the GUI retains History and read-only reconciliation. No new
+endpoint, signal or journal event type is added; the Caller contract is in
+[agent_interface](../caller/agent_interface/README.md#fencing-a-closed-behavior).
+Poise's existing log decoder validates the fence's exact terminal no-effect
+shape and native resource-release timestamp before the journal can settle its
+reservation. Closed-target native resource waits are separate from public
+GitHub recheck times; unrelated open-PR review/approval stays eligible.
+
+Native Caller receipts also carry append-only resource ownership outside
+publication artifacts. Normal cleanup acknowledges pinned directory identities;
+uncertain process/disk state retains its original reservation. The decoder and
+journal-derived capacity reject contradictory release timestamps, including
+historical contradictions on rebuild, without rewriting events. Capacity uses
+an indexed derived pending-resource flag rather than scanning settled history.
+Linux Stop pins a process handle before start/epoch verification and signals
+only its original supervisor. Unsupported/older/unreadable identities refuse
+signals; Chat Stop keeps its external runtime route. Epoch identity does not
+use wall-clock ordering. Neither supervisor loss nor a container replacement
+proves disk reclamation.
+
+New physical v2 Calls require a namespace-capable Linux host. The existing
+supervisor retains the original private procfs view before the original Call
+permits execution. The whole Call runs inside that boundary: CLI preparation,
+checkout/build/test/provider children, publication and fixed direct GitHub
+actions. PID 1 reaps descendants; Caller continues as PID 2 with all capabilities
+dropped and no-new-privileges preserved. Session changes, double forks and
+nested PID namespaces do not escape the boundary. Original parent/holder loss
+terminates the namespace. Neither init exit nor a queued kill proves settlement:
+the retained original kernel view must positively become empty, including
+unreaped entries, before normal pinned disk cleanup can acknowledge release.
+The original Call, epoch, outer process identities and immutable action receipt
+remain separate requirements. Missing witnesses or conflicting evidence retain
+the reservation; the first positive settlement time is never refreshed.
+
+The existing behavior request/tick performs a bounded internal capability
+check, with at most one setup probe and no new timer. Cutover and native
+admission require its positive result; Settings exposes checking, supported,
+unsupported or unavailable. An unsupported setup stays on v1. A v2 setup that
+loses support pauses new admissions rather than reopening v1 ownership.
+Mac development and default Docker security settings remain supported for v1;
+this does not change the gateway's optional runtime setting or any production
+configuration. The runtime image tests exercise actual runsc and default-Docker
+profiles separately; stand-in providers are not real workflow acceptance.
+Automatic post-loss disk/lease reclamation, retention, post-admission budget
+enforcement and the frozen real-provider campaign remain #806 obligations.
+
+Claimed disk recovery uses the same original Call and supervisor directory
+handles. A final unlink is proven by the original held directory's zero link
+count, followed by handle closure; its first certificate survives a cleanup
+worker's death before the Caller receipt commits. Private claim attempts never
+enter journal evidence. A new container or lost supervisor without retained
+positive proof remains held: this child does not satisfy the frozen container
+replacement acceptance case. Positive lifecycle evidence for that case remains
+required under #806; its fault-matrix requirement is unchanged.
+The same supervisor holds the original Caller metadata directory, database
+and response-directory descriptors. Its private control configuration names
+them; Caller and health/maintenance readers verify and use the held originals
+after ancestor replacement. A mismatched reference fails closed. The cleanup
+capability requires resource protocol 2 and these original metadata handles;
+an older image remains on v1 until its runtime base is upgraded. Unsupported
+metadata layouts also refuse v2 visibly while retaining v1's existing path.
+After cleanup, the same maintenance opportunity reuses Caller's existing
+selected-receipt reader to reconcile at most 16 pending admissions, including
+held and merged chains. `invocation.resources_reconciled` in the canonical
+event log changes only physical resource evidence. It preserves the original
+outcome, uncertainty, hold and merge evidence, starts no worker and repeats no
+external action. A later enabled behavior tick separately decides any next work.
+
+Fixed direct GitHub commands keep their original 30-second command deadline
+(publication completion keeps 25 seconds). Their enclosing Caller execution
+scope allows 60 seconds, and the outer client 120 seconds for interpreter/setup,
+durable receipts and teardown. The kernel emptiness deadline remains two
+seconds; these outer bounds do not extend the command or kernel deadlines.
 
 ## Google document publishing
 

@@ -756,11 +756,11 @@ test('selects a chat range with shift+click and deletes it with one confirmation
   await expect(page.locator('.chat-session-item.selected')).toHaveCount(1)
   await page.locator('.chat-session-item[data-id="s2"]').click({ modifiers: ['Shift'] })
   await expect(page.locator('.chat-session-item.selected')).toHaveCount(3)
-  // Ctrl+click toggles one chat without opening it.
-  await page.locator('.chat-session-item[data-id="s3"]').click({ modifiers: ['Control'] })
+  // Ctrl/Meta+click toggles one chat without opening it.
+  await page.locator('.chat-session-item[data-id="s3"]').click({ modifiers: ['ControlOrMeta'] })
   await expect(page.locator('.chat-session-item.selected')).toHaveCount(2)
   await expect(page.locator('.chat-session-item[data-id="s4"]')).toHaveClass(/active/)
-  await page.locator('.chat-session-item[data-id="s3"]').click({ modifiers: ['Control'] })
+  await page.locator('.chat-session-item[data-id="s3"]').click({ modifiers: ['ControlOrMeta'] })
   await expect(page.locator('.chat-session-item.selected')).toHaveCount(3)
   // One armed confirmation states the count, then deletes the whole range.
   const row = page.locator('.chat-session-item[data-id="s3"]')

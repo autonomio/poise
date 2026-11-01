@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import time
@@ -29,6 +30,9 @@ from .db import (
 )
 from .extract import extract_associations
 from .github_api import ITEM_GRAPH_BATCH_SIZE, GitHubClient, GitHubOrgReader, GitHubRateLimitError, parse_graphql_datetime
+
+
+logger = logging.getLogger(__name__)
 
 
 FULL_BUILD_COMPLETE_KEY = "full_build_complete"
@@ -147,7 +151,7 @@ def initialization_to_resume(
     stored_org = get_state(conn, "org", "login")
     if stored_org is None:
         data_tables = (
-            "repos", "items", "sync_state", "events", "comments", "reviews",
+            "repos", "items", "sync_state", "timestamp_regressions", "events", "comments", "reviews",
             "review_comments", "pr_commits", "associations", "item_fts", "users",
         )
         if any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() for table in data_tables):
@@ -547,12 +551,8 @@ def items_requiring_full_refresh(
         stored_at = parse_graphql_datetime(
             row["updated_at"], f"stored item {item_id} for {repo_full_name}"
         )
-        if current_at < stored_at:
-            raise RuntimeError(
-                f"item timestamp moved backward for {repo_full_name}: {item_id}"
-            )
         if (
-            current_at > stored_at
+            current_at != stored_at
             or int(row["number"]) != int(item["number"])
             or str(row["item_type"]) != item["item_kind"]
             or str(row["repo_full_name"]) != repo_full_name
@@ -645,13 +645,38 @@ def sync_loop(
 def store_expanded(
     conn: sqlite3.Connection, expanded: dict[str, Any], users: list[str] | None = None
 ) -> int:
+    issue = expanded["issue"]
     with conn:
+        previous = conn.execute(
+            "SELECT updated_at, expanded_json FROM items WHERE item_id = ?",
+            (int(issue["id"]),),
+        ).fetchone()
+        regressed = previous is not None and parse_graphql_datetime(
+            issue["updated_at"], f"item {issue['id']}"
+        ) < parse_graphql_datetime(previous["updated_at"], f"stored item {issue['id']}")
+        if regressed:
+            # Keep the complete prior graph atomically with its replacement: a
+            # timestamp alone cannot distinguish clock correction from old content.
+            conn.execute(
+                """INSERT INTO timestamp_regressions(
+                    item_id, repo_full_name, stored_updated_at, received_updated_at,
+                    previous_expanded_json, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (int(issue["id"]), expanded["repo"]["full_name"], previous["updated_at"],
+                 issue["updated_at"], previous["expanded_json"], utc_now()),
+            )
         item_id = upsert_expanded_item(conn, expanded)
         replace_child_rows(conn, item_id, expanded)
         refresh_fts(conn, item_id, expanded)
         for username in users or list_users(conn):
             associations = extract_associations(expanded, username)
             replace_associations(conn, item_id, username, associations)
+    if regressed:
+        logger.warning(
+            "item timestamp moved backward for %s: %s (%s -> %s); "
+            "accepted fresh GraphQL data; previous graph preserved in timestamp_regressions",
+            expanded["repo"]["full_name"], item_id, previous["updated_at"], issue["updated_at"],
+        )
     return item_id
 
 

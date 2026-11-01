@@ -12,18 +12,21 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
   if (!row || !text(row.id) || !/^[a-f0-9]{32}$/.test(String(row.id))) return null
   if (row.outcome === 'superseded' || ['stopped', 'stopping'].includes(String(row.error_code))) return null
   const raw = object(row.diagnostic)
-  const diagnostic = raw && raw.version === 1 ? raw : null
+  const priorWarning = raw?.version === 1 && raw.severity === 'warning' && row.status === 'failed'
+    ? { version: 1, severity: 'warning', operation: text(raw.operation), phase: text(raw.phase),
+      message: text(raw.message), stderr: text(raw.stderr), stderr_truncated: raw.stderr_truncated === true } : null
+  const diagnostic = raw && raw.version === 1 && !priorWarning ? raw : null
   const context = object(diagnostic?.context) ?? diagnostic ?? {}
   const unavailable = text(row.evidence_unavailable)
   const error = text(row.error) ?? unavailable ?? ''
   if (/pull-request head or base changed (?:while building review packet|before checkout|during checkout)\b|pull-request head changed(?: [a-z ]+)?: expected [a-f0-9]{40}, got [a-f0-9]{40}/.test(error)) return null
   // Review verdicts alone are routine; recorded failure evidence takes precedence.
-  if (!diagnostic && !error && !row.error_code) return null
+  if (!diagnostic && !error && !row.error_code && !priorWarning) return null
   const repository = text(row.repo)
   const pr = text(row.pr_id)
   return {
     id: 'caller:' + row.id, time: text(row.completed_at), source: unavailable && !row.error && !diagnostic ? 'collection' : 'caller', component: text(row.behavior) ?? 'agent-interface',
-    level: unavailable && !row.error && !diagnostic ? 'warning' : diagnostic?.severity === 'error' ? 'error' : ['overloaded', 'rate_limit', 'authentication_failed', 'interrupted'].includes(String(row.error_code)) ? 'warning' : 'error',
+    level: unavailable && !row.error && !diagnostic ? 'warning' : diagnostic?.severity === 'warning' ? 'warning' : diagnostic?.severity === 'error' ? 'error' : ['overloaded', 'rate_limit', 'authentication_failed', 'interrupted'].includes(String(row.error_code)) ? 'warning' : 'error',
     operation: unavailable && !row.error && !diagnostic ? 'caller.evidence_unavailable' : text(diagnostic?.operation) || text(row.behavior) || 'call.failed', phase: text(diagnostic?.phase), workspace,
     repository, pr, target: repository && pr ? `${repository}#${pr}` : repository,
     account: text(row.actor), reviewer: text(row.actor), behavior: text(row.behavior), callId: String(row.id),
@@ -38,6 +41,7 @@ export function callerDiagnostic(value: unknown, workspace: string): DiagnosticI
       resolvedExecutable: text(context.resolved_executable), cwd: text(context.cwd), elapsedMs: number(context.elapsed_ms),
       startedAt: text(row.started_at_precise) ?? text(row.started_at), source: text(row.source),
       inputBytes: number(context.actual_input_bytes), inputLimitBytes: number(context.input_limit_bytes),
+      ...(priorWarning ? { priorWarning } : {}),
       providerStarted: typeof context.provider_started === 'boolean' ? context.provider_started : null,
       evidenceIncomplete: !diagnostic || !!row.evidence_unavailable },
   }

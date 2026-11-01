@@ -266,11 +266,20 @@ class GitHubOrgReaderTest(unittest.TestCase):
         )
         self.assertEqual(changed, [])
 
-    def test_pr_comparison_rejects_invalid_or_backward_timestamps(self) -> None:
+    def test_pr_comparison_refreshes_backward_timestamp_before_watermark(self) -> None:
+        pull = pull_stub(1, "2026-11-01T09:46:12Z")
+        sibling = pull_stub(2, "2026-11-01T10:01:00Z")
+        client = ScriptedClient([incremental_response([], [pull, sibling])])
+        items = GitHubOrgReader(client).list_repo_changed_items(
+            "Vaquum/Test", "2026-11-01T10:00:00Z", {101: "2026-11-01T09:56:33Z"}
+        )
+        self.assertEqual([item["id"] for item in items], [101, 102])
+        client.assert_exhausted()
+
+    def test_pr_comparison_rejects_invalid_timestamps(self) -> None:
         cases = [
             ([pull_stub(1, "0")], {101: WATERMARK}),
             ([pull_stub(1, "2026-08-29T12:00:00")], {101: WATERMARK}),
-            ([pull_stub(1, "2026-08-29T11:59:59Z")], {101: WATERMARK}),
             ([pull_stub(1, WATERMARK)], {101: " "}),
         ]
         reader = GitHubOrgReader(ScriptedClient([]))

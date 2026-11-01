@@ -446,6 +446,12 @@ def _cwd_pids(root: Path, *, require_complete: bool = False) -> list[int] | None
 def stop_leftovers(root: Path) -> None:
     """End what the agent left running in its checkout — a dev server, a watcher,
     a test that detached into its own session — before the checkout goes."""
+    from . import resource_ownership
+    if resource_ownership.binding() is not None:
+        # Native ownership cannot come from cwd/path coincidence. Its actual
+        # supervisors stop their children; a surviving process retains the
+        # receipt instead of authorizing a numeric signal from a path scan.
+        return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         pids = _cwd_pids(Path(root))
         if not pids:

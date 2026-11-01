@@ -11,6 +11,20 @@ PR and its published review while preserving the normal CI and thread gates.
 A confirmed external merge is recorded separately: without qualifying pre-merge
 review evidence its review obligation remains open through journal recovery.
 
+After a confirmed merge, review reconciliation uses the last canonical
+pre-merge observation recorded before both the actual merge time and the first
+merge event. Its target, head, review context and required reviewer slots remain
+fixed. Today's reviewer settings and post-merge PR edits cannot discharge that
+obligation. A previously missing original review may become visible later, but
+its response and actual GitHub submission must precede the merge and match the
+original basis. The first recorded merged context and the current merged read
+must also match that basis; a mismatch recorded at the first merge cannot be
+erased by a later edit restoring the old title/body. Missing historical context
+or an empty panel stays unproven;
+the supported reviewer setting is one to three. This lookup reads existing
+immutable history and adds no state field, execution authority or polling loop.
+Previously completed histories are not rewritten or retroactively certified.
+
 Status: the native implementation completed the ten real cycles documented below. The admission cutover and GUI changes carry separate local regression proof; those historical cycles do not prove production cutover. Production execution remains disabled by default.
 
 The existing behavior scheduler consumes one durable journal in Poise's existing database. It admits one atomic invocation for a chain, records its native Caller correlation before starting a process, observes the resulting artifacts, and then decides the next behavior. A chain identifies an issue and its eventual PR; it is not a persistent Chat session or worker.
@@ -21,15 +35,108 @@ Intake failures remain visible in runtime health and diagnostics while already-a
 
 Settings → General → Behavior chain selects either issues bearing the configured label (default `poise`) or all open issues in followed organizations. Label intake includes old issues that acquire the label. Existing Chat bindings and linked open PRs prevent new ownership; active work is not migrated. The author and review account must be distinct and remain fixed for an admitted chain.
 
+Downstream reuse of this lifecycle for already-created PRs is decided separately: [Downstream-lifecycle.md](Downstream-lifecycle.md) records the scope decision, the exact existing routes and the contracts a follow-up must settle. There is no supported enrollment of an existing PR into a chain at this revision.
+
 The existing reviewer count, model slots, severity, behavior notes, switches, pauses and PR exclusions remain in effect. Implement Issues and Repair Pull Requests are rows in Behaviors with independent switches, notes, author identity, native activity, run metrics and pause/resume controls. Their switches default on within an enabled chain, preserving the existing execution semantics; they cannot enable the chain itself. Their model slots remain in Settings → Models. A chain can be held or resumed individually. Disabling invocations retains receipts and ownership and continues reconciling already admitted outcomes. Holding or pausing does not terminate an existing worker; its existing native Stop control still applies.
 
 **Switch to v2** is one action in Settings → General → Behavior chain. It records a durable `draining` admission state before any asynchronous work. The existing cooperative release barrier counts behavior operations separately; late legacy launches and prepared chain admissions recheck the durable gate. Running invocations finish, Chats remain usable, and unreadable Caller activity refuses readiness. The existing behavior tick then verifies fresh, complete PR observations across all followed organizations and commits the legacy PR boundary and enabled v2 setting in the same transaction. No new polling system is added.
+
+Cutover also requires the displayed native-cleanup setup check to pass. Hosts
+that cannot provide the [native process boundary](Service-architecture.md#workspace-behavior-observation)
+stay on v1; checking, unsupported or unavailable evidence disables Switch to v2.
+Cancel remains available during a drain even if the check subsequently fails.
+An already-v2 setup with unavailable cleanup pauses new invocations and keeps
+its existing ownership; it never silently falls back to v1. Run controls show
+the same refusal. No deployment or runtime setting changes through this check.
+
+Every new physical model, fixed GitHub action and publication continuation has
+its own original Caller resource receipt. Preparation cannot run before that
+claim and registered process boundary. A received action response is durably
+stored before its Call becomes terminal and remains available after Stop or
+interruption. Accepted responses, actual GitHub outcomes and process/disk release
+are independent evidence: a response alone cannot release capacity or permit
+another action. Reconciliation reads these Calls through the existing batched
+snapshot, including quick actions that reserve resources without counting as
+model agents. Shared checkout leases retain original outer identities and cannot
+be expired, adopted or numerically signalled by legacy lease recovery.
 
 The chain settings checkbox controls invocations only after the durable cutover completes. The settings API refuses early enablement, and the runtime independently checks the journal's v2 mode before admitting native work. Saving intake settings alone cannot enable coexistence with v1 issue intake.
 
 After completion, v2 owns new eligible seed issues; new legacy issue intake is fenced. Existing PR behaviors continue for PRs outside native chains, including PRs subsequently created manually or by Chats. They recheck canonical chain ownership immediately before acting, so v2-owned PRs cannot acquire a second behavior owner. Existing Chat bindings and linked PRs are not migrated, and standalone PRs do not acquire fabricated issue-chain history. The observed legacy boundary is retained across restart, and the UI labels its count as PRs retained at cutover, not a live remaining count. Cancel cutover is available while draining and records a return to v1; it does not terminate work or reverse a completed cutover. A failed or incomplete observation leaves the drain visible with its error. Ordinary chain pause remains available after cutover and never reopens v1 issue intake.
 
 The chain list displays v2 ownership, actual phase/wait/hold/uncertainty, last recorded outcome and confirmed merge SHA, with links to the issue and PR. More chains and per-chain History/More events page through the existing journal readers. It refreshes on the application's existing refresh clock while General settings is open. Unavailable reads disable cutover controls instead of displaying a confident engine state. Repository/author triggers and the approval-round escape remain explicitly legacy-only; v2 uses its selected label/all-issues intake and never escapes unresolved blockers by approving.
+
+API summaries include nullable `reviewPending` and `reviewStatus` (`pending`,
+`complete`, `not-recorded`). Older merges without an explicit review verdict
+stay not-recorded; they acquire neither fabricated proof nor a new obligation.
+These fields are projections, never normalized into historical reducer state.
+A confirmed merge remains visible alongside any hold or uncertain invocation.
+Merged chains offer History and original receipt reconciliation, including
+while an invocation is unsettled. They have no Hold/Resume admission controls;
+the headless API refuses those operations with 409 after a confirmed merge.
+The UI explains missing original pre-merge evidence without a way to create a
+replacement review. `state=active` retains open obligations, including merged
+PRs with pending review evidence; `state=merged` retains the existing terminal
+classification, including legacy not-recorded merges. Failed refreshes disable
+the retained row's write controls until a successful read. Native action summaries
+distinguish original accepted responses, observed no-action results and uncertain
+or unrecorded attribution without returning the full receipt. Quiescent evidence
+checks use the bounded reconciliation described below. Chain settings also
+show workspace-wide durable model admissions and their behavior-lane ceiling,
+the durable mode, effective all-issues/label intake or inactive saved intake,
+and admission pause. Configured resource budgets, reservations and unaccounted
+ownership are exposed in the same snapshot without headroom probes. This count survives a
+replacement semaphore and includes uncertain model ownership until native
+resource-release proof arrives; it is not a claim that a provider process is
+currently alive or that all unreserved slots are free of other heavy work.
+The separately labelled process-local semaphore count is not additive to durable
+chain occupancy and cannot establish that surviving workers have ended.
+Unavailable counts are unknown, never zero. The same `chainCapacity` appears
+beside `workerCapacity` in behavior diagnostics and Manager context. The latter
+still describes Manager worker Chats and their enhancement backlog; its Rhythm
+target does not govern atomic chain admissions. No new refresh loop is added.
+
+### Bounded reconciliation
+
+The existing scheduler selects a normal-work page before a separate due
+reconciliation page under its existing pass budget. Quiescent held or merged
+chains keep their original ownership and active-list membership, but cannot
+consume the normal-work page. Native model/resource receipts are still read
+while an original model lacks resource-release proof, including after a merge;
+only unnecessary GitHub observation waits.
+Known closed PRs and closed seeds use the same native-only resource wait for
+their blocked model behaviors. A closed seed alone does not defer PR review or
+approval of an open PR. Public recheck times describe GitHub observation;
+native receipt reconciliation remains eligible on every pass.
+
+A successful quiescent observation schedules its next read at `checkedAt +
+min(24 hours, max(2 minutes, checkedAt - origin))`. Origin is the recorded actual
+merge time, otherwise the first native admission; a held chain with neither
+uses the one-day cap. The interval approximately doubles until the cap. These
+times are derived from canonical state and indexed, so process replacement
+does not reset the cadence. Existing Resume makes unmerged work immediately
+eligible again; it never creates post-merge review authority. Identical holds
+are not repeated and a person's hold is retained. Failed observations neither
+advance timestamps nor become success: their error remains in runtime health
+after unrelated work is allowed to advance, with at most one attempt per
+target per existing pass under the existing account/native budgets.
+
+Merged `merge-pr` and `resolve-threads` uncertainty uses original journal
+receipts only. A missing original response schedules no GitHub read; retaining
+that response makes its original settlement eligible without another mutation.
+Settings and API/status summaries show the scheduled evidence check or the
+missing original response. Intentionally deferred observation is not a
+collector outage, and old GitHub facets remain unverified. The chain summary's
+`reconciliation.nextObservationAt` is epoch milliseconds (`0` means eligible
+on the existing pass, `null` means no GitHub check is scheduled), with a separate
+`waitingForOriginalResponse` flag. The optional `waitingForResourceRelease`
+flag identifies merged model ownership whose native resources remain
+unverified. Its GitHub observation time is null even though native receipt
+reconciliation remains immediately eligible on every pass, including when the
+invocation is uncertain. It is not a missing original merge/resolve response.
+No timer, independent execution ledger or
+new completion control is added. Old duplicate events are preserved; this fix
+does not shrink accumulated history or rewrite historical hashes.
 
 The existing authorized HTTP API supports interactive and headless controls: `GET /api/behavior-chains`, optional `state=active|merged`, cursor `after`, or `id` with an event-sequence cursor; `POST` accepts `id`, current `sequence` and `operation=hold|resume`. Cutover controls instead send the current cutover `sequence` and `operation=switch-to-v2|cancel-cutover`. Reads include `cutover` (mode, sequence, request time, recorded legacy targets and current drain blockers). Summaries/events are paginated. Stale writes fail instead of overwriting a later decision.
 
@@ -47,9 +154,81 @@ The chain intentionally does not use the legacy approval-round escape that files
 
 `behavior_chain_events` is immutable. It owns admissions, phase progression, retry history and ownership. `behavior_chain_current` is a rebuildable index whose state is checked against the authoritative event hash. Admissions and projection updates commit together with SQLite FULL durability. Existing observational behavior ledgers do not authorize this executor.
 
+Projection rebuild preserves historical invocation hashes across the resource-admission upgrade. Older admissions omitted `reservation` from their state; resource-era admissions can retain it as null even when their payload omits it. For that omission only, replay selects the representation matching the original immutable hash. It never rewrites events or accepts a hash mismatch. An admission with no reservation evidence remains unaccounted live ownership and blocks bounded resource admission until its resources are proven settled.
+
 Admission-mode transitions use `admission.changed` events under the reserved `@behavior-admission` journal identity. They share the immutable log and hashes but are not fabricated issue chains and do not appear in chain pages. Rebuilding chain projections verifies and preserves this durable admission state.
 
 Native Call rows and immutable action plans record effect intent before controlled publication. They provide execution evidence to the journal, not a second phase controller. Unique native correlations prevent duplicate processes from executing the same admission. Worker resource settlement is required before a handoff; a terminal model result is insufficient. A restart or interrupted process is reconciled against the original invocation, pushed branch, posted comments and exact-head review receipts.
+
+An uncertain fixed action retains its first verified response and digest in
+the same journal, so unchanged passes and projection rebuilds do not launch
+another response reader or repeat uncertainty events. Observation-based recovery
+of grey CI or publication preserves the original physical Call, failure and
+resource-release evidence; confirming an effect cannot discard cleanup proof.
+
+Log-read recovery never releases native resource ownership from parent death or
+a new container epoch alone. A release timestamp paired with an active cleanup
+error or unknown-resource phase is contradictory and stays quarantined, keeping
+the original reservation. The native finalizer preserves the first recorded
+settlement time; process lifecycle and verified cleanup remain separate facts.
+Caller records native resource ownership separately from publication artifacts.
+Registration precedes allocation and appends across recovery attempts. The
+issue/atomic root and every PR checkout, provider and watch directory have
+pinned filesystem identities. Native issue, atomic and PR work uses one private
+per-Call parent under Caller's data directory, outside the legacy age sweeps;
+temporary credential copies remain inside those registered roots. In service
+mode that directory is on the home volume and survives restart and recreation.
+Normal cleanup uses directory descriptors, records positive reclamation and
+retains the original failure plus an explicit covering recovery time on a
+successful retry. A failed proof write, absent/replaced root or unknown process
+inspection retains ownership. Historical v1 receipts retain their path-scan
+veto; physical v2 Calls require the original kernel scope's positive idle/empty
+proof. Neither grants numeric process-group signal authority. Process uncertainty is independent of
+replaceable phase fields and cannot be cleared by a later publication phase.
+
+The existing decoder checks these receipts before native settlement. Active
+invocations with older missing ownership remain uncertain; a timestamp alone
+does not release them. Contradictory releases already copied into historical
+events re-hold derived capacity, including after merge, without rewriting any
+event or hash. A one-time projection/index migration preserves bounded capacity
+and reconciliation reads. Ordinary settled historical receipts stay readable.
+Uncertain native receipts retain their original Call evidence and the cleanup
+cause/path for inspection. Publication continuation requires the same positive
+resource predicate and an originally unattempted reply batch.
+
+The supported physical v2 boundary establishes descendant ownership, as defined
+in the service contract above; it does not establish automatic post-loss disk
+or lease reclamation. Same-epoch parent loss, an unreadable identity, incomplete
+allocation or a new epoch without cleanup proof stays held. Removing a named
+directory is not a supported way to manufacture a release. A one-slot lane can
+remain held after such a failure. #806 retains
+claimed recovery outside log reads, retention, measured budget enforcement and
+real fault/load acceptance; these remain required before resource readiness.
+
+Known closure blocks all new model requests, worker launch/relaunch and repair
+publication continuation. A durable merge stays closed when a later observation
+has no PR; a closed PR blocks all model behaviors, and a closed seed also blocks
+issue review, implementation and repair. A never-started admission with no
+conflicting or quarantined Call settles as deferred `target_closed`, with
+explicit no-effect evidence and no failed-attempt charge. A started original
+with no Call can use Caller's atomic correlation fence: only winning the
+original unique correlation creates a terminal no-effect native Call. A late
+original cannot claim that correlation before its provider, checkout or writes.
+An existing Call is never altered, and normal validated receipt reconciliation
+must prove release. Fence failures remain reported and retain ownership; the
+existing tick retries that idempotent command at most once per two minutes,
+using a durable attempt time rather than a new timer.
+The receipt reader accepts only the fence's exact no-provider, no-publication
+shape with its native resource-release timestamp. Other superseded outcomes
+retain their original validation; malformed fence rows stay quarantined.
+
+Original artifact/receipt adoption continues while paused or held. Incomplete
+publication after closure is held once; complete original comments, reviews or
+replies can still settle through read-only observation. Native exit or
+quarantined uncertainty is retained. A running Call, or a terminal Call without
+resource-release proof, keeps its existing cleanup owner and reservation; no
+new stop or signal is sent. Closure first seen after that running worker ends
+is not a retroactive guarantee about its in-flight publication.
 
 The publication primitive validates the checkout and model-written metadata in
 read-only mode before Caller records its write intent. Invalid commit subjects,
@@ -58,12 +237,14 @@ rather than becoming ambiguous writes that never occurred.
 
 Durable model admissions use the existing semaphore's behavior-lane ceiling, including its interactive reserve. A fresh server process cannot fill that reserve with another background invocation merely because surviving workers hold no slots in its new in-memory semaphore. Existing work above a lowered ceiling finishes normally while new admissions wait. The journal's capacity check also precedes provider preparation, so waiting work cannot consume a provider recovery probe without launching; admission still rechecks capacity transactionally afterward.
 
+Resource-aware admission (#731) extends that boundary with memory/disk budgets instead of another scheduler. Each admitted native invocation holds a durable reservation covering its whole tree, including provider children and build/test descendants; the count and budget checks run in one journal transaction, so concurrent admissions cannot double-spend. A synchronous free-memory/free-disk probe guards the same boundary before provider preparation and again before spawn, and fails closed with an explicit reason. Blocked chains wait with that reason and no agent process, waking through the existing release paths. Verified settlement releases a reservation exactly once; cleanup uncertainty and pre-reservation live invocations retain or block it. Budgets and reservations are environment-only (`POISE_BEHAVIOR_MEMORY_BUDGET_BYTES`, `POISE_BEHAVIOR_DISK_BUDGET_BYTES`, `POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES`, `POISE_BEHAVIOR_DISK_RESERVATION_BYTES`); unset means unbounded and production behaves as before. Deletion authority stays with the Caller sweep's ownership proofs; live breach termination is the #730 follow-up.
+
 Known failures before publication retry with bounded backoff and existing provider fallback. Ambiguous writes retain ownership. Confirmed actual artifacts can settle a lost response; missing receipts cannot justify another write. Partially published review/reply plans that cannot be fully reconciled remain uncertain and visible. They are not silently retried or reported successful. This limitation must be exercised and resolved if encountered in the real validation runs.
 
 A repair push checkpoints its exact native head before bounded PR-head
 confirmation. If GitHub's PR projection still trails the push, the existing
 reconciliation pass can complete the original immutable reply plan once the
-head is confirmed and worker resources have settled. The canonical journal
+head is confirmed, the target remains open and worker resources have settled. The canonical journal
 records this continuation before Caller acts; no replacement model starts.
 Caller reserves the reply batch before its first POST. A lost or partial
 reply POST remains uncertain unless every original reply is found on GitHub;
@@ -74,6 +255,23 @@ An uncertain grey-CI rerun is inspected through the existing native command in
 read-only mode. A later attempt of that exact workflow/head settles its original
 admission; an unchanged attempt remains uncertain. A confirmed preflight read
 failure is a failed, unstarted action and retries with the existing backoff.
+
+## Native action receipts
+
+Merge, queue-submission and conversation-resolution responses are attributed to
+their original admitted invocation, actor, request digest, repository, PR and
+pinned head. The runtime validates and retains a bounded receipt in the canonical
+journal before terminal settlement. If settlement is interrupted, rebuilding the
+journal recovers that same accepted response without another native write. A
+returned response survives a subsequent nonzero process exit; the process failure
+is retained separately from the accepted effect. An observed prior merge, queue
+entry or empty thread set does not prove that this invocation performed it.
+Without its accepted response, the invocation remains uncertain and blocks a
+replacement write, even when another actor subsequently advances the PR. A
+failed receipt write has the same boundary: the returned response alone is not
+durable authority. Other chains can continue. Publication recovery likewise
+requires the original native invocation marker and pinned head; grey-CI recovery
+retains its existing exact-workflow/attempt inspection.
 
 ## Seed observation batch
 
@@ -416,6 +614,22 @@ unexercised, never passed.
 
 ### Predeclared counts, budgets, deadlines and uncertainty
 
+- #815's isolated cleanup component check uses at most 128 MiB and
+  5,000 directory entries per interrupted Call. Its first recovery attempt
+  must start within 120 seconds of the original kernel scope becoming
+  positively empty; disk reclamation and the first durable release must
+  complete within 180 seconds of that same event. Existing one-minute
+  runtime/maintenance ticks supply opportunities even with admissions paused.
+  One cleanup pass examines at most 16 Calls, yields after 15 seconds of
+  work and has a 30-second outer process deadline. Interrupted passes retain
+  their original claims and proof; expiry or a missing sample grants no
+  release. These limits are fixed before the #815 implementation and do not
+  claim the still-pending full campaign has passed.
+  Retained cleanup failures retry on the existing one-minute opportunity for
+  the first three failures, then after 120, 240 and 480 seconds, capped at
+  600 seconds. There is one coalesced cleanup command per workspace, rather
+  than one process per held Call. Ownership still must be positively verified
+  on every eligible attempt; a deadline or backoff expiry grants no authority.
 - Merge campaign: at least 3 unattended repetitions per achieved
   concurrency level (1, 2, 3), hence at least 9 confirmed merges
   on one frozen candidate. Each fault and breach case is

@@ -25,11 +25,101 @@ it writes without a voice guide, says so on stderr, and prints
 
 # Stopping a run
 
-Every call records the process id of the `agent-interface` that runs it.
-`agent-interface --stop CALL_ID` signals that process group (the CLI and the
-provider it started; a governed review stops its provider itself on SIGTERM),
-waits briefly, and closes the row as `failed` with `error_code = stopped` and
-the error "Stopped by user". A call that already finished is left as it is.
+Every local call records its supervisor PID and available kernel start/epoch
+identity before managed work. On Linux, `agent-interface --stop CALL_ID` opens
+a pidfd before checking that identity and signals only through the verified
+handle. SIGTERM lets the supervisor unwind its own provider handlers; escalation
+reaches only that same supervisor. Numeric process groups and command-name
+matches do not authorize signals. Stop closes the row as `failed` with
+`error_code = stopped` and "Stopped by user"; it never releases native resources
+or proves all descendants ended. A call that already finished is left as it is.
+Missing, reused, previous-epoch, unreadable or unsupported identity refuses the
+operation without a signal. This includes older rows and macOS development
+without kernel-pinned handles. The refusal is explicit; no unsafe fallback is
+used. Externally managed Chat turns retain Poise's existing Stop route.
+
+Native per-Call resource receipts live in `resource_ownership`, outside the
+replaceable publication artifact. Directory registration precedes allocation;
+all PR attempt roots and copied credentials use a private recorded Call parent.
+The normal finalizer also verifies the process nonce committed by the original
+unique Call claim; a later failed launch cannot borrow that claim by PID reuse.
+Positive cleanup, including a covering retry after a retained failure, is
+required for settlement. Log reads perform no deletion and never manufacture
+release from PID loss, wall-clock order or path absence. Physical v2 CLI calls
+register the original private namespace with the existing workspace supervisor
+before preparation or a helper/provider starts. Only the original retained
+kernel view can certify process settlement before normal pinned disk cleanup.
+The [service contract](../../docs/Service-architecture.md#workspace-behavior-observation)
+defines support, teardown and uncertainty; automatic post-loss disk/lease
+reclamation and complete resource acceptance remain pending under #806.
+
+Cleanup recovery uses the existing maintenance/runtime triggers and the same
+original Call. Its private `resource_cleanup` column records a bounded cleanup
+claim, the cleaner's kernel identity and retry metadata; it is not a work or
+action ledger and never enters the log DTO. Root handles stay in the existing
+workspace supervisor until positive deletion is acknowledged. Original errors
+are retained with optional `recovered_at` evidence after a complete positive
+retry; an artifact's matching `resource_recovered_at` distinguishes recovered
+resource uncertainty from an uncertain external action. Neither marker alone
+can release a reservation.
+An incompletely registered descendant can carry `state: covered` only when its
+original ancestor's pinned deletion certificate covers it. Its `covered_by`
+names that reclaimed ancestor; it carries no invented child device/inode.
+Allocated roots, preparation siblings and unknown older ownership require
+their own proof. Original and recovery cleanup use the same private claim;
+PID loss, a new epoch or a deadline never grants takeover by itself.
+The supervisor pins Caller's original data directory, database and response
+directory. Caller metadata reads/writes and service drain counts use those
+handles after an ancestor rename; a replacement directory never becomes the
+recovery target. New allocations refuse a changed data-directory identity.
+`--reclaim-native-resources [--dry-run]` is an internal, bounded maintenance
+command, not a behavior entrypoint.
+An older workspace's owned `native-resources` parent may have mode 0755.
+The allocator tightens the original pinned parent to 0700 without deleting
+its contents; foreign ownership and symlink replacements are refused.
+Fresh helpers inside a private PID namespace verify the original metadata
+handles with that same live controller before opening them. A same-numbered
+local PID or descriptor cannot substitute foreign metadata or prevent the
+verified original-directory path from being used.
+
+Poise's internal `--native-action` admits only the existing fixed merge,
+conversation-resolution, grey-CI and issue-publication-completion commands.
+It preserves the immutable logical request while giving the physical action
+its own Call, correlation, scratch root and resource receipt. Accepted JSON is
+fsynced before terminal status; Stop or a lost terminal write cannot erase it
+or authorize a repeated mutation. The internal publication continuation also
+has a physical Call and reuses the original repair's guarded publication plan.
+`--native-capability` creates no Call or workflow: it verifies namespace setup
+and positive teardown through the same private controller. Direct Python
+library/unit calls retain historical receipts and are not physical CLI proof.
+Provider preparation now runs inside the original physical Call; nonfatal
+updater warnings retain warning severity in the existing diagnostic stream,
+and missing verified launchers fail with their preparation diagnostic.
+
+# Fencing a closed behavior
+
+`--fence-closed-behavior --model MODEL --actor USER --repo OWNER/NAME --number N
+--behavior issue_review|implement_issue|repair_pr|pr_review|pr_approve
+--correlation-id ID [--expected-head SHA]` is Poise's no-worker reconciliation
+command for an original invocation whose target is now closed. PR behaviors and
+repair require the original head. It performs no provider preparation, checkout,
+GitHub operation or signal. In one native database transaction it either wins
+the original correlation and records a terminal `superseded` / `not_started` /
+`target_closed` Call with settled resources, or returns the existing matching
+Call unchanged. Conflicting identity fails; an existing worker's resources are
+never released by this command. Repeats preserve the original receipt and time.
+
+The existing unique correlation claim precedes every managed provider/checkout/
+write. A late original therefore loses that claim if the fence won. The journal
+still owns phase decisions, and Poise reads the resulting Call through its normal
+validated receipt reader before releasing its durable reservation. A failed or
+lost fence response alone proves no settlement. This adds no remote endpoint or
+replacement worker.
+The consumer requires the exact `admission_fenced` artifact, null executed head
+and publication fields, and a valid resource-release timestamp. Caller tests
+feed real `--logs --select` bytes into Poise's decoder and journal runtime for
+all five behaviors; malformed variants remain quarantined. These contract
+checks create no GitHub artifacts and are not workflow acceptance runs.
 
 # Recording a Chat turn
 

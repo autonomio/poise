@@ -11,6 +11,7 @@
 // like a real run without deleting anything.
 
 import { lstat, opendir, readdir, readFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { statfs } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,12 @@ import { LOCAL_CHAT_ROOT, workerWorkspaceRef, workspaceMarkerValid } from './cha
 import { getOpenTurn, sessionsForCheckout } from './chat/storage'
 import { queueOwner, readQueue } from './chat/message-queue'
 import { poiseStateRoot } from './review-checkout'
+import { agentInterfaceCwd } from './models'
+import { callerDatabase } from './caller-store'
+import { behaviorChainJournal } from './behavior-chain-journal'
+import { BehaviorResourceRecovery } from './behavior-chain-resource-recovery'
+import { readNativeInvocations } from './behavior-chain-native'
+import { db } from './db'
 
 /** Closed sessions keep their workspace this long before it may be removed. */
 export const WORKSPACE_CLOSED_GRACE_MS = 24 * 60 * 60_000
@@ -109,6 +116,8 @@ export interface MaintenanceReport {
   errors: Array<{ path?: string, message: string }>
   /** Bytes fstrim returned to the host, or null when it did not run. */
   trimmedBytes: number | null
+  /** Completed native cleanup receipts; bytes require the separate inventory. */
+  nativeCleanupCompleted?: number
 }
 
 export interface WorkspaceClaim {
@@ -318,6 +327,7 @@ export async function storageBreakdown(
     { key: 'uv', label: 'uv cache', path: caches.uv },
     { key: 'npm', label: 'npm cache', path: caches.npm },
     { key: 'agent-work', label: 'Issue-review work dirs', path: caches.agentWork },
+    { key: 'native-resources', label: 'Native behavior resources', path: join(process.env.AGENT_INTERFACE_DATA_DIR || join(agentInterfaceCwd(), 'data'), 'native-resources') },
     { key: 'mirrors', label: 'GitHub mirrors', path: caches.mirrors },
   ].map(async (category) => {
     const dir = await measureDir(category.path, { budget, deadlineMs, now: clock })
@@ -669,6 +679,46 @@ function emptyReport(dryRun: boolean, pressureRun: boolean, startedAt: string): 
   return { startedAt, finishedAt: startedAt, dryRun, pressureRun, reclaimedBytes: 0, removed: [], pruned: [], caches: [], held: [], errors: [], trimmedBytes: null }
 }
 
+interface NativeCleanupReport { examined: number, released: string[], held: { callId: string, reason: string }[] }
+let nativeCleanupPending: Promise<NativeCleanupReport | null> | null = null
+let resourceRecovery: BehaviorResourceRecovery | undefined
+
+async function nativeCleanup(dryRun = false): Promise<NativeCleanupReport | null> {
+  const perform = async (): Promise<NativeCleanupReport | null> => {
+    if (!process.env.POISE_NATIVE_CONTROL) return null
+    if (!callerDatabase(process.env.AGENT_INTERFACE_DATA_DIR || join(agentInterfaceCwd(), 'data'), existsSync)) return null
+    const { stdout } = await runFile('agent-interface', ['--reclaim-native-resources', ...(dryRun ? ['--dry-run'] : [])],
+      { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
+    const value: unknown = JSON.parse(stdout)
+    if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1
+      || !('examined' in value) || !Number.isInteger(value.examined) || Number(value.examined) < 0 || Number(value.examined) > 16
+      || !('released' in value) || !Array.isArray(value.released) || !('held' in value) || !Array.isArray(value.held)) {
+      throw new Error('Caller native cleanup returned an invalid report')
+    }
+    const released = value.released.map((id: unknown) => {
+      if (typeof id !== 'string' || !HEX32.test(id)) throw new Error('Caller native cleanup returned an invalid Call')
+      return id
+    })
+    const held = value.held.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || !('callId' in item) || typeof item.callId !== 'string' || !HEX32.test(item.callId)
+        || !('reason' in item) || typeof item.reason !== 'string' || !item.reason || item.reason.length > 2000) {
+        throw new Error('Caller native cleanup returned an invalid hold')
+      }
+      return { callId: item.callId, reason: item.reason }
+    })
+    const ids = [...released, ...held.map(item => item.callId)]
+    if (ids.length !== value.examined || new Set(ids).size !== ids.length) throw new Error('Caller native cleanup returned contradictory counts')
+    if (!dryRun && db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'behavior_chain_current'").get()) {
+      resourceRecovery ??= new BehaviorResourceRecovery(behaviorChainJournal(), readNativeInvocations)
+      await resourceRecovery.run()
+    }
+    return { examined: Number(value.examined), released, held }
+  }
+  if (dryRun) return perform()
+  nativeCleanupPending ??= perform().finally(() => { nativeCleanupPending = null })
+  return nativeCleanupPending
+}
+
 /** Run one maintenance pass. On pressure the caches go first so space comes
  *  back even if workspace work later stalls. */
 export async function runStorageMaintenance(options: MaintenanceOptions = {}): Promise<MaintenanceReport> {
@@ -682,6 +732,34 @@ export async function runStorageMaintenance(options: MaintenanceOptions = {}): P
   const report = emptyReport(dryRun, pressureRun, startedAt)
   const caches = cacheDirs(home)
   const caps = { ...CACHE_CAP_BYTES, ...options.caps }
+
+  try {
+    const native = await nativeCleanup(dryRun)
+    if (native) {
+      report.nativeCleanupCompleted = native.released.length
+      for (const item of native.held) report.held.push({ path: process.env.AGENT_INTERFACE_DATA_DIR || agentInterfaceCwd(),
+        reason: `Native Call ${item.callId}: ${item.reason}` })
+    }
+  } catch (error) {
+    report.errors.push({ message: `Caller native cleanup failed: ${messageOf(error)}` })
+  }
+  // Inventory never grants deletion authority, including for legacy or
+  // unregistered roots. Bound this classification independently of tree size.
+  const nativeRoot = join(process.env.AGENT_INTERFACE_DATA_DIR || join(agentInterfaceCwd(), 'data'), 'native-resources')
+  try {
+    const node = await lstat(nativeRoot)
+    if (!node.isDirectory() || node.isSymbolicLink()) report.held.push({ path: nativeRoot, reason: 'Native resource inventory is not an original directory; retained' })
+    else {
+      const directory = await opendir(nativeRoot)
+      let count = 0
+      for await (const entry of directory) {
+        if (count++ === 16) { report.held.push({ path: nativeRoot, reason: 'More native resource inventory remains; classification bounded to 16 entries' }); break }
+        report.held.push({ path: join(nativeRoot, entry.name), reason: 'Retained native resource: only its original current-version receipt can authorize reclamation; legacy and unknown ownership stay held' })
+      }
+    }
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') report.errors.push({ message: `Native resource inventory unavailable: ${messageOf(error)}` })
+  }
 
   const workspaces = async () => {
     for (const id of await listDirs(join(chatRoot, 'workers'))) {
@@ -902,7 +980,11 @@ export function startStorageMaintenanceRuntime(): void {
   maintenanceTimer.unref?.()
   const pressure = () => {
     if (pressurePass) return
-    pressurePass = checkWorkspacePressure().finally(() => { pressurePass = null })
+    pressurePass = (async () => {
+      try { await nativeCleanup() }
+      catch (error) { console.error('[storage] native cleanup failed:', error) }
+      return checkWorkspacePressure()
+    })().finally(() => { pressurePass = null })
   }
   pressureTimer = setInterval(pressure, PRESSURE_CHECK_MS)
   pressureTimer.unref?.()

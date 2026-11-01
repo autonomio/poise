@@ -157,7 +157,7 @@ export class ServiceControl {
   health(): ServiceHealth {
     const activeChatTurns = listOpenTurns(this.runtime.instance).length
     const calls = runningCallerCalls()
-    const backgroundWork = this.runtime.busy() + releaseBackgroundBusy() + this.launches
+    const backgroundWork = this.runtime.busy() + releaseBackgroundBusy() + this.launches + calls.pendingResources
     const pending = this.pendingSwitchRecord()
     const release = this.release.name
     const switching = pending?.release ?? null

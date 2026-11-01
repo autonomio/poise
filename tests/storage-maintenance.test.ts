@@ -63,6 +63,7 @@ beforeEach(async () => {
   vi.stubEnv('npm_config_cache', join(home, 'npm'))
   vi.stubEnv('AGENT_INTERFACE_WORK_DIR', join(home, 'agent-work'))
   vi.stubEnv('GITHUB_INTERFACE_MIRROR_DIR', join(home, 'mirrors'))
+  vi.stubEnv('AGENT_INTERFACE_DATA_DIR', join(home, 'caller'))
   vi.resetModules()
   maintenance = await import('../server/storage-maintenance')
   database = await import('../server/db')
@@ -548,6 +549,21 @@ describe('disk pressure', () => {
 })
 
 describe('storage breakdown', () => {
+  it('measures and retains unregistered native roots without granting cleanup authority', async () => {
+    const native = join(home, 'caller', 'native-resources', 'a'.repeat(32))
+    await mkdir(native, { recursive: true })
+    const sentinel = join(native, 'auth-and-evidence')
+    const content = 'protected original user data'.repeat(1024)
+    await writeFile(sentinel, content)
+    const report = await maintenance.runStorageMaintenance({ home, chatRoot, stateRoot })
+    expect(report.held).toContainEqual({ path: native, reason: expect.stringContaining('legacy and unknown ownership stay held') })
+    expect(await readFile(sentinel, 'utf8')).toBe(content)
+    const measured = await maintenance.storageBreakdown(home, chatRoot, stateRoot)
+    const category = measured.categories.find(category => category.key === 'native-resources')
+    expect(category).toMatchObject({ status: 'ok' })
+    expect(category?.bytes).toBeGreaterThanOrEqual(Buffer.byteLength(content))
+  })
+
   it('reports per-category sizes and disk totals', async () => {
     const checkout = await makeWorkspace('dddddddd-dddd-dddd-dddd-dddddddddddd')
     await writeFile(join(checkout, 'payload.bin'), 'x'.repeat(4096))
@@ -570,7 +586,7 @@ describe('storage breakdown', () => {
 describe('bounded storage reads', () => {
   it('measures missing directories as zero and completes', async () => {
     const breakdown = await maintenance.storageBreakdown(home, chatRoot, stateRoot)
-    expect(breakdown.categories).toHaveLength(8)
+    expect(breakdown.categories).toHaveLength(9)
     for (const category of breakdown.categories) {
       expect(category).toMatchObject({ status: 'ok', bytes: 0 })
     }

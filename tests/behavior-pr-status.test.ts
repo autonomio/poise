@@ -546,12 +546,22 @@ describe('handleBehaviorPrStatus', () => {
     expect(res.statusCode).toBe(200)
     expect(res.headers['Content-Type']).toBe('application/json')
     const body = JSON.parse(res.body) as { version: number, totalOpen: number }
-    expect(body.version).toBe(1)
+    expect(body.version).toBe(2)
     expect(body.totalOpen).toBe(1)
   })
 })
 
 describe('pr-status CLI', () => {
+  it('accepts status schema v2 while keeping ordinary ledger reads on their v1 contract', async () => {
+    const body = { version: 2, health: { status: 'ok', pending: 0, dropped: 0, gaps: [] }, rows: [] }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })))
+    const output: string[] = []
+    expect(await runBehaviorLedgerCli(['pr-status'], (text) => output.push(text))).toBe(0)
+    expect(JSON.parse(output[0]).version).toBe(2)
+    expect(await runBehaviorLedgerCli(['list'], () => {})).toBe(1)
+    body.version = 3
+    expect(await runBehaviorLedgerCli(['pr-status'], () => {})).toBe(1)
+  })
   afterEach(() => { vi.unstubAllGlobals() })
 
   it('builds the pr-status URL', () => {

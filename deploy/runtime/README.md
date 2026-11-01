@@ -32,7 +32,8 @@ docker build --file deploy/runtime/Dockerfile --tag poise-runtime \
 - Python 3.13 and Caller's three CLIs in the relocatable virtualenv
   `/opt/caller/venv` (`CALLER_BIN_ROOT`); agent-interface keeps its data in
   `~/.poise/agent-interface` (`AGENT_INTERFACE_DATA_DIR`).
-- `/opt/poise-runtime`: `supervisor.mjs`, `install-release.sh` and `BASE`, the
+- `/opt/poise-runtime`: `supervisor.mjs`, its `resource-witness.mjs` directory
+  handles, `install-release.sh` and `BASE`, the
   base every release of this image runs on
   ([Updates in place](../../docs/Service-architecture.md#updates-in-place)).
 - `gh` from GitHub's apt repository, `git`, `build-essential`,
@@ -60,6 +61,21 @@ running `entrypoint.sh`. That script
    personal computer.
 
 The health check is `GET /api/service/health` over loopback.
+
+The supervisor also retains native cleanup witnesses across Poise release
+switches. The private controller and supported-runtime gate are defined in
+[Service architecture](../../docs/Service-architecture.md#workspace-behavior-observation).
+Unsupported hosts retain v1; the image does not enable v2 or configure a host
+runtime automatically.
+
+`deploy/runtime/test/native-cleanup.sh IMAGE runsc` checks the actual service
+entrypoint/gate and kernel teardown, sanitizer semantics and native Caller
+resource serialization under the shipped uid/capability/security settings.
+`... IMAGE runc` separately checks refusal under Docker's default profile.
+The Runtime image workflow installs a pinned runsc only on its disposable CI
+runner. Tests use isolated tmpfs state, no network, no provider identities or
+GitHub actions. They are component proof; the frozen real-provider campaign
+remains separate.
 
 ## Provider CLIs
 

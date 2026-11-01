@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from . import checkout_lock, issue_review, progress, review_budget
+from . import checkout_lock, issue_review, progress, review_budget, resource_ownership
 from .model_catalog import Model
 
 UNATTENDED = "You are one atomic implementation/repair behavior. Work unattended; report a blocker instead of inventing a human answer. Caller owns publication."
@@ -12,7 +12,7 @@ UNATTENDED = "You are one atomic implementation/repair behavior. Work unattended
 def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Path,
         call_id: str, record: Callable[[dict], None], pull: int | None = None,
         expected_head: str | None = None, note: str = "", merge_base: bool = False, expected_issue_revision: str | None = None) -> dict:
-    work.mkdir(parents=True)
+    work.mkdir(parents=True, exist_ok=True)
     checkout = work / "repo"
     output = work / "publication.json"
     common = [f"#{number}", "--repository", repo, "--branch", branch, "--token-user", actor, "--invocation-id", call_id]
@@ -70,6 +70,9 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
             issue_review.stop_leftovers(work)
             if issue_review._cwd_pids(work, require_complete=True) != []:
                 raise checkout_lock.WorkerOrphaned("atomic behavior resources could not be proven released")
+            bound = resource_ownership.binding()
+            if bound is not None:
+                resource_ownership.process_check(*bound, complete=True)
             record({"phase": "executing", "prepared": prepared})
             terminal = issue_review._terminal_failure(model.provider, done.stdout)
             if done.returncode or terminal:

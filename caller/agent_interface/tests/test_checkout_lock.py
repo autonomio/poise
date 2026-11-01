@@ -8,8 +8,9 @@ import tempfile
 from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep, time
+from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import agent_interface
 from agent_interface import checkout_lock, fix_failing_ci, review_budget, review_watch
@@ -93,6 +94,49 @@ class LockCase(TestCase):
     def lease(self, owner="call-1", label="fix-failing-ci o/r#1 (call call-1)") -> Lease:
         return Lease(self.checkout, owner, label)
 
+    def test_native_lease_publishes_only_outer_ids_and_requires_positive_idle_proof(self):
+        native = SimpleNamespace(key={"callId": "a" * 32}, binding={"owner": {"pid": 104, "start": "10"}, "pid": 106},
+                                 require_idle=Mock())
+        with patch.object(checkout_lock.native_namespace, "active", return_value=native):
+            hold = self.lease().acquire()
+            hold.register_worker(3, 3, "inner-gate")
+            row, = self.rows()
+            self.assertEqual((row["host_pid"], row["host_start"], row["worker_pid"], row["worker_pgid"], row["native_call"]),
+                             (104, "10", 106, None, "a" * 32))
+            self.assertEqual(row["worker_ident"], f"native:{'a' * 32}")
+            self.assertTrue(hold.release())
+            native.require_idle.assert_called_once_with()
+        self.assertEqual(self.rows(), [])
+
+    def test_native_uncertainty_retains_lease_and_legacy_never_expires_or_removes_it(self):
+        native = SimpleNamespace(key={"callId": "a" * 32}, binding={"owner": {"pid": 104, "start": "10"}, "pid": 106},
+                                 require_idle=Mock(side_effect=RuntimeError("original witness unavailable")))
+        with patch.object(checkout_lock.native_namespace, "active", return_value=native):
+            hold = self.lease().acquire()
+            with self.assertRaisesRegex(WorkerOrphaned, "original witness unavailable"):
+                hold.release()
+        before, = self.rows()
+        self.set_row(lease_until=0)
+        with patch.object(checkout_lock, "pid_alive", side_effect=AssertionError("legacy probed a native PID")), \
+                patch.object(checkout_lock, "pgid_alive", side_effect=AssertionError("legacy probed a native group")):
+            other = self.lease("legacy-contender")
+            with self.assertRaisesRegex(LockBusy, "retains another invocation"):
+                other.acquire(timeout=0)
+            other.token, other.held = before["token"], True
+            self.assertFalse(other.release())
+        after, = self.rows()
+        self.assertEqual(after["token"], before["token"])
+        self.assertEqual(after["native_call"], "a" * 32)
+
+    def test_native_contender_never_probes_foreign_outer_identifiers_from_its_inner_view(self):
+        legacy = self.lease("legacy").acquire()
+        native = SimpleNamespace(key={"callId": "a" * 32}, binding={"owner": {"pid": 104, "start": "10"}, "pid": 106})
+        with patch.object(checkout_lock.native_namespace, "active", return_value=native), \
+                patch.object(checkout_lock, "pid_alive", side_effect=AssertionError("inner view probed foreign outer PID")):
+            with self.assertRaisesRegex(LockBusy, "retains another invocation"):
+                self.lease("native").acquire(timeout=0)
+        self.assertTrue(legacy.release())
+
     def meta(self) -> tuple[int, int, int, str]:
         pid, pgid, ppid, control = Path(self.log + ".meta").read_text().split()
         return int(pid), int(pgid), int(ppid), control
@@ -114,7 +158,8 @@ class LockCase(TestCase):
         process = subprocess.Popen([sys.executable, "-c", HOLDER, self.checkout, writer], text=True, stdout=subprocess.PIPE)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         token = process.stdout.readline().strip()
-        self.assertTrue(self.wait_until(lambda: Path(self.log + ".meta").exists()))
+        self.assertTrue(self.wait_until(lambda: Path(self.log + ".meta").exists()
+                                      and len(Path(self.log + ".meta").read_text().split()) == 4))
         return process, token
 
 
@@ -136,7 +181,7 @@ class TestIdentityAndSchema(LockCase):
         self.assertEqual(columns, [
             ("id", "integer", 0), ("token", "text", 1), ("checkout", "text", 1), ("owner_kind", "text", 1),
             ("owner_id", "text", 1), ("owner_label", "text", 1), ("instance", "text", 1), ("host_pid", "integer", 1),
-            ("host_start", "text", 0),
+            ("host_start", "text", 0), ("native_call", "text", 0),
             ("worker_pid", "integer", 0), ("worker_pgid", "integer", 0), ("worker_ident", "text", 0), ("branch", "text", 0),
             ("acquired_at", "text", 1), ("heartbeat_at", "text", 1), ("lease_until", "integer", 1),
         ])

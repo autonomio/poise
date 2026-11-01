@@ -10,6 +10,7 @@ import type { ChatRuntime } from '../server/chat/runtime'
 import type { SessionRecord } from '../server/chat/protocol'
 import type { RequestAuthority } from '../server/http'
 import { createCpuCapture } from '../server/production-cpu-profile'
+import Database from 'better-sqlite3'
 
 let root = ''
 let control: typeof import('../server/service/control')
@@ -98,6 +99,31 @@ function call(method: string, path: string, authority: RequestAuthority, service
 }
 
 describe('service health', () => {
+  it('retains pending native cleanup through drain until its durable release and claim retirement', async () => {
+    const { service } = serviceOf()
+    const records = join(root, 'native-cleanup-records')
+    await mkdir(records, { recursive: true })
+    const database = new Database(join(records, 'calls.sqlite3'))
+    database.exec('create table calls (id text, status text, pid integer, runner text, source text, resources_settled_at real, resource_cleanup text)')
+    const insert = database.prepare('insert into calls values (?,?,?,?,?,?,?)')
+    insert.run('interrupted', 'failed', null, null, 'poise:behavior-chain', null, '{"token":"private"}')
+    insert.run('fenced', 'superseded', null, null, 'poise:behavior-chain', 1, null)
+    insert.run('chat', 'failed', null, 'external', 'poise:chat', null, null)
+    vi.stubEnv('AGENT_INTERFACE_DATA_DIR', records)
+    try {
+      expect(service.health()).toMatchObject({ runningCallerCalls: 0, backgroundWork: 1, idle: false })
+      expect(service.drain()).toMatchObject({ draining: true, backgroundWork: 1, idle: false })
+      database.exec("update calls set resources_settled_at=1 where id='interrupted'")
+      expect(service.health()).toMatchObject({ backgroundWork: 1, idle: false })
+      database.exec("update calls set resource_cleanup=null where id='interrupted'")
+      expect(service.health()).toMatchObject({ backgroundWork: 0, idle: true, draining: true })
+    } finally {
+      service.resume()
+      vi.stubEnv('AGENT_INTERFACE_DATA_DIR', '')
+      database.close()
+    }
+  })
+
   it('counts this workspace\'s open Chat turns and Caller calls', async () => {
     const runtime = fakeRuntime()
     session(runtime.instance, true)

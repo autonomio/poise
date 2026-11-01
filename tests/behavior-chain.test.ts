@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainEvent, type ChainInvocation } from '../server/behavior-chain-store'
+import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainAdmission, type ChainEvent, type ChainInvocation } from '../server/behavior-chain-store'
 import { decideBehaviorChain, type ChainObservation } from '../server/behavior-chain-decision'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
 import type { LogEntry } from '../server/agent-log-parse'
@@ -31,7 +31,7 @@ function observation(): ChainObservation {
 function record(journal: BehaviorChainJournal, chain: BehaviorChain, event: ChainEvent): BehaviorChain {
   return journal.append(chain.id, `event-${chain.sequence}`, chain.sequence, event, NOW)
 }
-function invocation(id: string, behavior: ChainInvocation['behavior'], basis: string, slot: string | null = 'primary'): Omit<ChainInvocation, 'state' | 'callId' | 'outcome' | 'evidence' | 'admissionSequence'> {
+function invocation(id: string, behavior: ChainInvocation['behavior'], basis: string, slot: string | null = 'primary'): ChainAdmission {
   return { id, behavior, basis, actor: behavior === 'implement-issue' || behavior === 'repair-pr' ? 'author' : 'reviewer',
     model: 'fixture-model', slot, admittedAt: NOW, request: { command: 'agent-interface', argv: ['--fixture'], cwd: '/fixture' } }
 }
@@ -200,6 +200,7 @@ describe('completion-driven atomic behavior decisions', () => {
     expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr', reason: expect.stringContaining('PR-head green checks do not prove integration success') })
     obs.pull!.queueRemoval.reason = 'manual'
     expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'hold', reason: expect.stringContaining('decision') })
+    current = record(journal, current, { type: 'chain.observed', observation: structuredClone(obs) })
     obs.pull!.merged = true; obs.pull!.mergeSha = MERGE; obs.pull!.state = 'closed'
     expect(decideBehaviorChain(current, obs, NOW)).toEqual({ kind: 'complete', mergeSha: MERGE })
   })
@@ -239,7 +240,9 @@ describe('native admission and recovery', () => {
       ownsRepository: () => true, observe: async () => ({ ...observation(), checkedAt: Date.now() }),
       readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => true, capacity: () => 2,
       permitted: () => true, request: async () => ({ command: 'agent-interface', argv: ['--model', 'fixture-model'], cwd: '/fixture' }),
-      launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') }, wake: () => {}, ...overrides }
+      launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') },
+      readActionResult: async () => { throw new Error('unexpected native response read') },
+      fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') }, wake: () => {}, ...overrides }
   }
 
   it('recovers a review only with its retained substantive response and preserves its original completion time', async () => {
@@ -252,7 +255,8 @@ describe('native admission and recovery', () => {
     let current = record(journal, chain, { type: 'invocation.admitted', invocation: pending })
     current = record(journal, current, { type: 'invocation.uncertain', invocationId: pending.id, reason: 'submission response lost' })
     current = record(journal, current, { type: 'invocation.reconciled', invocationId: pending.id,
-      evidence: { callId: nativeId, resources_settled_at: new Date(now).toISOString(), completedAt: now } })
+      evidence: { callId: nativeId, resources_settled_at: new Date(now).toISOString(), completedAt: now,
+        resource_ownership: { version: 1, roots: [], errors: [] } } })
     obs.pull!.reviewReceipts = [{ id: 91, head: HEAD, state: 'COMMENTED', invocation: nativeId, submittedAt: now - 1000 }]
     const runtime = new BehaviorChainRuntime(journal, operations({ observe: async () => obs, launch: async () => { throw new Error('duplicate review dispatch') } }))
     await runtime.run()
@@ -270,10 +274,13 @@ describe('native admission and recovery', () => {
     const { journal, chain } = setup(); const obs = observation()
     const pending = invocation('existing-review', 'review-issue', chainBasis(['issue', obs.issue.revision]))
     record(journal, chain, { type: 'invocation.admitted', invocation: pending })
-    const call = { id: 'a'.repeat(32), correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'reviewer',
+    const call: LogEntry = { id: 'a'.repeat(32), correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'reviewer',
+      pr_id: '7', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(),
+      time_elapsed: '1s', head_sha: null, expected_head: null, response: null, error: '',
       repo: 'Example/Repo', behavior: 'issue_review', status: 'completed', outcome: 'commented', action: 'commented',
       issue_revision: obs.issue.revision, resources_settled_at: new Date(NOW).toISOString(),
-      receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer' }] } as LogEntry
+      resource_ownership: { version: 1, roots: [], errors: [] },
+      receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer', url: null }] }
     const runtime = new BehaviorChainRuntime(journal, operations({ discover: async () => { throw new Error('intake is stale') },
       readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
     await expect(runtime.run()).rejects.toThrow('intake is stale')
@@ -327,10 +334,13 @@ describe('native admission and recovery', () => {
       observe: async () => { observations++; return { ...obs, checkedAt: Date.now() } },
       launch: async (invocation) => { launched.push(invocation.behavior); running = invocation; return true },
       readInvocations: async () => ({ quarantined: [], entries: running ? [{ id: 'a'.repeat(32), correlation_id: running.id,
+        pr_id: '7', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(),
+        time_elapsed: '1s', head_sha: null, expected_head: null, response: null, error: '',
         source: 'poise:behavior-chain', repo: 'Example/Repo', actor: 'reviewer', behavior: 'issue_review',
         status: completed ? 'completed' : 'running', action: completed ? 'commented' : null, outcome: completed ? 'commented' : null,
-        issue_revision: obs.issue.revision, receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer' }],
+        issue_revision: obs.issue.revision, receipts: [{ issue: 'Example/Repo#7', comment_id: 17, author: 'reviewer', url: null }],
         resources_settled_at: completed ? new Date().toISOString() : null,
+        resource_ownership: { version: 1, roots: [], errors: [] },
       } as LogEntry] : [] }),
     }))
     await runtime.run()
@@ -416,29 +426,57 @@ describe('native admission and recovery', () => {
     const callId = 'a'.repeat(32)
     const call: LogEntry = { id: callId, correlation_id: pending.id, source: 'poise:behavior-chain', actor: 'author', repo: 'Example/Repo', behavior: 'repair_pr',
       status: 'failed', action: null, outcome: null, resources_settled_at: new Date(NOW).toISOString(),
+      resource_ownership: { version: 1, roots: [], errors: [] },
       pr_id: '21', model: 'fixture-model', session_id: null, prompt: '', started_at: new Date(NOW).toISOString(), time_elapsed: '1s',
       head_sha: null, expected_head: HEAD, response: null, error: 'PR head confirmation timed out',
       artifact: { phase: 'publishing', plan_sha: 'b'.repeat(64) } }
     obs.publication.head_invocation = callId
     obs.workPublication = { callId, repliesComplete: false, resumable: true, planSha: 'b'.repeat(64) }
     let resumed = 0
+    let received = 0
+    let publicationCall: LogEntry | null = null
     const runtime = new BehaviorChainRuntime(journal, operations({ observe: async () => ({ ...obs, checkedAt: Date.now() }),
-      readInvocations: async () => ({ entries: [call], quarantined: [] }), resumePublication: async (original, head) => {
+      received: () => { received++ },
+      readInvocations: async () => ({ entries: [call, ...(publicationCall ? [publicationCall] : [])], quarantined: [] }), resumePublication: async (original, head, correlation) => {
         expect(original.id).toBe(pending.id)
         expect(head).toBe(HEAD)
         expect(journal.read(chain.id)!.invocations[0].evidence).toMatchObject({ publicationResume: { callId, head: HEAD } })
+        publicationCall = { ...call, id: 'c'.repeat(32), correlation_id: correlation, behavior: 'native_publication', model: 'native-action',
+          status: 'running', resources_settled_at: null, artifact: { phase: 'preparing_native_action',
+            request_sha: chainBasis({ kind: 'native_publication', call_id: callId, digest: 'b'.repeat(64), head }) } }
         resumed++; throw new Error('completion response lost')
       }, launch: async () => { throw new Error('must not launch a replacement worker') } }))
+    const releasedAt = call.resources_settled_at
+    call.resources_settled_at = null
+    await runtime.run()
+    expect(resumed).toBe(0)
+    expect(received).toBe(0)
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    call.resources_settled_at = releasedAt
     await runtime.run()
     expect(resumed).toBe(1)
+    expect(received).toBe(1)
     expect(journal.read(chain.id)!.invocations).toHaveLength(1)
     expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
     obs.workPublication.resumable = false
     call.artifact = { ...call.artifact, replies_started: true }
     await runtime.run()
     expect(resumed).toBe(1)
+    expect(received).toBe(1)
     expect(journal.read(chain.id)!.invocations[0].evidence?.artifact).toMatchObject({ replies_started: true })
     obs.workPublication.repliesComplete = true
+    await runtime.run()
+    expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    const continuation = publicationCall as LogEntry | null
+    expect(continuation).not.toBeNull()
+    Object.assign(continuation!, { status: 'completed', action: 'native_action', outcome: 'native_action', head_sha: HEAD,
+      resources_settled_at: releasedAt, resource_ownership: { version: 2, roots: [], errors: [], namespace: {
+        state: 'settled', callId: continuation!.id, correlation: continuation!.correlation_id!, settled_at: NOW / 1000,
+        controller: { version: 1, instance: 'd'.repeat(32) }, binding: { pid: 104, start: '12', namespace: 'pid:[91]',
+          owner: { pid: 102, start: '10' }, holder: { pid: 103, start: '11' },
+          epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
+      artifact: { ...continuation!.artifact, phase: 'received_native_action', response_sha: chainBasis({ outcome: 'published' }) } })
     await runtime.run()
     expect(journal.read(chain.id)!.invocations[0]).toMatchObject({ state: 'settled', callId, outcome: 'published' })
   })

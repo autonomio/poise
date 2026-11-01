@@ -1,6 +1,9 @@
 import { expect, it, vi } from 'vitest'
-import { chainBasis, type BehaviorChain } from '../server/behavior-chain-store'
+import { createHash } from 'node:crypto'
+import type { LogEntry } from '../server/agent-log-parse'
+import { chainBasis, type BehaviorChain, type ChainInvocation } from '../server/behavior-chain-store'
 import type { Organization } from '../server/organizations'
+import type { NativeChainHooks } from '../server/behavior-chain-native'
 
 const mocks = vi.hoisted(() => ({ runFile: vi.fn() }))
 vi.mock('../server/process', () => ({ runFile: mocks.runFile, spawnDetached: vi.fn() }))
@@ -16,6 +19,87 @@ const chain: BehaviorChain = { id: 'example/repo#7', repository: 'example/repo',
   author: 'author', reviewer: 'reviewer', sequence: 1, held: null, waiting: null, resumedAfterSequence: 0,
   mergeSha: null, observation: null, invocations: [] }
 const reviewer = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
+
+it('verifies the original native response bytes without changing Python number formatting', async () => {
+  const invocation = mergeInvocation()
+  const retained = '{"duration":1.0,"outcome":"enqueued"}'
+  const call: LogEntry = { id: 'b'.repeat(32), pr_id: '21', repo: chain.repository, actor: invocation.actor,
+    model: 'native-action', behavior: 'native_action', session_id: null, prompt: '', started_at: new Date().toISOString(),
+    time_elapsed: '1s', status: 'completed', outcome: 'native_action', action: 'native_action', head_sha: HEAD,
+    expected_head: HEAD, source: 'poise:behavior-chain', correlation_id: invocation.id, response: 'bbbbbbbb', error: '',
+    artifact: { phase: 'received_native_action',
+    request_sha: chainBasis(invocation.request), response_sha: createHash('sha256').update(retained).digest('hex') } }
+  mocks.runFile.mockResolvedValueOnce({ stdout: `${retained}\n` })
+  await expect(actionOperations().readActionResult(invocation, call))
+    .resolves.toEqual({ duration: 1, outcome: 'enqueued' })
+  mocks.runFile.mockResolvedValueOnce({ stdout: `${JSON.stringify(JSON.parse(retained))}\n` })
+  await expect(actionOperations().readActionResult(invocation, call))
+    .rejects.toThrow('retained digest')
+})
+
+function actionOperations(overrides: Partial<NativeChainHooks> = {}) {
+  return nativeChainOperations({ login: 'example' } as Organization, {
+    roster: async () => ({ issueReviewers: [], prReviewers: [], implementer: reviewer, repairer: reviewer, approver: reviewer }),
+    resolve: async () => reviewer, prepare: async () => ({}), borrow: () => () => {}, available: () => true,
+    capacity: () => 3, permitted: () => true, note: () => '', severity: () => 'p2', received: () => {},
+    reviews: async () => 'reviews', existing: async () => new Set(), wake: () => {}, ...overrides,
+  })
+}
+
+function mergeInvocation(): ChainInvocation {
+  return { id: 'original-merge', behavior: 'merge-pr', basis: 'merge', actor: 'reviewer', model: null, slot: null,
+    reservation: null, admittedAt: Date.now() - 1000, admissionSequence: 2, state: 'started', callId: null, outcome: null, evidence: null,
+    request: { command: 'github-interface', cwd: '/fixture', argv: ['--merge-if-ready', '21', '--expected-head', HEAD, '--token-user', 'reviewer'] } }
+}
+
+it.each(['fenced', 'existing'] as const)('validates the original closed-target fence response without provider preparation: %s', async outcome => {
+  const prepare = vi.fn(async () => ({}))
+  const borrow = vi.fn(() => () => {})
+  const invocation: ChainInvocation = { ...mergeInvocation(), behavior: 'repair-pr', model: 'fixture', actor: 'author',
+    request: { command: 'agent-interface', cwd: '/fixture', argv: ['--atomic-work', 'example/repo#7', '--pull-number', '21', '--expected-head', HEAD] } }
+  mocks.runFile.mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'c'.repeat(32), outcome, model: 'fixture', actor: 'author',
+    repo: chain.repository, pr_id: '21', behavior: 'repair_pr', source: 'poise:behavior-chain', correlation_id: invocation.id, expected_head: HEAD }) })
+  expect(await actionOperations({ prepare, borrow }).fenceClosedTarget(chain, invocation)).toBe(outcome === 'fenced')
+  expect(mocks.runFile.mock.calls.at(-1)?.slice(0, 2)).toEqual(['agent-interface', ['--fence-closed-behavior', '--model', 'fixture',
+    '--actor', 'author', '--repo', chain.repository, '--number', '21', '--behavior', 'repair_pr', '--correlation-id', invocation.id, '--expected-head', HEAD]])
+  expect(prepare).not.toHaveBeenCalled()
+  expect(borrow).not.toHaveBeenCalled()
+})
+
+it('refuses a late native launch before reserving capacity or preparing a provider', async () => {
+  const prepare = vi.fn(async () => ({}))
+  const borrow = vi.fn(() => () => {})
+  expect(await actionOperations({ prepare, borrow }).launch(mergeInvocation(), () => {}, () => false)).toBe(false)
+  expect(prepare).not.toHaveBeenCalled()
+  expect(borrow).not.toHaveBeenCalled()
+})
+
+it('releases borrowed capacity when closure arrives during provider preparation', async () => {
+  const release = vi.fn()
+  const borrow = vi.fn(() => release)
+  const prepare = vi.fn(async () => ({}))
+  const allowed = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false)
+  expect(await actionOperations({ prepare, borrow }).launch(mergeInvocation(), () => {}, allowed)).toBe(false)
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(borrow).toHaveBeenCalledTimes(1)
+  expect(release).toHaveBeenCalledTimes(1)
+})
+
+it('retains a returned native mutation response when its process subsequently fails', async () => {
+  const response = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21,
+    head_sha: HEAD, outcome: 'enqueued', queue_entry_id: 'accepted-queue-entry' }
+  mocks.runFile.mockRejectedValueOnce(Object.assign(new Error('process exited after response'), {
+    code: 1, signal: null, stdout: JSON.stringify({ id: 'c'.repeat(32), result: response }),
+  }))
+  await expect(actionOperations().perform(mergeInvocation(), chain)).resolves.toEqual({ ...response,
+    nativeCallId: 'c'.repeat(32), nativeOuterProcessFailure: { code: 1, signal: null } })
+})
+
+it.each(['', 'partial JSON {', '[]'])('preserves the original process failure when stdout is not a valid response: %s', async (stdout) => {
+  const failure = Object.assign(new Error('native timeout after a possible write'), { code: 'ETIMEDOUT', signal: 'SIGTERM', stdout })
+  mocks.runFile.mockRejectedValueOnce(failure)
+  await expect(actionOperations().perform(mergeInvocation(), chain)).rejects.toBe(failure)
+})
 
 it('preserves actual review identities, responses and times after an external merge', async () => {
   const completedAt = Date.now() - 5000
@@ -43,11 +127,13 @@ it('preserves actual review identities, responses and times after an external me
   expect(observation.pull).toMatchObject({ merged: true, reviewIds: [91], mergedAt: completedAt + 2000,
     reviewReceipts: [{ id: 91, invocation: response.invocation_id, response, submittedAt: completedAt + 1000 }] })
   const invocation = { id: 'review', behavior: 'review-pr' as const, basis: chainBasis(['pr', HEAD, response.context_sha]),
-    actor: 'reviewer', model: 'fixture', slot: 'primary', admittedAt: completedAt - 1000, admissionSequence: 1,
+    actor: 'reviewer', model: 'fixture', slot: 'primary', reservation: null, admittedAt: completedAt - 1000, admissionSequence: 1,
     request: { command: 'agent-interface' as const, argv: [], cwd: '/fixture' }, state: 'settled' as const,
     callId: response.invocation_id, outcome: 'clean', evidence: { status: 'completed', action: 'reviewed_clean',
       review_id: 91, head_sha: HEAD, completedAt: completedAt + 1000, artifact: { review_response: response } } }
-  const reviewed = { ...chain, invocations: [invocation] }
+  const preMerge = { ...observation, checkedAt: completedAt + 1000,
+    pull: { ...observation.pull!, merged: false, state: 'open', mergeSha: null, mergedAt: null } }
+  const reviewed = { ...chain, observation: preMerge, invocations: [invocation] }
   expect(decideBehaviorChain(reviewed, observation, Date.now())).toMatchObject({ kind: 'complete' })
   observation.pull!.mergedAt = completedAt - 1
   expect(decideBehaviorChain(reviewed, observation, Date.now())).toMatchObject({ kind: 'hold' })
@@ -114,7 +200,7 @@ it('reconciles planned review comments with and without the revision marker', as
     reviews: async () => 'reviews', existing: async () => new Set(), wake: () => {},
   })
   const uncertain: BehaviorChain = { ...chain, invocations: [{ id: 'inv-1', behavior: 'review-issue', basis: 'basis',
-    actor: 'reviewer', model: 'fixture', slot: 'primary', admittedAt: Date.now(), admissionSequence: 1,
+    actor: 'reviewer', model: 'fixture', slot: 'primary', reservation: null, admittedAt: Date.now(), admissionSequence: 1,
     request: { command: 'agent-interface', argv: [], cwd: '/interface' }, state: 'uncertain', callId,
     outcome: null, evidence: { callId, artifact: { plan_sha: digest } } }] }
   const observation = await operations.observe(uncertain)

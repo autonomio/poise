@@ -18,9 +18,9 @@ export interface WakeData {
   wakesLast24h: number
 }
 
-export function wakeData(overrides: Partial<WakeData> = {}): WakeData {
+export function wakeData(now: number, overrides: Partial<WakeData> = {}): WakeData {
   return { everyMinutes: 60, revision: 1,
-    timer: { id: 'wake-1', state: 'active', nextAt: new Date(Date.now() + 60 * 60_000).toISOString() },
+    timer: { id: 'wake-1', state: 'active', nextAt: new Date(now + 60 * 60_000).toISOString() },
     pendingOn: null, lastFailure: null, wakesLast24h: 0, ...overrides }
 }
 
@@ -82,6 +82,8 @@ interface SnippetLibrary {
 }
 
 interface ServerState {
+  /** Explicit fixture clock for wake GET defaults and interval updates. */
+  wakeNow: number
   serverStartedAt?: string
   snippets?: SnippetLibrary
   switchboard?: SwitchboardState
@@ -250,7 +252,7 @@ async function installRoutes(page: Page, state: ServerState): Promise<void> {
       return
     }
     if (path === '/api/chat/manager/wake') {
-      state.wake ??= wakeData()
+      state.wake ??= wakeData(state.wakeNow)
       if (method === 'GET' && state.wakeGetFailure) { await route.fulfill(state.wakeGetFailure); return }
       if (method === 'PUT') {
         if (state.wakePutFailure) {
@@ -261,7 +263,7 @@ async function installRoutes(page: Page, state: ServerState): Promise<void> {
         }
         const req = body as { everyMinutes: number, revision: number }
         state.wake = { ...state.wake, everyMinutes: req.everyMinutes, revision: state.wake.revision + 1,
-          timer: state.wake.timer ? { ...state.wake.timer, nextAt: new Date(Date.now() + req.everyMinutes * 60_000).toISOString() } : null }
+          timer: state.wake.timer ? { ...state.wake.timer, nextAt: new Date(state.wakeNow + req.everyMinutes * 60_000).toISOString() } : null }
       }
       await route.fulfill({ json: state.wake })
       return
@@ -456,7 +458,7 @@ function env(sessionId: string, seq: number, event: ChatEvent): ChatEnvelope {
 }
 
 function makeState(sessions: SessionRecord[], history: Record<string, ChatEnvelope[]> = {}): ServerState {
-  return { sessions, history, calls: [], settings: { org: 'acme', me: 'octocat', timezone: 'UTC', models: {}, chat: { branchPrefix: 'chat/', idleTimeoutMinutes: 120, maxConcurrentLocalTurns: 4, updateTurnBoundMinutes: 15 } } }
+  return { wakeNow: Date.parse(NOW), sessions, history, calls: [], settings: { org: 'acme', me: 'octocat', timezone: 'UTC', models: {}, chat: { branchPrefix: 'chat/', idleTimeoutMinutes: 120, maxConcurrentLocalTurns: 4, updateTurnBoundMinutes: 15 } } }
 }
 
 const input = (page: Page) => page.locator('.chat-v-composer .chat-input')

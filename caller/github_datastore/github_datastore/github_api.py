@@ -820,11 +820,8 @@ class GitHubOrgReader:
             stored_at = parse_graphql_datetime(
                 stored, f"stored pull request {pull_id} for {full_name}"
             )
-            if updated_at < stored_at:
-                raise GitHubApiError(
-                    f"pull request timestamp moved backward for {full_name}: {pull_id}"
-                )
-            if updated_at > stored_at:
+            # GitHub can correct timestamps backward; either change needs a fresh graph.
+            if updated_at != stored_at:
                 changed.append(node)
 
         missing_ids = sorted(set(stored_pr_updated_at) - set(current))

@@ -73,6 +73,23 @@ function event(id: string, update: Partial<DiagnosticInput> = {}): LogEvent {
 }
 
 describe('one diagnostic contract', () => {
+  it('keeps a nonfatal Caller preparation warning at warning severity', () => {
+    const input = callerDiagnostic({ id: 'a'.repeat(32), status: 'completed', diagnostic: { version: 1,
+      severity: 'warning', operation: 'provider.cli_update', phase: 'launcher_verification', message: 'Updater unavailable; retained launcher usable' } }, 'alice')!
+    expect(normalize(input, NOW)).toMatchObject({ severity: 'warning', source: 'caller', operation: 'provider.cli_update' })
+  })
+
+  it('keeps a later Call failure separate from its earlier preparation warning', () => {
+    const warning = { version: 1, severity: 'warning', operation: 'provider.cli_update', phase: 'launcher_verification',
+      stderr: 'Retained launcher warning' }
+    const input = callerDiagnostic({ id: 'a'.repeat(32), status: 'failed', behavior: 'pr_review',
+      error: 'Provider ended without a result', diagnostic: { ...warning, prompt: 'private prompt', argv: ['private argument'] } }, 'alice')!
+    expect(normalize(input, NOW)).toMatchObject({ severity: 'error', operation: 'pr_review', phase: null,
+      message: 'Provider ended without a result', stderr: null, context: { priorWarning: warning, evidenceIncomplete: true } })
+    expect(JSON.stringify(input)).not.toContain('private prompt')
+    expect(JSON.stringify(input)).not.toContain('private argument')
+  })
+
   it('preserves typed source and Caller identities through short-secret redaction and backfill', async () => {
     const callId = 'a1'.repeat(16); const correlationId = 'ab12cd34-ab12-cd34-ab12-cd34ab12cd34'
     const input = callerDiagnostic({ id: callId, correlation_id: correlationId, completed_at: new Date(NOW).toISOString(),
