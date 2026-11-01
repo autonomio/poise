@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS items (
     UNIQUE(repo_id, number)
 );
 
+CREATE TABLE IF NOT EXISTS timestamp_regressions (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL,
+    repo_full_name TEXT NOT NULL,
+    stored_updated_at TEXT NOT NULL,
+    received_updated_at TEXT NOT NULL,
+    previous_expanded_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     event_key TEXT NOT NULL,
     item_id INTEGER NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
@@ -440,6 +450,7 @@ def list_users(conn: sqlite3.Connection) -> list[str]:
 def clear_index(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM item_fts")
     for table in (
+        "timestamp_regressions",
         "associations",
         "pr_commits",
         "review_comments",
