@@ -65,6 +65,21 @@ interface StoredEvent { sequence: number, chain_id: string, event_id: string, at
 const SHA = /^[0-9a-f]{40}$/i
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
+
+function recordObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function resourceArtifact(prior: unknown, value: unknown): Record<string, unknown> {
+  if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a logical artifact')
+  const original = recordObject(prior) ? prior : {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!['resource_error', 'resource_recovered_at'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+      throw new Error('resource reconciliation cannot change a logical artifact')
+    }
+  }
+  return { ...original, ...value }
+}
 // Resource occupancy is derived from every original invocation, including
 // contradictory historical releases. Index the projection so settled history
 // cannot turn each capacity/observation read into a full journal scan.
@@ -134,19 +149,20 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
       if (!Object.keys(event.evidence).length || Object.keys(event.evidence).some(key => !['resource_ownership', 'resources_settled_at', 'artifact', 'publicationReceipt'].includes(key))) {
         throw new Error('resource reconciliation cannot change a behavior outcome')
       }
-      const artifact = event.evidence.artifact
       const evidence = { ...event.evidence }
-      if (artifact && typeof artifact === 'object') {
-        const prior = invocation.evidence?.artifact
-        const original = prior && typeof prior === 'object' ? prior : {}
-        for (const [key, value] of Object.entries(artifact)) {
-          if (!['resource_error', 'resource_recovered_at'].includes(key)
-            && !(key === 'phase' && value === 'resources_unknown')
-            && chainBasis(value) !== chainBasis(Object.getOwnPropertyDescriptor(original, key)?.value ?? null)) {
-            throw new Error('resource reconciliation cannot change a logical artifact')
+      if ('artifact' in evidence) evidence.artifact = resourceArtifact(invocation.evidence?.artifact, evidence.artifact)
+      if ('publicationReceipt' in evidence) {
+        const value = evidence.publicationReceipt
+        if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a publication receipt')
+        const before = invocation.evidence?.publicationReceipt
+        const original = recordObject(before) ? before : {}
+        for (const [key, entry] of Object.entries(value)) {
+          if (!['resource_ownership', 'resources_settled_at', 'artifact'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+            throw new Error('resource reconciliation cannot change a publication outcome')
           }
         }
-        evidence.artifact = { ...original, ...artifact }
+        evidence.publicationReceipt = { ...original, ...value,
+          ...('artifact' in value ? { artifact: resourceArtifact(original.artifact, value.artifact) } : {}) }
       }
       if (!resourceReleaseProven({ ...invocation.evidence, ...evidence }, true)) throw new Error('resource reconciliation requires positive original release proof')
       invocation.evidence = { ...invocation.evidence, ...evidence }

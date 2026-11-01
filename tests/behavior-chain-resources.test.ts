@@ -70,8 +70,10 @@ describe('durable behavior resource reservations', () => {
       argv: ['--fixture'], cwd: '/fixture', nativeResources: 2 as const } }
     let current = record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
     current = record(journal, current, { type: 'invocation.uncertain', invocationId: admitted.id, reason: 'original effect remains uncertain' })
+    current = record(journal, current, { type: 'invocation.reconciled', invocationId: admitted.id,
+      evidence: { artifact: { phase: 'posting_issue_reviews', plan_sha: 'd'.repeat(64) } } })
     if (mode === 'settled') current = record(journal, current, { type: 'invocation.settled', invocationId: admitted.id,
-      callId: 'c'.repeat(32), outcome: 'retained original outcome', evidence: { status: 'completed' } })
+      callId: 'c'.repeat(32), outcome: 'retained original outcome', evidence: { status: 'completed', artifact: current.invocations[0].evidence?.artifact } })
     if (mode === 'held') current = record(journal, current, { type: 'chain.held', reason: 'person paused admissions' })
     if (mode === 'merged') current = record(journal, current, { type: 'chain.merged', mergeSha: 'a'.repeat(40),
       evidence: { merged: true, merge_sha: 'a'.repeat(40), repository: chain.repository, pull_number: 9, review_complete: false } })
@@ -83,7 +85,8 @@ describe('durable behavior resource reservations', () => {
     const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer), id: 'c'.repeat(32),
       behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
       action: 'commented', outcome: 'commented', resources_settled_at: new Date(20_000).toISOString(),
-      resource_ownership: { version: 2, roots: [], errors: [], namespace } }
+      artifact: { phase: 'resources_unknown', resource_error: 'retained cleanup cause', resource_recovered_at: 18 },
+      resource_ownership: { version: 2, roots: [], errors: [{ cause: 'resources_unknown', path: null, at: 12, recovered_at: 18 }], namespace } }
     const read = vi.fn(async () => parseAgentLogStdout(JSON.stringify([call]), 'physical-only recovery fixture'))
     const recovery = new BehaviorResourceRecovery(journal, read)
     expect(journal.liveModelInvocationCount()).toBe(1)
@@ -94,6 +97,7 @@ describe('durable behavior resource reservations', () => {
       callId: before.invocations[0].callId })
     expect(recovered.held).toBe(before.held)
     expect(recovered.mergeSha).toBe(before.mergeSha)
+    expect(recovered.invocations[0].evidence?.artifact).toMatchObject({ phase: 'posting_issue_reviews', plan_sha: 'd'.repeat(64), resource_recovered_at: 18 })
     const history = journal.history(chain.id)
     await recovery.run()
     expect(journal.history(chain.id)).toEqual(history)

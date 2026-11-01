@@ -53,7 +53,6 @@ export class BehaviorResourceRecovery {
           for (const key of ['resource_error', 'resource_recovered_at'] as const) {
             if (key in call.artifact) Object.assign(artifact, { [key]: call.artifact[key] })
           }
-          if (call.artifact.phase === 'resources_unknown') Object.assign(artifact, { phase: 'resources_unknown' })
           if (Object.keys(artifact).length) physical.artifact = artifact
         }
         const resume = invocation.evidence?.publicationResume
@@ -67,8 +66,14 @@ export class BehaviorResourceRecovery {
               throw new Error('native publication resource receipt differs from its original continuation')
             }
             const prior = invocation.evidence?.publicationReceipt
-            physical.publicationReceipt = { ...(prior && typeof prior === 'object' && !Array.isArray(prior) ? prior : {}), resource_ownership: continuation.resource_ownership,
-              resources_settled_at: continuation.resources_settled_at, artifact: continuation.artifact }
+            const publication = prior && typeof prior === 'object' && !Array.isArray(prior) ? { ...prior } : {}
+            const oldArtifact = 'artifact' in publication ? publication.artifact : null
+            const artifact = oldArtifact && typeof oldArtifact === 'object' && !Array.isArray(oldArtifact) ? { ...oldArtifact } : {}
+            for (const key of ['resource_error', 'resource_recovered_at'] as const) {
+              if (continuation.artifact && key in continuation.artifact) Object.assign(artifact, { [key]: continuation.artifact[key] })
+            }
+            physical.publicationReceipt = { ...publication, resource_ownership: continuation.resource_ownership,
+              resources_settled_at: continuation.resources_settled_at, ...(Object.keys(artifact).length ? { artifact } : {}) }
           }
         }
         if (!resourceReleaseProven(physical, true)) continue
