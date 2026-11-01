@@ -194,9 +194,18 @@ try:
             assert time.monotonic() < deadline
             time.sleep(0.25)
         maintenance = {'trigger': 'existing-one-minute-opportunity-while-drained'}
-        with urllib.request.urlopen('http://127.0.0.1:5555/api/service/health', timeout=5) as response:
-            drained = json.load(response)
+        # Release is durable before the cleanup claim retires. Wait for both
+        # within the original deadline; neither alone establishes service idle.
+        while True:
+            with urllib.request.urlopen('http://127.0.0.1:5555/api/service/health', timeout=5) as response:
+                drained = json.load(response)
+            assert drained['draining'] is True, drained
+            if drained['idle'] is True:
+                break
+            assert time.monotonic() < deadline, drained
+            time.sleep(0.25)
         assert drained['draining'] is True and drained['idle'] is True, drained
+        assert drained['unsettledNativeCalls'] == 0 and drained['backgroundWork'] == 0, drained
         resume = urllib.request.Request('http://127.0.0.1:5555/api/service/resume', data=b'{}', method='POST')
         with urllib.request.urlopen(resume, timeout=5) as response:
             assert json.load(response)['draining'] is False
