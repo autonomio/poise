@@ -90,7 +90,7 @@ class TimestampRegressionTest(unittest.TestCase):
                     # Simulate an existing database from before diagnostics were added.
                     conn = connect(path)
                     with conn:
-                        conn.execute("DROP TABLE timestamp_regressions")
+                        conn.execute("DROP TABLE IF EXISTS timestamp_regressions")
                     conn.close()
                     reader = RegressionReader([repo, other], {
                         repo["full_name"]: [current, sibling], other["full_name"]: [other_item],
