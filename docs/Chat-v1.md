@@ -305,6 +305,14 @@ original native Caller releases it only after its retained namespace witness
 contains just the trusted reaper and Caller continuation. Any other member or
 unavailable witness retains the hold. Post-loss disk/lease reclamation is
 separate from this normal release; process disappearance grants no takeover.
+New native atomic checkouts keep that gate in their original disposable Call
+directory, rather than adding a global database per invocation. Only the bound
+original native Caller opens it, using the original pinned root identity and
+a local directory descriptor. Chat and unrelated Caller writers refuse these
+private checkout paths; they cannot acquire a competing global gate. Ordinary
+Chat/legacy checkouts keep the shared protocol above. Older global gate files
+remain retained; [storage maintenance](Operating.md#storage-maintenance)
+defines their accounting and retention.
 Background Git inspections skip optional index-cache writes, so cancelling a
 read cannot leave that cache's lock blocking the next chat. Git writes retain
 their normal locks and the registered worker gate.

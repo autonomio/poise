@@ -266,7 +266,11 @@ def artifact_status(path: Path) -> dict:
 
 def command(model: Model, text: str, checkout: Path, work: Path, seconds: float, unattended: str = UNATTENDED) -> tuple[list[str], str, dict]:
     """The provider's own CLI with full access — no allowlist, no sandbox."""
-    env = os.environ.copy()
+    if model.provider == "codex":
+        from .structured_review import codex_environment
+        env = codex_environment(work)
+    else:
+        env = os.environ.copy()
     scratch = work.resolve() / "tmp"
     scratch.mkdir(mode=0o700, exist_ok=True)
     env.update({key: str(scratch) for key in ("TMPDIR", "TMP", "TEMP")})

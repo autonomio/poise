@@ -35,7 +35,7 @@ address = json.loads(addresses.pop())
 os.environ['POISE_NATIVE_CONTROL'] = json.dumps(address)
 os.environ['AGENT_INTERFACE_DATA_DIR'] = str(Path.home() / '.poise' / 'agent-interface')
 import agent_interface as api
-from agent_interface import native_cleanup, native_namespace, process_identity, resource_ownership
+from agent_interface import checkout_lock, issue_review, native_cleanup, native_namespace, process_identity, resource_ownership, review_receipt
 
 if sys.argv[1:2] == ['cleaner']:
     original_remove = resource_ownership._remove_directory
@@ -67,6 +67,21 @@ if sys.argv[1:2] == ['worker']:
             runpy.run_path('/contract/metadata_collision.py')['validate']()
         root = resource_ownership.allocate(api.DB, call, resource_ownership.call_directory(api.DB, call))
         (root / 'disposable-output').write_bytes(b'owned component output\n' * 4096)
+        if variant in {'native-coordination', 'native-coordination-replaced'}:
+            checkout = root / 'repo'
+            checkout.mkdir()
+            with review_receipt.invocation_environment(api.DB, call, True, initialize=False):
+                lease = checkout_lock.Lease(str(checkout), call, 'native post-loss coordination component').acquire()
+                assert lease.path == root / 'checkout-lease.sqlite3' and lease.path.is_file()
+                lease.start_heartbeat()
+            # This writes explicit fixture history, not a provider result.
+            # The actual command builder must place it inside the owned root.
+            model = api.CATALOG.resolve('gpt-6-astra-ultra')
+            _, _, env = issue_review.command(model, 'no provider is started', checkout, root, 600)
+            history = Path(env['CODEX_HOME']) / 'sessions'
+            history.mkdir()
+            (history / 'component-fixture.jsonl').write_text('explicit component history fixture')
+            assert history.is_relative_to(root)
         if variant == 'permission-zero':
             locked = root / 'locked'
             locked.mkdir()
@@ -92,6 +107,15 @@ assert sys.argv[1:2] != ['worker']
 foreign = Path.home() / 'user-evidence-sentinel'
 foreign.write_text('retained user and authentication evidence sentinel')
 foreign_hash = hashlib.sha256(foreign.read_bytes()).hexdigest()
+legacy_directory = Path.home() / '.poise' / 'locks'
+legacy_before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in legacy_directory.glob('checkout-*.sqlite3')}
+shared_provider = Path.home() / 'protected-codex-component'
+shared_provider.mkdir(exist_ok=True)
+(shared_provider / 'auth.json').write_text('{"auth_mode":"component-fixture-no-credentials"}')
+(shared_provider / 'history-sentinel').write_text('retained shared provider history fixture')
+shared_before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in shared_provider.iterdir()}
+os.environ['CODEX_HOME'] = str(shared_provider)
 worker = subprocess.Popen([sys.executable, '-u', __file__, 'worker', variant], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 try:
@@ -125,7 +149,7 @@ try:
     replacement = None
     original_ancestor = None
     foreign_files = {}
-    if variant in {'base-replaced', 'data-replaced'}:
+    if variant in {'base-replaced', 'data-replaced', 'native-coordination-replaced'}:
         ancestor = api.DATA_DIR if variant == 'data-replaced' else api.DATA_DIR / 'native-resources'
         original_ancestor = ancestor.with_name(f'{ancestor.name}-retained-{variant}')
         ancestor.rename(original_ancestor)
@@ -193,6 +217,9 @@ try:
             str(path.relative_to(replacement)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in replacement.rglob('*') if path.is_file()}
     assert unchanged
+    assert legacy_before == {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                             for path in legacy_directory.glob('checkout-*.sqlite3')}
+    assert shared_before == {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in shared_provider.iterdir()}
     print(json.dumps({'kind': 'native-recovery-component', 'variant': variant, 'source': Path('/opt/poise/RELEASE').read_text().strip(),
                       'original_namespace_positive_empty': observed['empty'], 'call_status': after['status'],
                       'before_release': before['resources_settled_at'], 'after_release': after['resources_settled_at'],
@@ -200,6 +227,9 @@ try:
                       'foreign_unchanged': unchanged, 'maintenance': maintenance,
                       'installed_service_decoder_accepted': True,
                       'metadata_pid_collision_validated': variant == 'metadata-pid-collision',
+                      'private_checkout_coordination_reclaimed': variant in {'native-coordination', 'native-coordination-replaced'} and not root.exists(),
+                      'shared_lease_inventory_unchanged': True,
+                      'shared_auth_and_history_unchanged': True,
                       'seconds_from_original_empty': time.monotonic() - empty_at,
                       'original_resource_state': after['resource_ownership'], 'caller_rows': [after],
                       'provider_or_workflow_acceptance': False}), flush=True)
