@@ -58,7 +58,7 @@ function setup(behavior: ChainBehavior | null = 'repair-pr', started = false) {
     discover: async () => [], ownsRepository: () => true, observe: vi.fn(async () => observed()),
     readInvocations: vi.fn(async () => parseAgentLogStdout(JSON.stringify(calls), 'closed-target native receipt fixture')), received: () => {},
     available: () => true, capacity: () => 1, permitted: (_chain, decision) => !['review-pr', 'approve-pr'].includes(decision.behavior),
-    request: forbidden, launch: forbidden, perform: forbidden, resumePublication: forbidden, fenceClosedTarget, wake: () => {} }
+    request: forbidden, launch: forbidden, perform: forbidden, readActionResult: forbidden, resumePublication: forbidden, fenceClosedTarget, wake: () => {} }
   return { db, journal, chain, calls, operations, forbidden, fenceClosedTarget }
 }
 

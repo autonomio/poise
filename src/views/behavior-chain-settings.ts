@@ -20,6 +20,7 @@ export function behaviorChainSettings() {
   element.innerHTML = `<div class="tp-group-label">Behavior chain</div>
     <p role="status" data-cutover-status>Reading behavior admission state…</p>
     <button type="button" class="st-clear" data-cutover disabled>Switch to v2</button>
+    <p role="status" data-native-support>Checking whether this setup supports v2…</p>
     <p class="st-help">Switching drains current behavior invocations, then assigns new work to v2. Existing legacy PRs keep their ownership. Chats remain available.</p>
     <label class="tp-label"><input type="checkbox" data-chain-enabled disabled> Run the issue-to-merge chain</label>
     <label class="tp-label" for="chain-seed-mode">Seed issues</label><select id="chain-seed-mode" class="st-select"><option value="label">Issues with the selected label</option><option value="all">All issues in followed organizations</option></select>
@@ -157,8 +158,16 @@ export function behaviorChainSettings() {
       cutover = data.cutover ?? null
       save.disabled = cutover === null
       cutoverButton.disabled = !cutover || cutover.mode === 'v2'
+        || (cutover.mode !== 'draining' && cutover.support?.status !== 'supported')
       cutoverButton.textContent = cutover?.mode === 'draining' ? 'Cancel cutover' : cutover?.mode === 'v2' ? 'v2 active' : 'Switch to v2'
-      enabled.disabled = cutover?.mode !== 'v2'
+      enabled.disabled = cutover?.mode !== 'v2' || cutover.support?.status !== 'supported'
+      const support = cutover?.support
+      element.querySelector('[data-native-support]')!.textContent = support?.status === 'supported'
+        ? 'This setup supports v2 worker cleanup.'
+        : support?.status === 'unsupported' ? (cutover?.mode === 'v2'
+          ? 'v2 is paused: this setup cannot verify worker cleanup.' : 'This setup cannot run v2. v1 remains available.')
+          : support?.status === 'unavailable' ? 'The v2 setup check is unavailable. Switching is disabled.'
+            : 'Checking whether this setup supports v2…'
       const legacy = element.querySelector<HTMLDetailsElement>('[data-legacy]')!
       legacy.hidden = !cutover?.legacyPulls.length
       legacy.querySelector('ul')!.innerHTML = (cutover?.legacyPulls ?? []).map((target) => {
@@ -204,6 +213,7 @@ export function behaviorChainSettings() {
       for (const button of list.querySelectorAll<HTMLButtonElement>('button[data-operation="hold"], button[data-operation="resume"]')) button.disabled = true
       element.querySelector('[data-chain-capacity]')!.textContent = 'Atomic behavior capacity unavailable.'
       element.querySelector('[data-cutover-status]')!.textContent = 'Admission state unavailable'
+      element.querySelector('[data-native-support]')!.textContent = 'The v2 setup check is unavailable.'
       status.textContent = `Chains could not be refreshed: ${(error as Error).message}`
     } finally { reading = false; more.disabled = false }
   }

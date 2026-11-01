@@ -41,6 +41,25 @@ The existing reviewer count, model slots, severity, behavior notes, switches, pa
 
 **Switch to v2** is one action in Settings → General → Behavior chain. It records a durable `draining` admission state before any asynchronous work. The existing cooperative release barrier counts behavior operations separately; late legacy launches and prepared chain admissions recheck the durable gate. Running invocations finish, Chats remain usable, and unreadable Caller activity refuses readiness. The existing behavior tick then verifies fresh, complete PR observations across all followed organizations and commits the legacy PR boundary and enabled v2 setting in the same transaction. No new polling system is added.
 
+Cutover also requires the displayed native-cleanup setup check to pass. Hosts
+that cannot provide the [native process boundary](Service-architecture.md#workspace-behavior-observation)
+stay on v1; checking, unsupported or unavailable evidence disables Switch to v2.
+Cancel remains available during a drain even if the check subsequently fails.
+An already-v2 setup with unavailable cleanup pauses new invocations and keeps
+its existing ownership; it never silently falls back to v1. Run controls show
+the same refusal. No deployment or runtime setting changes through this check.
+
+Every new physical model, fixed GitHub action and publication continuation has
+its own original Caller resource receipt. Preparation cannot run before that
+claim and registered process boundary. A received action response is durably
+stored before its Call becomes terminal and remains available after Stop or
+interruption. Accepted responses, actual GitHub outcomes and process/disk release
+are independent evidence: a response alone cannot release capacity or permit
+another action. Reconciliation reads these Calls through the existing batched
+snapshot, including quick actions that reserve resources without counting as
+model agents. Shared checkout leases retain original outer identities and cannot
+be expired, adopted or numerically signalled by legacy lease recovery.
+
 The chain settings checkbox controls invocations only after the durable cutover completes. The settings API refuses early enablement, and the runtime independently checks the journal's v2 mode before admitting native work. Saving intake settings alone cannot enable coexistence with v1 issue intake.
 
 After completion, v2 owns new eligible seed issues; new legacy issue intake is fenced. Existing PR behaviors continue for PRs outside native chains, including PRs subsequently created manually or by Chats. They recheck canonical chain ownership immediately before acting, so v2-owned PRs cannot acquire a second behavior owner. Existing Chat bindings and linked PRs are not migrated, and standalone PRs do not acquire fabricated issue-chain history. The observed legacy boundary is retained across restart, and the UI labels its count as PRs retained at cutover, not a live remaining count. Cancel cutover is available while draining and records a return to v1; it does not terminate work or reverse a completed cutover. A failed or incomplete observation leaves the drain visible with its error. Ordinary chain pause remains available after cutover and never reopens v1 issue intake.
@@ -141,6 +160,12 @@ Admission-mode transitions use `admission.changed` events under the reserved `@b
 
 Native Call rows and immutable action plans record effect intent before controlled publication. They provide execution evidence to the journal, not a second phase controller. Unique native correlations prevent duplicate processes from executing the same admission. Worker resource settlement is required before a handoff; a terminal model result is insufficient. A restart or interrupted process is reconciled against the original invocation, pushed branch, posted comments and exact-head review receipts.
 
+An uncertain fixed action retains its first verified response and digest in
+the same journal, so unchanged passes and projection rebuilds do not launch
+another response reader or repeat uncertainty events. Observation-based recovery
+of grey CI or publication preserves the original physical Call, failure and
+resource-release evidence; confirming an effect cannot discard cleanup proof.
+
 Log-read recovery never releases native resource ownership from parent death or
 a new container epoch alone. A release timestamp paired with an active cleanup
 error or unknown-resource phase is contradictory and stays quarantined, keeping
@@ -156,8 +181,9 @@ mode that directory is on the home volume and survives restart and recreation.
 Normal cleanup uses directory descriptors, records positive reclamation and
 retains the original failure plus an explicit covering recovery time on a
 successful retry. A failed proof write, absent/replaced root or unknown process
-inspection retains ownership. A path scan can veto cleanup; it grants no
-native signal authority. Process-inspection uncertainty is independent of
+inspection retains ownership. Historical v1 receipts retain their path-scan
+veto; physical v2 Calls require the original kernel scope's positive idle/empty
+proof. Neither grants numeric process-group signal authority. Process uncertainty is independent of
 replaceable phase fields and cannot be cleared by a later publication phase.
 
 The existing decoder checks these receipts before native settlement. Active
@@ -170,11 +196,12 @@ Uncertain native receipts retain their original Call evidence and the cleanup
 cause/path for inspection. Publication continuation requires the same positive
 resource predicate and an originally unattempted reply batch.
 
-This containment does not establish complete descendant ownership or automatic
-post-loss reclamation. Same-epoch parent loss, an unreadable identity, incomplete
+The supported physical v2 boundary establishes descendant ownership, as defined
+in the service contract above; it does not establish automatic post-loss disk
+or lease reclamation. Same-epoch parent loss, an unreadable identity, incomplete
 allocation or a new epoch without cleanup proof stays held. Removing a named
 directory is not a supported way to manufacture a release. A one-slot lane can
-remain held after such a failure. #806 retains the containment mechanism,
+remain held after such a failure. #806 retains
 claimed recovery outside log reads, retention, measured budget enforcement and
 real fault/load acceptance; these remain required before resource readiness.
 

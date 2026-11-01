@@ -241,6 +241,7 @@ describe('native admission and recovery', () => {
       readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => true, capacity: () => 2,
       permitted: () => true, request: async () => ({ command: 'agent-interface', argv: ['--model', 'fixture-model'], cwd: '/fixture' }),
       launch: async () => true, perform: async () => ({}), resumePublication: async () => { throw new Error('unexpected publication resume') },
+      readActionResult: async () => { throw new Error('unexpected native response read') },
       fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') }, wake: () => {}, ...overrides }
   }
 
@@ -433,12 +434,16 @@ describe('native admission and recovery', () => {
     obs.workPublication = { callId, repliesComplete: false, resumable: true, planSha: 'b'.repeat(64) }
     let resumed = 0
     let received = 0
+    let publicationCall: LogEntry | null = null
     const runtime = new BehaviorChainRuntime(journal, operations({ observe: async () => ({ ...obs, checkedAt: Date.now() }),
       received: () => { received++ },
-      readInvocations: async () => ({ entries: [call], quarantined: [] }), resumePublication: async (original, head) => {
+      readInvocations: async () => ({ entries: [call, ...(publicationCall ? [publicationCall] : [])], quarantined: [] }), resumePublication: async (original, head, correlation) => {
         expect(original.id).toBe(pending.id)
         expect(head).toBe(HEAD)
         expect(journal.read(chain.id)!.invocations[0].evidence).toMatchObject({ publicationResume: { callId, head: HEAD } })
+        publicationCall = { ...call, id: 'c'.repeat(32), correlation_id: correlation, behavior: 'native_publication', model: 'native-action',
+          status: 'running', resources_settled_at: null, artifact: { phase: 'preparing_native_action',
+            request_sha: chainBasis({ kind: 'native_publication', call_id: callId, digest: 'b'.repeat(64), head }) } }
         resumed++; throw new Error('completion response lost')
       }, launch: async () => { throw new Error('must not launch a replacement worker') } }))
     const releasedAt = call.resources_settled_at
@@ -460,6 +465,18 @@ describe('native admission and recovery', () => {
     expect(received).toBe(1)
     expect(journal.read(chain.id)!.invocations[0].evidence?.artifact).toMatchObject({ replies_started: true })
     obs.workPublication.repliesComplete = true
+    await runtime.run()
+    expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    const continuation = publicationCall as LogEntry | null
+    expect(continuation).not.toBeNull()
+    Object.assign(continuation!, { status: 'completed', action: 'native_action', outcome: 'native_action', head_sha: HEAD,
+      resources_settled_at: releasedAt, resource_ownership: { version: 2, roots: [], errors: [], namespace: {
+        state: 'settled', callId: continuation!.id, correlation: continuation!.correlation_id!, settled_at: NOW / 1000,
+        controller: { version: 1, instance: 'd'.repeat(32) }, binding: { pid: 104, start: '12', namespace: 'pid:[91]',
+          owner: { pid: 102, start: '10' }, holder: { pid: 103, start: '11' },
+          epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
+      artifact: { ...continuation!.artifact, phase: 'received_native_action', response_sha: chainBasis({ outcome: 'published' }) } })
     await runtime.run()
     expect(journal.read(chain.id)!.invocations[0]).toMatchObject({ state: 'settled', callId, outcome: 'published' })
   })

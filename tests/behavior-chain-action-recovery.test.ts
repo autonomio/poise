@@ -8,6 +8,7 @@ import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/beh
 import { decideBehaviorChain, type ChainObservation } from '../server/behavior-chain-decision'
 import { matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement } from '../server/behavior-chain-action'
 import { completedReviewCall } from './review-response-fixture'
+import type { LogEntry } from '../server/agent-log-parse'
 
 const HEAD = 'a'.repeat(40)
 const MERGE = 'b'.repeat(40)
@@ -18,14 +19,15 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(behavior: 'merge-pr' | 'resolve-threads' = 'merge-pr', pending = true, filename = ':memory:') {
+function setup(behavior: 'merge-pr' | 'resolve-threads' = 'merge-pr', pending = true, filename = ':memory:', contained = false) {
   const db = new Database(filename)
   databases.push(db)
   const journal = new BehaviorChainJournal(db)
   let chain = journal.append('example/repo#7', 'seed', 0, { type: 'chain.admitted', repository: 'example/repo', issue: 7,
     branch: 'poise/issue-7', author: 'author', reviewer: 'reviewer' })
   const invocation: ChainAdmission = { id: 'original-action', behavior, basis: 'exact-request', actor: 'reviewer', model: null,
-    slot: null, admittedAt: Date.now() - 20_000, request: { command: 'github-interface', cwd: '/isolated/example/repo',
+    slot: null, admittedAt: Date.now() - 20_000, ...(contained ? { reservation: { memoryBytes: 8, diskBytes: 16 } } : {}),
+    request: { command: 'github-interface', cwd: '/isolated/example/repo', ...(contained ? { nativeResources: 2 as const } : {}),
       argv: [behavior === 'merge-pr' ? '--merge-if-ready' : '--resolve-nonblocking-conversations-if-ready', '21',
         '--expected-head', HEAD, '--token-user', 'reviewer'] } }
   if (pending) {
@@ -52,6 +54,7 @@ function operations(obs: ChainObservation, overrides: Partial<ChainRuntimeOperat
     received: () => {}, available: () => true, capacity: () => 2, permitted: () => true,
     request: async () => { throw new Error('unexpected admission') }, launch: async () => { throw new Error('unexpected launch') },
     perform: async () => { throw new Error('must not repeat an uncertain action') }, resumePublication: async () => { throw new Error('unexpected resume') },
+    readActionResult: async () => { throw new Error('unexpected native response read') },
     fenceClosedTarget: async () => { throw new Error('unexpected closed-target fence') },
     wake: () => {}, ...overrides }
 }
@@ -83,6 +86,134 @@ function acceptedMerge() {
   return { action: 'merge_if_ready', repository: 'example/repo', pull_number: 21, head_sha: HEAD,
     outcome: 'merged', merge_sha: MERGE, merge_method: 'squash' }
 }
+
+function releasedAction(invocation: ChainInvocation, result?: Record<string, unknown>): LogEntry {
+  const id = 'c'.repeat(32), stamp = Date.now()
+  return { id, correlation_id: invocation.id, model: 'native-action', behavior: 'native_action', source: 'poise:behavior-chain',
+    actor: invocation.actor, repo: 'example/repo', pr_id: invocation.request.argv[1], session_id: null, prompt: '',
+    started_at: new Date(invocation.admittedAt).toISOString(), completed_at: new Date(stamp).toISOString(), time_elapsed: '1s',
+    status: 'failed', action: null, outcome: null, error: 'original process failed', head_sha: null, expected_head: HEAD,
+    response: result ? id.slice(0, 8) : null, resources_settled_at: new Date(stamp).toISOString(),
+    resource_ownership: { version: 2, roots: [], errors: [], namespace: { state: 'settled', callId: id,
+      correlation: invocation.id, settled_at: stamp / 1000, controller: { version: 1, instance: 'd'.repeat(32) },
+      binding: { pid: 104, start: '12', namespace: 'pid:[91]', owner: { pid: 102, start: '10' },
+        holder: { pid: 103, start: '11' }, epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
+    artifact: { phase: result ? 'received_native_action' : 'performing_native_action', request_sha: chainBasis(invocation.request),
+      ...(result ? { response_sha: chainBasis(result) } : {}) } }
+}
+
+it.each(['rerun-grey-ci', 'publish-issue'] as const)('keeps physical release proof when %s recovers from an observation', async behavior => {
+  const { journal, chain } = setup('merge-pr', false)
+  const request: ChainAdmission = { id: 'original-direct', behavior, basis: 'original-request', actor: behavior === 'publish-issue' ? chain.author : chain.reviewer,
+    model: null, slot: null, admittedAt: Date.now() - 1000, reservation: { memoryBytes: 8, diskBytes: 16 },
+    request: { command: 'github-interface', cwd: '/fixture', nativeResources: 2, argv: behavior === 'publish-issue'
+      ? ['--issue-work', '7', '--invocation-id', 'original-native', '--expected-head', HEAD]
+      : ['--rerun-grey-ci-if-ready', '21', '--expected-head', HEAD] } }
+  const admitted = journal.append(chain.id, 'direct', chain.sequence, { type: 'invocation.admitted', invocation: request })
+  const invocation = admitted.invocations[0]
+  const call = releasedAction(invocation)
+  const obs = observation()
+  obs.publication.head_invocation = 'original-native'
+  obs.greyRecovery = { invocationId: invocation.id, receipt: { outcome: 'rerun_observed', observed_run_attempt: 3 } }
+  const perform = vi.fn(async () => { throw new Error('must not repeat recovered work') })
+  await new BehaviorChainRuntime(journal, operations(obs, { enabled: () => false, perform,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  const current = journal.read(chain.id)!
+  expect(current.invocations[0]).toMatchObject({ state: 'settled', callId: call.id,
+    evidence: { nativeCallId: call.id, nativeCallStatus: 'failed', resources_settled_at: call.resources_settled_at, resource_ownership: call.resource_ownership } })
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  expect(perform).not.toHaveBeenCalled()
+  const history = journal.history(chain.id)
+  journal.rebuild()
+  expect(journal.history(chain.id)).toEqual(history)
+  expect(journal.admitInvocation(current, 'next', { ...request, id: 'next-direct' }, 2)).not.toBeNull()
+})
+
+it('reads an uncertain non-attributed result once and retains only changed receipts on later passes', async () => {
+  const { journal, chain } = setup('merge-pr', false)
+  const admitted = journal.append(chain.id, 'direct', chain.sequence, { type: 'invocation.admitted', invocation: {
+    id: 'original-grey', behavior: 'rerun-grey-ci', basis: 'original-request', actor: chain.reviewer, model: null, slot: null,
+    admittedAt: Date.now() - 1000, reservation: { memoryBytes: 8, diskBytes: 16 },
+    request: { command: 'github-interface', cwd: '/fixture', nativeResources: 2, argv: ['--rerun-grey-ci-if-ready', '21', '--expected-head', HEAD] } } })
+  const result = { outcome: 'unconfirmed', nativeProcessFailure: { code: 7, signal: null } }
+  const call = releasedAction(admitted.invocations[0], result)
+  const readActionResult = vi.fn(async () => result)
+  const runtime = new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, readActionResult,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
+  await runtime.run()
+  const receipts = () => journal.history(chain.id).filter(event => ['invocation.reconciled', 'invocation.uncertain'].includes(JSON.parse(event.payload).type))
+  const original = receipts()
+  await runtime.run()
+  await runtime.run()
+  expect(readActionResult).toHaveBeenCalledTimes(1)
+  expect(receipts()).toEqual(original)
+  expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  journal.rebuild()
+  await new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, readActionResult,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(readActionResult).toHaveBeenCalledTimes(1)
+  expect(receipts()).toEqual(original)
+})
+
+it('keeps a contained action reserved after its accepted response until original process and disk proof agree', async () => {
+  const { journal, chain } = setup('merge-pr', true, ':memory:', true)
+  const invocation = chain.invocations[0]
+  const result = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21, head_sha: HEAD,
+    outcome: 'enqueued', queue_entry_id: 'original-entry' }
+  const proof = nativeActionReceipt(chain, invocation, result)
+  journal.append(chain.id, 'accepted-before-cleanup', chain.sequence, { type: 'invocation.reconciled', invocationId: invocation.id,
+    evidence: { nativeCallId: 'c'.repeat(32), nativeActionReceipt: proof } })
+  const call: LogEntry = { id: 'c'.repeat(32), correlation_id: invocation.id, model: 'native-action', behavior: 'native_action',
+    source: 'poise:behavior-chain', actor: 'reviewer', repo: chain.repository, pr_id: '21', session_id: null, prompt: '',
+    started_at: new Date(invocation.admittedAt).toISOString(), completed_at: new Date().toISOString(), time_elapsed: '1s',
+    status: 'completed', action: 'native_action', outcome: 'native_action', error: '', head_sha: HEAD, expected_head: HEAD,
+    response: 'cccccccc', resources_settled_at: null, resource_ownership: { version: 2, roots: [], errors: [],
+      namespace: { state: 'active', callId: 'c'.repeat(32), correlation: invocation.id,
+        controller: { version: 1, instance: 'd'.repeat(32) }, binding: { pid: 104, start: '12', namespace: 'pid:[91]',
+          owner: { pid: 102, start: '10' }, holder: { pid: 103, start: '11' },
+          epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
+    artifact: { phase: 'received_native_action', request_sha: chainBasis(invocation.request), response_sha: chainBasis(result) } }
+  const readActionResult = vi.fn(async () => result)
+  const perform = vi.fn(async () => { throw new Error('must not repeat the action') })
+  const runtime = new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, perform, readActionResult,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
+  const originalCallId = call.id
+  call.id = 'e'.repeat(32)
+  call.resource_ownership!.namespace!.callId = call.id
+  await expect(runtime.run()).rejects.toThrow('native action target conflicts')
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 8, diskBytes: 16, unaccounted: 0 })
+  call.id = originalCallId
+  call.resource_ownership!.namespace!.callId = call.id
+  await runtime.run()
+  expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 8, diskBytes: 16, unaccounted: 0 })
+  expect(journal.liveModelInvocationCount()).toBe(0)
+  expect(readActionResult).not.toHaveBeenCalled()
+  const stamp = Date.now()
+  call.resource_ownership!.namespace = { ...call.resource_ownership!.namespace!, state: 'settled', settled_at: stamp / 1000 }
+  call.resources_settled_at = new Date(stamp).toISOString()
+  await runtime.run()
+  expect(journal.read(chain.id)!.invocations[0]).toMatchObject({ state: 'settled', callId: call.id, outcome: 'enqueued' })
+  expect(journal.read(chain.id)!.invocations[0].evidence!.nativeActionReceipt).toEqual(proof)
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  expect(readActionResult).toHaveBeenCalledTimes(1)
+  expect(perform).not.toHaveBeenCalled()
+  const events = journal.history(chain.id)
+  journal.rebuild()
+  expect(journal.history(chain.id)).toEqual(events)
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+})
+
+it('does not settle a contained action from a retained response while the original physical Call is missing', async () => {
+  const { journal, chain } = setup('merge-pr', true, ':memory:', true)
+  const invocation = chain.invocations[0]
+  journal.append(chain.id, 'response-only', chain.sequence, { type: 'invocation.reconciled', invocationId: invocation.id,
+    evidence: { nativeActionReceipt: nativeActionReceipt(chain, invocation, acceptedMerge()) } })
+  await new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false })).run()
+  expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 8, diskBytes: 16, unaccounted: 0 })
+})
 
 it.each(['merge-pr', 'resolve-threads'] as const)('settles %s from its retained original response after rebuilding, without repeating the action', async (behavior) => {
   const directory = mkdtempSync(join(tmpdir(), 'poise-action-receipt-'))

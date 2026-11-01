@@ -1,4 +1,6 @@
 import { expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import type { LogEntry } from '../server/agent-log-parse'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from '../server/behavior-chain-store'
 import type { Organization } from '../server/organizations'
 import type { NativeChainHooks } from '../server/behavior-chain-native'
@@ -17,6 +19,23 @@ const chain: BehaviorChain = { id: 'example/repo#7', repository: 'example/repo',
   author: 'author', reviewer: 'reviewer', sequence: 1, held: null, waiting: null, resumedAfterSequence: 0,
   mergeSha: null, observation: null, invocations: [] }
 const reviewer = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
+
+it('verifies the original native response bytes without changing Python number formatting', async () => {
+  const invocation = mergeInvocation()
+  const retained = '{"duration":1.0,"outcome":"enqueued"}'
+  const call: LogEntry = { id: 'b'.repeat(32), pr_id: '21', repo: chain.repository, actor: invocation.actor,
+    model: 'native-action', behavior: 'native_action', session_id: null, prompt: '', started_at: new Date().toISOString(),
+    time_elapsed: '1s', status: 'completed', outcome: 'native_action', action: 'native_action', head_sha: HEAD,
+    expected_head: HEAD, source: 'poise:behavior-chain', correlation_id: invocation.id, response: 'bbbbbbbb', error: '',
+    artifact: { phase: 'received_native_action',
+    request_sha: chainBasis(invocation.request), response_sha: createHash('sha256').update(retained).digest('hex') } }
+  mocks.runFile.mockResolvedValueOnce({ stdout: `${retained}\n` })
+  await expect(actionOperations().readActionResult(invocation, call))
+    .resolves.toEqual({ duration: 1, outcome: 'enqueued' })
+  mocks.runFile.mockResolvedValueOnce({ stdout: `${JSON.stringify(JSON.parse(retained))}\n` })
+  await expect(actionOperations().readActionResult(invocation, call))
+    .rejects.toThrow('retained digest')
+})
 
 function actionOperations(overrides: Partial<NativeChainHooks> = {}) {
   return nativeChainOperations({ login: 'example' } as Organization, {
@@ -70,16 +89,16 @@ it('retains a returned native mutation response when its process subsequently fa
   const response = { action: 'merge_if_ready', repository: chain.repository, pull_number: 21,
     head_sha: HEAD, outcome: 'enqueued', queue_entry_id: 'accepted-queue-entry' }
   mocks.runFile.mockRejectedValueOnce(Object.assign(new Error('process exited after response'), {
-    code: 1, signal: null, stdout: JSON.stringify(response),
+    code: 1, signal: null, stdout: JSON.stringify({ id: 'c'.repeat(32), result: response }),
   }))
-  await expect(actionOperations().perform(mergeInvocation())).resolves.toEqual({ ...response,
-    nativeProcessFailure: { code: 1, signal: null } })
+  await expect(actionOperations().perform(mergeInvocation(), chain)).resolves.toEqual({ ...response,
+    nativeCallId: 'c'.repeat(32), nativeOuterProcessFailure: { code: 1, signal: null } })
 })
 
 it.each(['', 'partial JSON {', '[]'])('preserves the original process failure when stdout is not a valid response: %s', async (stdout) => {
   const failure = Object.assign(new Error('native timeout after a possible write'), { code: 'ETIMEDOUT', signal: 'SIGTERM', stdout })
   mocks.runFile.mockRejectedValueOnce(failure)
-  await expect(actionOperations().perform(mergeInvocation())).rejects.toBe(failure)
+  await expect(actionOperations().perform(mergeInvocation(), chain)).rejects.toBe(failure)
 })
 
 it('preserves actual review identities, responses and times after an external merge', async () => {

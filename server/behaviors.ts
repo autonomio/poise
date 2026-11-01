@@ -6,6 +6,7 @@ import { readBehaviorResourceAdmission, type BehaviorResourceBudget, type Behavi
 import { advanceBehaviorCutover, behaviorAdmissionDraining, behaviorCutoverBlockers } from './behavior-cutover'
 import { BehaviorChainRuntime } from './behavior-chain-runtime'
 import { nativeChainOperations } from './behavior-chain-native'
+import { invalidateNativeCleanup, nativeCleanupSupport, requireNativeCleanup } from './native-cleanup-support'
 import { callReviewResponse } from './review-response'
 import { chainBasis, type ChainBehavior } from './behavior-chain-store'
 import { prepareModelClis } from './provider-clis'
@@ -34,9 +35,9 @@ import { tmpdir, homedir } from 'node:os'
 import { mkdir } from 'node:fs/promises'
 import { MessageChannel } from 'node:worker_threads'
 import { ISSUE_REVIEW_BEHAVIOR, fetchAgentLogSnapshot, quarantinedLogMayMatch, type LogEntry } from './agent'
-import { claudeAuth } from './claude-auth'
+import { claudeAuth, ClaudeAuthReadinessError } from './claude-auth'
 import { REVIEW_POLICY, needsClaude, randomDrawStillValid, reviewChoice, reviewPanel, type ReviewPanel, type ReviewPlace } from './review-model'
-import { type Catalog, type ReviewerSlot, MODEL_SLOTS, REVIEWER_SLOTS, isPlaceModel, loadCatalog, recoveryModel, resolveSlots, resolvePlace, seededRandom } from './models'
+import { type Catalog, type ReviewerSlot, MODEL_SLOTS, REVIEWER_SLOTS, isPlaceModel, loadCatalog, loadedCatalog, recoveryModel, resolveSlots, resolvePlace, seededRandom } from './models'
 import {
   db,
   claimPrOperationOwned,
@@ -1881,7 +1882,7 @@ function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry
       quarantineEvidence(snapshot, claim, call).hasLiveEvidence)
     return false
   }
-  if (call.outcome === 'published' || call.outcome === 'no_changes' || call.outcome === 'target_closed') {
+  if (call.outcome === 'published' || call.outcome === 'no_changes' || call.outcome === 'target_closed' || call.outcome === 'native_action') {
     throw new Error('native chain outcomes cannot settle a legacy review claim')
   }
   // A recovered completion settles the launch record itself, not just the
@@ -7215,7 +7216,7 @@ export function getBehaviorChainCapacity(): BehaviorChainCapacity {
     const mode = journal.cutover().mode
     return { status: 'available', error: null, modelInvocationLimit, processLocal,
       reservedModelInvocations: usage.modelInvocations, mode,
-      enabled: settings.enabled && mode === 'v2',
+      enabled: settings.enabled && mode === 'v2' && nativeCleanupSupport().status === 'supported',
       resources: { budget: admission?.budget ?? null,
         reserved: { memoryBytes: usage.reservations.memoryBytes, diskBytes: usage.reservations.diskBytes },
         unaccounted: usage.reservations.unaccounted },
@@ -7242,6 +7243,10 @@ async function runBehaviorChains(): Promise<void> {
     || !db.prepare('SELECT 1 FROM behavior_chain_current WHERE merged = 0 LIMIT 1').get())) return
   const org = currentOrganization()
   if (!org) return
+  const cleanup = nativeCleanupSupport()
+  if (behaviorChainJournal().cutover().mode === 'v2' && ['unsupported', 'unavailable'].includes(cleanup.status)) {
+    behaviorChainHealth.set('@native-cleanup', { lastSweepAt: Date.now(), error: cleanup.error })
+  } else behaviorChainHealth.delete('@native-cleanup')
   let runtime = behaviorChains.get(org.login.toLowerCase())
   if (!runtime) {
     const roster = async (chainKey: string) => {
@@ -7288,9 +7293,16 @@ async function runBehaviorChains(): Promise<void> {
         return { slot, model, recovery: model }
       },
       async prepare(identities) {
-        const catalog = await loadCatalog()
-        if (identities.some((identity) => needsClaude(catalog, identity))) await claudeAuth.requireReady()
-        return { ...claudeSubscriptionEnvironment(), ...await prepareBehaviorModelClis(catalog, identities) }
+        const catalog = loadedCatalog()
+        if (!catalog) throw new Error('native model selection requires its loaded catalog')
+        // Scheduled account health owns its probes. This admission only reads
+        // that result; per-Call CLI preparation runs inside Caller's boundary.
+        const status = claudeAuth.snapshot().status
+        if (identities.some((identity) => needsClaude(catalog, identity)) && status !== 'authenticated') {
+          throw new ClaudeAuthReadinessError(status)
+        }
+        return { ...claudeSubscriptionEnvironment(), POISE_NATIVE_NODE: process.execPath,
+          POISE_NATIVE_PREPARE: resolve(agentInterfaceCwd(), '../../scripts/native-provider-prepare.mjs') }
       },
       borrow() {
         return behaviorCheckSlots.tryAcquire('behavior')
@@ -7309,6 +7321,8 @@ async function runBehaviorChains(): Promise<void> {
       note: (behavior) => { const key = chainBehaviorKey(behavior); return key ? noteArgs(key)[1] ?? '' : '' },
       severity: (behavior) => getSetting(behavior === 'approve-pr' ? 'approve-prs' : 'review-new-prs'),
       received(invocation, call) {
+        if (call.error_code === 'native_cleanup_failed') invalidateNativeCleanup(call.error || 'Native cleanup verification failed')
+        if (invocation.model === null) return
         const identity = call.recovery_model || call.model
         if (call.status === 'completed') clearReviewerTrip(identity)
         else {
@@ -7361,7 +7375,8 @@ async function runBehaviorChains(): Promise<void> {
       wake() { checkSlotRetryPending = true; onCheckSlotReleased() },
     })
     runtime = new BehaviorChainRuntime(behaviorChainJournal(), { ...operations,
-      enabled: () => behaviorChainJournal().cutover().mode === 'v2' && operations.enabled() })
+      enabled: () => behaviorChainJournal().cutover().mode === 'v2'
+        && nativeCleanupSupport().status === 'supported' && operations.enabled() })
     behaviorChains.set(org.login.toLowerCase(), runtime)
   }
   const directory = dirname(behaviorProcessLockPath(ISSUES_KEY))
@@ -7406,7 +7421,9 @@ export async function runEnabledBehaviorsOnce(
       const configuration = () => JSON.stringify([getSettings().me, getSettings().agentAccount,
         getOrganizations().map((org) => [org.login.toLowerCase(), org.datastorePath]).sort()])
       const expectedConfiguration = configuration()
-      try { await advanceBehaviorCutover(behaviorChainJournal(), async () => {
+      try {
+        await requireNativeCleanup()
+        await advanceBehaviorCutover(behaviorChainJournal(), async () => {
         const pulls: string[] = []
         const { readOpenPrClosingRefs } = await import('./chat/control')
         const organizations = getOrganizations()

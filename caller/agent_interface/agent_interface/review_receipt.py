@@ -188,7 +188,7 @@ def managed_resources(root: Path):
     if not database or not call_id:
         yield
         return
-    from . import issue_review, resource_ownership
+    from . import issue_review, native_namespace, resource_ownership
     root = resource_ownership.allocate(Path(database), call_id, root)
     with sqlite3.connect(database, timeout=30) as conn:
         conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_root',?) where id=?", (str(root), call_id))
@@ -196,7 +196,12 @@ def managed_resources(root: Path):
         yield
     finally:
         resource_ownership.process_check(Path(database), call_id)
-        if issue_review._cwd_pids(root, require_complete=True) != []:
+        scope = native_namespace.active()
+        if scope is not None:
+            if scope.key["callId"] != call_id:
+                raise RuntimeError("managed resource scope differs from its original Call")
+            scope.require_idle()
+        elif issue_review._cwd_pids(root, require_complete=True) != []:
             resource_ownership.failure(Path(database), call_id, "resources_unknown", root)
             with sqlite3.connect(database, timeout=30) as conn:
                 conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_error','resources_unknown') where id=?", (call_id,))

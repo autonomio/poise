@@ -12,6 +12,32 @@ async function general(page: Page) {
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
 
+test('unsupported cleanup refuses v2 while v1 controls stay available, including drain cancellation', async ({ page }) => {
+  await workspace(page)
+  let draining = false
+  const writes: unknown[] = []
+  await page.route('**/api/behavior-chains', async route => {
+    if (route.request().method() === 'POST') {
+      writes.push(route.request().postDataJSON())
+      draining = false
+    }
+    return route.fulfill({ json: { chains: [], next: null, runtime: [],
+      cutover: { mode: draining ? 'draining' : 'v1', sequence: draining ? 1 : 0, requestedAt: null,
+        legacyPulls: [], blockers: [], support: { status: 'unsupported', error: 'unsupported test host' } } } })
+  })
+  const controls = await general(page)
+  await expect(controls.locator('[data-native-support]')).toHaveText('This setup cannot run v2. v1 remains available.')
+  await expect(controls.getByRole('button', { name: 'Switch to v2', exact: true })).toBeDisabled()
+  await expect(controls.locator('[data-cutover-status]')).toHaveText('v1 owns new work')
+  expect(writes).toEqual([])
+  draining = true
+  await controls.getByRole('button', { name: 'Refresh chains' }).click()
+  await expect(controls.getByRole('button', { name: 'Cancel cutover', exact: true })).toBeEnabled()
+  await controls.getByRole('button', { name: 'Cancel cutover', exact: true }).click()
+  await expect.poll(() => writes).toEqual([{ operation: 'cancel-cutover', sequence: 1 }])
+  await expect(controls.locator('[data-cutover-status]')).toHaveText('v1 owns new work')
+})
+
 test('merged chains retain open obligations as reconciliation-only and stale reads disable admission writes', async ({ page }) => {
   await workspace(page)
   let complete = false
@@ -93,7 +119,7 @@ test('one cutover action reports drain, survives reload and reflects actual comp
       writes.push(body)
       cutover = { ...cutover, mode: 'draining', sequence: 1, requestedAt: Date.now() }
     }
-    return route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { ...cutover, blockers: ['1 native Caller invocation(s) still running'] },
+    return route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { ...cutover, support: { status: 'supported', error: null }, blockers: ['1 native Caller invocation(s) still running'] },
       settings: { enabled: cutover.mode === 'v2', seedMode: 'label', label: 'poise' } } })
   })
   const controls = await general(page)
@@ -121,7 +147,7 @@ test('stale cutover and unavailable reads never show a successful activation', a
   await page.route('**/api/behavior-chains', route => route.request().method() === 'POST'
     ? route.fulfill({ status: 409, json: { error: 'behavior cutover changed; reload its current state' } })
     : unavailable ? route.fulfill({ status: 503, json: { error: 'Caller unavailable' } })
-      : route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { mode: 'v1', sequence: 0, legacyPulls: [], blockers: [] } } }))
+      : route.fulfill({ json: { chains: [], next: null, runtime: [], cutover: { mode: 'v1', sequence: 0, legacyPulls: [], blockers: [], support: { status: 'supported', error: null } } } }))
   const controls = await general(page)
   await controls.getByRole('button', { name: 'Switch to v2', exact: true }).click()
   await expect(controls.locator('[data-chain-status]')).toContainText('Cutover was not applied')

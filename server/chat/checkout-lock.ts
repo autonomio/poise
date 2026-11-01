@@ -1,7 +1,7 @@
 // The per-checkout writer lease shared by every process that mutates a
 // repository checkout: this Poise server, the other one (dev vs production),
 // and Caller's fix-failing-ci worker. The protocol is published in
-// /tmp/poise-chat-v1/poise-contract.md §1 and docs/Chat-v1.md; Caller
+// docs/Chat-v1.md defines the shared lease contract; Caller
 // implements the same file, table and rules in Python, so nothing here may
 // change without the document changing first.
 //
@@ -59,6 +59,7 @@ export interface LeaseRow {
   instance: string
   host_pid: number
   host_start: string | null
+  native_call: string | null
   worker_pid: number | null
   worker_pgid: number | null
   worker_ident: string | null
@@ -78,7 +79,7 @@ export interface LeaseOwner {
 
 export type AcquireResult =
   | { acquired: true, token: string, recovered: boolean }
-  | { acquired: false, holder: LeaseRow, orphan: boolean, reason: 'live_host' | 'lease_valid' | 'orphan_worker' }
+  | { acquired: false, holder: LeaseRow, orphan: boolean, reason: 'live_host' | 'lease_valid' | 'orphan_worker' | 'native_invocation' }
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lease (
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS lease (
   instance       TEXT    NOT NULL,
   host_pid       INTEGER NOT NULL,
   host_start     TEXT,
+  native_call    TEXT,
   worker_pid     INTEGER,
   worker_pgid    INTEGER,
   worker_ident   TEXT,
@@ -115,6 +117,12 @@ function openLock(path: string): LockDb {
     try {
       db.exec('ALTER TABLE lease ADD COLUMN host_start TEXT')
     } catch (error) {
+      if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error
+    }
+  }
+  if (!columns.some((column) => column.name === 'native_call')) {
+    try { db.exec('ALTER TABLE lease ADD COLUMN native_call TEXT') }
+    catch (error) {
       if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error
     }
   }
@@ -219,6 +227,9 @@ export class CheckoutLease {
           .run(nowIso, now + LEASE_MS, this.token)
         return { acquired: true, token: this.token, recovered: false }
       }
+      if (row.native_call !== null) {
+        return { acquired: false, holder: row, orphan: false, reason: 'native_invocation' }
+      }
       if (this.hostAlive(row)) {
         return { acquired: false, holder: row, orphan: false, reason: 'live_host' }
       }
@@ -255,6 +266,7 @@ export class CheckoutLease {
     const adopted = withLock(this.path, (db) => {
       const row = db.prepare('SELECT * FROM lease WHERE id = 1').get() as LeaseRow | undefined
       if (!row) return false
+      if (row.native_call !== null) return false
       if (row.owner_id !== expected.ownerId || row.instance !== this.owner.instance) return false
       if (row.worker_pid !== expected.workerPid || row.worker_pgid !== expected.workerPgid || row.worker_ident !== expected.workerIdent) return false
       if (row.host_pid === this.probes.hostPid) {
@@ -348,7 +360,7 @@ export class CheckoutLease {
   release(): boolean {
     const token = this.token
     if (!token) return false
-    const deleted = withLock(this.path, (db) => db.prepare('DELETE FROM lease WHERE id = 1 AND token = ?').run(token).changes === 1)
+    const deleted = withLock(this.path, (db) => db.prepare('DELETE FROM lease WHERE id = 1 AND token = ? AND native_call IS NULL').run(token).changes === 1)
     this.stopHeartbeat()
     this.token = null
     return deleted
@@ -358,7 +370,7 @@ export class CheckoutLease {
    *  leftover after the worker was verified and terminated. */
   static releaseByToken(checkout: string, token: string): boolean {
     const path = checkoutLockPath(canonicalCheckout(checkout))
-    return withLock(path, (db) => db.prepare('DELETE FROM lease WHERE id = 1 AND token = ?').run(token).changes === 1)
+    return withLock(path, (db) => db.prepare('DELETE FROM lease WHERE id = 1 AND token = ? AND native_call IS NULL').run(token).changes === 1)
   }
 
   onLost(listener: () => void): void {
@@ -393,6 +405,7 @@ export class CheckoutLease {
  *  unreadable start time fails closed to the pid check. Recovery's
  *  ownership guards share this so a squatting pid cannot pin them either. */
 export function leaseHostAlive(row: LeaseRow, options: CheckoutLeaseOptions = {}): boolean {
+  if (row.native_call != null) return true
   if (!(options.pidAlive ?? pidAlive)(row.host_pid)) return false
   if (row.host_start == null) return true
   const start = (options.processStart ?? processStartTime)(row.host_pid)

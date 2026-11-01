@@ -75,6 +75,25 @@ jobs:
       - name: Check that a release switch restarts Poise alone
         run: deploy/runtime/test/smoke.sh switch poise-runtime:ci
 
+      - name: Check v2 refusal under the default Docker security profile
+        run: deploy/runtime/test/native-cleanup.sh poise-runtime:ci runc
+
+      # Only this disposable CI runner is configured. v1 keeps its existing
+      # runtime contract; no deployment defaults or production hosts change.
+      - name: Install the pinned namespace-capable test runtime
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/gvisor.tar.bz2" \
+            https://github.com/google/gvisor/releases/download/release-20261026.0/gvisor-x86_64.tar.bz2
+          echo "096589d2d6078ba4caa26aa0200932f571aa5da9d08a5156b98ab1d93fa54468  $RUNNER_TEMP/gvisor.tar.bz2" | sha256sum --check
+          sudo mkdir -p /usr/local/lib/poise-gvisor
+          sudo tar -xjf "$RUNNER_TEMP/gvisor.tar.bz2" -C /usr/local/lib/poise-gvisor
+          sudo /usr/local/lib/poise-gvisor/runsc install --runtime=runsc -- --platform=systrap
+          sudo systemctl reload docker
+          /usr/local/lib/poise-gvisor/runsc --version
+
+      - name: Check native namespace teardown and Caller resource receipts in the actual image
+        run: deploy/runtime/test/native-cleanup.sh poise-runtime:ci runsc
+
       # Installing the provider CLIs downloads about a gigabyte from five
       # vendors, so it runs only when the image's own files change.
       - name: Check whether the image's own files changed

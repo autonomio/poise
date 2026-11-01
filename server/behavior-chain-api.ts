@@ -7,6 +7,7 @@ import { getBehaviorChainCapacity, getBehaviorChainRuntimeHealth } from './behav
 import { behaviorCutoverBlockers } from './behavior-cutover'
 import type { BehaviorChain, ChainEvent } from './behavior-chain-store'
 import { behaviorChainSummary } from './behavior-chain-summary'
+import { nativeCleanupSupport, requireNativeCleanup } from './native-cleanup-support'
 
 function reply(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value))
@@ -17,7 +18,8 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
     const params = new URL(url, 'http://localhost').searchParams
     const journal = behaviorChainJournal()
     const summary = (chain: BehaviorChain) => behaviorChainSummary(chain, { at: journal.reconciliationAt(chain) })
-    const cutover = () => ({ ...journal.cutover(), blockers: journal.cutover().mode === 'draining' ? behaviorCutoverBlockers() : [] })
+    const cutover = () => ({ ...journal.cutover(), support: nativeCleanupSupport(),
+      blockers: journal.cutover().mode === 'draining' ? behaviorCutoverBlockers() : [] })
     if (req.method === 'GET') {
       const id = params.get('id')
       if (id) {
@@ -45,6 +47,7 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
       if (!('sequence' in body) || !Number.isSafeInteger(body.sequence)) throw new HttpError(400, 'current cutover sequence is required')
       const accounts = getSettings()
       if (body.operation === 'switch-to-v2' && (!accounts.me || !accounts.agentAccount || accounts.me.toLowerCase() === accounts.agentAccount.toLowerCase())) throw new HttpError(409, 'Cutover requires distinct author and automation GitHub accounts')
+      if (body.operation === 'switch-to-v2') await requireNativeCleanup()
       journal.changeAdmission(Number(body.sequence), body.operation === 'switch-to-v2' ? 'draining' : 'v1')
       return reply(res, 200, { cutover: cutover() })
     }

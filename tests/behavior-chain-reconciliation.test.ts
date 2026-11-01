@@ -48,7 +48,7 @@ function operations(overrides: Partial<ChainRuntimeOperations> = {}): ChainRunti
   return { enabled: () => false, accounts: () => ({ author: 'author', reviewer: 'reviewer' }), discover: async () => [],
     ownsRepository: () => true, observe: async () => observation(), readInvocations: async () => ({ entries: [], quarantined: [] }),
     received: () => {}, available: () => false, capacity: () => 3, permitted: () => false, request: forbidden,
-    launch: forbidden, perform: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {}, ...overrides }
+    launch: forbidden, perform: forbidden, readActionResult: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {}, ...overrides }
 }
 
 it('deduplicates merged holds and bounds repeated observation from durable state across runtime replacement', async () => {

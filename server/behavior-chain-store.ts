@@ -21,7 +21,8 @@ export interface ChainInvocation {
   reservation?: BehaviorResourceReservation | null
   admittedAt: number
   admissionSequence: number
-  request: { command: 'agent-interface' | 'github-interface', argv: string[], cwd: string, context?: { head: string, reviewRevision: string, queueRemoval?: string } }
+  request: { command: 'agent-interface' | 'github-interface', argv: string[], cwd: string, nativeResources?: 2,
+    context?: { head: string, reviewRevision: string, queueRemoval?: string } }
   state: 'admitted' | 'started' | 'uncertain' | 'settled'
   callId: string | null
   outcome: string | null
@@ -371,7 +372,8 @@ export class BehaviorChainJournal {
       if (this.cutover().mode === 'draining') return null
       if (chain.invocations.some(prior => nativeResourcesPending({ ...prior }))) return null
       if (invocation.model !== null && !this.modelCapacityAvailable(capacity)) return null
-      if (budget && (budget.memoryBytes !== null || budget.diskBytes !== null) && invocation.model !== null) {
+      if (budget && (budget.memoryBytes !== null || budget.diskBytes !== null)
+        && (invocation.model !== null || invocation.request.nativeResources === 2)) {
         const reservation = invocation.reservation
         if (!reservation || !Number.isSafeInteger(reservation.memoryBytes) || reservation.memoryBytes < 0
           || !Number.isSafeInteger(reservation.diskBytes) || reservation.diskBytes < 0) throw new Error('behavior resource budget is configured but the admission carries no valid reservation')
@@ -391,7 +393,8 @@ export class BehaviorChainJournal {
 
   liveModelInvocationCount(): number {
     const row = this.db.prepare(`SELECT count(*) AS count FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
-      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
+      WHERE c.resource_pending = 1 AND json_extract(i.value, '$.model') IS NOT NULL
+        AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
     return row.count
   }
 

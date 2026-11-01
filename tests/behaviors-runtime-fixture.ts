@@ -24,8 +24,16 @@ vi.mock('../server/behavior-ledger', () => ({
   captureBehaviorAdmission: mocks.captureAdmission, captureBehaviorOutcome: mocks.captureOutcome,
   observeAgentSnapshot: mocks.observeSnapshot, behaviorLedgerHeartbeat: vi.fn(),
 }))
+// This runtime fixture uses stand-in CLIs throughout. Actual setup capability
+// refusal and namespace delivery have separate boundary/kernel checks.
+vi.mock('../server/native-cleanup-support', () => ({
+  nativeCleanupSupport: () => ({ status: 'supported', error: null }),
+  requireNativeCleanup: async () => {},
+  invalidateNativeCleanup: vi.fn(),
+}))
 
 vi.mock('../server/process', () => ({
+  CLAUDE_SUBSCRIPTION_CLI: '/poise/claude-subscription',
   runFile: mocks.runFile,
   spawnDetached: mocks.spawnDetached,
   runningCallerLaunches: () => 0,
@@ -37,7 +45,8 @@ vi.mock('../server/process', () => ({
     CLAUDE_CLI: '/poise/claude-subscription',
   }),
 }))
-vi.mock('../server/claude-auth', () => ({
+vi.mock('../server/claude-auth', async (importOriginal) => ({
+  ClaudeAuthReadinessError: (await importOriginal<typeof import('../server/claude-auth')>()).ClaudeAuthReadinessError,
   claudeAuth: {
     snapshot: () => ({ status: mocks.authStatus }),
     requireReady: mocks.requireAuth,

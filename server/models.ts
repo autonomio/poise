@@ -82,6 +82,10 @@ function parseCatalog(stdout: string): Catalog {
   return data as Catalog
 }
 
+/** Admission already resolved its model; checking that selection immediately
+ * before spawn must not start another catalog helper outside the Call. */
+export function loadedCatalog(): Catalog | null { return cached?.catalog ?? null }
+
 export async function loadCatalog(options: { fresh?: boolean } = {}): Promise<Catalog> {
   if (!options.fresh && cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.catalog
   if (pending) return pending
