@@ -15,6 +15,7 @@ import { chmodSync, closeSync, constants as fsConstants, existsSync, mkdtempSync
 import { createServer } from 'node:net'
 import { constants } from 'node:os'
 import { join } from 'node:path'
+import { callerStore, resourceWitnesses } from './resource-witness.mjs'
 
 export const UPDATE_EXIT_CODE = 75
 // A release that exits this soon after starting, other than to switch, is not run again.
@@ -110,11 +111,14 @@ export function openNamespaceWitness({ pid, start, namespace, epoch, owner, hold
 /** Kernel descriptors live in the existing workspace supervisor, outside
  * replaceable Poise and Caller processes. This service records no work and
  * starts no process; the canonical journal remains execution authority. */
-export async function namespaceControl({ open = openNamespaceWitness, limit = 4096 } = {}) {
+export async function namespaceControl({ open = openNamespaceWitness, limit = 4096, dataDirectory } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error('Invalid native namespace capacity')
   const directory = mkdtempSync('/tmp/poise-native-')
   const path = join(directory, 'control.sock')
   const instance = randomBytes(16).toString('hex')
+  let store
+  try { store = dataDirectory === undefined ? null : callerStore(dataDirectory) }
+  catch (error) { rmdirSync(directory); throw error }
   const scopes = new Map()
   const connections = new Set()
   let closed = false
@@ -135,11 +139,12 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
       // empty. Ordinary Call witnesses require their durable acknowledgement.
       for (const [id, scope] of scopes) {
         if (scope.probe && scope.witness.read().empty && !scope.witness.ownerPresent()) {
+          scope.resources.close()
           scope.witness.close()
           scopes.delete(id)
         }
       }
-      return { available: true, witnesses: scopes.size, probeAvailable: ![...scopes.values()].some(scope => scope.probe) }
+      return { available: true, resourceProtocol: 2, witnesses: scopes.size, probeAvailable: ![...scopes.values()].some(scope => scope.probe) }
     }
     identity(request)
     let scope = scopes.get(request.callId)
@@ -155,17 +160,29 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
         if (request.probe && [...scopes.values()].some(scope => scope.probe)) throw new Error('Original native setup probe is still unsettled')
         if (scopes.size >= limit) throw new Error('Native namespace witnesses are at capacity')
         const witness = open(request.identity)
-        scope = { witness, identity: bindingKey(request.identity), token: request.token, correlation: request.correlation, probe: request.probe === true }
+        scope = { witness, resources: resourceWitnesses(request.callId), identity: bindingKey(request.identity), token: request.token, correlation: request.correlation, probe: request.probe === true }
         scopes.set(request.callId, scope)
       }
-    } else if (!['read', 'release'].includes(request.operation)) throw new Error('Unknown native namespace operation')
+    } else if (!['read', 'release', 'retire', 'allocate-root', 'read-root', 'repair-root', 'finish-root'].includes(request.operation)) throw new Error('Unknown native namespace operation')
+    // Retirement follows an already-durable positive Call release. Absence
+    // reports only housekeeping state, never kernel or disk settlement.
+    if (!scope && request.operation === 'retire') return { retired: false, present: false }
     if (!scope) throw new Error('Original native namespace witness is unavailable')
     const state = scope.witness.read()
-    if (request.operation === 'release') {
+    if (['allocate-root', 'read-root', 'repair-root', 'finish-root'].includes(request.operation)) {
+      if (scope.probe) throw new Error('Native setup probes cannot allocate resources')
+      if (request.operation === 'allocate-root' && state.empty) throw new Error('Ended native scopes cannot allocate resources')
+      if (['repair-root', 'finish-root'].includes(request.operation) && state.pids.some(pid => pid > 2)) throw new Error('Native resource still owns child processes')
+      const method = { 'allocate-root': 'allocate', 'read-root': 'read', 'repair-root': 'repair', 'finish-root': 'finish' }[request.operation]
+      return { callId: request.callId, correlation: scope.correlation, resource: scope.resources[method](request.root) }
+    }
+    if (request.operation === 'release' || request.operation === 'retire') {
       if (!state.empty) throw new Error('Native namespace still owns processes')
+      if (!scope.resources.released()) throw new Error('Native namespace still owns resource handles')
+      scope.resources.close()
       scope.witness.close()
       scopes.delete(request.callId)
-      return { released: true }
+      return request.operation === 'retire' ? { retired: true, present: false } : { released: true }
     }
     return { callId: request.callId, correlation: scope.correlation, binding: scope.witness.binding, ...state }
   }
@@ -206,10 +223,12 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
     catch (failure) { failures.push(failure) }
     try { rmdirSync(directory) }
     catch (failure) { failures.push(failure) }
+    try { store?.close() }
+    catch (failure) { failures.push(failure) }
     throw failures.length === 1 ? error : new AggregateError(failures, 'Native namespace controller startup failed')
   }
   return {
-    address: Object.freeze({ version: 1, path, instance }),
+    address: Object.freeze({ version: 1, path, instance, ...(store ? { store: store.reference } : {}) }),
     async close() {
       if (closed) return
       closed = true
@@ -218,10 +237,14 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
       try { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
       catch (error) { failures.push(error) }
       for (const scope of scopes.values()) {
+        try { scope.resources.close() }
+        catch (error) { failures.push(error) }
         try { scope.witness.close() }
         catch (error) { failures.push(error) }
       }
       scopes.clear()
+      try { store?.close() }
+      catch (error) { failures.push(error) }
       try { rmdirSync(directory) }
       catch (error) { failures.push(error) }
       if (failures.length) throw new AggregateError(failures, 'Native namespace witness shutdown failed')
@@ -350,7 +373,7 @@ export function supervisor({
     },
     /** Runs Poise until the container stops, and resolves with the exit code to stop with. */
     async run() {
-      nativeControl = nativeControlFactory ? await nativeControlFactory() : null
+      nativeControl = nativeControlFactory ? await nativeControlFactory({ dataDirectory: env.AGENT_INTERFACE_DATA_DIR || join(home, '.poise', 'agent-interface') }) : null
       try {
         for (;;) {
           const release = choose()

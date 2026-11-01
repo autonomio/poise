@@ -33,7 +33,7 @@ export interface ChainRuntimeOperations {
   wake(): void
 }
 
-function nativeBehavior(behavior: ChainInvocation['behavior']): string | null {
+export function nativeBehavior(behavior: ChainInvocation['behavior']): string | null {
   return ({ 'review-issue': 'issue_review', 'review-pr': 'pr_review', 'approve-pr': 'pr_approve',
     'implement-issue': 'implement_issue', 'repair-pr': 'repair_pr', 'merge-pr': 'native_action',
     'resolve-threads': 'native_action', 'rerun-grey-ci': 'native_action', 'publish-issue': 'native_action' } as Partial<Record<ChainInvocation['behavior'], string>>)[behavior] ?? null
@@ -345,7 +345,7 @@ export class BehaviorChainRuntime {
         chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
       }
       const failure = call.resource_ownership?.errors.at(-1)
-      const root = call.resource_ownership?.roots.find(root => root.state !== 'reclaimed')
+      const root = call.resource_ownership?.roots.find(root => !['reclaimed', 'covered'].includes(root.state))
       const cause = failure ? `; ${failure.cause}${failure.path ? ` at ${failure.path}` : ''}`
         : !call.resource_ownership ? '; durable resource ownership is unavailable'
           : root ? `; ${root.state} directory at ${root.path} lacks a reclamation receipt` : ''

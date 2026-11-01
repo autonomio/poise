@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Database } from 'better-sqlite3'
 import type { BehaviorCutoverState } from '../src/behavior-cutover'
 import { budgetShortfall, type BehaviorResourceBudget, type BehaviorResourceReservation } from './behavior-resources'
-import { nativeResourcesPending } from './behavior-resource-receipt'
+import { nativeResourcesPending, resourceReleaseProven } from './behavior-resource-receipt'
 
 const CUTOVER_ID = '@behavior-admission'
 interface CutoverEvent { type: 'admission.changed', state: BehaviorCutoverState }
@@ -57,6 +57,7 @@ export type ChainEvent =
   | { type: 'invocation.admitted', invocation: ChainAdmission }
   | { type: 'invocation.started', invocationId: string }
   | { type: 'invocation.reconciled', invocationId: string, evidence: Record<string, unknown> }
+  | { type: 'invocation.resources_reconciled', invocationId: string, evidence: Record<string, unknown> }
   | { type: 'invocation.uncertain', invocationId: string, reason: string }
   | { type: 'invocation.settled', invocationId: string, callId: string | null, outcome: string, evidence: Record<string, unknown> }
 
@@ -129,6 +130,26 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
     if (event.type === 'invocation.started') {
       if (invocation.state !== 'admitted') throw new Error('behavior invocation has already started')
       invocation.state = 'started'
+    } else if (event.type === 'invocation.resources_reconciled') {
+      if (!Object.keys(event.evidence).length || Object.keys(event.evidence).some(key => !['resource_ownership', 'resources_settled_at', 'artifact', 'publicationReceipt'].includes(key))) {
+        throw new Error('resource reconciliation cannot change a behavior outcome')
+      }
+      const artifact = event.evidence.artifact
+      const evidence = { ...event.evidence }
+      if (artifact && typeof artifact === 'object') {
+        const prior = invocation.evidence?.artifact
+        const original = prior && typeof prior === 'object' ? prior : {}
+        for (const [key, value] of Object.entries(artifact)) {
+          if (!['resource_error', 'resource_recovered_at'].includes(key)
+            && !(key === 'phase' && value === 'resources_unknown')
+            && chainBasis(value) !== chainBasis(Object.getOwnPropertyDescriptor(original, key)?.value ?? null)) {
+            throw new Error('resource reconciliation cannot change a logical artifact')
+          }
+        }
+        evidence.artifact = { ...original, ...artifact }
+      }
+      if (!resourceReleaseProven({ ...invocation.evidence, ...evidence }, true)) throw new Error('resource reconciliation requires positive original release proof')
+      invocation.evidence = { ...invocation.evidence, ...evidence }
     } else if (event.type === 'invocation.reconciled') {
       if (invocation.state === 'settled' || !Object.keys(event.evidence).length) throw new Error('invalid invocation reconciliation')
       invocation.evidence = { ...invocation.evidence, ...event.evidence }
@@ -396,6 +417,18 @@ export class BehaviorChainJournal {
       WHERE c.resource_pending = 1 AND json_extract(i.value, '$.model') IS NOT NULL
         AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
     return row.count
+  }
+
+  /** Includes held/merged historical admissions. It is a resource-only page,
+   * independent of organization readiness and behavior admission controls. */
+  pendingResourcePage(after: { chain: string, position: number }, limit = 16): { chain: BehaviorChain, invocation: ChainInvocation, position: number }[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16 || !Number.isSafeInteger(after.position)) throw new Error('invalid pending resource page')
+    const rows = this.db.prepare(`SELECT c.chain_id AS chain, CAST(i.key AS INTEGER) AS position
+      FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1
+        AND (c.chain_id > ? OR (c.chain_id = ? AND CAST(i.key AS INTEGER) > ?))
+      ORDER BY c.chain_id, CAST(i.key AS INTEGER) LIMIT ?`).all(after.chain, after.chain, after.position, limit) as { chain: string, position: number }[]
+    return rows.map(row => { const chain = this.read(row.chain)!; return { chain, invocation: chain.invocations[row.position], position: row.position } })
   }
 
   capacitySnapshot() {

@@ -9,8 +9,9 @@ import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../../server/
 
 const wire = readFileSync(process.argv[2], 'utf8')
 const mode = process.argv[3] ?? 'fence'
-assert.ok(['fence', 'pending', 'released', 'recovered', 'namespace-no-effect'].includes(mode))
-const direct = mode === 'namespace-no-effect'
+assert.ok(['fence', 'pending', 'released', 'recovered', 'namespace-no-effect', 'namespace-interrupted-pending', 'namespace-interrupted-released'].includes(mode))
+const interrupted = mode.startsWith('namespace-interrupted-')
+const direct = mode === 'namespace-no-effect' || interrupted
 const snapshot = parseAgentLogStdout(wire, 'actual native Call log output')
 assert.equal(snapshot.quarantined.length, 0, JSON.stringify(snapshot.quarantined))
 assert.equal(snapshot.entries.length, 1)
@@ -45,17 +46,18 @@ try {
     perform: forbidden, readActionResult: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {} }
   await new BehaviorChainRuntime(journal, operations).run()
   const current = journal.read(id)!
-  const pending = mode === 'pending'
-  assert.equal(current.invocations[0].state, pending ? 'uncertain' : 'settled')
+  const pending = mode === 'pending' || mode === 'namespace-interrupted-pending'
+  assert.equal(current.invocations[0].state, pending || interrupted ? 'uncertain' : 'settled')
   if (mode === 'fence') assert.equal(current.invocations[0].outcome, 'target_closed')
   if (mode === 'released' || mode === 'recovered') assert.equal(current.invocations[0].outcome, 'commented')
   if (direct) {
     assert.equal(call.resource_ownership?.version, 2)
-    assert.equal(call.resource_ownership.namespace?.state, 'settled')
-    assert.equal(current.invocations[0].outcome, 'preflight_failed')
+    assert.equal(call.resource_ownership.namespace?.state, pending ? 'active' : 'settled')
+    if (!interrupted) assert.equal(current.invocations[0].outcome, 'preflight_failed')
+    else assert.equal(call.error_code, 'interrupted')
   }
-  if (pending || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
-  assert.equal(journal.liveModelInvocationCount(), pending ? 1 : 0)
+  if (mode === 'pending' || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
+  assert.equal(journal.liveModelInvocationCount(), pending && !direct ? 1 : 0)
   assert.deepEqual(journal.reservedResources(), { memoryBytes: pending ? 8 : 0, diskBytes: pending ? 16 : 0, unaccounted: 0 })
   const events = journal.history(id)
   journal.rebuild()
@@ -67,5 +69,5 @@ try {
     assert.equal(rejected.entries.length, 0, JSON.stringify(change))
     assert.equal(rejected.quarantined.length, 1)
   }
-  process.stdout.write(JSON.stringify({ accepted: 1, settled: pending ? 0 : 1, reservations: pending ? 1 : 0 }))
+  process.stdout.write(JSON.stringify({ accepted: 1, settled: pending || interrupted ? 0 : 1, reservations: pending ? 1 : 0 }))
 } finally { db.close() }

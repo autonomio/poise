@@ -139,7 +139,7 @@ $(head -n 10 <<<"$changes")"
 # build the system around Poise. A workspace takes a new image of the same
 # base in place; a new base recreates its container.
 runtime_base() {
-  (cd "$root/deploy/runtime" && cat Dockerfile entrypoint.sh install-clis.sh supervisor.mjs install-release.sh) \
+  (cd "$root/deploy/runtime" && cat Dockerfile entrypoint.sh install-clis.sh supervisor.mjs resource-witness.mjs install-release.sh) \
     | sha256sum | cut -c1-16
 }
 

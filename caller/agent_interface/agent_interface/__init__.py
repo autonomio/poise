@@ -12,13 +12,14 @@ import sys
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from time import sleep, time
+from time import monotonic, sleep, time
 from uuid import uuid4
 
 from . import (
     atoms,
     atomic_work,
     author_content,
+    caller_store,
     chat,
     debate,
     fix_failing_ci,
@@ -52,14 +53,14 @@ _native_call_id: str | None = None
 
 @contextmanager
 def db():
-    with closing(sqlite3.connect(DB, timeout=30)) as conn:
+    with closing(caller_store.connect(DB, timeout=30)) as conn:
         conn.row_factory = sqlite3.Row
         with conn:
             yield conn
 
 
 def init_db():
-    RESPONSES.mkdir(parents=True, exist_ok=True)
+    caller_store.directory(RESPONSES, responses=True).mkdir(parents=True, exist_ok=True)
     with db() as conn:
         # WAL first, outside any transaction: readers stop blocking writers'
         # commits and commits stop blocking readers. The mode persists in the
@@ -111,6 +112,7 @@ def init_db():
             "process_identity",
             "resource_ownership",
             "namespace_control",
+            "resource_cleanup",
         ):
             if col not in cols:
                 try:
@@ -118,6 +120,14 @@ def init_db():
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e):
                         raise
+        conn.execute("create index if not exists calls_native_cleanup on calls "
+                     "(coalesce(json_extract(resource_cleanup,'$.next_attempt_at'),0),"
+                     "coalesce(json_extract(resource_cleanup,'$.attempt_at'),0),started_at,id) "
+                     "where source='poise:behavior-chain' and json_valid(resource_ownership) "
+                     "and json_extract(resource_ownership,'$.version')=2 "
+                     "and (resources_settled_at is null or resource_cleanup is not null)")
+        conn.execute("create index if not exists calls_native_resource_pending on calls(id) "
+                     "where source='poise:behavior-chain' and (resources_settled_at is null or resource_cleanup is not null)")
         duplicates = conn.execute(
             """select correlation_id, count(*) as uses
                from calls
@@ -212,8 +222,8 @@ def track(
         conn.execute(
             """insert into calls (
                  id, model, prompt, started_at, status, pr_id, repo, actor,
-                 behavior, session_id, expected_head, source, correlation_id, pid, runner, process_identity, resource_ownership
-               ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 behavior, session_id, expected_head, source, correlation_id, pid, runner, process_identity, resource_ownership, resource_cleanup
+               ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 id_,
                 model,
@@ -232,6 +242,8 @@ def track(
                 None if runner else process_identity.capture(os.getpid()),
                 resource_ownership.initial(id_, correlation_id) if _native_cli and source == "poise:behavior-chain" and not runner
                 else resource_ownership.initial() if source == "poise:behavior-chain" and not runner else None,
+                json.dumps({"token": uuid4().hex, "owner": process_identity.capture(os.getpid()), "attempt_at": 0})
+                if _native_cli and source == "poise:behavior-chain" and not runner else None,
             ),
         )
     if source == "poise:behavior-chain" and not runner:
@@ -290,6 +302,7 @@ def _enter_native_call(call_id: str, correlation: str) -> None:
     scope = None
     try:
         scope = native_namespace.Namespace(call_id, correlation)
+        native_namespace.require_resource_controller()
         resource_ownership.request_namespace(DB, call_id, scope)
         direct = sys.argv[1] in {"--native-action", "--complete-atomic-publication"}
         seconds = native_action.CALL_SECONDS if direct else issue_review.TIMEOUT_SECONDS \
@@ -300,7 +313,6 @@ def _enter_native_call(call_id: str, correlation: str) -> None:
                 _prepare_native_clis(call_id)
             return
         resource_ownership.settle_namespace(DB, call_id, scope)
-        scope.release()
         with db() as conn:
             row = conn.execute("select status,error_code from calls where id=?", (call_id,)).fetchone()
         if row["status"] == "running":
@@ -328,7 +340,6 @@ def _enter_native_call(call_id: str, correlation: str) -> None:
                         resource_ownership.register_namespace(DB, call_id,
                             {"controller": scope.address, **scope.key, "binding": scope.binding})
                 resource_ownership.settle_namespace(DB, call_id, scope)
-                scope.release()
             else:
                 raise RuntimeError("native namespace ended without its original kernel binding")
         except Exception as cleanup_error:
@@ -536,7 +547,7 @@ def finish(
     # First terminal writer wins: a worker finishing after stop/reap must not
     # overwrite stopped/interrupted. The loser keeps its response file out of
     # the row and reports the existing state.
-    path = str((RESPONSES / f"{id_}.txt").resolve()) if response else None
+    path = str((RESPONSES / f"{id_}.txt").absolute()) if response else None
     ended_at = time()
     with db() as conn:
         persisted = False
@@ -545,7 +556,7 @@ def finish(
             artifact = json.loads(prior["artifact"] or "{}") if prior else {}
             if prior and prior["behavior"] in {"native_action", "native_publication"} \
                     and prior["response_path"] == path and artifact.get("response_sha") == hashlib.sha256(response.encode()).hexdigest():
-                if Path(path).read_text() != response:
+                if caller_store.response(Path(path), RESPONSES).read_text() != response:
                     raise RuntimeError("native response differs from its first durable receipt")
                 persisted = True
         changed = conn.execute(
@@ -559,7 +570,7 @@ def finish(
                 return float(row["ended_at"])
     if response and changed == 1 and not persisted:
         try:
-            Path(path).write_text(response)
+            caller_store.response(Path(path), RESPONSES).write_text(response)
         except OSError as persist_error:
             # The row is terminal; a response persistence failure must not
             # reopen it. Clear the dangling path and retain the cause.
@@ -909,7 +920,7 @@ def read_response(short: str):
     if len(rows) != 1:
         raise SystemExit(f"response hash matched {len(rows)} rows")
     path = Path(rows[0]["response_path"])
-    print((path if path.is_absolute() else DATA_DIR.parent / path).read_text())
+    print(caller_store.response(path if path.is_absolute() else DATA_DIR.parent / path, RESPONSES).read_text())
 
 
 def run_pr_review(
@@ -1231,7 +1242,7 @@ def _native_action_artifact(call_id: str, phase: str, request_sha: str, response
     path = None
     if response is not None:
         artifact["response_sha"] = hashlib.sha256(response.encode()).hexdigest()
-        directory = os.open(RESPONSES, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory = os.open(caller_store.directory(RESPONSES, responses=True), os.O_RDONLY | os.O_DIRECTORY)
         try:
             name = f"{call_id}.txt"
             try:
@@ -1247,7 +1258,7 @@ def _native_action_artifact(call_id: str, phase: str, request_sha: str, response
                     output.flush()
                     os.fsync(output.fileno())
             os.fsync(directory)
-            path = str((RESPONSES / name).resolve())
+            path = str((RESPONSES / name).absolute())
         finally:
             os.close(directory)
     with db() as conn:
@@ -2569,13 +2580,19 @@ def main():
                 row = conn.execute("select id,status,process_identity from calls where id=? and pid=?",
                                    (_native_call_id, str(os.getpid()))).fetchone()
             if row is not None and row["status"] != "running" and process_identity.owns_registration(row["process_identity"]):
-                resource_ownership.cleanup_remaining(DB, row["id"])
+                resource_ownership.cleanup_remaining(DB, row["id"], deadline=monotonic() + 15)
+                resource_ownership.acknowledge_recovery(DB, row["id"])
                 with db() as conn:
                     ownership = resource_ownership.read(conn, row["id"])
                     if resource_ownership.released(ownership):
                         conn.execute("update calls set resources_settled_at=? where id=? and status != 'running' "
                                      "and resources_settled_at is null", (time(), row["id"]))
                         mark_managed_no_write(conn, row["id"])
+                if ownership["version"] == 2 and resource_ownership.released(ownership):
+                    if ownership["namespace"]["state"] == "settled":
+                        resource_ownership.original_scope(DB, row["id"], ownership).retire()
+                    with db() as conn:
+                        conn.execute("update calls set resource_cleanup=null where id=? and resources_settled_at is not null", (row["id"],))
         _native_cli = previous_native_cli
         _native_call_id = previous_native_call_id
 
@@ -2587,6 +2604,24 @@ def _main():
         usage(0)
     if sys.argv[1:] == ["--native-capability"]:
         print(json.dumps(native_namespace.capability()))
+        return
+    if sys.argv[1] == "--reclaim-native-resources":
+        import argparse
+        from . import native_cleanup
+        parser = argparse.ArgumentParser(prog="agent-interface --reclaim-native-resources")
+        parser.add_argument("--limit", type=int, default=native_cleanup.MAX_CALLS)
+        parser.add_argument("--seconds", type=int, default=native_cleanup.PASS_SECONDS)
+        parser.add_argument("--dry-run", action="store_true")
+        args = parser.parse_args(sys.argv[2:])
+        prior_alarm = signal.getitimer(signal.ITIMER_REAL)
+        guard_started = monotonic()
+        signal.setitimer(signal.ITIMER_REAL, min(25, prior_alarm[0]) if prior_alarm[0] else 25)
+        try:
+            if not args.dry_run:
+                reap_interrupted()
+            print(json.dumps(native_cleanup.recover(DB, limit=args.limit, seconds=args.seconds, dry_run=args.dry_run)))
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, max(0, prior_alarm[0] - (monotonic() - guard_started)), prior_alarm[1])
         return
     if sys.argv[1] == "--native-action":
         import argparse

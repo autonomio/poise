@@ -63,6 +63,7 @@ beforeEach(async () => {
   vi.stubEnv('npm_config_cache', join(home, 'npm'))
   vi.stubEnv('AGENT_INTERFACE_WORK_DIR', join(home, 'agent-work'))
   vi.stubEnv('GITHUB_INTERFACE_MIRROR_DIR', join(home, 'mirrors'))
+  vi.stubEnv('AGENT_INTERFACE_DATA_DIR', join(home, 'caller'))
   vi.resetModules()
   maintenance = await import('../server/storage-maintenance')
   database = await import('../server/db')
@@ -570,7 +571,7 @@ describe('storage breakdown', () => {
 describe('bounded storage reads', () => {
   it('measures missing directories as zero and completes', async () => {
     const breakdown = await maintenance.storageBreakdown(home, chatRoot, stateRoot)
-    expect(breakdown.categories).toHaveLength(8)
+    expect(breakdown.categories).toHaveLength(9)
     for (const category of breakdown.categories) {
       expect(category).toMatchObject({ status: 'ok', bytes: 0 })
     }

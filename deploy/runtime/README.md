@@ -32,7 +32,8 @@ docker build --file deploy/runtime/Dockerfile --tag poise-runtime \
 - Python 3.13 and Caller's three CLIs in the relocatable virtualenv
   `/opt/caller/venv` (`CALLER_BIN_ROOT`); agent-interface keeps its data in
   `~/.poise/agent-interface` (`AGENT_INTERFACE_DATA_DIR`).
-- `/opt/poise-runtime`: `supervisor.mjs`, `install-release.sh` and `BASE`, the
+- `/opt/poise-runtime`: `supervisor.mjs`, its `resource-witness.mjs` directory
+  handles, `install-release.sh` and `BASE`, the
   base every release of this image runs on
   ([Updates in place](../../docs/Service-architecture.md#updates-in-place)).
 - `gh` from GitHub's apt repository, `git`, `build-essential`,

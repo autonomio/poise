@@ -40,10 +40,14 @@ expected=unsupported
 if [ "$runtime" = runsc ]; then expected=supported; fi
 docker exec "$container" /opt/caller/venv/bin/python /contract/service.py "$expected"
 if [ "$runtime" = runsc ]; then
+  docker exec "$container" node /contract/resources.mjs
   docker exec "$container" mkdir /tmp/native-fixtures
   docker exec "$container" gcc -O0 -g -fsanitize=address -static-libasan /contract/sanitizer.c -o /tmp/native-fixtures/sanitizer
   docker exec "$container" gcc -O0 -pthread /contract/thread-leader.c -o /tmp/native-fixtures/thread-leader
   docker exec "$container" /opt/caller/venv/bin/python /contract/kernel.py
   docker exec "$container" /opt/caller/venv/bin/python /contract/receipt.py
   docker exec "$container" /opt/caller/venv/bin/python /contract/receipt.py slow
+  for fault in parent-loss before-active deleted-before-ack cleaner-loss partial-root partial-before-mkdir permission-zero unknown-process-error base-replaced data-replaced paused-maintenance-tick; do
+    docker exec "$container" /opt/caller/venv/bin/python /contract/recovery.py "$fault"
+  done
 fi

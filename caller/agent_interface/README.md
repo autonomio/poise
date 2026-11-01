@@ -53,6 +53,28 @@ The [service contract](../../docs/Service-architecture.md#workspace-behavior-obs
 defines support, teardown and uncertainty; automatic post-loss disk/lease
 reclamation and complete resource acceptance remain pending under #806.
 
+Cleanup recovery uses the existing maintenance/runtime triggers and the same
+original Call. Its private `resource_cleanup` column records a bounded cleanup
+claim, the cleaner's kernel identity and retry metadata; it is not a work or
+action ledger and never enters the log DTO. Root handles stay in the existing
+workspace supervisor until positive deletion is acknowledged. Original errors
+are retained with optional `recovered_at` evidence after a complete positive
+retry; an artifact's matching `resource_recovered_at` distinguishes recovered
+resource uncertainty from an uncertain external action. Neither marker alone
+can release a reservation.
+An incompletely registered descendant can carry `state: covered` only when its
+original ancestor's pinned deletion certificate covers it. Its `covered_by`
+names that reclaimed ancestor; it carries no invented child device/inode.
+Allocated roots, preparation siblings and unknown older ownership require
+their own proof. Original and recovery cleanup use the same private claim;
+PID loss, a new epoch or a deadline never grants takeover by itself.
+The supervisor pins Caller's original data directory, database and response
+directory. Caller metadata reads/writes and service drain counts use those
+handles after an ancestor rename; a replacement directory never becomes the
+recovery target. New allocations refuse a changed data-directory identity.
+`--reclaim-native-resources [--dry-run]` is an internal, bounded maintenance
+command, not a behavior entrypoint.
+
 Poise's internal `--native-action` admits only the existing fixed merge,
 conversation-resolution, grey-CI and issue-publication-completion commands.
 It preserves the immutable logical request while giving the physical action
