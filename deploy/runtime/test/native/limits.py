@@ -182,9 +182,10 @@ try:
                 decoded = json.load(response)
             assert decoded['quarantined'] == [] and len(decoded['logs']) == 1, decoded
             assert decoded['logs'][0]['resource_guard'] == guard, decoded
-            assert decoded['logs'][0]['resources_settled_at'] == row['resources_settled_at'], decoded
+            receipt = api.logs_selected({'latest': [], 'ids': [call], 'correlations': []})
+            assert decoded['logs'][0]['resources_settled_at'] == receipt[0]['resources_settled_at'], decoded
             print(json.dumps({'kind': 'actual-live-resource-stop', 'mode': mode, 'call': call,
-                              'initialRssBytes': initial_memory, 'samples': observations, 'receipt': api.logs_selected({'latest': [], 'ids': [call], 'correlations': []}),
+                              'initialRssBytes': initial_memory, 'samples': observations, 'receipt': receipt,
                               'headroom': headroom, 'neighborAlive': True, 'installedServiceDecoderAccepted': True,
                               'emptyObservedMonotonic': time.monotonic()}), flush=True)
             break
