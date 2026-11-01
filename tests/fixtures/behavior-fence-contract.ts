@@ -71,16 +71,20 @@ try {
     assert.equal(call.resource_ownership.namespace?.state, pending ? 'active' : 'settled')
     if (guarded) {
       assert.equal(current.invocations[0].outcome, call.error_code)
-      assert.equal(current.held, true)
+      assert.equal(current.held, call.error)
       assert.equal(call.resource_guard?.failure?.noWrite, true)
     } else if (!interrupted) assert.equal(current.invocations[0].outcome, 'preflight_failed')
-    else assert.equal(call.error_code, 'interrupted')
+    else assert.equal(call.error_code, physical && limits ? call.resource_guard?.failure?.code : 'interrupted')
   }
   if (mode === 'pending' || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
   assert.equal(journal.liveModelInvocationCount(), pending && !direct ? 1 : 0)
   assert.deepEqual(journal.reservedResources(), { memoryBytes: pending ? reservation.memoryBytes : 0,
     diskBytes: pending ? reservation.diskBytes : 0, unaccounted: 0 })
   const events = journal.history(id)
+  if (guarded) {
+    await new BehaviorChainRuntime(journal, operations).run()
+    assert.deepEqual(journal.history(id), events)
+  }
   journal.rebuild()
   assert.deepEqual(journal.history(id), events)
   assert.deepEqual(journal.read(id), current)
