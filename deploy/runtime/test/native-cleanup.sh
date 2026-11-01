@@ -47,7 +47,7 @@ if [ "$runtime" = runsc ]; then
   docker exec "$container" /opt/caller/venv/bin/python /contract/kernel.py
   docker exec "$container" /opt/caller/venv/bin/python /contract/receipt.py
   docker exec "$container" /opt/caller/venv/bin/python /contract/receipt.py slow
-  for fault in parent-loss before-active deleted-before-ack cleaner-loss partial-root partial-before-mkdir permission-zero unknown-process-error base-replaced data-replaced paused-maintenance-tick; do
+  for fault in parent-loss before-active deleted-before-ack cleaner-loss partial-root partial-before-mkdir permission-zero unknown-process-error base-replaced data-replaced metadata-pid-collision paused-maintenance-tick; do
     docker exec "$container" /opt/caller/venv/bin/python /contract/recovery.py "$fault"
   done
 fi

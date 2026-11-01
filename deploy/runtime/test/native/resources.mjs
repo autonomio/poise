@@ -1,6 +1,6 @@
 // Real Linux descriptors/filesystem only; no provider or workflow execution.
 import assert from 'node:assert/strict'
-import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { callerStore, resourceWitnesses } from '/opt/poise-runtime/resource-witness.mjs'
 
 const work = mkdtempSync('/tmp/native-resource-witness-')
@@ -49,6 +49,20 @@ try {
   rmdirSync(`/proc/self/fd/${pinned.anchor.parentFd}/${call}`)
   replaced.finish(path)
   assert.equal(readFileSync(`${foreign}/${call}/user-auth-evidence`, 'utf8'), 'protected')
+  const legacyStore = callerStore(`${work}/legacy-caller`)
+  stores.push(legacyStore)
+  const legacyBase = `${legacyStore.reference.path}/native-resources`
+  mkdirSync(legacyBase, { mode: 0o755 })
+  chmodSync(legacyBase, 0o755)
+  writeFileSync(`${legacyBase}/retained-legacy-evidence`, 'protected older evidence')
+  const legacy = resourceWitnesses(call, legacyStore.reference)
+  registries.push(legacy)
+  const legacyRoot = `${legacyBase}/${call}`
+  legacy.allocate(legacyRoot)
+  assert.equal(statSync(legacyBase).mode & 0o777, 0o700)
+  assert.equal(readFileSync(`${legacyBase}/retained-legacy-evidence`, 'utf8'), 'protected older evidence')
+  rmdirSync(legacyRoot)
+  legacy.finish(legacyRoot)
 
   const unregistered = registry()
   mkdirSync(`${work}/unregistered/native-resources/${call}`, { recursive: true, mode: 0o700 })

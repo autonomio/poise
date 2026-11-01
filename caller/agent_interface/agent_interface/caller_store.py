@@ -56,25 +56,32 @@ def _store() -> tuple[dict, tuple[int, int]] | None:
     if _reference is not None and reference != _reference:
         raise RuntimeError("Caller metadata controller changed during this process")
     if _descriptors is None:
+        if __package__:
+            from .native_namespace import control_address, control_request
+        else:
+            from native_namespace import control_address, control_request
+        address = control_address()
+        observed = control_request(address, "hello")
+        if address.get("store") != reference or observed.get("resourceProtocol") != 2 or observed.get("store") != reference:
+            raise RuntimeError("Caller metadata lacks its original live controller handles")
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         opened = []
         try:
             for name, key, fallback in (("directory", "directoryFd", reference["path"]),
                                         ("responses", "responsesFd", str(Path(reference["path"]) / "responses"))):
+                fd = None
                 try:
                     # Following this procfs link duplicates the original held inode.
                     fd = os.open(f"/proc/{reference['pid']}/fd/{reference[key]}", os.O_RDONLY | os.O_DIRECTORY)
-                except (FileNotFoundError, PermissionError):
+                    _identity(fd, reference[name], True)
+                except (FileNotFoundError, PermissionError, NotADirectoryError, RuntimeError):
+                    if fd is not None:
+                        os.close(fd)
+                        fd = None
+                if fd is None:
                     # Executed helpers in the private PID namespace cannot see
                     # the outer supervisor. The still-live controller and exact
                     # original inode are both required before using its name.
-                    if __package__:
-                        from .native_namespace import control_address, control_request
-                    else:
-                        from native_namespace import control_address, control_request
-                    observed = control_request(control_address(), "hello")
-                    if observed.get("resourceProtocol") != 2:
-                        raise RuntimeError("Caller metadata lacks its original controller")
                     fd = os.open(fallback, flags)
                 opened.append(fd)
                 _identity(fd, reference[name], True)

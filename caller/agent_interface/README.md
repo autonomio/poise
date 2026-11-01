@@ -74,6 +74,13 @@ handles after an ancestor rename; a replacement directory never becomes the
 recovery target. New allocations refuse a changed data-directory identity.
 `--reclaim-native-resources [--dry-run]` is an internal, bounded maintenance
 command, not a behavior entrypoint.
+An older workspace's owned `native-resources` parent may have mode 0755.
+The allocator tightens the original pinned parent to 0700 without deleting
+its contents; foreign ownership and symlink replacements are refused.
+Fresh helpers inside a private PID namespace verify the original metadata
+handles with that same live controller before opening them. A same-numbered
+local PID or descriptor cannot substitute foreign metadata or prevent the
+verified original-directory path from being used.
 
 Poise's internal `--native-action` admits only the existing fixed merge,
 conversation-resolution, grey-CI and issue-publication-completion commands.

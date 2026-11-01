@@ -27,8 +27,15 @@ export function callerStore(path) {
     const responses = openSync(`/proc/self/fd/${directory}/responses`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     descriptors.push(responses)
     const response = identity(responses, true)
-    return { reference: Object.freeze({ path, pid: process.pid, directoryFd: directory, responsesFd: responses,
-      directory: original, database: db, responses: response }), close() {
+    const reference = Object.freeze({ path, pid: process.pid, directoryFd: directory, responsesFd: responses,
+      directory: original, database: db, responses: response })
+    return { reference, read() {
+      for (const [fd, expected, isDirectory] of [[directory, original, true], [database, db, false], [responses, response, true]]) {
+        const current = identity(fd, isDirectory)
+        if (current.device !== expected.device || current.inode !== expected.inode) throw new Error('Original Caller metadata handle changed')
+      }
+      return reference
+    }, close() {
       const failures = []
       for (const fd of descriptors.splice(0).reverse()) {
         try { closeSync(fd) }
@@ -99,9 +106,10 @@ export function resourceWitnesses(callId, metadata) {
         const fd = openSync(original, directory)
         try {
           const node = fstatSync(fd)
-          if (!node.isDirectory() || node.uid !== process.getuid() || (node.mode & 0o077)) {
-            throw new Error('Native resource base is not private and owned')
-          }
+          if (!node.isDirectory() || node.uid !== process.getuid()) throw new Error('Native resource base is not owned')
+          // Earlier Caller releases created this managed parent as 0755.
+          // Repair the pinned original, never a mutable ancestor pathname.
+          if (node.mode & 0o077) fchmodSync(fd, 0o700)
           base = { path: parent, fd }
         } catch (error) { closeSync(fd); throw error }
       }

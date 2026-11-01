@@ -6,6 +6,7 @@ SQLite, the installed Caller, service maintenance and kernel observations are re
 import hashlib
 import json
 import os
+import runpy
 import signal
 import shutil
 import sqlite3
@@ -62,6 +63,8 @@ if sys.argv[1:2] == ['worker']:
     def allocation_body():
         call = api.track('native-action', 'no-effect cleanup baseline', '21', 'example/repo', 'reviewer', 'native_action',
                          expected_head='a' * 40, source='poise:behavior-chain', correlation_id=correlation)
+        if variant == 'metadata-pid-collision':
+            runpy.run_path('/contract/metadata_collision.py')['validate']()
         root = resource_ownership.allocate(api.DB, call, resource_ownership.call_directory(api.DB, call))
         (root / 'disposable-output').write_bytes(b'owned component output\n' * 4096)
         if variant == 'permission-zero':
@@ -151,8 +154,6 @@ try:
             receipt = resource_ownership.read(db, ready['call'])
             receipt['process_pending'] = True
             resource_ownership._write(db, ready['call'], receipt)
-            db.execute('update calls set artifact=? where id=?',
-                       (json.dumps({'phase': 'resources_unknown', 'resource_error': 'retained teardown timeout'}), ready['call']))
     request = urllib.request.Request('http://127.0.0.1:5555/api/storage/maintenance',
                                      data=b'{"dryRun":false}', headers={'Content-Type': 'application/json'}, method='POST')
     if variant == 'paused-maintenance-tick':
@@ -179,6 +180,11 @@ try:
         with urllib.request.urlopen(request, timeout=30) as response:
             maintenance = json.load(response)
     after = api.logs_selected({'latest': [], 'ids': [ready['call']]})[0]
+    with urllib.request.urlopen(f'http://127.0.0.1:5555/api/agent-logs?id={ready["call"]}', timeout=30) as response:
+        decoded = json.load(response)
+    assert decoded['quarantined'] == [] and len(decoded['logs']) == 1, decoded
+    assert decoded['logs'][0]['id'] == ready['call']
+    assert decoded['logs'][0]['resources_settled_at'] == after['resources_settled_at']
     root = original_root
     payload = root / 'disposable-output'
     unchanged = hashlib.sha256(foreign.read_bytes()).hexdigest() == foreign_hash
@@ -192,6 +198,8 @@ try:
                       'before_release': before['resources_settled_at'], 'after_release': after['resources_settled_at'],
                       'payload_exists': payload.exists(), 'payload_bytes': payload.stat().st_size if payload.exists() else 0,
                       'foreign_unchanged': unchanged, 'maintenance': maintenance,
+                      'installed_service_decoder_accepted': True,
+                      'metadata_pid_collision_validated': variant == 'metadata-pid-collision',
                       'seconds_from_original_empty': time.monotonic() - empty_at,
                       'original_resource_state': after['resource_ownership'], 'caller_rows': [after],
                       'provider_or_workflow_acceptance': False}), flush=True)
