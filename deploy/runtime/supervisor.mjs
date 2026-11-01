@@ -116,9 +116,10 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
   const directory = mkdtempSync('/tmp/poise-native-')
   const path = join(directory, 'control.sock')
   const instance = randomBytes(16).toString('hex')
-  let store
+  let store = null
+  let storeError = null
   try { store = dataDirectory === undefined ? null : callerStore(dataDirectory) }
-  catch (error) { rmdirSync(directory); throw error }
+  catch (error) { storeError = `Original Caller metadata handles are unavailable: ${error.message}` }
   const scopes = new Map()
   const connections = new Set()
   let closed = false
@@ -144,7 +145,7 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
           scopes.delete(id)
         }
       }
-      return { available: true, resourceProtocol: 2, witnesses: scopes.size, probeAvailable: ![...scopes.values()].some(scope => scope.probe) }
+      return { available: true, resourceProtocol: 2, ...(storeError ? { storeError } : {}), witnesses: scopes.size, probeAvailable: ![...scopes.values()].some(scope => scope.probe) }
     }
     identity(request)
     let scope = scopes.get(request.callId)
@@ -160,7 +161,7 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
         if (request.probe && [...scopes.values()].some(scope => scope.probe)) throw new Error('Original native setup probe is still unsettled')
         if (scopes.size >= limit) throw new Error('Native namespace witnesses are at capacity')
         const witness = open(request.identity)
-        scope = { witness, resources: resourceWitnesses(request.callId), identity: bindingKey(request.identity), token: request.token, correlation: request.correlation, probe: request.probe === true }
+        scope = { witness, resources: resourceWitnesses(request.callId, store?.reference), identity: bindingKey(request.identity), token: request.token, correlation: request.correlation, probe: request.probe === true }
         scopes.set(request.callId, scope)
       }
     } else if (!['read', 'release', 'retire', 'allocate-root', 'read-root', 'repair-root', 'finish-root'].includes(request.operation)) throw new Error('Unknown native namespace operation')
@@ -171,6 +172,7 @@ export async function namespaceControl({ open = openNamespaceWitness, limit = 40
     const state = scope.witness.read()
     if (['allocate-root', 'read-root', 'repair-root', 'finish-root'].includes(request.operation)) {
       if (scope.probe) throw new Error('Native setup probes cannot allocate resources')
+      if (request.operation === 'allocate-root' && !store) throw new Error('Native resource allocation lacks its original Caller metadata handles')
       if (request.operation === 'allocate-root' && state.empty) throw new Error('Ended native scopes cannot allocate resources')
       if (['repair-root', 'finish-root'].includes(request.operation) && state.pids.some(pid => pid > 2)) throw new Error('Native resource still owns child processes')
       const method = { 'allocate-root': 'allocate', 'read-root': 'read', 'repair-root': 'repair', 'finish-root': 'finish' }[request.operation]

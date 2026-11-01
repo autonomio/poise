@@ -506,7 +506,9 @@ def require_resource_controller() -> None:
     address = control_address()
     state = control_request(address, "hello")
     if state.get("resourceProtocol") != 2 or not isinstance(address.get("store"), dict):
-        raise NamespaceUnavailable("v2 cleanup requires the current workspace image and original Caller metadata handles")
+        reason = state.get("storeError")
+        raise NamespaceUnavailable(reason if isinstance(reason, str) and reason else
+                                   "v2 cleanup requires the current workspace image and original Caller metadata handles")
 
 
 def capability() -> dict:

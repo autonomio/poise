@@ -46,7 +46,7 @@ export function callerStore(path) {
   }
 }
 
-export function resourceWitnesses(callId) {
+export function resourceWitnesses(callId, metadata) {
   if (!/^[0-9a-f]{32}$/.test(callId)) throw new Error('Invalid native resource Call')
   const roots = new Map()
   let base = null
@@ -71,6 +71,7 @@ export function resourceWitnesses(callId) {
       throw new Error('Native resource path belongs to another Call')
     }
     const parent = path.slice(0, index + marker.length - 1)
+    if (metadata && parent !== `${metadata.path}/native-resources`) throw new Error('Native resource base differs from its original Caller metadata')
     if (base && base.path !== parent) throw new Error('Native resource base differs from its original allocation')
     return { parent, relative, names }
   }
@@ -91,10 +92,11 @@ export function resourceWitnesses(callId) {
       }
       if (roots.size >= 128) throw new Error('Native resource handles are at capacity')
       if (!base) {
-        if (realpathSync(dirname(parent)) !== dirname(parent)) throw new Error('Native resource base is not canonical')
-        try { mkdirSync(parent, { mode: 0o700 }) }
+        if (!metadata && realpathSync(dirname(parent)) !== dirname(parent)) throw new Error('Native resource base is not canonical')
+        const original = metadata ? at(metadata.directoryFd, 'native-resources') : parent
+        try { mkdirSync(original, { mode: 0o700 }) }
         catch (error) { if (error.code !== 'EEXIST') throw error }
-        const fd = openSync(parent, directory)
+        const fd = openSync(original, directory)
         try {
           const node = fstatSync(fd)
           if (!node.isDirectory() || node.uid !== process.getuid() || (node.mode & 0o077)) {

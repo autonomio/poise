@@ -1297,7 +1297,8 @@ and response-directory descriptors. Its private control configuration names
 them; Caller and health/maintenance readers verify and use the held originals
 after ancestor replacement. A mismatched reference fails closed. The cleanup
 capability requires resource protocol 2 and these original metadata handles;
-an older image remains on v1 until its runtime base is upgraded.
+an older image remains on v1 until its runtime base is upgraded. Unsupported
+metadata layouts also refuse v2 visibly while retaining v1's existing path.
 After cleanup, the same maintenance opportunity reuses Caller's existing
 selected-receipt reader to reconcile at most 16 pending admissions, including
 held and merged chains. `invocation.resources_reconciled` in the canonical

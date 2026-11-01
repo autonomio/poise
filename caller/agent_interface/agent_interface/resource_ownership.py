@@ -171,15 +171,16 @@ def original_scope(database: Path, call_id: str, value: dict):
 def allocate(database: Path, call_id: str, root: Path) -> Path:
     from . import caller_store
     caller_store.require_current_path(database.parent)
-    # Resolve legitimate system ancestors (/var on macOS), never the leaf.
-    root = root.parent.resolve() / root.name
     with _database(database) as conn:
         conn.execute("begin immediate")
         value = read(conn, call_id)
+        # A v2 path names the original metadata root; resolving a replaced
+        # native-resources ancestor would silently adopt a foreign location.
+        root = root.absolute() if value["version"] == 2 else root.parent.resolve() / root.name
         if value["version"] == 2 and conn.execute("select status from calls where id=?", (call_id,)).fetchone()[0] != "running":
             raise RuntimeError("terminal native Calls cannot allocate resources")
         if value["version"] == 2:
-            names = root.relative_to((database.parent / "native-resources").resolve()).parts
+            names = root.relative_to((database.parent / "native-resources").absolute()).parts
             if not names or names[0] not in {call_id, f"{call_id}-preparation"} or any(name in {".", ".."} for name in names):
                 raise RuntimeError("native resource allocation is outside its original Call")
         if any(entry["path"] == str(root) for entry in value["roots"]):

@@ -64,6 +64,12 @@ try {
   writeFileSync(`${work}/caller/calls.sqlite3`, 'foreign database sentinel')
   assert.equal(readFileSync(`/proc/self/fd/${store.reference.directoryFd}/calls.sqlite3`, 'utf8'), 'original database descriptor fixture')
   assert.equal(readFileSync(`${work}/caller/calls.sqlite3`, 'utf8'), 'foreign database sentinel')
+  const bound = resourceWitnesses(call, store.reference)
+  registries.push(bound)
+  assert.throws(() => bound.allocate(`${work}/foreign/native-resources/${call}`), /original Caller metadata/)
+  symlinkSync(`${work}/foreign`, `/proc/self/fd/${store.reference.directoryFd}/native-resources`)
+  assert.throws(() => bound.allocate(`${store.reference.path}/native-resources/${call}`))
+  assert.equal(readFileSync(`${foreign}/${call}/user-auth-evidence`, 'utf8'), 'protected')
   console.log(JSON.stringify({ kind: 'native-resource-handles', original_unlink_proven: true,
     repeated_finish_stable: true, foreign_unchanged: true, provider_or_workflow_acceptance: false }))
 } finally {
