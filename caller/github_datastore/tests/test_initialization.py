@@ -441,13 +441,21 @@ class InitializationTest(unittest.TestCase):
             self.initialize(self.reader([]), resume=True)
         self.assertEqual(self.item_ids(), [100])
 
-    def test_resume_rejects_item_timestamp_regression(self) -> None:
+    def test_resume_refreshes_item_timestamp_regression_with_diagnostics(self) -> None:
         self.partial()
-        reader = self.reader([expansion(self.repo, 100, 1, "2026-01-01T00:00:00Z")])
-        with self.assertRaisesRegex(RuntimeError, "timestamp moved backward"):
+        corrected = expansion(self.repo, 100, 1, "2026-01-01T00:00:00Z")
+        reader = self.reader([corrected])
+        with self.assertLogs("github_datastore.store", level="WARNING"):
             self.initialize(reader, resume=True)
-        self.assertEqual(reader.expanded, [])
-        self.assertIsNone(self.state("last_sync_at"))
+        self.assertEqual(reader.expanded, [100])
+        self.assertIsNotNone(self.state("last_sync_at"))
+        conn = connect(self.path)
+        try:
+            self.assertEqual(json.loads(conn.execute("SELECT expanded_json FROM items").fetchone()[0]), corrected)
+            prior = conn.execute("SELECT previous_expanded_json FROM timestamp_regressions").fetchone()[0]
+            self.assertEqual(json.loads(prior), expansion(self.repo, 100, 1))
+        finally:
+            conn.close()
 
     def test_quota_failure_cancels_queued_expansions(self) -> None:
         release = threading.Event()

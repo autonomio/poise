@@ -216,8 +216,12 @@ received-count mismatch), the reader discards the partial pass and restarts
 that enumeration from its first page with the original watermark, up to three
 attempts per enumeration. Persistent drift fails the sync without advancing
 either watermark, so health keeps reporting stale until a complete sync
-commits. Malformed responses, cursor violations, duplicate identities, missing
-stored items and backward timestamps still fail on the first attempt.
+commits. Malformed responses, cursor violations, duplicate identities and missing
+stored items still fail on the first attempt.
+
+Backward timestamps trigger a fresh graph instead of aborting the account.
+[Timestamp correction diagnostics](README.md#timestamp-corrections) preserve the
+previous graph atomically when the refreshed timestamp is earlier.
 
 Poise runs daily reconciliation in resumable 20-second work chunks between
 ordinary syncs. A chunk may finish its in-flight GraphQL work beyond the budget.

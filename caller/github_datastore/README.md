@@ -120,8 +120,7 @@ and complete association graph is still read. When upstream changes while a
 connection is paged, the reader discards the partial pass and restarts that
 enumeration from its first page with the original watermark, up to three
 attempts; persistent drift still fails the sync without advancing freshness.
-Identity, cursor, missing-item and backward-timestamp checks still reject on
-the first attempt.
+Identity, cursor and missing-item checks still reject on the first attempt.
 A primary quota failure raises `GitHubRateLimitError` with `reset_at` (Unix seconds)
 and `GITHUB_RATE_LIMIT_RESET=<seconds>` in the CLI error. Callers must wait until
 that deadline before retrying; the CLI does not sleep through a quota window.
@@ -134,6 +133,20 @@ using four read-only calls:
 ```bash
 caller/.venv/bin/python scripts/measure-github-pagination.py --token-user LOGIN
 ```
+
+## Timestamp corrections
+
+GitHub timestamp corrections can move an item backward. Any PR timestamp change
+selects a fresh graph, including changes older than the sync watermark; full
+enumeration and resumed initialization also refresh items changed in either
+direction. When a fresh expanded graph has an earlier `updated_at`, sync accepts
+it, emits a warning naming the repository, item and both timestamps, and
+atomically saves the complete previous graph in `timestamp_regressions` with
+the observed timestamps and recording time. The current graph, child rows and
+user associations are refreshed together; the previous graph remains available
+for diagnosis instead of being silently discarded. Repeating an unchanged sync
+does not add another diagnostic. Normal sync creates the diagnostic table in
+existing databases and recovers without a reset.
 
 ## Read Interface
 
