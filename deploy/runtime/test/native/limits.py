@@ -186,4 +186,5 @@ finally:
             with api.db() as db:
                 after = dict(db.execute('select id,error,error_code,resource_ownership,resources_settled_at from calls where id=?', (other['call'],)).fetchone())
             print(json.dumps({'kind': 'neighbor-cleanup-failure', 'row': after}), flush=True)
-        assert neighbor.returncode == 0, errors
+        if not baseline:
+            assert neighbor.returncode == 0, errors

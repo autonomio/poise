@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { callerStore, resourceWitnesses } from '/opt/poise-runtime/resource-witness.mjs'
 
-const work = mkdtempSync('/tmp/native-resource-witness-')
+const work = mkdtempSync('/home/poise/native-resource-witness-')
 const call = 'a'.repeat(32)
 const registries = []
 const stores = []
