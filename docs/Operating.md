@@ -876,6 +876,25 @@ offer Retry, which re-measures at once (`GET /api/storage?fresh=1`). A
 completed maintenance run drops the cached summary, so the next open
 measures the reclaimed space.
 
+Shared checkout coordination and provider state are retained, independently of
+age. The existing bounded storage scan includes the global lease directory,
+Codex/Claude/Grok homes and Muse data/configuration, honoring their configured
+paths. Storage lists these categories as retained; maintenance never unlinks their
+SQLite gates or removes shared sign-in, history or user files. Missing, partial
+and unavailable measurements keep the same meanings above. A retained directory
+is not proof of an idle provider or attributable to a particular invocation;
+return-to-idle evidence must include it. Antigravity's external history layout
+is not established by these categories, so this inventory cannot establish
+complete provider-disk coverage for an unexercised Antigravity run.
+
+New native atomic checkout gates live inside their original owned Call root and
+are reclaimed with that root after positive process settlement. Codex issue
+review and implementation/repair commands reuse structured review's isolated
+Codex home: only sign-in is copied, ephemeral invocations remain ephemeral, and
+structured reviews retain within-invocation resume. Muse already keeps its
+invocation history in the owned root. These guarantees do not authorize deleting
+older shared history or prove other unexercised provider/platform cleanup.
+
 ### Giving space back on a VM host
 
 When Poise runs [in a virtual machine](#in-a-virtual-machine-on-a-shared-server),

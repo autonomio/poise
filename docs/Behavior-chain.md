@@ -197,13 +197,17 @@ cause/path for inspection. Publication continuation requires the same positive
 resource predicate and an originally unattempted reply batch.
 
 The supported physical v2 boundary establishes descendant ownership, as defined
-in the service contract above; it does not establish automatic post-loss disk
-or lease reclamation. Same-epoch parent loss, an unreadable identity, incomplete
-allocation or a new epoch without cleanup proof stays held. Removing a named
+in the service contract above. Same-supervisor claimed recovery now reclaims
+positively owned roots through existing maintenance, including new native
+checkout coordination and isolated Codex/Muse history inside those roots.
+An unreadable identity, incomplete proof or a new epoch without positive
+original lifecycle evidence stays held. Removing a named
 directory is not a supported way to manufacture a release. A one-slot lane can
 remain held after such a failure. #806 retains
-claimed recovery outside log reads, retention, measured budget enforcement and
-real fault/load acceptance; these remain required before resource readiness.
+forced-container lifecycle proof, measured budget enforcement and real fault/load
+acceptance. The [retention policy](Operating.md#storage-maintenance) keeps older
+shared metadata/history measured and protected; it does not establish zero
+provider residue or complete resource readiness.
 
 Known closure blocks all new model requests, worker launch/relaunch and repair
 publication continuation. A durable merge stays closed when a later observation

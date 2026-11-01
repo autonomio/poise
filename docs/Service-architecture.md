@@ -1281,8 +1281,14 @@ Mac development and default Docker security settings remain supported for v1;
 this does not change the gateway's optional runtime setting or any production
 configuration. The runtime image tests exercise actual runsc and default-Docker
 profiles separately; stand-in providers are not real workflow acceptance.
-Automatic post-loss disk/lease reclamation, retention, post-admission budget
-enforcement and the frozen real-provider campaign remain #806 obligations.
+The claimed recovery path below also reclaims new native checkout coordination
+inside its owned root. Chat and unrelated Caller writers refuse those private
+checkout paths; ordinary shared leases retain their existing protocol. Codex
+issue/implementation and structured review histories use the same per-invocation
+home, preserving sign-in and structured resume. Older shared state remains
+retained and measured under the [storage retention policy](Operating.md#storage-maintenance).
+Forced-container lifecycle proof, post-admission budget enforcement and the
+frozen real-provider campaign remain #806 obligations.
 
 Claimed disk recovery uses the same original Call and supervisor directory
 handles. A final unlink is proven by the original held directory's zero link
