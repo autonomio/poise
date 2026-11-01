@@ -164,10 +164,10 @@ try:
             assert time.monotonic() - failure['observedMonotonic'] <= 10, failure
             if mode == 'memory':
                 assert guard['peakMemoryBytes'] <= 256 * MiB + 192 * MiB, guard
-                assert max(sample.get('rssBytes', 0) for sample in observations) <= 256 * MiB + 192 * MiB
+                assert max(sample['rssBytes'] for sample in observations if 'rssBytes' in sample) <= 256 * MiB + 192 * MiB
             elif mode != 'unavailable':
                 assert guard['peakDiskBytes'] <= 8 * MiB + 8 * MiB, guard
-                assert max(sample.get('openAllocatedBytes', 0) for sample in observations) <= 8 * MiB + 8 * MiB
+                assert max(sample['openAllocatedBytes'] for sample in observations if 'openAllocatedBytes' in sample) <= 8 * MiB + 8 * MiB
             assert not root.exists(), root
             assert row['action'] is None and row['outcome'] is None
             print(json.dumps({'kind': 'actual-live-resource-stop', 'mode': mode, 'call': call,
