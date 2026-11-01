@@ -549,6 +549,21 @@ describe('disk pressure', () => {
 })
 
 describe('storage breakdown', () => {
+  it('measures and retains unregistered native roots without granting cleanup authority', async () => {
+    const native = join(home, 'caller', 'native-resources', 'a'.repeat(32))
+    await mkdir(native, { recursive: true })
+    const sentinel = join(native, 'auth-and-evidence')
+    const content = 'protected original user data'.repeat(1024)
+    await writeFile(sentinel, content)
+    const report = await maintenance.runStorageMaintenance({ home, chatRoot, stateRoot })
+    expect(report.held).toContainEqual({ path: native, reason: expect.stringContaining('legacy and unknown ownership stay held') })
+    expect(await readFile(sentinel, 'utf8')).toBe(content)
+    const measured = await maintenance.storageBreakdown(home, chatRoot, stateRoot)
+    const category = measured.categories.find(category => category.key === 'native-resources')
+    expect(category).toMatchObject({ status: 'ok' })
+    expect(category?.bytes).toBeGreaterThanOrEqual(Buffer.byteLength(content))
+  })
+
   it('reports per-category sizes and disk totals', async () => {
     const checkout = await makeWorkspace('dddddddd-dddd-dddd-dddd-dddddddddddd')
     await writeFile(join(checkout, 'payload.bin'), 'x'.repeat(4096))
