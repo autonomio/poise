@@ -614,6 +614,17 @@ unexercised, never passed.
 
 ### Predeclared counts, budgets, deadlines and uncertainty
 
+- #815's isolated cleanup component check uses at most 128 MiB and
+  5,000 directory entries per interrupted Call. Its first recovery attempt
+  must start within 120 seconds of the original kernel scope becoming
+  positively empty; disk reclamation and the first durable release must
+  complete within 180 seconds of that same event. Existing one-minute
+  runtime/maintenance ticks supply opportunities even with admissions paused.
+  One cleanup pass examines at most 16 Calls, yields after 15 seconds of
+  work and has a 30-second outer process deadline. Interrupted passes retain
+  their original claims and proof; expiry or a missing sample grants no
+  release. These limits are fixed before the #815 implementation and do not
+  claim the still-pending full campaign has passed.
 - Merge campaign: at least 3 unattended repetitions per achieved
   concurrency level (1, 2, 3), hence at least 9 confirmed merges
   on one frozen candidate. Each fault and breach case is
