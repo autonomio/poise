@@ -145,6 +145,7 @@ try:
     before = api.logs_selected({'latest': [], 'ids': [ready['call']]})[0]
     assert before['status'] == 'failed' and before['resources_settled_at'] is None
     empty_at = time.monotonic()
+    deadline = empty_at + 180
     original_root = Path(ready['root'])
     replacement = None
     original_ancestor = None
@@ -186,7 +187,6 @@ try:
             draining = json.load(response)
         assert draining['draining'] is True and draining['idle'] is False
         assert draining['backgroundWork'] > 0
-        deadline = empty_at + 180
         while True:
             candidate = api.logs_selected({'latest': [], 'ids': [ready['call']]})[0]
             if candidate['resources_settled_at'] is not None:
@@ -212,11 +212,25 @@ try:
     else:
         with urllib.request.urlopen(request, timeout=30) as response:
             maintenance = json.load(response)
-    after = api.logs_selected({'latest': [], 'ids': [ready['call']]})[0]
-    with urllib.request.urlopen(f'http://127.0.0.1:5555/api/agent-logs?id={ready["call"]}', timeout=30) as response:
-        decoded = json.load(response)
-    assert decoded['quarantined'] == [] and len(decoded['logs']) == 1, decoded
-    assert decoded['logs'][0]['id'] == ready['call']
+    # A periodic pass can already own cleanup when the explicit pass arrives.
+    # Its retained retry runs on the existing tick, under the same release bound.
+    while True:
+        after = api.logs_selected({'latest': [], 'ids': [ready['call']]})[0]
+        if after['resources_settled_at'] is not None:
+            break
+        assert time.monotonic() < deadline, {'maintenance': maintenance, 'call': after}
+        time.sleep(0.25)
+    # The service reader may still have its earlier snapshot. It must expose
+    # the same positive release, not merely accept a row with no release field.
+    while True:
+        with urllib.request.urlopen(f'http://127.0.0.1:5555/api/agent-logs?id={ready["call"]}', timeout=30) as response:
+            decoded = json.load(response)
+        assert decoded['quarantined'] == [] and len(decoded['logs']) == 1, decoded
+        assert decoded['logs'][0]['id'] == ready['call']
+        if decoded['logs'][0].get('resources_settled_at') == after['resources_settled_at']:
+            break
+        assert time.monotonic() < deadline, decoded
+        time.sleep(0.25)
     assert decoded['logs'][0]['resources_settled_at'] == after['resources_settled_at']
     root = original_root
     payload = root / 'disposable-output'
