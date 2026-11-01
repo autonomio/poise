@@ -376,7 +376,13 @@ export class BehaviorChainRuntime {
         return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
           reason: 'native action ended without its accepted response; the original effect remains uncertain' })
       }
-      const result = await this.operations.readActionResult(invocation, call)
+      const savedSha = invocation.evidence?.nativeResponseSha
+      if (typeof savedSha === 'string' && savedSha !== call.artifact?.response_sha) {
+        throw new Error('native action response conflicts with its first verified digest')
+      }
+      const saved = invocation.evidence?.nativeActionResult
+      const result = typeof savedSha === 'string' && saved && typeof saved === 'object' && !Array.isArray(saved)
+        ? saved as Record<string, unknown> : await this.operations.readActionResult(invocation, call)
       let evidence = { ...result }
       if (attributedNativeAction(invocation)) {
         const original = matchingNativeActionReceipt(chain, invocation)
@@ -384,9 +390,13 @@ export class BehaviorChainRuntime {
         if (original && chainBasis(proof) !== chainBasis(original)) throw new Error('native action response conflicts with its first accepted receipt')
         evidence = nativeActionSettlement(proof)
       } else if (result.nativeProcessFailure) {
-        chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { ...physical, nativeActionResult: result } })
-        return this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
-          reason: 'native action returned a response with process failure; its original effect remains uncertain' })
+        const retained = { ...physical, nativeActionResult: result, nativeResponseSha: call.artifact?.response_sha }
+        if (!sameReceipt(invocation.evidence, retained)) {
+          chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: retained })
+        }
+        const reason = 'native action returned a response with process failure; its original effect remains uncertain'
+        return invocation.state === 'uncertain' && invocation.outcome === reason ? chain
+          : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id, reason })
       } else if (result.outcome === 'read_failed') {
         evidence = { ...result, status: 'failed', action: 'not_started', completedAt: Date.now() }
       } else if (['not_ready', 'superseded'].includes(String(result.outcome))
@@ -593,8 +603,11 @@ export class BehaviorChainRuntime {
         && observation.publication.head_sha === invocation.request.argv[invocation.request.argv.indexOf('--expected-head') + 1]) {
         evidence = { outcome: 'published', ...observation.publication }
       }
-      if (evidence) this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: null,
-        outcome: String(evidence.outcome), evidence: { status: 'completed', ...evidence } })
+      if (evidence) this.append(chain, { type: 'invocation.settled', invocationId: invocation.id,
+        callId: typeof invocation.evidence?.nativeCallId === 'string' ? invocation.evidence.nativeCallId : null,
+        outcome: String(evidence.outcome), evidence: { ...invocation.evidence,
+          ...(invocation.evidence?.nativeCallId ? { nativeCallStatus: invocation.evidence.nativeCallStatus ?? invocation.evidence.status } : {}),
+          status: 'completed', ...evidence } })
       return
     }
     if (!this.operations.enabled() || !this.operations.available() || chain.held || invocation.state === 'uncertain') return

@@ -292,7 +292,7 @@ def _enter_native_call(call_id: str, correlation: str) -> None:
         scope = native_namespace.Namespace(call_id, correlation)
         resource_ownership.request_namespace(DB, call_id, scope)
         direct = sys.argv[1] in {"--native-action", "--complete-atomic-publication"}
-        seconds = native_action.TIMEOUT_SECONDS if direct else issue_review.TIMEOUT_SECONDS \
+        seconds = native_action.CALL_SECONDS if direct else issue_review.TIMEOUT_SECONDS \
             if sys.argv[1] in {"--issue-review", "--atomic-work"} else review_budget.REVIEW_TIMEOUT_SECONDS
         if scope.start(lambda receipt: resource_ownership.register_namespace(DB, call_id, receipt),
                        timeout_seconds=seconds + (0 if direct else 180)):

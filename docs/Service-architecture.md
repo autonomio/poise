@@ -1278,6 +1278,12 @@ profiles separately; stand-in providers are not real workflow acceptance.
 Automatic post-loss disk/lease reclamation, retention, post-admission budget
 enforcement and the frozen real-provider campaign remain #806 obligations.
 
+Fixed direct GitHub commands keep their original 30-second command deadline
+(publication completion keeps 25 seconds). Their enclosing Caller execution
+scope allows 60 seconds, and the outer client 120 seconds for interpreter/setup,
+durable receipts and teardown. The kernel emptiness deadline remains two
+seconds; these outer bounds do not extend the command or kernel deadlines.
+
 ## Google document publishing
 
 Google account grants belong to the gateway, partitioned by immutable GitHub

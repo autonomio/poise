@@ -14,10 +14,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ['AGENT_INTERFACE_DATA_DIR'] = '/tmp/isolated-call-resource-proof'
+slow = sys.argv[1:] == ['slow']
+assert not sys.argv[1:] or slow
 import agent_interface as api
 from agent_interface import native_namespace, resource_ownership
 
-signal.alarm(30)
+signal.alarm(90 if slow else 30)
 server = subprocess.Popen(['node', '/contract/control.mjs'], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 address = json.loads(server.stdout.readline())
@@ -25,12 +27,16 @@ os.environ['POISE_NATIVE_CONTROL'] = json.dumps(address)
 foreign = Path('/tmp/neighbor-user-evidence')
 foreign.write_text('retained neighbor/user/evidence sentinel')
 foreign_hash = hashlib.sha256(foreign.read_bytes()).hexdigest()
-correlation = 'kernel-call-original'
+correlation = 'kernel-call-slow' if slow else 'kernel-call-original'
 
 def no_effect_body():
     call = api.track('native-action', 'no-effect resource component', '21', 'example/repo', 'reviewer', 'native_action',
                      expected_head='a' * 40, source='poise:behavior-chain', correlation_id=correlation)
     assert os.getpid() == 2 and native_namespace.active().key['callId'] == call
+    if slow:
+        # Setup/receipt overhead must not consume the wrapped command's
+        # original 30-second budget. This is a no-effect component body.
+        time.sleep(31)
     root = resource_ownership.allocate(api.DB, call, resource_ownership.call_directory(api.DB, call))
     (root / 'disposable-build-output').write_text('owned component output')
     api.finish(call, 'failed', error='Explicit no-effect component body; no provider or GitHub action started',

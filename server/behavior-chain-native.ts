@@ -16,6 +16,9 @@ import { runFile, spawnDetached } from './process'
 
 type Roster = Pick<ChainObservation, 'issueReviewers' | 'prReviewers' | 'implementer' | 'repairer' | 'approver'>
 type Invoke = Extract<ChainDecision, { kind: 'invoke' }>
+// Caller contains a 30-second GitHub command in a 60-second execution scope.
+// Leave the outer client room for startup, receipt commits and teardown too.
+const NATIVE_ACTION_TIMEOUT_MS = 120_000
 export interface NativeChainHooks {
   roster(chainKey: string): Promise<Roster>
   resolve(decision: Invoke, chainKey: string): Promise<ChainReviewer | null>
@@ -376,7 +379,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         ({ stdout } = await runFile('agent-interface', ['--native-action', '--repository', chain.repository, '--actor', invocation.actor,
           '--source', 'poise:behavior-chain', '--correlation-id', invocation.id, '--request-cwd', invocation.request.cwd,
           ...(invocation.request.nativeResources === 2 ? ['--native-resource-v2'] : []), '--', ...invocation.request.argv],
-        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 256 * 1024 }))
+        { cwd: agentInterfaceCwd(), timeoutMs: NATIVE_ACTION_TIMEOUT_MS, maxOutputBytes: 256 * 1024 }))
       } catch (error) {
         const failure = error as { stdout?: unknown, code?: unknown, signal?: unknown }
         if (!attributedNativeAction(invocation) || typeof failure.stdout !== 'string' || !failure.stdout.trim()) throw error
@@ -421,7 +424,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       if (typeof callId !== 'string' || !/^[0-9a-f]{32}$/.test(callId) || typeof artifact.plan_sha !== 'string') throw new Error('repair lacks its original native publication identity')
       const { stdout } = await runFile('agent-interface', ['--complete-atomic-publication', callId, artifact.plan_sha, head,
         '--source', 'poise:behavior-chain', '--correlation-id', correlation],
-        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 256 * 1024 })
+        { cwd: agentInterfaceCwd(), timeoutMs: NATIVE_ACTION_TIMEOUT_MS, maxOutputBytes: 256 * 1024 })
       const response = object(JSON.parse(stdout), 'native repair publication completion')
       if (typeof response.id !== 'string' || !/^[0-9a-f]{32}$/.test(response.id)) throw new Error('native publication lacks its physical Call')
       return { ...object(response.result, 'native publication result'), nativeCallId: response.id }

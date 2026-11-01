@@ -16,6 +16,9 @@ from .process_diagnostic import command_failure, diagnostic_envelope, diagnostic
 
 MAX_OUTPUT = 256 * 1024
 TIMEOUT_SECONDS = 30
+# The command keeps its original 30 seconds. Its containing Call also needs
+# time to persist intent/response and unwind before the outer client expires.
+CALL_SECONDS = TIMEOUT_SECONDS + 30
 COMMANDS = {"--merge-if-ready", "--resolve-nonblocking-conversations-if-ready", "--rerun-grey-ci-if-ready", "--issue-work"}
 
 

@@ -87,6 +87,75 @@ function acceptedMerge() {
     outcome: 'merged', merge_sha: MERGE, merge_method: 'squash' }
 }
 
+function releasedAction(invocation: ChainInvocation, result?: Record<string, unknown>): LogEntry {
+  const id = 'c'.repeat(32), stamp = Date.now()
+  return { id, correlation_id: invocation.id, model: 'native-action', behavior: 'native_action', source: 'poise:behavior-chain',
+    actor: invocation.actor, repo: 'example/repo', pr_id: invocation.request.argv[1], session_id: null, prompt: '',
+    started_at: new Date(invocation.admittedAt).toISOString(), completed_at: new Date(stamp).toISOString(), time_elapsed: '1s',
+    status: 'failed', action: null, outcome: null, error: 'original process failed', head_sha: null, expected_head: HEAD,
+    response: result ? id.slice(0, 8) : null, resources_settled_at: new Date(stamp).toISOString(),
+    resource_ownership: { version: 2, roots: [], errors: [], namespace: { state: 'settled', callId: id,
+      correlation: invocation.id, settled_at: stamp / 1000, controller: { version: 1, instance: 'd'.repeat(32) },
+      binding: { pid: 104, start: '12', namespace: 'pid:[91]', owner: { pid: 102, start: '10' },
+        holder: { pid: 103, start: '11' }, epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
+    artifact: { phase: result ? 'received_native_action' : 'performing_native_action', request_sha: chainBasis(invocation.request),
+      ...(result ? { response_sha: chainBasis(result) } : {}) } }
+}
+
+it.each(['rerun-grey-ci', 'publish-issue'] as const)('keeps physical release proof when %s recovers from an observation', async behavior => {
+  const { journal, chain } = setup('merge-pr', false)
+  const request: ChainAdmission = { id: 'original-direct', behavior, basis: 'original-request', actor: behavior === 'publish-issue' ? chain.author : chain.reviewer,
+    model: null, slot: null, admittedAt: Date.now() - 1000, reservation: { memoryBytes: 8, diskBytes: 16 },
+    request: { command: 'github-interface', cwd: '/fixture', nativeResources: 2, argv: behavior === 'publish-issue'
+      ? ['--issue-work', '7', '--invocation-id', 'original-native', '--expected-head', HEAD]
+      : ['--rerun-grey-ci-if-ready', '21', '--expected-head', HEAD] } }
+  const admitted = journal.append(chain.id, 'direct', chain.sequence, { type: 'invocation.admitted', invocation: request })
+  const invocation = admitted.invocations[0]
+  const call = releasedAction(invocation)
+  const obs = observation()
+  obs.publication.head_invocation = 'original-native'
+  obs.greyRecovery = { invocationId: invocation.id, receipt: { outcome: 'rerun_observed', observed_run_attempt: 3 } }
+  const perform = vi.fn(async () => { throw new Error('must not repeat recovered work') })
+  await new BehaviorChainRuntime(journal, operations(obs, { enabled: () => false, perform,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  const current = journal.read(chain.id)!
+  expect(current.invocations[0]).toMatchObject({ state: 'settled', callId: call.id,
+    evidence: { nativeCallId: call.id, nativeCallStatus: 'failed', resources_settled_at: call.resources_settled_at, resource_ownership: call.resource_ownership } })
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  expect(perform).not.toHaveBeenCalled()
+  const history = journal.history(chain.id)
+  journal.rebuild()
+  expect(journal.history(chain.id)).toEqual(history)
+  expect(journal.admitInvocation(current, 'next', { ...request, id: 'next-direct' }, 2)).not.toBeNull()
+})
+
+it('reads an uncertain non-attributed result once and retains only changed receipts on later passes', async () => {
+  const { journal, chain } = setup('merge-pr', false)
+  const admitted = journal.append(chain.id, 'direct', chain.sequence, { type: 'invocation.admitted', invocation: {
+    id: 'original-grey', behavior: 'rerun-grey-ci', basis: 'original-request', actor: chain.reviewer, model: null, slot: null,
+    admittedAt: Date.now() - 1000, reservation: { memoryBytes: 8, diskBytes: 16 },
+    request: { command: 'github-interface', cwd: '/fixture', nativeResources: 2, argv: ['--rerun-grey-ci-if-ready', '21', '--expected-head', HEAD] } } })
+  const result = { outcome: 'unconfirmed', nativeProcessFailure: { code: 7, signal: null } }
+  const call = releasedAction(admitted.invocations[0], result)
+  const readActionResult = vi.fn(async () => result)
+  const runtime = new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, readActionResult,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
+  await runtime.run()
+  const receipts = () => journal.history(chain.id).filter(event => ['invocation.reconciled', 'invocation.uncertain'].includes(JSON.parse(event.payload).type))
+  const original = receipts()
+  await runtime.run()
+  await runtime.run()
+  expect(readActionResult).toHaveBeenCalledTimes(1)
+  expect(receipts()).toEqual(original)
+  expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+  expect(journal.reservedResources()).toEqual({ memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  journal.rebuild()
+  await new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, readActionResult,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(readActionResult).toHaveBeenCalledTimes(1)
+  expect(receipts()).toEqual(original)
+})
+
 it('keeps a contained action reserved after its accepted response until original process and disk proof agree', async () => {
   const { journal, chain } = setup('merge-pr', true, ':memory:', true)
   const invocation = chain.invocations[0]
