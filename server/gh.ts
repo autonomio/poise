@@ -10,9 +10,8 @@
 // — matches Poise's long-standing semantics. Without `me`, fall back to
 // org-wide `views.{pr,issue}` so a fresh install isn't blank.
 //
-// Writes (open_issue, post_comment) aren't supported by github-datastore
-// — it's a read-only consumer view of GitHub. We return 501 so the
-// frontend's existing error handling kicks in.
+// User-initiated issue creation, editing and comments go directly to GitHub
+// with the configured account. The datastore remains a read-only consumer.
 //
 // Reference: caller/github_datastore/CONSUMER_CONTRACT.md.
 
@@ -732,6 +731,70 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
     // window are instant.
     const result = await fetchGreenPrs(me, body, selectOrganizations(body.org))
     return { status: 200, body: result }
+  }
+
+  if (op === 'read_issue' || op === 'edit_issue') {
+    const repoFull = String(body.repository_full_name || '')
+    const issueNumber: unknown = body.issue_number
+    try { requireConfiguredRepository(repoFull) }
+    catch (error) { return { status: 400, body: { error: (error as Error).message } } }
+    if (typeof issueNumber !== 'number' || !Number.isSafeInteger(issueNumber) || issueNumber < 1) {
+      return { status: 400, body: { error: 'issue_number must be a positive integer' } }
+    }
+    if (!me) return { status: 400, body: { error: 'Set your GitHub account in Settings → General before editing issues' } }
+    if (op === 'edit_issue') {
+      if (typeof body.title !== 'string' || !body.title.trim() || typeof body.body !== 'string'
+        || typeof body.expected_title !== 'string' || typeof body.expected_body !== 'string') {
+        return { status: 400, body: { error: 'title, body and the original title/body are required' } }
+      }
+      if (!fitsProcessArgument(ISSUE_TITLE_PREFIX, body.title.trim()) || !fitsProcessArgument(ISSUE_BODY_PREFIX, body.body)) {
+        return { status: 413, body: { error: 'The issue title or body exceeds the supported field size' } }
+      }
+    }
+    let token = ''
+    try {
+      token = await resolveMeToken(me)
+      const env = { GH_HOST: 'github.com', GH_TOKEN: token, GITHUB_TOKEN: undefined,
+        GH_ENTERPRISE_TOKEN: undefined, GITHUB_ENTERPRISE_TOKEN: undefined }
+      const endpoint = `repos/${repoFull}/issues/${issueNumber}`
+      const parse = (stdout: string) => {
+        const value: unknown = JSON.parse(stdout)
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('GitHub returned an invalid issue')
+        const row = value as Record<string, unknown>
+        if ('pull_request' in row) throw new HttpError(400, 'The target is a pull request, not an issue')
+        if (row.number !== issueNumber || typeof row.title !== 'string' || !row.title
+          || row.body !== null && typeof row.body !== 'string' || !['open', 'closed'].includes(String(row.state))
+          || typeof row.html_url !== 'string' || row.html_url.toLowerCase() !== `https://github.com/${repoFull}/issues/${issueNumber}`.toLowerCase()
+          || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))
+          || typeof row.updated_at !== 'string' || !Number.isFinite(Date.parse(row.updated_at))) {
+          throw new Error('GitHub returned an invalid or mismatched issue')
+        }
+        return { number: issueNumber, title: row.title, body: row.body ?? '', state: String(row.state),
+          url: row.html_url, created_at: row.created_at, updated_at: row.updated_at }
+      }
+      const current = parse((await runFile(GH, ['api', endpoint, '--method', 'GET'], {
+        env, timeoutMs: 30_000, maxOutputBytes: 4 * 1024 * 1024,
+      })).stdout)
+      if (op === 'read_issue') return { status: 200, body: { issue: current } }
+      const title = body.title.trim(), issueBody = body.body
+      const answer = (issue: typeof current) => ({ status: 200,
+        body: { issue, record: { kind: 'issue', repo: repoFull, ...issue, merged_at: null } } })
+      // A lost acknowledgement may already have saved exactly this edit. Read it back, never repeat it.
+      if (current.title === title && current.body === issueBody) return answer(current)
+      if (current.title !== body.expected_title || current.body !== body.expected_body) {
+        return { status: 409, body: { error: 'The issue changed on GitHub. Keep your draft and reopen the editor to load the latest version.' } }
+      }
+      const saved = parse((await runFile(GH, ['api', endpoint, '--method', 'PATCH', '-f', `title=${title}`, '-f', `body=${issueBody}`], {
+        env, timeoutMs: 60_000, maxOutputBytes: 4 * 1024 * 1024,
+      })).stdout)
+      if (saved.title !== title || saved.body !== issueBody) throw new Error('GitHub did not confirm the requested title and body')
+      return answer(saved)
+    } catch (error) {
+      const failure = error as { stderr?: unknown, message?: string }
+      let message = typeof failure.stderr === 'string' && failure.stderr ? failure.stderr : failure.message || String(error)
+      if (token) message = message.split(token).join('***')
+      return { status: error instanceof HttpError ? error.statusCode : 502, body: { error: `GitHub issue edit failed: ${message}` } }
+    }
   }
 
   if (op === 'open_issue') {

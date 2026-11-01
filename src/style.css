@@ -4811,6 +4811,8 @@ body.chat-resizing { user-select: none; cursor: col-resize; }
   background: var(--border);
 }
 .card-action-btn:disabled { cursor: default; }
+.card-issue-edit { width: auto; padding: 0 5px; }
+.composer-labels[hidden] { display: none; }
 
 /* Per-icon accents on direct hover. Delete tints to the destructive
    red; review keeps neutral hover but uses A1/A3 to signal in-flight
