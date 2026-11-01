@@ -1449,7 +1449,9 @@ test('starts a fresh console with the saved Chat default on first send, exactly 
   await input(page).press('Enter')
   await expect(page.locator('.chat-session-item.pending')).toHaveCount(1)
   await expect(page.locator('.chat-msg-user')).toHaveText('First line\nSecond line')
-  await expect(input(page)).toBeDisabled()
+  await expect(input(page)).toBeEnabled()
+  await input(page).fill('Next draft while creation is pending')
+  await expect(page.locator('.chat-send')).toBeDisabled()
   await page.locator('.chat-v-composer').dispatchEvent('submit')
   expect(sock.framesOf('prompt')).toHaveLength(0)
   expect(state.calls.filter(c => c.method === 'POST' && c.path === '/api/chat/sessions')).toHaveLength(1)
@@ -1459,6 +1461,7 @@ test('starts a fresh console with the saved Chat default on first send, exactly 
   await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
   expect(sock.framesOf('prompt')[0].command).toMatchObject({ sessionId: 'new-1', text: 'First line\nSecond line', attachments: [], mentions: [] })
   await expect(page.locator('.chat-msg-user')).toHaveCount(1)
+  await expect(input(page)).toHaveValue('Next draft while creation is pending')
   await expect(page.getByRole('dialog', { name: 'New session' })).toBeHidden()
 })
 
