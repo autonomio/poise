@@ -18,6 +18,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
+if __package__:
+    from . import caller_store
+else:
+    import caller_store
+
 SUBMISSIONS = {"requested_changes", "reviewed_clean", "approved_pr"}
 _current: ContextVar[dict | None] = ContextVar("review_receipt", default=None)
 _call: ContextVar[tuple[Path, str] | None] = ContextVar("review_receipt_call", default=None)
@@ -45,7 +50,7 @@ def prepare_response(packet: str, model: str) -> None:
     context = sha256(json.dumps([pull["base"]["sha"], pull["title"], pull.get("body") or ""],
                                ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
     database, call_id = bound
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.review_context',json(?)) where id=? and status='running'",
                      (json.dumps({"repository": value["repository"], "pull_number": value["pull_number"],
                                   "head_sha": value["head_sha"], "context_sha": context, "model": model}), call_id))
@@ -67,7 +72,7 @@ def complete_response(assessment: dict, head: str) -> dict | None:
         if bound is None:
             return None
         database, call_id = bound
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         conn.execute("begin immediate")
         row = conn.execute("select artifact,actor,status from calls where id=?", (call_id,)).fetchone()
         if not row or row[2] != "running":
@@ -96,7 +101,7 @@ def retained_response() -> dict:
     database, call_id = os.environ.get("AGENT_INTERFACE_RECEIPT_DB"), os.environ.get("AGENT_INTERFACE_RECEIPT_CALL")
     if not database or not call_id:
         raise RuntimeError("review response lacks its native invocation")
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         row = conn.execute("select artifact from calls where id=? and status='running'", (call_id,)).fetchone()
     response = json.loads(row[0] or "{}").get("review_response") if row else None
     if not response:
@@ -115,7 +120,7 @@ def invocation_environment(database: Path, call_id: str, managed: bool, *, initi
             else:
                 os.environ.pop(key, None)
         if managed and initialize:
-            with sqlite3.connect(database, timeout=30) as conn:
+            with caller_store.connect(database, timeout=30) as conn:
                 conn.execute("update calls set artifact=? where id=? and status='running'", (json.dumps({"phase": "reviewing"}), call_id))
         yield
     finally:
@@ -135,7 +140,7 @@ def begin_submission(body: str, head: str) -> str:
         return body
     if not database or not call_id or not re.fullmatch(r"[0-9a-f]{32}", call_id):
         raise RuntimeError("managed review submission lacks its native receipt binding")
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         changed = conn.execute("update calls set artifact=json_patch(artifact,?) where id=? and status='running' and behavior in ('pr_review','pr_approve') "
                                "and coalesce(error_code,'') not in ('stopping','stopped') and json_extract(artifact,'$.phase')='reviewing' "
                                "and json_extract(artifact,'$.review_response.head_sha')=? "
@@ -152,13 +157,13 @@ def work_publication(head: str, *, start_replies: bool = False) -> None:
     Only a recorded unattempted reply batch can resume after worker settlement.
     A lost POST remains uncertain instead of authorizing another write.
     """
-    from . import resource_ownership
+    from . import native_namespace, resource_ownership
     database, call_id = os.environ.get("AGENT_INTERFACE_RECEIPT_DB"), os.environ.get("AGENT_INTERFACE_RECEIPT_CALL")
     if not database and not call_id:
         return
     if not database or not call_id or not re.fullmatch(r"[0-9a-f]{32}", call_id) or not re.fullmatch(r"[0-9a-f]{40}", head):
         raise RuntimeError("managed work publication lacks its native receipt binding")
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         conn.execute("begin immediate")
         row = conn.execute("select artifact,status,resources_settled_at,resource_ownership from calls where id=? and source='poise:behavior-chain' "
                            "and behavior in ('implement_issue','repair_pr') and action_plan is not null "
@@ -167,8 +172,14 @@ def work_publication(head: str, *, start_replies: bool = False) -> None:
         if not row or artifact.get("phase") != "publishing" or not artifact.get("plan_sha"):
             raise RuntimeError("work publication lacks its original native action plan")
         if start_replies:
+            ownership = json.loads(row[3]) if row[3] else None
+            if row[1] == "running" and ownership and ownership.get("version") == 2:
+                scope = native_namespace.active()
+                if scope is None or scope.key["callId"] != call_id:
+                    raise RuntimeError("planned replies lack their original active native ownership")
+                scope.require_idle()
             if row[1] not in {"running", "failed"} or (row[1] == "failed" and not resource_ownership.publication_released(row[2], row[3], artifact)) \
-                    or (row[1] == "running" and (not resource_ownership.healthy(json.loads(row[3]) if row[3] else None)
+                    or (row[1] == "running" and (not resource_ownership.healthy(ownership)
                                                 or artifact.get("resource_error"))) \
                     or artifact.get("publication_head") != head or artifact.get("replies_started") is not False:
                 raise RuntimeError("planned replies are already attempted or lack settled native ownership")
@@ -190,7 +201,7 @@ def managed_resources(root: Path):
         return
     from . import issue_review, native_namespace, resource_ownership
     root = resource_ownership.allocate(Path(database), call_id, root)
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_root',?) where id=?", (str(root), call_id))
     try:
         yield
@@ -203,7 +214,7 @@ def managed_resources(root: Path):
             scope.require_idle()
         elif issue_review._cwd_pids(root, require_complete=True) != []:
             resource_ownership.failure(Path(database), call_id, "resources_unknown", root)
-            with sqlite3.connect(database, timeout=30) as conn:
+            with caller_store.connect(database, timeout=30) as conn:
                 conn.execute("update calls set artifact=json_set(coalesce(artifact,'{}'),'$.resource_error','resources_unknown') where id=?", (call_id,))
             raise RuntimeError("managed behavior resources could not be proven released")
         resource_ownership.process_check(Path(database), call_id, complete=True)
@@ -390,7 +401,7 @@ def record(text: str) -> dict | None:
     bound = _call.get()
     if bound:
         database, call_id = bound
-        with sqlite3.connect(database, timeout=30) as conn:
+        with caller_store.connect(database, timeout=30) as conn:
             row = conn.execute("select review_id from calls where id=?", (call_id,)).fetchone()
             if row is not None and row[0] is not None and str(row[0]) != str(receipt["review_id"]):
                 try:
@@ -439,7 +450,7 @@ def record_file(path: str | Path) -> dict | None:
 
 def sibling_ids(database: Path, call_id: str, repo: str, pr_number: str) -> set[int]:
     """Review ids other runs recorded for this PR — theirs, never this run's."""
-    with sqlite3.connect(database, timeout=30) as conn:
+    with caller_store.connect(database, timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "select review_id from calls where review_id is not null and id != ? and repo = ? and pr_id = ?",

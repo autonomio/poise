@@ -178,6 +178,43 @@ class Namespace:
         self.forked = False
         self._buffer = bytearray()
 
+    @classmethod
+    def restore(cls, private: dict, binding: dict):
+        address = control_address()
+        if private.get("address") != address:
+            raise RuntimeError("original native cleanup controller is unavailable")
+        scope = cls.__new__(cls)
+        scope.address = address
+        scope.key = {key: private[key] for key in ("callId", "correlation", "token")}
+        if not re.fullmatch(r"[a-f0-9]{32}", scope.key["callId"]) \
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}", scope.key["correlation"]) \
+                or not re.fullmatch(r"[a-f0-9]{32}", scope.key["token"]):
+            raise RuntimeError("original native cleanup identity is invalid")
+        scope.binding = binding
+        scope.outer_proc = None
+        return scope
+
+    def resource(self, operation: str, root: Path) -> dict:
+        if operation not in {"allocate-root", "read-root", "repair-root", "finish-root"}:
+            raise ValueError("invalid native resource operation")
+        row = control_request(self.address, operation, **self.key, root=str(root))
+        value = row.get("resource")
+        if row.get("callId") != self.key["callId"] or row.get("correlation") != self.key["correlation"] \
+                or not isinstance(value, dict) or value.get("path") != str(root) \
+                or value.get("state") not in {"allocated", "reclaimed"} \
+                or any(not isinstance(value.get(key), str) or not re.fullmatch(r"[0-9]{1,20}", value[key])
+                       for key in ("device", "inode", "parent_device", "parent_inode")):
+            raise RuntimeError("native resource differs from its original controller proof")
+        if value["state"] == "allocated":
+            anchor = value.get("anchor")
+            if type(value.get("unlinked")) is not bool or not isinstance(anchor, dict) \
+                    or type(anchor.get("pid")) is not int or anchor["pid"] < 2 \
+                    or any(type(anchor.get(key)) is not int or anchor[key] < 0 for key in ("parentFd", "rootFd")):
+                raise RuntimeError("native resource lacks its original directory handles")
+        elif type(value.get("reclaimed_at")) not in (int, float) or not 0 < value["reclaimed_at"] < float("inf"):
+            raise RuntimeError("native resource lacks its positive reclamation time")
+        return value
+
     def _message(self, fd: int, deadline: float) -> dict:
         while b"\n" not in self._buffer:
             remaining = deadline - monotonic()
@@ -223,6 +260,13 @@ class Namespace:
         response = control_request(self.address, "release", **self.key)
         if response.get("released") is not True:
             raise RuntimeError("native namespace witness retirement was not confirmed")
+
+    def retire(self) -> None:
+        # This is housekeeping after durable physical release, not a proof
+        # from an absent witness. Callers must already have that release.
+        response = control_request(self.address, "retire", **self.key)
+        if type(response.get("retired")) is not bool or response.get("present") is not False:
+            raise RuntimeError("native cleanup witness retirement is unavailable")
 
     def await_empty(self) -> None:
         deadline = monotonic() + SETTLE_SECONDS
@@ -458,11 +502,21 @@ class Namespace:
                 raise BaseExceptionGroup("native namespace teardown failed", ([original] if original else []) + failures)
 
 
+def require_resource_controller() -> None:
+    address = control_address()
+    state = control_request(address, "hello")
+    if state.get("resourceProtocol") != 2 or not isinstance(address.get("store"), dict):
+        reason = state.get("storeError")
+        raise NamespaceUnavailable(reason if isinstance(reason, str) and reason else
+                                   "v2 cleanup requires the current workspace image and original Caller metadata handles")
+
+
 def capability() -> dict:
     """An explicit local setup check, not a behavior or an execution admission.
     No provider, checkout or GitHub operation is started by the continuation.
     """
     try:
+        require_resource_controller()
         scope = Namespace(uuid4().hex, f"capability-{uuid4().hex}", probe=True)
         if scope.start(lambda receipt: None, timeout_seconds=START_SECONDS):
             os._exit(0)

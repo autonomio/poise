@@ -6,11 +6,14 @@ import Database from 'better-sqlite3'
 import { parseAgentLogStdout } from '../../server/agent-log-parse'
 import { BehaviorChainJournal, chainIdentity, type ChainBehavior } from '../../server/behavior-chain-store'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../../server/behavior-chain-runtime'
+import { BehaviorResourceRecovery } from '../../server/behavior-chain-resource-recovery'
 
 const wire = readFileSync(process.argv[2], 'utf8')
 const mode = process.argv[3] ?? 'fence'
-assert.ok(['fence', 'pending', 'released', 'recovered', 'namespace-no-effect'].includes(mode))
-const direct = mode === 'namespace-no-effect'
+assert.ok(['fence', 'pending', 'released', 'recovered', 'namespace-no-effect', 'namespace-interrupted-pending', 'namespace-interrupted-released', 'namespace-physical-only'].includes(mode))
+const physical = mode === 'namespace-physical-only'
+const interrupted = mode.startsWith('namespace-interrupted-') || physical
+const direct = mode === 'namespace-no-effect' || interrupted
 const snapshot = parseAgentLogStdout(wire, 'actual native Call log output')
 assert.equal(snapshot.quarantined.length, 0, JSON.stringify(snapshot.quarantined))
 assert.equal(snapshot.entries.length, 1)
@@ -43,19 +46,30 @@ try {
       publication: { pull_number: null, head_sha: null, head_invocation: null, state: null, merged: false, merge_sha: null }, pull: null }),
     available: () => false, capacity: () => 1, permitted: () => false, received: () => {}, request: forbidden, launch: forbidden,
     perform: forbidden, readActionResult: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {} }
-  await new BehaviorChainRuntime(journal, operations).run()
+  if (physical) {
+    const started = journal.read(id)!
+    journal.append(id, 'original-uncertainty', started.sequence, { type: 'invocation.uncertain', invocationId: call.correlation_id,
+      reason: 'original effect remains uncertain' })
+    await new BehaviorResourceRecovery(journal, async () => snapshot).run()
+  } else await new BehaviorChainRuntime(journal, operations).run()
   const current = journal.read(id)!
-  const pending = mode === 'pending'
-  assert.equal(current.invocations[0].state, pending ? 'uncertain' : 'settled')
+  const pending = mode === 'pending' || mode === 'namespace-interrupted-pending'
+  assert.equal(current.invocations[0].state, pending || interrupted ? 'uncertain' : 'settled')
   if (mode === 'fence') assert.equal(current.invocations[0].outcome, 'target_closed')
   if (mode === 'released' || mode === 'recovered') assert.equal(current.invocations[0].outcome, 'commented')
+  if (physical) {
+    assert.equal(current.invocations[0].outcome, 'original effect remains uncertain')
+    assert.equal(current.invocations[0].callId, null)
+    assert.equal(current.invocations[0].evidence?.resources_settled_at, call.resources_settled_at)
+  }
   if (direct) {
     assert.equal(call.resource_ownership?.version, 2)
-    assert.equal(call.resource_ownership.namespace?.state, 'settled')
-    assert.equal(current.invocations[0].outcome, 'preflight_failed')
+    assert.equal(call.resource_ownership.namespace?.state, pending ? 'active' : 'settled')
+    if (!interrupted) assert.equal(current.invocations[0].outcome, 'preflight_failed')
+    else assert.equal(call.error_code, 'interrupted')
   }
-  if (pending || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
-  assert.equal(journal.liveModelInvocationCount(), pending ? 1 : 0)
+  if (mode === 'pending' || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
+  assert.equal(journal.liveModelInvocationCount(), pending && !direct ? 1 : 0)
   assert.deepEqual(journal.reservedResources(), { memoryBytes: pending ? 8 : 0, diskBytes: pending ? 16 : 0, unaccounted: 0 })
   const events = journal.history(id)
   journal.rebuild()
@@ -67,5 +81,5 @@ try {
     assert.equal(rejected.entries.length, 0, JSON.stringify(change))
     assert.equal(rejected.quarantined.length, 1)
   }
-  process.stdout.write(JSON.stringify({ accepted: 1, settled: pending ? 0 : 1, reservations: pending ? 1 : 0 }))
+  process.stdout.write(JSON.stringify({ accepted: 1, settled: pending || interrupted ? 0 : 1, reservations: pending ? 1 : 0 }))
 } finally { db.close() }

@@ -98,6 +98,21 @@ def test_response_never_follows_a_foreign_symlink(database):
     assert row(call)["response_path"] is None
 
 
+def test_response_directory_replacement_cannot_receive_native_evidence(database):
+    call, digest = original()
+    foreign = database / "foreign-responses"
+    foreign.mkdir()
+    sentinel = foreign / "user-auth-evidence"
+    sentinel.write_text("retained")
+    api.RESPONSES.rmdir()
+    api.RESPONSES.symlink_to(foreign, target_is_directory=True)
+    with pytest.raises(OSError):
+        api._native_action_artifact(call, "received_native_action", digest, "{}")
+    assert list(foreign.iterdir()) == [sentinel]
+    assert sentinel.read_text() == "retained"
+    assert row(call)["response_path"] is None
+
+
 def process(monkeypatch, program):
     # An isolated transport stand-in; it cannot reach GitHub or start a worker.
     popen = subprocess.Popen

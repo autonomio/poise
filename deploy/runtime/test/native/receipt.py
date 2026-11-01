@@ -33,6 +33,16 @@ def no_effect_body():
     call = api.track('native-action', 'no-effect resource component', '21', 'example/repo', 'reviewer', 'native_action',
                      expected_head='a' * 40, source='poise:behavior-chain', correlation_id=correlation)
     assert os.getpid() == 2 and native_namespace.active().key['callId'] == call
+    # Executed helpers cannot see the outer supervisor's PID. Exercise the
+    # original metadata binding through a fresh interpreter in this scope.
+    helper = subprocess.run([sys.executable, '-c',
+                             'import agent_interface as api; '
+                             'from agent_interface import caller_store; '
+                             'connection = caller_store.connect(api.DB); '
+                             'assert connection.execute("select count(*) from calls").fetchone()[0] > 0; '
+                             'connection.close(); print("original-metadata-read")'],
+                            capture_output=True, text=True, timeout=10)
+    assert helper.returncode == 0 and helper.stdout == 'original-metadata-read\n' and not helper.stderr, helper
     if slow:
         # Setup/receipt overhead must not consume the wrapped command's
         # original 30-second budget. This is a no-effect component body.

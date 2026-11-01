@@ -19,6 +19,12 @@ type Invoke = Extract<ChainDecision, { kind: 'invoke' }>
 // Caller contains a 30-second GitHub command in a 60-second execution scope.
 // Leave the outer client room for startup, receipt commits and teardown too.
 const NATIVE_ACTION_TIMEOUT_MS = 120_000
+
+export async function readNativeInvocations(ids: string[]) {
+  const { stdout } = await runFile('agent-interface', ['--logs', '--select', JSON.stringify({ latest: [], ids: [], correlations: ids })],
+    { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 })
+  return parseAgentLogStdout(stdout, 'behavior chain native receipts')
+}
 export interface NativeChainHooks {
   roster(chainKey: string): Promise<Roster>
   resolve(decision: Invoke, chainKey: string): Promise<ChainReviewer | null>
@@ -113,11 +119,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       const existing = await hooks.existing(seeds)
       return seeds.filter((seed) => !existing.has(`${seed.repository.toLowerCase()}#${seed.number}`))
     },
-    async readInvocations(ids) {
-      const { stdout } = await runFile('agent-interface', ['--logs', '--select', JSON.stringify({ latest: [], ids: [], correlations: ids })],
-        { cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 })
-      return parseAgentLogStdout(stdout, 'behavior chain native receipts')
-    },
+    readInvocations: readNativeInvocations,
     async observe(chain): Promise<ChainObservation> {
       if (!ownsRepository(chain.repository)) throw new Error('behavior chain organization is no longer followed')
       const actor = ['--token-user', chain.author]

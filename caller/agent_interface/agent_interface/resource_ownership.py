@@ -13,7 +13,7 @@ import sqlite3
 import stat
 from contextlib import closing, contextmanager
 from pathlib import Path
-from time import time
+from time import monotonic, time
 from uuid import uuid4
 
 
@@ -32,7 +32,8 @@ def call_directory(database: Path, call_id: str) -> Path:
 
 @contextmanager
 def _database(path: Path):
-    with closing(sqlite3.connect(path, timeout=30)) as conn:
+    from . import caller_store
+    with closing(caller_store.connect(path, timeout=30)) as conn:
         with conn:
             yield conn
 
@@ -146,29 +147,70 @@ def binding() -> tuple[Path, str] | None:
     return Path(database), call_id
 
 
+def original_scope(database: Path, call_id: str, value: dict):
+    from . import native_namespace
+    namespace = value.get("namespace")
+    if value.get("version") != 2 or not namespace or namespace.get("state") not in {"active", "settled"}:
+        raise RuntimeError("native resources lack their original namespace binding")
+    with _database(database) as conn:
+        row = conn.execute("select namespace_control from calls where id=?", (call_id,)).fetchone()
+    private = json.loads(row[0] or "null") if row else None
+    if not isinstance(private, dict) or private.get("callId") != call_id \
+            or private.get("correlation") != namespace["correlation"] \
+            or namespace.get("controller") != {"version": 1, "instance": private.get("address", {}).get("instance")}:
+        raise RuntimeError("native resources lack their original private controller")
+    scope = native_namespace.active()
+    if scope is not None:
+        if scope.address != private["address"] or scope.key != {key: private[key] for key in ("callId", "correlation", "token")} \
+                or scope.binding != namespace["binding"]:
+            raise RuntimeError("native resource scope belongs to another Call")
+        return scope
+    return native_namespace.Namespace.restore(private, namespace["binding"])
+
+
 def allocate(database: Path, call_id: str, root: Path) -> Path:
-    # Resolve legitimate system ancestors (/var on macOS), never the leaf.
-    root = root.parent.resolve() / root.name
+    from . import caller_store
+    caller_store.require_current_path(database.parent)
     with _database(database) as conn:
         conn.execute("begin immediate")
         value = read(conn, call_id)
+        # A v2 path names the original metadata root; resolving a replaced
+        # native-resources ancestor would silently adopt a foreign location.
+        root = root.absolute() if value["version"] == 2 else root.parent.resolve() / root.name
+        if value["version"] == 2 and conn.execute("select status from calls where id=?", (call_id,)).fetchone()[0] != "running":
+            raise RuntimeError("terminal native Calls cannot allocate resources")
+        if value["version"] == 2:
+            names = root.relative_to((database.parent / "native-resources").absolute()).parts
+            if not names or names[0] not in {call_id, f"{call_id}-preparation"} or any(name in {".", ".."} for name in names):
+                raise RuntimeError("native resource allocation is outside its original Call")
         if any(entry["path"] == str(root) for entry in value["roots"]):
             raise RuntimeError("native resource directory was already registered")
         value["roots"].append({"path": str(root), "state": "registered"})
         _write(conn, call_id, value)
     # A crash before the next transaction retains the registered, incomplete
     # root. No cleaner may infer that incomplete registration means no disk.
-    root.mkdir(mode=0o700, parents=True)
-    parent = root.parent.stat()
-    node = root.lstat()
-    if not stat.S_ISDIR(node.st_mode) or node.st_uid != os.getuid() or node.st_mode & 0o077:
-        raise RuntimeError("native resource directory is not private and owned")
+    if value["version"] == 2:
+        from . import native_namespace
+        scope = original_scope(database, call_id, value)
+        if native_namespace.active() is not scope:
+            raise RuntimeError("native allocation requires its original active namespace")
+        proof = scope.resource("allocate-root", root)
+        if proof["state"] != "allocated" or proof["unlinked"]:
+            raise RuntimeError("native allocation lacks its original live directory handle")
+        identity = {key: proof[key] for key in ("device", "inode", "parent_device", "parent_inode")}
+    else:
+        root.mkdir(mode=0o700, parents=True)
+        parent = root.parent.stat()
+        node = root.lstat()
+        if not stat.S_ISDIR(node.st_mode) or node.st_uid != os.getuid() or node.st_mode & 0o077:
+            raise RuntimeError("native resource directory is not private and owned")
+        identity = {"device": str(node.st_dev), "inode": str(node.st_ino),
+                    "parent_device": str(parent.st_dev), "parent_inode": str(parent.st_ino)}
     with _database(database) as conn:
         conn.execute("begin immediate")
         value = read(conn, call_id)
         entry = next(entry for entry in value["roots"] if entry["path"] == str(root))
-        entry.update(state="allocated", device=str(node.st_dev), inode=str(node.st_ino),
-                     parent_device=str(parent.st_dev), parent_inode=str(parent.st_ino))
+        entry.update(state="allocated", **identity)
         _write(conn, call_id, value)
     return root
 
@@ -186,7 +228,9 @@ def failure(database: Path, call_id: str, cause: str, root: Path | None = None) 
 def released(value: dict | None) -> bool:
     if not healthy(value):
         return False
-    return all(entry.get("state") == "reclaimed" for entry in value["roots"])
+    if value["version"] == 2 and value["namespace"]["state"] not in {"settled", "not_started"}:
+        return False
+    return all(entry.get("state") in {"reclaimed", "covered"} for entry in value["roots"])
 
 
 def healthy(value: dict | None) -> bool:
@@ -194,10 +238,15 @@ def healthy(value: dict | None) -> bool:
             or not isinstance(value.get("roots"), list) or not isinstance(value.get("errors"), list):
         return False
     if value["version"] == 2 and (not isinstance(value.get("namespace"), dict)
-                                  or value["namespace"].get("state") not in ("settled", "not_started")):
+                                  or value["namespace"].get("state") not in ("active", "settled", "not_started")):
         return False
     roots = {entry["path"]: entry for entry in value["roots"]}
-    return all(item.get("cause") != "resources_unknown" and item.get("path") in roots
+    def recovered(item):
+        stamp = item.get("recovered_at", 0)
+        return value["version"] == 2 and value["namespace"]["state"] == "settled" \
+            and stamp >= max(item["at"], value["namespace"]["settled_at"]) \
+            and all(root.get("state") in {"reclaimed", "covered"} and stamp >= root["reclaimed_at"] for root in roots.values())
+    return all(recovered(item) or item.get("cause") != "resources_unknown" and item.get("path") in roots
                and roots[item["path"]].get("recovered_at", 0) >= item["at"] for item in value["errors"])
 
 
@@ -211,25 +260,45 @@ def process_check(database: Path, call_id: str, *, complete: bool = False) -> No
 
 def publication_released(settled_at, encoded: str | None, artifact: dict) -> bool:
     value = json.loads(encoded) if encoded else None
-    return settled_at is not None and released(value) and not artifact.get("resource_error") \
-        and artifact.get("phase") != "resources_unknown"
+    uncertain = artifact.get("resource_error") or artifact.get("phase") == "resources_unknown"
+    recovered = artifact.get("resource_recovered_at", 0)
+    covering = value and value["version"] == 2 and value["errors"] \
+        and all(error.get("recovered_at", 0) >= error["at"] and recovered >= error["recovered_at"] for error in value["errors"])
+    return settled_at is not None and released(value) and (not uncertain or covering)
 
 
-def _remove_directory(parent_fd: int, name: str, device: int, inode: int) -> None:
-    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+def _remove_directory(parent_fd: int, name: str, device: int, inode: int, *, deadline: float | None = None) -> None:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except PermissionError:
+        if not hasattr(os, "O_PATH"):
+            raise RuntimeError("unreadable resource repair requires Linux directory handles") from None
+        pinned = os.open(name, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            node = os.fstat(pinned)
+            if (node.st_dev, node.st_ino) != (device, inode) or node.st_uid != os.getuid() or not stat.S_ISDIR(node.st_mode):
+                raise RuntimeError("unreadable resource identity changed before permission repair")
+            # This is the original kernel handle, not the mutable entry name.
+            os.chmod(f"/proc/self/fd/{pinned}", stat.S_IMODE(node.st_mode) | stat.S_IRWXU)
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        finally:
+            os.close(pinned)
     try:
         node = os.fstat(fd)
         if (node.st_dev, node.st_ino) != (device, inode):
             raise RuntimeError("native resource directory changed before opening")
         os.fchmod(fd, stat.S_IMODE(node.st_mode) | stat.S_IRWXU)
-        for child in os.listdir(fd):
-            info = os.stat(child, dir_fd=fd, follow_symlinks=False)
-            if info.st_dev != node.st_dev:
-                raise RuntimeError("native resource cleanup crosses a filesystem boundary")
-            if stat.S_ISDIR(info.st_mode):
-                _remove_directory(fd, child, info.st_dev, info.st_ino)
-            else:
-                os.unlink(child, dir_fd=fd)
+        with os.scandir(fd) as children:
+            for child in children:
+                if deadline is not None and monotonic() >= deadline:
+                    raise TimeoutError("native cleanup pass yielded at its deadline")
+                info = child.stat(follow_symlinks=False)
+                if info.st_dev != node.st_dev:
+                    raise RuntimeError("native resource cleanup crosses a filesystem boundary")
+                if stat.S_ISDIR(info.st_mode):
+                    _remove_directory(fd, child.name, info.st_dev, info.st_ino, deadline=deadline)
+                else:
+                    os.unlink(child.name, dir_fd=fd)
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         if (current.st_dev, current.st_ino) != (device, inode):
             raise RuntimeError("native resource directory changed before unlinking")
@@ -238,26 +307,86 @@ def _remove_directory(parent_fd: int, name: str, device: int, inode: int) -> Non
         os.close(fd)
 
 
-def cleanup(database: Path, call_id: str, root: Path) -> bool:
-    from . import issue_review, native_namespace
-    root = root.parent.resolve() / root.name
+def _cleanup_native(database: Path, call_id: str, value: dict, entry: dict, claim: str | None, deadline: float | None) -> dict:
+    from . import native_namespace, process_identity
+    scope = original_scope(database, call_id, value)
+    if native_namespace.active() is not scope:
+        with _database(database) as conn:
+            row = conn.execute("select process_identity,resource_cleanup from calls where id=?", (call_id,)).fetchone()
+        cleaner = json.loads(row[1] or "null")
+        if not process_identity.owns_registration(row[0]) and (not isinstance(cleaner, dict)
+                or cleaner.get("token") != claim or not process_identity.owns_registration(cleaner.get("owner"))):
+            raise RuntimeError("native cleanup lacks its original owner or current cleanup claim")
+    if value["namespace"]["state"] == "active":
+        if native_namespace.active() is not scope:
+            raise RuntimeError("native disk cleanup lacks its original live or settled namespace")
+        scope.require_idle()
+    elif not scope.read()["empty"]:
+        raise RuntimeError("original native namespace is not empty")
+    root = Path(entry["path"])
+    proof = scope.resource("read-root", root)
+    fields = ("device", "inode", "parent_device", "parent_inode")
+    if entry["state"] != "registered" and any(entry.get(key) != proof[key] for key in fields):
+        raise RuntimeError("native resource differs from its original directory handle")
+    if proof["state"] == "allocated" and not proof["unlinked"]:
+        repaired = scope.resource("repair-root", root)
+        if repaired != proof:
+            raise RuntimeError("original native resource changed during permission repair")
+        anchor = proof["anchor"]
+        if native_namespace.active() is scope:
+            # PID 2 cannot borrow a parent user namespace's procfs handles.
+            # Its normal path is accepted only against the still-pinned
+            # parent identity; replacement defers to the outer cleaner.
+            parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        else:
+            # This descriptor link duplicates the original anchored parent,
+            # including after an ancestor pathname has been replaced.
+            parent_fd = os.open(f"/proc/{anchor['pid']}/fd/{anchor['parentFd']}/", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            parent = os.fstat(parent_fd)
+            if (str(parent.st_dev), str(parent.st_ino)) != (proof["parent_device"], proof["parent_inode"]) \
+                    or scope.resource("read-root", root) != proof:
+                raise RuntimeError("original native directory handle changed before cleanup")
+            _remove_directory(parent_fd, root.name, int(proof["device"]), int(proof["inode"]), deadline=deadline)
+        finally:
+            os.close(parent_fd)
+    reclaimed = scope.resource("finish-root", root)
+    if reclaimed["state"] != "reclaimed" or any(reclaimed[key] != proof[key] for key in fields):
+        raise RuntimeError("original native resource reclamation was not confirmed")
+    return reclaimed
+
+
+def cleanup(database: Path, call_id: str, root: Path, *, claim: str | None = None, deadline: float | None = None) -> bool:
+    from . import issue_review
     with _database(database) as conn:
         value = read(conn, call_id)
-    if value.get("process_pending") or any(item["cause"] == "resources_unknown" for item in value["errors"]):
+    if value["version"] == 1:
+        root = root.parent.resolve() / root.name
+    if value.get("process_pending") or value["version"] == 1 and any(item["cause"] == "resources_unknown" for item in value["errors"]):
         return False
     entry = next((entry for entry in value["roots"] if entry["path"] == str(root)), None)
     if entry is None:
         raise RuntimeError("native cleanup lacks a registered directory")
-    if entry["state"] == "reclaimed":
+    if entry["state"] in {"reclaimed", "covered"}:
+        return True
+    if value["version"] == 2:
+        try:
+            reclaimed = _cleanup_native(database, call_id, value, entry, claim, deadline)
+        except (OSError, RuntimeError) as error:
+            failure(database, call_id, str(error), root)
+            return False
+        with _database(database) as conn:
+            conn.execute("begin immediate")
+            value = read(conn, call_id)
+            kept = next(item for item in value["roots"] if item["path"] == str(root))
+            if kept != entry:
+                raise RuntimeError("native resource ownership changed during cleanup")
+            kept.update({key: reclaimed[key] for key in ("state", "device", "inode", "parent_device", "parent_inode", "reclaimed_at")})
+            if any(item.get("path") == str(root) and item["at"] <= reclaimed["reclaimed_at"] for item in value["errors"]):
+                kept["recovered_at"] = kept["reclaimed_at"]
+            _write(conn, call_id, value)
         return True
     try:
-        if value["version"] == 2 and value["namespace"]["state"] == "active":
-            scope = native_namespace.active()
-            if scope is None or scope.key["callId"] != call_id:
-                raise RuntimeError("native disk cleanup lacks its original live or settled namespace")
-            scope.require_idle()
-        elif value["version"] == 2 and value["namespace"]["state"] != "settled":
-            raise RuntimeError("native disk cleanup lacks process settlement")
         if entry["state"] != "allocated":
             raise RuntimeError("native resource allocation identity is incomplete")
         parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -292,6 +421,32 @@ def cleanup(database: Path, call_id: str, root: Path) -> bool:
     return True
 
 
+def acknowledge_recovery(database: Path, call_id: str) -> None:
+    with _database(database) as conn:
+        value = read(conn, call_id)
+    if value["version"] != 2 or not value["errors"]:
+        return
+    if value["namespace"]["state"] != "settled" or value.get("process_pending") \
+            or any(root["state"] not in {"reclaimed", "covered"} for root in value["roots"]):
+        raise RuntimeError("native cleanup recovery lacks complete physical proof")
+    if not original_scope(database, call_id, value).read()["empty"]:
+        raise RuntimeError("original native namespace is not empty")
+    with _database(database) as conn:
+        conn.execute("begin immediate")
+        current = read(conn, call_id)
+        if current != value:
+            raise RuntimeError("native ownership changed before recovery acknowledgement")
+        stamp = time()
+        for error in current["errors"]:
+            error.setdefault("recovered_at", stamp)
+        _write(conn, call_id, current)
+        row = conn.execute("select artifact from calls where id=?", (call_id,)).fetchone()
+        artifact = json.loads(row[0] or "{}")
+        if artifact.get("resource_error") or artifact.get("phase") == "resources_unknown":
+            artifact.setdefault("resource_recovered_at", stamp)
+            conn.execute("update calls set artifact=? where id=?", (json.dumps(artifact), call_id))
+
+
 @contextmanager
 def temporary_directory(prefix: str):
     bound = binding()
@@ -316,10 +471,36 @@ def temporary_directory(prefix: str):
             raise RuntimeError("native temporary resource cleanup is unverified")
 
 
-def cleanup_remaining(database: Path, call_id: str) -> None:
+def cleanup_remaining(database: Path, call_id: str, *, claim: str | None = None, deadline: float | None = None) -> None:
     with _database(database) as conn:
         value = read(conn, call_id)
     # Nested temporary directories are acknowledged before their Call parent.
     for entry in sorted(value["roots"], key=lambda item: len(Path(item["path"]).parts), reverse=True):
-        if entry["state"] != "reclaimed":
-            cleanup(database, call_id, Path(entry["path"]))
+        if deadline is not None and monotonic() >= deadline:
+            return
+        if entry["state"] not in {"reclaimed", "covered"}:
+            cleanup(database, call_id, Path(entry["path"]), claim=claim, deadline=deadline)
+    with _database(database) as conn:
+        value = read(conn, call_id)
+    if value["version"] != 2 or value["namespace"]["state"] != "settled":
+        return
+    for entry in value["roots"]:
+        if entry["state"] != "registered":
+            continue
+        ancestors = [root for root in value["roots"] if root["state"] == "reclaimed"
+                     and entry["path"].startswith(root["path"] + "/")]
+        if not ancestors:
+            continue
+        ancestor = max(ancestors, key=lambda root: len(root["path"]))
+        proof = original_scope(database, call_id, value).resource("read-root", Path(ancestor["path"]))
+        if proof["state"] != "reclaimed" or any(ancestor.get(key) != proof[key]
+                for key in ("device", "inode", "parent_device", "parent_inode", "reclaimed_at")):
+            raise RuntimeError("incomplete native allocation lacks its original ancestor proof")
+        with _database(database) as conn:
+            conn.execute("begin immediate")
+            current = read(conn, call_id)
+            kept = next(root for root in current["roots"] if root["path"] == entry["path"])
+            if kept != entry:
+                raise RuntimeError("native allocation changed before ancestor coverage acknowledgement")
+            kept.update(state="covered", covered_by=ancestor["path"], reclaimed_at=proof["reclaimed_at"])
+            _write(conn, call_id, current)

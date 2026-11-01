@@ -125,7 +125,7 @@ COPY caller /opt/poise/caller
 COPY deploy/runtime/entrypoint.sh deploy/runtime/install-clis.sh /opt/poise/deploy/runtime/
 # The base every release of this image runs on: the supervisor, which runs
 # the current release, and the script the gateway installs a release with.
-COPY deploy/runtime/supervisor.mjs deploy/runtime/install-release.sh /opt/poise-runtime/
+COPY deploy/runtime/supervisor.mjs deploy/runtime/resource-witness.mjs deploy/runtime/install-release.sh /opt/poise-runtime/
 
 # The provider CLIs come first on PATH: they live in the home volume and
 # update themselves there. No identity is baked in; the gateway passes it.

@@ -38,7 +38,8 @@ for entry in Path('/proc').iterdir():
         continue
     addresses.update(value.partition(b'=')[2].decode() for value in environment if value.startswith(b'POISE_NATIVE_CONTROL='))
 assert len(addresses) == 1, addresses
-environment = {**os.environ, 'POISE_NATIVE_CONTROL': addresses.pop(), 'AGENT_INTERFACE_DATA_DIR': '/tmp/setup-component'}
+address = addresses.pop()
+environment = {**os.environ, 'POISE_NATIVE_CONTROL': address, 'AGENT_INTERFACE_DATA_DIR': json.loads(address)['store']['path']}
 for _ in range(2):
     completed = subprocess.run(['agent-interface', '--native-capability'], env=environment,
                                capture_output=True, text=True, timeout=15, check=True)

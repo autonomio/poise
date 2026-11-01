@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseAgentLogStdout } from '../server/agent-log-parse'
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainAdmission, type ChainEvent } from '../server/behavior-chain-store'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
+import { BehaviorResourceRecovery } from '../server/behavior-chain-resource-recovery'
 import type { ChainObservation } from '../server/behavior-chain-decision'
 import type { Organization } from '../server/organizations'
 import { completedReviewCall } from './review-response-fixture'
@@ -63,6 +64,48 @@ function bounded(memory = '10', reservation = '6'): void {
 }
 
 describe('durable behavior resource reservations', () => {
+  it.each(['merged', 'held', 'settled'])("recovers only physical resources for a %s chain without admission or external actions", async mode => {
+    const { journal, chain } = setup()
+    const admitted = { ...invocation('original', RESERVATION), request: { command: 'agent-interface' as const,
+      argv: ['--fixture'], cwd: '/fixture', nativeResources: 2 as const } }
+    let current = record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+    current = record(journal, current, { type: 'invocation.uncertain', invocationId: admitted.id, reason: 'original effect remains uncertain' })
+    current = record(journal, current, { type: 'invocation.reconciled', invocationId: admitted.id,
+      evidence: { artifact: { phase: 'posting_issue_reviews', plan_sha: 'd'.repeat(64) } } })
+    if (mode === 'settled') current = record(journal, current, { type: 'invocation.settled', invocationId: admitted.id,
+      callId: 'c'.repeat(32), outcome: 'retained original outcome', evidence: { status: 'completed', artifact: current.invocations[0].evidence?.artifact } })
+    if (mode === 'held') current = record(journal, current, { type: 'chain.held', reason: 'person paused admissions' })
+    if (mode === 'merged') current = record(journal, current, { type: 'chain.merged', mergeSha: 'a'.repeat(40),
+      evidence: { merged: true, merge_sha: 'a'.repeat(40), repository: chain.repository, pull_number: 9, review_complete: false } })
+    const before = structuredClone(current)
+    const namespace = { state: 'settled', callId: 'c'.repeat(32), correlation: admitted.id, settled_at: 15,
+      controller: { version: 1, instance: 'b'.repeat(32) }, binding: { pid: 4, start: '4', namespace: 'pid:[9]',
+        owner: { pid: 2, start: '2' }, holder: { pid: 3, start: '3' },
+        epoch: { boot: 'fixture', init_start: '1', namespace_dev: '1', namespace_ino: '9' } } }
+    const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer), id: 'c'.repeat(32),
+      behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+      action: 'commented', outcome: 'commented', resources_settled_at: new Date(20_000).toISOString(),
+      artifact: { phase: 'resources_unknown', resource_error: 'retained cleanup cause', resource_recovered_at: 18 },
+      resource_ownership: { version: 2, roots: [], errors: [{ cause: 'resources_unknown', path: null, at: 12, recovered_at: 18 }], namespace } }
+    const read = vi.fn(async () => parseAgentLogStdout(JSON.stringify([call]), 'physical-only recovery fixture'))
+    const recovery = new BehaviorResourceRecovery(journal, read)
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    await recovery.run()
+    expect(journal.liveModelInvocationCount()).toBe(0)
+    const recovered = journal.read(chain.id)!
+    expect(recovered.invocations[0]).toMatchObject({ state: before.invocations[0].state, outcome: before.invocations[0].outcome,
+      callId: before.invocations[0].callId })
+    expect(recovered.held).toBe(before.held)
+    expect(recovered.mergeSha).toBe(before.mergeSha)
+    expect(recovered.invocations[0].evidence?.artifact).toMatchObject({ phase: 'posting_issue_reviews', plan_sha: 'd'.repeat(64), resource_recovered_at: 18 })
+    const history = journal.history(chain.id)
+    await recovery.run()
+    expect(journal.history(chain.id)).toEqual(history)
+    journal.rebuild()
+    expect(journal.history(chain.id)).toEqual(history)
+    expect(journal.read(chain.id)).toEqual(recovered)
+  })
+
   it('admits within the budget and refuses over-budget without double-spend', () => {
     const { journal, chain } = setup()
     const other = seed(journal, 8)

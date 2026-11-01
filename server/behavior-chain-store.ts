@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Database } from 'better-sqlite3'
 import type { BehaviorCutoverState } from '../src/behavior-cutover'
 import { budgetShortfall, type BehaviorResourceBudget, type BehaviorResourceReservation } from './behavior-resources'
-import { nativeResourcesPending } from './behavior-resource-receipt'
+import { nativeResourcesPending, resourceReleaseProven } from './behavior-resource-receipt'
 
 const CUTOVER_ID = '@behavior-admission'
 interface CutoverEvent { type: 'admission.changed', state: BehaviorCutoverState }
@@ -57,6 +57,7 @@ export type ChainEvent =
   | { type: 'invocation.admitted', invocation: ChainAdmission }
   | { type: 'invocation.started', invocationId: string }
   | { type: 'invocation.reconciled', invocationId: string, evidence: Record<string, unknown> }
+  | { type: 'invocation.resources_reconciled', invocationId: string, evidence: Record<string, unknown> }
   | { type: 'invocation.uncertain', invocationId: string, reason: string }
   | { type: 'invocation.settled', invocationId: string, callId: string | null, outcome: string, evidence: Record<string, unknown> }
 
@@ -64,6 +65,21 @@ interface StoredEvent { sequence: number, chain_id: string, event_id: string, at
 const SHA = /^[0-9a-f]{40}$/i
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]+$/
 const MAX_EVENT_BYTES = 256 * 1024
+
+function recordObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function resourceArtifact(prior: unknown, value: unknown): Record<string, unknown> {
+  if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a logical artifact')
+  const original = recordObject(prior) ? prior : {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!['resource_error', 'resource_recovered_at'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+      throw new Error('resource reconciliation cannot change a logical artifact')
+    }
+  }
+  return { ...original, ...value }
+}
 // Resource occupancy is derived from every original invocation, including
 // contradictory historical releases. Index the projection so settled history
 // cannot turn each capacity/observation read into a full journal scan.
@@ -129,6 +145,27 @@ export function reduceChain(current: BehaviorChain | null, event: ChainEvent, se
     if (event.type === 'invocation.started') {
       if (invocation.state !== 'admitted') throw new Error('behavior invocation has already started')
       invocation.state = 'started'
+    } else if (event.type === 'invocation.resources_reconciled') {
+      if (!Object.keys(event.evidence).length || Object.keys(event.evidence).some(key => !['resource_ownership', 'resources_settled_at', 'artifact', 'publicationReceipt'].includes(key))) {
+        throw new Error('resource reconciliation cannot change a behavior outcome')
+      }
+      const evidence = { ...event.evidence }
+      if ('artifact' in evidence) evidence.artifact = resourceArtifact(invocation.evidence?.artifact, evidence.artifact)
+      if ('publicationReceipt' in evidence) {
+        const value = evidence.publicationReceipt
+        if (!recordObject(value)) throw new Error('resource reconciliation cannot erase a publication receipt')
+        const before = invocation.evidence?.publicationReceipt
+        const original = recordObject(before) ? before : {}
+        for (const [key, entry] of Object.entries(value)) {
+          if (!['resource_ownership', 'resources_settled_at', 'artifact'].includes(key) && chainBasis(entry) !== chainBasis(original[key] ?? null)) {
+            throw new Error('resource reconciliation cannot change a publication outcome')
+          }
+        }
+        evidence.publicationReceipt = { ...original, ...value,
+          ...('artifact' in value ? { artifact: resourceArtifact(original.artifact, value.artifact) } : {}) }
+      }
+      if (!resourceReleaseProven({ ...invocation.evidence, ...evidence }, true)) throw new Error('resource reconciliation requires positive original release proof')
+      invocation.evidence = { ...invocation.evidence, ...evidence }
     } else if (event.type === 'invocation.reconciled') {
       if (invocation.state === 'settled' || !Object.keys(event.evidence).length) throw new Error('invalid invocation reconciliation')
       invocation.evidence = { ...invocation.evidence, ...event.evidence }
@@ -396,6 +433,18 @@ export class BehaviorChainJournal {
       WHERE c.resource_pending = 1 AND json_extract(i.value, '$.model') IS NOT NULL
         AND behavior_native_resources_pending(i.value) = 1`).get() as { count: number }
     return row.count
+  }
+
+  /** Includes held/merged historical admissions. It is a resource-only page,
+   * independent of organization readiness and behavior admission controls. */
+  pendingResourcePage(after: { chain: string, position: number }, limit = 16): { chain: BehaviorChain, invocation: ChainInvocation, position: number }[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16 || !Number.isSafeInteger(after.position)) throw new Error('invalid pending resource page')
+    const rows = this.db.prepare(`SELECT c.chain_id AS chain, CAST(i.key AS INTEGER) AS position
+      FROM behavior_chain_current c, json_each(c.state, '$.invocations') i
+      WHERE c.resource_pending = 1 AND behavior_native_resources_pending(i.value) = 1
+        AND (c.chain_id > ? OR (c.chain_id = ? AND CAST(i.key AS INTEGER) > ?))
+      ORDER BY c.chain_id, CAST(i.key AS INTEGER) LIMIT ?`).all(after.chain, after.chain, after.position, limit) as { chain: string, position: number }[]
+    return rows.map(row => { const chain = this.read(row.chain)!; return { chain, invocation: chain.invocations[row.position], position: row.position } })
   }
 
   capacitySnapshot() {

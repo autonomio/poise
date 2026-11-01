@@ -11,6 +11,7 @@ export function behaviorCutoverBlockers(): string[] {
   const blockers: string[] = []
   if (!calls.known) blockers.push('Caller activity is unreadable')
   if (calls.count) blockers.push(`${calls.count} native Caller invocation(s) still running`)
+  if (calls.pendingResources) blockers.push(`${calls.pendingResources} native cleanup(s) still unsettled`)
   const operations = behaviorBackgroundBusy()
   if (operations) blockers.push(`${operations} behavior operation(s) still settling`)
   const leases = db.prepare("SELECT count(*) AS count FROM behavior_seen WHERE key = 'pr-operation' AND claim_id != '' AND lease_until > ?").get(Date.now()) as { count: number }

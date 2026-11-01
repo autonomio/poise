@@ -1,4 +1,6 @@
-import { stat } from 'node:fs/promises'
+import { mkdtemp, rm, stat, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createConnection } from 'node:net'
 import { afterEach, expect, it, vi } from 'vitest'
 import { namespaceControl } from '../deploy/runtime/supervisor.mjs'
@@ -45,8 +47,19 @@ const request = (control, operation, extra = {}) => raw(control.address,
 it('exposes only a private local socket and one controller generation', async () => {
   const { control, open } = await fixture()
   expect((await stat(control.address.path)).mode & 0o777).toBe(0o600)
-  expect((await request(control, 'hello'))).toEqual({ version: 1, instance: control.address.instance, available: true, witnesses: 0, probeAvailable: true })
+  expect((await request(control, 'hello'))).toEqual({ version: 1, instance: control.address.instance, available: true, resourceProtocol: 2, witnesses: 0, probeAvailable: true })
   expect(open).not.toHaveBeenCalled()
+})
+
+it('keeps the v1 controller available when metadata cannot be pinned and reports v2 unsupported', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'poise-native-unsupported-store-'))
+  try {
+    await symlink(root, join(root, 'data'))
+    const control = await namespaceControl({ dataDirectory: join(root, 'data') })
+    controls.push(control)
+    expect(control.address.store).toBeUndefined()
+    expect(await request(control, 'hello')).toMatchObject({ available: true, storeError: expect.stringContaining('metadata handles are unavailable') })
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 it('keeps original evidence across clients and idempotent registration without reopening the kernel handle', async () => {

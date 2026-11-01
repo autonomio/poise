@@ -11,7 +11,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 import agent_interface as api
-from agent_interface import issue_review, review_budget, review_receipt, resource_ownership
+from agent_interface import issue_review, native_namespace, review_budget, review_receipt, resource_ownership
 
 CALL = "a" * 32
 HEAD = "b" * 40
@@ -72,6 +72,38 @@ class ManagedReceipts(TestCase):
         self.conn.commit()
         with self.assertRaisesRegex(RuntimeError, "settled native ownership"):
             review_receipt.work_publication("c" * 40, start_replies=True)
+
+    def active_publication(self):
+        owned = json.loads(resource_ownership.initial(CALL, "original-publication"))
+        owned["namespace"].update(state="active", controller={"version": 1, "instance": "c" * 32},
+                                  binding={"pid": 104, "start": "12", "namespace": "pid:[91]",
+                                           "owner": {"pid": 102, "start": "10"}, "holder": {"pid": 103, "start": "11"},
+                                           "epoch": {"boot": "fixture", "init_start": "1", "namespace_dev": "2", "namespace_ino": "3"}})
+        self.conn.execute("update calls set behavior='repair_pr', action_plan='{}', artifact=?,resource_ownership=?",
+                          (json.dumps({"phase": "publishing", "plan_sha": "c" * 64,
+                                       "publication_head": HEAD, "replies_started": False}), json.dumps(owned)))
+        self.conn.commit()
+        return owned
+
+    def test_original_active_v2_call_can_reserve_its_planned_replies_without_releasing_resources(self):
+        owned = self.active_publication()
+        # Explicit kernel-reader stand-in; actual namespace publication guard
+        # execution belongs to the isolated image component gate.
+        idle = MagicMock()
+        scope = SimpleNamespace(key={"callId": CALL}, require_idle=idle)
+        with patch.object(native_namespace, "active", return_value=scope):
+            review_receipt.work_publication(HEAD, start_replies=True)
+        idle.assert_called_once_with()
+        self.assertFalse(resource_ownership.released(owned))
+        self.assertTrue(json.loads(self.conn.execute("select artifact from calls").fetchone()[0])["replies_started"])
+
+    def test_a_different_or_missing_active_namespace_cannot_borrow_running_publication(self):
+        self.active_publication()
+        for scope in (None, SimpleNamespace(key={"callId": "d" * 32}, require_idle=MagicMock())):
+            with self.subTest(scope=scope), patch.object(native_namespace, "active", return_value=scope), \
+                    self.assertRaisesRegex(RuntimeError, "native ownership"):
+                review_receipt.work_publication(HEAD, start_replies=True)
+        self.assertFalse(json.loads(self.conn.execute("select artifact from calls").fetchone()[0])["replies_started"])
 
     def test_unacknowledged_issue_comment_is_never_reclassified_as_no_write(self):
         self.conn.execute("update calls set status='failed', behavior='issue_review', resources_settled_at=1, action_plan='{}', artifact=?",

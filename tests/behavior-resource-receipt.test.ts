@@ -9,6 +9,29 @@ const NAMESPACE = { state: 'active', callId: 'a'.repeat(32), correlation: 'origi
     epoch: { boot: 'test-epoch', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } }
 
 describe('native resource receipt boundary', () => {
+  it('covers interrupted namespace/null/path errors only with complete original physical recovery', () => {
+    const error = { cause: 'resources_unknown', path: null, at: 12, recovered_at: 18 }
+    const value = { version: 2, roots: [ROOT], errors: [error], namespace: { ...NAMESPACE, state: 'settled', settled_at: 15 } }
+    const artifact = { phase: 'resources_unknown', resource_error: 'retained original cause', resource_recovered_at: 18 }
+    const proof = { resources_settled_at: new Date(20_000).toISOString(), artifact, resource_ownership: value }
+    expect(resourceReleaseProven(proof, true)).toBe(true)
+    expect(resourceReleaseProven({ ...proof, artifact: { ...artifact, resource_recovered_at: 17 } }, true)).toBe(false)
+    expect(resourceReleaseProven({ ...proof, resource_ownership: { ...value, errors: [{ ...error, recovered_at: undefined }] } }, true)).toBe(false)
+    expect(resourceReleaseProven({ ...proof, resource_ownership: { ...value, process_pending: true } }, true)).toBe(false)
+    expect(resourceReleaseProven({ ...proof, resources_settled_at: new Date(17_000).toISOString() }, true)).toBe(false)
+  })
+
+  it('covers a never-allocated descendant only through an actually reclaimed original ancestor', () => {
+    const child = { path: `${ROOT.path}/partial`, state: 'covered', covered_by: ROOT.path, reclaimed_at: ROOT.reclaimed_at }
+    const value = { ...OWNED, version: 2, roots: [ROOT, child], namespace: { ...NAMESPACE, state: 'settled', settled_at: 15 } }
+    expect(resourceOwnershipReleased(parseResourceOwnership(value))).toBe(true)
+    for (const change of [{ path: `${ROOT.path}-preparation` }, { path: `${ROOT.path}/../foreign` },
+      { covered_by: '/foreign' }, { inode: '9' }, { reclaimed_at: 11 }]) {
+      expect(() => parseResourceOwnership({ ...value, roots: [ROOT, { ...child, ...change }] })).toThrow(/native/)
+    }
+    expect(() => parseResourceOwnership({ ...value, version: 1, namespace: undefined })).toThrow(/native/)
+  })
+
   it('requires original namespace settlement independently of completed disk cleanup', () => {
     const active = { ...OWNED, version: 2, namespace: NAMESPACE }
     const evidence = { resources_settled_at: new Date(20_000).toISOString() }
