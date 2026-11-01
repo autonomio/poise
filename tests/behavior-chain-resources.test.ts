@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parseAgentLogStdout } from '../server/agent-log-parse'
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainAdmission, type ChainEvent } from '../server/behavior-chain-store'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
 import type { ChainObservation } from '../server/behavior-chain-decision'
 import type { Organization } from '../server/organizations'
+import { completedReviewCall } from './review-response-fixture'
 
 const mocks = vi.hoisted(() => ({ spawnDetached: vi.fn() }))
 vi.mock('../server/process', () => ({ runFile: vi.fn(), spawnDetached: mocks.spawnDetached }))
@@ -89,7 +91,7 @@ describe('durable behavior resource reservations', () => {
     let current = record(journal, journal.read(chain.id)!, { type: 'invocation.uncertain', invocationId: 'one', reason: 'worker ended without proof of release' })
     expect(journal.reservedResources().memoryBytes).toBe(6)
     current = record(journal, current, { type: 'invocation.reconciled', invocationId: 'one',
-      evidence: { resources_settled_at: new Date(NOW).toISOString() } })
+      evidence: { resources_settled_at: new Date(NOW).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
     expect(journal.reservedResources().memoryBytes).toBe(0)
     current = record(journal, current, { type: 'invocation.settled', invocationId: 'one', callId: 'native',
       outcome: 'commented', evidence: { status: 'completed', resources_settled_at: new Date(NOW).toISOString() } })
@@ -128,6 +130,124 @@ describe('durable behavior resource reservations', () => {
 })
 
 describe('resource-aware behavior admission', () => {
+  it('retains the person Stop intent while cleanup is uncertain and after its later verified release', async () => {
+    const { journal, chain } = setup()
+    const admitted = { ...invocation('stopped-original', RESERVATION), admittedAt: Date.now() - 3000 }
+    record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+    const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+      behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+      status: 'failed', error_code: 'stopped', error: 'Stopped by user', action: null, outcome: null,
+      head_sha: null, expected_head: null, review_id: null, artifact: null, receipts: null,
+      resource_ownership: { version: 1, roots: [], errors: [] }, resources_settled_at: null as string | null }
+    const runtime = new BehaviorChainRuntime(journal, operations({ enabled: () => false,
+      readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'original Stop resource receipt') }))
+    await runtime.run()
+    expect(journal.read(chain.id)!.held).toContain('stopped by the person')
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    call.resources_settled_at = new Date().toISOString()
+    await runtime.run()
+    expect(journal.read(chain.id)!.held).toContain('stopped by the person')
+    expect(journal.liveModelInvocationCount()).toBe(0)
+    expect(journal.read(chain.id)!.invocations).toHaveLength(1)
+  })
+
+  it('retains a modern unsettled native invocation when its historical Call has no ownership record', async () => {
+    const { journal, chain } = setup()
+    const admitted = { ...invocation('ownership-missing', RESERVATION), admittedAt: Date.now() - 3000 }
+    const current = record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+    record(journal, current, { type: 'invocation.started', invocationId: admitted.id })
+    const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+      behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+      head_sha: null, expected_head: null, action: 'commented', outcome: 'commented', review_id: null, artifact: null,
+      resources_settled_at: new Date().toISOString(),
+      receipts: [{ issue: `${chain.repository}#${chain.issue}`, comment_id: 17, author: chain.reviewer, url: null }] }
+    await new BehaviorChainRuntime(journal, operations({ enabled: () => false,
+      readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'historical ownership unavailable') })).run()
+    expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
+    expect(journal.liveModelInvocationCount()).toBe(1)
+    expect(journal.reservedResources()).toEqual({ ...RESERVATION, unaccounted: 0 })
+  })
+
+  it.each([{ resource_error: 'cleanup_failed' }, { phase: 'resources_unknown' }])(
+    're-holds contradictory releases already in immutable history: %j', artifact => {
+      const { journal, chain } = setup()
+      let current = record(journal, chain, { type: 'invocation.admitted', invocation: invocation('historical', RESERVATION) })
+      current = record(journal, current, { type: 'invocation.settled', invocationId: 'historical', callId: 'old-call',
+        outcome: 'commented', evidence: { status: 'completed', artifact, resources_settled_at: new Date(NOW).toISOString() } })
+      record(journal, current, { type: 'chain.merged', mergeSha: 'a'.repeat(40), evidence: { review_complete: true,
+        repository: chain.repository, pull_number: 17, merged: true, merge_sha: 'a'.repeat(40) } })
+      const history = journal.history(chain.id)
+      expect(journal.liveModelInvocationCount()).toBe(1)
+      expect(journal.reservedResources()).toEqual({ ...RESERVATION, unaccounted: 0 })
+      expect(journal.admitInvocation(journal.read(chain.id)!, 'blocked-next-phase', {
+        ...invocation('next-phase'), model: null, slot: null, behavior: 'merge-pr',
+        request: { command: 'github-interface', argv: [], cwd: '/fixture' },
+      }, 10)).toBeNull()
+      journal.rebuild()
+      expect(journal.history(chain.id)).toEqual(history)
+      expect(journal.liveModelInvocationCount()).toBe(1)
+    })
+
+  it('migrates the existing projection index and re-holds contradictions without changing historical evidence', () => {
+    const { db, journal, chain } = setup()
+    let current = record(journal, chain, { type: 'invocation.admitted', invocation: invocation('old-release', RESERVATION) })
+    current = record(journal, current, { type: 'invocation.settled', invocationId: 'old-release', callId: 'old-call', outcome: 'commented',
+      evidence: { resources_settled_at: new Date(NOW).toISOString(), artifact: { resource_error: 'cleanup_failed' } } })
+    const history = journal.history(chain.id)
+    db.exec(`DROP INDEX behavior_chain_reconciliation; DROP INDEX behavior_chain_resource_pending;
+      ALTER TABLE behavior_chain_current DROP COLUMN resource_pending;
+      CREATE INDEX behavior_chain_reconciliation ON behavior_chain_current(merged, chain_id);`)
+    const reopened = new BehaviorChainJournal(db)
+    expect(reopened.read(chain.id)).toEqual(current)
+    expect(reopened.history(chain.id)).toEqual(history)
+    expect(reopened.reservedResources()).toEqual({ ...RESERVATION, unaccounted: 0 })
+    expect(db.prepare("SELECT sql FROM sqlite_master WHERE name='behavior_chain_reconciliation'").get()).toMatchObject({
+      sql: expect.stringContaining('resource_pending'),
+    })
+  })
+
+  it('preserves a person hold when historical resource contradictions are discovered', async () => {
+    const { journal, chain } = setup()
+    let current = record(journal, chain, { type: 'invocation.admitted', invocation: invocation('old-release', RESERVATION) })
+    current = record(journal, current, { type: 'invocation.settled', invocationId: 'old-release', callId: 'old-call', outcome: 'commented',
+      evidence: { resources_settled_at: new Date(NOW).toISOString(), artifact: { resource_error: 'cleanup_failed' } } })
+    record(journal, current, { type: 'chain.held', reason: 'New invocations held by the person' })
+    const observe = vi.fn(async () => { throw new Error('contradiction cannot authorize another GitHub observation') })
+    await new BehaviorChainRuntime(journal, operations({ enabled: () => false, observe })).run()
+    expect(journal.read(chain.id)).toMatchObject({ held: 'New invocations held by the person',
+      waiting: expect.stringContaining('contradictory resource-release evidence') })
+    expect(observe).not.toHaveBeenCalled()
+    expect(journal.liveModelInvocationCount()).toBe(1)
+  })
+
+  it.each([{ phase: 'posted', resource_error: 'cleanup_failed' }, { phase: 'resources_unknown' }])(
+    'retains native reservations when release timestamps contradict $phase evidence', async artifact => {
+      const { journal, chain } = setup()
+      const admitted = { ...invocation('one', RESERVATION), admittedAt: Date.now() - 3000 }
+      let current = record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+      record(journal, current, { type: 'invocation.started', invocationId: admitted.id })
+      const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+        behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+        head_sha: null, expected_head: null, action: 'commented', outcome: 'commented', review_id: null,
+        artifact, resources_settled_at: new Date().toISOString(),
+        receipts: [{ issue: `${chain.repository}#${chain.issue}`, comment_id: 17, author: chain.reviewer, url: null }] }
+      const noAction = vi.fn(async () => { throw new Error('contradictory native resource evidence grants no execution authority') })
+      const ops = operations({ enabled: () => false,
+        readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'native resource receipt fixture'),
+        request: noAction, launch: noAction, perform: noAction, resumePublication: noAction })
+      await new BehaviorChainRuntime(journal, ops).run()
+      current = journal.read(chain.id)!
+      expect(current.invocations[0].state).toBe('uncertain')
+      expect(journal.liveModelInvocationCount()).toBe(1)
+      expect(journal.reservedResources()).toEqual({ ...RESERVATION, unaccounted: 0 })
+      expect(noAction).not.toHaveBeenCalled()
+      expect(parseAgentLogStdout(JSON.stringify([call]), 'same retained native receipt').quarantined).toHaveLength(1)
+      const events = journal.history(chain.id)
+      journal.rebuild()
+      expect(journal.history(chain.id)).toEqual(events)
+      expect(journal.read(chain.id)).toEqual(current)
+    })
+
   it('waits with an explicit reason and no provider preparation while exhausted, then admits after release', async () => {
     bounded()
     const { journal, chain } = setup()

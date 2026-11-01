@@ -1,10 +1,11 @@
+import json
 import os
 import tempfile
 import threading
 from pathlib import Path
 from time import time
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import agent_interface
 
@@ -88,8 +89,11 @@ class InterruptedCallsCase(TestCase):
             with patch.object(agent_interface, "init_started_at", return_value=self.now):
                 agent_interface.reap_interrupted()
 
+        pinned = MagicMock()
+        pinned.__enter__.return_value.signal.side_effect = lambda sig: reaped_meanwhile(4242, sig)
+        pinned.__enter__.return_value.wait.return_value = True
         with patch.object(agent_interface, "process_command", side_effect=[AGENT, None, None]), \
-                patch.object(agent_interface, "signal_group", side_effect=reaped_meanwhile):
+                patch.object(agent_interface.process_identity, "pinned", return_value=pinned):
             result = agent_interface.stop_call(id_)
         self.assertEqual(result, {"id": id_, "stopped": True, "status": "failed", "error_code": "stopped"})
         self.assertEqual(self.row(id_)["error_code"], "stopped")
@@ -116,9 +120,12 @@ class InterruptedCallsCase(TestCase):
             reaped.set()
 
         reaper = threading.Thread(target=reap)
+        pinned = MagicMock()
+        pinned.__enter__.return_value.signal.side_effect = lambda sig: kill(4242, sig)
+        pinned.__enter__.return_value.wait.return_value = True
         with patch.object(agent_interface, "init_started_at", return_value=None), \
                 patch.object(agent_interface, "process_command", side_effect=command), \
-                patch.object(agent_interface, "signal_group", side_effect=kill):
+                patch.object(agent_interface.process_identity, "pinned", return_value=pinned):
             reaper.start()
             self.assertTrue(read.wait(5))
             result = agent_interface.stop_call(id_)
@@ -134,3 +141,44 @@ class InterruptedCallsCase(TestCase):
         self.assertEqual(self.row(done)["status"], "completed")
         self.assertEqual(self.row(turn)["status"], "running")
         self.assertEqual(self.row(old)["status"], "running")
+
+    def test_native_cleanup_failure_survives_recovery_without_freeing_its_resources(self):
+        for previous_epoch in (False, True):
+            for status in ("running", "completed", "failed"):
+                with self.subTest(previous_epoch=previous_epoch, status=status):
+                    id_ = agent_interface.track("fixture-model", "original review", repo="acme/app", pr_id="7",
+                                                actor="reviewer", behavior="pr_review", expected_head="a" * 40,
+                                                source="poise:behavior-chain")
+                    root = Path(self.work.name) / id_
+                    root.mkdir()
+                    retained = root / "owned-build-output"
+                    retained.write_bytes(b"not yet reclaimed")
+                    artifact = json.dumps({"phase": "review_submitted", "resource_root": str(root),
+                                           "resource_error": "cleanup_failed"})
+                    receipts = json.dumps([{"review_id": 91}])
+                    with agent_interface.db() as conn:
+                        conn.execute("update calls set pid='4242', status=?, started_at=?, artifact=?, "
+                                     "action_plan=?, receipts=?, review_id=91 where id=?",
+                                     (status, self.now - 7200, artifact, "original publication plan", receipts, id_))
+                    epoch = self.now - 3600 if previous_epoch else self.now - 10800
+                    with patch.object(agent_interface, "init_started_at", return_value=epoch), \
+                            patch.object(agent_interface, "process_command", return_value=None), \
+                            patch.object(agent_interface.issue_review, "_cwd_pids", return_value=[]):
+                        agent_interface.reap_interrupted()
+                    with agent_interface.db() as conn:
+                        row = conn.execute("select artifact, action_plan, receipts, review_id, resources_settled_at "
+                                           "from calls where id=?", (id_,)).fetchone()
+                    self.assertIsNone(row["resources_settled_at"], "process loss is not disposable disk reclamation")
+                    self.assertTrue(retained.is_file())
+                    self.assertEqual((row["artifact"], row["action_plan"], row["receipts"], row["review_id"]),
+                                     (artifact, "original publication plan", receipts, "91"))
+
+    def test_a_forward_wall_clock_step_does_not_interrupt_or_release_a_live_native_supervisor(self):
+        call = agent_interface.track("fixture-model", "native epoch contract", repo="acme/app", pr_id="7",
+                                     actor="reviewer", behavior="pr_review", source="poise:behavior-chain")
+        with patch.object(agent_interface, "init_started_at", return_value=self.now + 24 * 3600), \
+                patch.object(agent_interface, "process_command", return_value=AGENT):
+            agent_interface.reap_interrupted()
+        with agent_interface.db() as conn:
+            row = conn.execute("select status,resources_settled_at from calls where id=?", (call,)).fetchone()
+        self.assertEqual((row["status"], row["resources_settled_at"]), ("running", None))

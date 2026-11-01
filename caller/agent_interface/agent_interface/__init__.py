@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from time import sleep, time
@@ -26,9 +27,11 @@ from . import (
     pr_approve,
     pr_review,
     pr_stop_gate,
+    process_identity,
     progress,
     review_budget,
     review_receipt,
+    resource_ownership,
 )
 from .model_catalog import CATALOG, ModelCatalogError
 from .process_diagnostic import diagnostic_envelope
@@ -43,10 +46,12 @@ RESPONSES = DATA_DIR / "responses"
 LOG_OWNER_SQL = "lower(substr(repo || '/',1,instr(repo || '/','/')-1))"
 
 
+@contextmanager
 def db():
-    conn = sqlite3.connect(DB, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+    with closing(sqlite3.connect(DB, timeout=30)) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            yield conn
 
 
 def init_db():
@@ -99,6 +104,8 @@ def init_db():
             "resources_settled_at",
             "issue_revision",
             "action_plan",
+            "process_identity",
+            "resource_ownership",
         ):
             if col not in cols:
                 try:
@@ -199,8 +206,8 @@ def track(
         conn.execute(
             """insert into calls (
                  id, model, prompt, started_at, status, pr_id, repo, actor,
-                 behavior, session_id, expected_head, source, correlation_id, pid, runner
-               ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 behavior, session_id, expected_head, source, correlation_id, pid, runner, process_identity, resource_ownership
+               ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 id_,
                 model,
@@ -216,6 +223,8 @@ def track(
                 correlation_id,
                 None if runner else str(os.getpid()),
                 runner,
+                None if runner else process_identity.capture(os.getpid()),
+                resource_ownership.initial() if source == "poise:behavior-chain" and not runner else None,
             ),
         )
     return id_
@@ -346,12 +355,11 @@ def record_turn_finish(id_: str, status: str, error: str | None = None) -> dict:
 
 
 # ── --stop ─────────────────────────────────────────────────────────────
-# A running call is this process and whatever provider CLI it started, all in
-# one process group when the caller detached us (Poise does). Governed reviews
-# start their provider in its own session and stop it themselves on SIGTERM.
+# Stop pins only its recorded supervisor; its SIGTERM handlers own graceful
+# provider shutdown. A missing supervisor is not complete-tree settlement.
 STOP_GRACE_SECONDS = 5.0
-# What the recorded pid must be running before it is signalled; a pid can be
-# reused by an unrelated process once the call's process has died.
+# Historical non-native reaping still uses its old age/command rule. This
+# marker never grants signal authority or native resource-release proof.
 STOP_COMMAND_MARK = "agent-interface"
 
 
@@ -362,27 +370,9 @@ def process_command(pid: int) -> str | None:
     return done.stdout.strip() or None
 
 
-def signal_group(pid: int, signum: int) -> None:
-    try:
-        os.killpg(os.getpgid(pid), signum)
-    except ProcessLookupError:
-        return
-    except PermissionError:
-        os.kill(pid, signum)
-
-
-def wait_gone(pid: int, seconds: float) -> bool:
-    deadline = time() + seconds
-    while time() < deadline:
-        if process_command(pid) is None:
-            return True
-        sleep(0.1)
-    return process_command(pid) is None
-
-
 def stop_call(id_: str) -> dict:
     with db() as conn:
-        row = conn.execute("select id, status, pid, runner, source from calls where id=?", (id_,)).fetchone()
+        row = conn.execute("select id, status, pid, runner, source, process_identity from calls where id=?", (id_,)).fetchone()
     if row is None:
         raise ValueError("unknown call id")
     if row["status"] != "running":
@@ -395,17 +385,16 @@ def stop_call(id_: str) -> dict:
     if not row["pid"]:
         raise RuntimeError("this call recorded no process id; it started before stop support")
     pid = int(row["pid"])
-    command = process_command(pid)
-    if command is not None and STOP_COMMAND_MARK not in command:
-        raise RuntimeError(f"pid {pid} now belongs to another process; the call is not running")
-    # Marked first, so a call that ends meanwhile reads as stopped, never as interrupted.
-    with db() as conn:
-        conn.execute("update calls set error_code='stopping' where id=? and status='running'", (id_,))
-    if command is not None:
-        signal_group(pid, signal.SIGTERM)
-        if not wait_gone(pid, STOP_GRACE_SECONDS):
-            signal_group(pid, signal.SIGKILL)
-            wait_gone(pid, 2.0)
+    with process_identity.pinned(row["process_identity"], pid) as process:
+        # A verified leader receives SIGTERM and unwinds its own provider
+        # handlers. Numeric killpg after verification would reopen PID reuse.
+        with db() as conn:
+            conn.execute("update calls set error_code='stopping' where id=? and status='running'", (id_,))
+        if process is not None:
+            process.signal(signal.SIGTERM)
+            if not process.wait(STOP_GRACE_SECONDS):
+                process.signal(signal.SIGKILL)
+                process.wait(2.0)
     # The process may have finished its own row in the grace period.
     with db() as conn:
         changed = conn.execute(
@@ -478,23 +467,28 @@ def init_started_at() -> float | None:
 
 
 def reap_interrupted() -> int:
-    """Marks a running call failed once nothing of it can still run, so what
-    launched it tries again rather than reading it as running for good: it
-    started before this container's init did, so a restart ended all its
-    processes; or its agent-interface process has been gone after
-    ORPHAN_AFTER_SECONDS. A supervisor gone sooner is not enough, since its
-    providers may live on and still post. A call being stopped reads as
-    stopped, as stop_call would have recorded it; any other as interrupted.
-    Calls Poise runs itself record no pid and are left to it."""
+    """Historical non-native calls retain their age-based status reaping.
+    Native supervisor loss uses its recorded kernel identity, never wall-clock
+    epoch order. Its interrupted status grants neither resource release nor
+    retry authority. Terminal native rows need no reaping or process scan;
+    verified cleanup is separate and never runs in these log reads."""
     init = init_started_at()
     now = time()
     with db() as conn:
         rows = conn.execute(
-            "select id, pid, started_at, source, artifact from calls where runner is null and pid is not null "
-            "and (status='running' or (source='poise:behavior-chain' and resources_settled_at is null))"
+            "select id, pid, started_at, source, process_identity from calls "
+            "where status='running' and runner is null and pid is not null"
         ).fetchall()
     ended = []
     for row in rows:
+        if row["source"] == "poise:behavior-chain":
+            try:
+                observed = process_identity.state(row["process_identity"], int(row["pid"]))
+            except (RuntimeError, TypeError, ValueError):
+                continue
+            if observed != "alive":
+                ended.append(row["id"])
+            continue
         started = float(row["started_at"] or 0)
         if init is None or started >= init:
             if row["source"] != "poise:behavior-chain" and now - started < ORPHAN_AFTER_SECONDS:
@@ -506,26 +500,9 @@ def reap_interrupted() -> int:
             command = process_command(pid)
             if command is not None and STOP_COMMAND_MARK in command:
                 continue
-            if row["source"] == "poise:behavior-chain":
-                # A missing parent alone cannot prove detached provider
-                # descendants stopped. Retain ownership without proof.
-                try:
-                    root = json.loads(row["artifact"] or "{}").get("resource_root")
-                except (ValueError, AttributeError):
-                    continue
-                if not root or issue_review._cwd_pids(Path(root), require_complete=True) != []:
-                    continue
         ended.append(row["id"])
     count = 0
     with db() as conn:
-        if init is not None:
-            # A restarted PID namespace ended every old worker, including
-            # calls Stop had already made terminal before the crash.
-            old = conn.execute("select id from calls where source='poise:behavior-chain' and status!='running' "
-                               "and resources_settled_at is null and started_at < ?", (init,)).fetchall()
-            for row in old:
-                conn.execute("update calls set resources_settled_at=? where id=?", (now, row["id"]))
-                mark_managed_no_write(conn, row["id"])
         for id_ in ended:
             # Whether it is being stopped is read by the update itself: stop_call
             # may have marked it, and ended its worker, since the select above.
@@ -533,11 +510,9 @@ def reap_interrupted() -> int:
                 "update calls set status='failed', ended_at=?, "
                 "error=case when error_code='stopping' then 'Stopped by user' else ? end, "
                 "error_code=case when error_code='stopping' then 'stopped' else 'interrupted' end, "
-                "resources_settled_at=case when source='poise:behavior-chain' then ? else resources_settled_at end, "
                 "progress=coalesce(?, progress) where id=? and status='running'",
-                (now, INTERRUPTED_ERROR, now, progress.terminal("failed"), id_),
+                (now, INTERRUPTED_ERROR, progress.terminal("failed"), id_),
             ).rowcount
-            conn.execute("update calls set resources_settled_at=? where id=? and source='poise:behavior-chain' and resources_settled_at is null", (now, id_))
             mark_managed_no_write(conn, id_)
     return count
 
@@ -546,7 +521,7 @@ LOG_ROW_COLUMNS = """id, model, prompt, started_at, ended_at, status,
     response_path, error, pr_id, repo, actor, behavior,
     session_id, outcome, head_sha, expected_head, source,
     correlation_id, action, error_code, progress, review_policy, recovery_model,
-    review_id, runner, receipts, review_comments, diagnostic, artifact, resources_settled_at, issue_revision"""
+    review_id, runner, receipts, review_comments, diagnostic, artifact, resources_settled_at, issue_revision, resource_ownership"""
 
 
 def _log_row(r) -> dict:
@@ -583,6 +558,7 @@ def _log_row(r) -> dict:
         "runner": r["runner"],
         "receipts": _receipts(r["receipts"]),
         "artifact": json.loads(r["artifact"]) if r["artifact"] else None,
+        "resource_ownership": json.loads(r["resource_ownership"]) if r["resource_ownership"] else None,
         "resources_settled_at": utc_stamp(float(r["resources_settled_at"])) if r["resources_settled_at"] else None,
         "issue_revision": r["issue_revision"],
     }
@@ -871,7 +847,7 @@ def run_issue_review(
     source = atoms.source(source)
     correlation_id = atoms.correlation_id(correlation_id)
     id_ = track(spec.identity, note, str(number), repo, actor, "issue_review", source=source, correlation_id=correlation_id)
-    run_dir = issue_review.WORK_ROOT / id_
+    run_dir = resource_ownership.call_directory(DB, id_) if source == "poise:behavior-chain" else issue_review.WORK_ROOT / id_
     issue_review.sweep()
     stamp_ = {"id": id_, "behavior": "issue_review", "issue": issue_review.ref(repo, number), "actor": actor,
               "source": source, "correlation_id": correlation_id}
@@ -992,7 +968,9 @@ def run_issue_review(
         raise
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
-        if not issue_review.cleanup(run_dir):
+        if source == "poise:behavior-chain":
+            resource_ownership.cleanup_remaining(DB, id_)
+        elif not issue_review.cleanup(run_dir):
             record_cleanup_failure(id_)
 
 
@@ -1111,7 +1089,7 @@ def complete_atomic_publication(call_id: str, digest: str, head: str) -> dict:
     prepared = artifact.get("prepared") or {}
     if not row or row["source"] != "poise:behavior-chain" or row["behavior"] != "repair_pr" \
             or row["status"] != "failed" or row["error_code"] in {"stopping", "stopped"} \
-            or row["resources_settled_at"] is None or artifact.get("resource_error") \
+            or not resource_ownership.publication_released(row["resources_settled_at"], row["resource_ownership"], artifact) \
             or plan["sha"] != digest or artifact.get("plan_sha") != digest or plan["plan"].get("kind") != "atomic_work" \
             or artifact.get("phase") != "publishing" or artifact.get("publication_head") != head \
             or artifact.get("replies_started") is not False or not re.fullmatch(r"[0-9a-f]{40}", head):
@@ -1148,12 +1126,14 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
     behavior = "repair_pr" if pull is not None else "implement_issue"
     id_ = track(spec.identity, note, str(pull if pull is not None else number), repo, actor, behavior,
                 expected_head=expected_head, source=source, correlation_id=correlation_id)
-    run_dir = issue_review.WORK_ROOT.parent / "atomic-work" / id_
+    run_dir = resource_ownership.call_directory(DB, id_) if source == "poise:behavior-chain" else issue_review.WORK_ROOT.parent / "atomic-work" / id_
     issue_review.sweep()
     artifact = {"phase": "preparing"}
 
     def record(value: dict) -> None:
         nonlocal artifact
+        if value.get("phase") == "resources_unknown" and source == "poise:behavior-chain":
+            resource_ownership.process_check(DB, id_)
         if "publication" in value:
             digest = persist_action_plan(id_, {"kind": "atomic_work", "publication": value["publication"]})
             artifact = {key: item for key, item in value.items() if key != "publication"}
@@ -1161,10 +1141,13 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
         else:
             artifact = value
         artifact["resource_root"] = str(run_dir)
-        encoded = json.dumps(artifact)
-        if len(encoded.encode()) > 128 * 1024:
-            raise ValueError("atomic behavior receipt is oversized")
         with db() as conn:
+            conn.execute("begin immediate")
+            prior = conn.execute("select artifact from calls where id=?", (id_,)).fetchone()
+            artifact = {**json.loads(prior[0] or "{}"), **artifact}
+            encoded = json.dumps(artifact)
+            if len(encoded.encode()) > 128 * 1024:
+                raise ValueError("atomic behavior receipt is oversized")
             if conn.execute("update calls set artifact=? where id=? and status='running'", (encoded, id_)).rowcount != 1:
                 raise RuntimeError("atomic behavior no longer owns its durable call")
 
@@ -1186,6 +1169,8 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
                               "correlation_id": correlation_id, "model": spec.identity, "artifact": artifact, **result}))
     except BaseException as error:
         if isinstance(error, atomic_work.checkout_lock.WorkerOrphaned):
+            if source == "poise:behavior-chain":
+                resource_ownership.failure(DB, id_, "resources_unknown", run_dir)
             record({**artifact, "phase": "resources_unknown"})
         with db() as conn:
             row = conn.execute("select error_code from calls where id=?", (id_,)).fetchone()
@@ -1198,7 +1183,9 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
         raise
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
-        if not issue_review.cleanup(run_dir):
+        if source == "poise:behavior-chain":
+            resource_ownership.cleanup_remaining(DB, id_)
+        elif not issue_review.cleanup(run_dir):
             record_cleanup_failure(id_)
 
 
@@ -2321,13 +2308,16 @@ def main():
         # authorizes the chain's next invocation.
         if flag_value("--source") == "poise:behavior-chain" and flag_value("--correlation-id"):
             with db() as conn:
-                conn.execute("update calls set resources_settled_at=? where correlation_id=? and pid=? and status != 'running' "
-                             "and coalesce(json_extract(artifact, '$.phase'), '') != 'resources_unknown' "
-                             "and json_extract(artifact, '$.resource_error') is null",
-                             (time(), flag_value("--correlation-id"), str(os.getpid())))
-                row = conn.execute("select id from calls where correlation_id=? and pid=?", (flag_value("--correlation-id"), str(os.getpid()))).fetchone()
-                if row is not None:
-                    mark_managed_no_write(conn, row["id"])
+                row = conn.execute("select id,status,process_identity from calls where correlation_id=? and pid=?",
+                                   (flag_value("--correlation-id"), str(os.getpid()))).fetchone()
+            if row is not None and row["status"] != "running" and process_identity.owns_registration(row["process_identity"]):
+                resource_ownership.cleanup_remaining(DB, row["id"])
+                with db() as conn:
+                    ownership = resource_ownership.read(conn, row["id"])
+                    if resource_ownership.released(ownership):
+                        conn.execute("update calls set resources_settled_at=? where id=? and status != 'running' "
+                                     "and resources_settled_at is null", (time(), row["id"]))
+                        mark_managed_no_write(conn, row["id"])
 
 
 def _main():

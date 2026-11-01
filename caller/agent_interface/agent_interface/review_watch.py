@@ -5,13 +5,14 @@ import json
 import os
 import re
 import signal
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
 from time import monotonic, sleep
 from threading import current_thread, main_thread
 
-from . import atoms, progress, review_budget, review_receipt
+from . import atoms, progress, review_budget, review_receipt, resource_ownership
 from .review_gate import cancel_when_idle, submission_active
 from .provider_progress import ProviderStream, READ_BYTES
 
@@ -158,14 +159,19 @@ class ReviewWatch:
         self.head = atoms.expected_head(head)
 
     def __enter__(self):
-        self.directory = tempfile.TemporaryDirectory(prefix="agent-interface-review-watch-")
-        self.gate_path = str(Path(self.directory.name) / "submission.lock")
-        Path(self.gate_path).touch(mode=0o600)
-        self.receipt_path = str(Path(self.directory.name) / "receipt.json")
+        self.directory = resource_ownership.temporary_directory(prefix="agent-interface-review-watch-")
+        work = self.directory.__enter__()
+        try:
+            self.gate_path = str(Path(work) / "submission.lock")
+            Path(self.gate_path).touch(mode=0o600)
+            self.receipt_path = str(Path(work) / "receipt.json")
+        except BaseException:
+            self.directory.__exit__(*sys.exc_info())
+            raise
         return self
 
     def __exit__(self, *exc):
-        self.directory.cleanup()
+        self.directory.__exit__(*exc)
 
     def changed_head(self, timeout: float) -> str | None:
         try:

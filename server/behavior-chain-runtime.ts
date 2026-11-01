@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentLogSnapshot, LogEntry } from './agent-log-parse'
+import { resourceReleaseContradicted, resourceReleaseProven } from './behavior-resource-receipt'
 import type { DetachedProcessExit } from './process'
 import { chainReviewResponse, closedChainTarget, decideBehaviorChain, type ChainDecision, type ChainObservation } from './behavior-chain-decision'
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainEvent, type ChainInvocation } from './behavior-chain-store'
@@ -41,7 +42,17 @@ function receipt(call: LogEntry): Record<string, unknown> {
     review_id: call.review_id ?? null, receipts: call.receipts ?? null, artifact: call.artifact ?? null,
     issue_revision: call.issue_revision ?? null,
     resources_settled_at: call.resources_settled_at ?? null,
+    resource_ownership: call.resource_ownership ?? null,
     error: call.error, error_code: call.error_code ?? null, completedAt: call.completed_at ? Date.parse(call.completed_at) : null }
+}
+
+function nativeResourcesReleased(call: LogEntry): boolean {
+  const fence = call.outcome === 'target_closed' && call.artifact?.phase === 'admission_fenced'
+  return resourceReleaseProven(receipt(call), !fence)
+}
+
+function sameReceipt(prior: Record<string, unknown> | null, next: Record<string, unknown>): boolean {
+  return Object.entries(next).every(([key, value]) => chainBasis(prior?.[key] ?? null) === chainBasis(value ?? null))
 }
 
 class ClosedTargetFenceError extends Error {}
@@ -141,20 +152,28 @@ export class BehaviorChainRuntime {
           if (Date.now() - began > 45_000) break
           this[cursorKey] = chain.id
           if (!this.operations.ownsRepository(chain.repository)) continue
+          const contradicted = chain.invocations.find(invocation => invocation.model !== null && invocation.evidence
+            && resourceReleaseContradicted(invocation.evidence))
+          if (contradicted) {
+            const cause = `Invocation ${contradicted.id} has contradictory resource-release evidence; ownership remains held`
+            if (!chain.held) this.append(chain, { type: 'chain.held', reason: cause })
+            else if (chain.held !== cause && chain.waiting !== cause) this.append(chain, { type: 'chain.waiting', reason: cause })
+            continue
+          }
           chain = await this.reconcile(chain, snapshot)
           const direct = chain.invocations.find((invocation) => invocation.state !== 'settled' && attributedNativeAction(invocation))
           if (chain.mergeSha && direct && this.recoverNativeAction(chain, direct)) continue
           const owned = chain.invocations.find((invocation) => invocation.state !== 'settled' && invocation.model !== null)
           const call = owned ? snapshot.entries.find((entry) => entry.correlation_id === owned.id) : null
-          const releasedAt = owned?.evidence?.resources_settled_at
+          const released = owned ? resourceReleaseProven(owned.evidence ?? {}, true) : false
           if (owned && !call && closedChainTarget(chain, chain.observation as ChainObservation | null, owned.behavior)
-            && !(typeof releasedAt === 'string' && Number.isFinite(Date.parse(releasedAt)))) {
+            && !released) {
             try { await this.closeRecovery(chain, owned, chain.observation as ChainObservation | null, snapshot) }
             catch (error) { if (!(error instanceof ClosedTargetFenceError)) throw error; observationError ??= error }
             continue
           }
-          if (chain.mergeSha && owned && !(typeof releasedAt === 'string' && Number.isFinite(Date.parse(releasedAt)))) continue
-          if (owned && call && (call.status === 'running' || !call.resources_settled_at || !Number.isFinite(Date.parse(call.resources_settled_at)))) {
+          if (chain.mergeSha && owned && !released) continue
+          if (owned && call && (call.status === 'running' || !nativeResourcesReleased(call))) {
             // The authoritative admission already owns this invocation. Only
             // its native settlement can advance it; rereading GitHub while it
             // runs adds no decision evidence and burns shared API quota.
@@ -279,17 +298,30 @@ export class BehaviorChainRuntime {
     if (call.source !== 'poise:behavior-chain' || call.actor !== invocation.actor || call.repo !== chain.repository
       || call.behavior !== nativeBehavior(invocation.behavior)) throw new Error(`native receipt conflicts with behavior admission ${invocation.id}`)
     if (call.status === 'running') return chain
-    if (!call.resources_settled_at || !Number.isFinite(Date.parse(call.resources_settled_at))) {
-      return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
-        reason: 'native invocation ended without proof that its worker resources were released' })
+    const stopped = ['stopped', 'stopping'].includes(call.error_code || '')
+    if (stopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
+    if (!nativeResourcesReleased(call)) {
+      const evidence = { ...receipt(call), callId: call.id }
+      if (!sameReceipt(invocation.evidence, evidence)) {
+        chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
+      }
+      const failure = call.resource_ownership?.errors.at(-1)
+      const root = call.resource_ownership?.roots.find(root => root.state !== 'reclaimed')
+      const cause = failure ? `; ${failure.cause}${failure.path ? ` at ${failure.path}` : ''}`
+        : !call.resource_ownership ? '; durable resource ownership is unavailable'
+          : root ? `; ${root.state} directory at ${root.path} lacks a reclamation receipt` : ''
+      const reason = `native invocation ended without proof that its worker resources were released${cause}`
+      return invocation.state === 'uncertain' && invocation.outcome === reason ? chain
+        : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id, reason })
     }
     if (call.status === 'failed' && call.action !== 'not_started' && ['implement-issue', 'repair-pr', 'review-issue', 'review-pr', 'approve-pr'].includes(invocation.behavior)) {
       if (invocation.state === 'uncertain' && invocation.evidence?.callId === call.id) {
-        return chainBasis(invocation.evidence.artifact ?? null) === chainBasis(call.artifact ?? null) ? chain
-          : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { artifact: call.artifact ?? null } })
+        const evidence = { ...receipt(call), callId: call.id }
+        if (!resourceReleaseProven(invocation.evidence, true)) this.operations.received(invocation, call)
+        return sameReceipt(invocation.evidence, evidence) ? chain
+          : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
       }
       this.operations.received(invocation, call)
-      if (['stopped', 'stopping'].includes(call.error_code || '') && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
       chain = this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence: { ...receipt(call), callId: call.id } })
       return this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
         reason: 'native publication may have happened; reconcile the original invocation against GitHub' })
@@ -297,7 +329,7 @@ export class BehaviorChainRuntime {
     this.operations.received(invocation, call)
     chain = this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
       outcome: call.outcome || call.error_code || call.status, evidence: receipt(call) })
-    if (['stopped', 'stopping'].includes(call.error_code || '')) return this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
+    if (stopped) return chain
     if (call.status === 'failed' && call.action !== 'not_started') return this.append(chain, { type: 'chain.held',
       reason: `behavior invocation ${invocation.id} failed after a possible write; its artifact needs reconciliation` })
     return chain
@@ -391,8 +423,7 @@ export class BehaviorChainRuntime {
   private async recover(chain: BehaviorChain, invocation: ChainInvocation, observation: ChainObservation, snapshot: AgentLogSnapshot): Promise<void> {
     const nativeId = invocation.evidence?.callId
     const publishedReview = observation.reviewPublication
-    const resourcesSettled = typeof invocation.evidence?.resources_settled_at === 'string'
-      && Number.isFinite(Date.parse(invocation.evidence.resources_settled_at))
+    const resourcesSettled = resourceReleaseProven(invocation.evidence ?? {}, true)
     if (resourcesSettled && invocation.state === 'uncertain' && publishedReview && publishedReview.callId === nativeId && publishedReview.complete) {
       this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: publishedReview.callId, outcome: 'commented',
         evidence: { ...invocation.evidence, status: 'completed', action: 'commented', outcome: 'commented',

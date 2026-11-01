@@ -380,7 +380,7 @@ it('keeps durable model reservations visible after replacing the process-local s
     modelInvocationLimit: 3, enabled: true, mode: 'v2', intake: { seedMode: 'label', label: 'work-ready' },
     processLocal: { behaviorRunning: 0 }, resources: { unaccounted: 1 } })
   record(journal, current, { type: 'invocation.reconciled', invocationId: 'surviving-model',
-    evidence: { resources_settled_at: new Date().toISOString() } })
+    evidence: { resources_settled_at: new Date().toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
   expect(runtime.getBehaviorChainCapacity()).toMatchObject({ reservedModelInvocations: 0 })
   expect(journal.read(chain.id)!.invocations[0].state).toBe('uncertain')
 })

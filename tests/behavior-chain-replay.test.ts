@@ -68,6 +68,10 @@ describe.each(historicalJournals)('journal compatibility from $revision', ({ has
     expect(journal.admitInvocation(other, 'new-admission', invocation, 2, budget)).toBeNull()
     const recovered = journal.read(TARGET)!
     journal.append(TARGET, 'verified-resource-release', recovered.sequence, historicalEvents[4])
+    expect(journal.admitInvocation(other, 'new-admission', invocation, 2, budget)).toBeNull()
+    const pending = journal.read(TARGET)!
+    journal.append(TARGET, 'current-resource-ownership-proof', pending.sequence, { type: 'invocation.reconciled',
+      invocationId: pending.invocations[0].id, evidence: { resource_ownership: { version: 1, roots: [], errors: [] } } })
     const admitted = journal.admitInvocation(other, 'new-admission', invocation, 2, budget)!
     expect(admitted.invocations[0].reservation).toEqual(invocation.reservation)
     journal.rebuild()

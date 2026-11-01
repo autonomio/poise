@@ -219,7 +219,7 @@ class TestFinish(RecordTurnCase):
 class TestStopAndLogs(RecordTurnCase):
     def test_generic_stop_refuses_an_external_turn_and_signals_nothing(self):
         id_ = self.start()
-        with patch.object(agent_interface, "signal_group", side_effect=AssertionError("signalled")), \
+        with patch.object(agent_interface.process_identity, "pinned", side_effect=AssertionError("signalled")), \
                 patch.object(agent_interface, "process_command", side_effect=AssertionError("looked up a process")):
             with self.assertRaisesRegex(RuntimeError, "managed externally .*poise:chat.*through Poise"):
                 agent_interface.stop_call(id_)

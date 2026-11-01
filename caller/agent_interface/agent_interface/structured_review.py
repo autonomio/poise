@@ -17,7 +17,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from uuid import UUID
 from pathlib import Path
 from time import monotonic
@@ -27,7 +26,7 @@ from .atoms import packet as fetch_packet
 from .model_catalog import Model
 from .process_diagnostic import diagnostic_envelope
 from .review_watch import ReviewSuperseded, ReviewWatch
-from . import progress, review_budget, review_receipt, review_stages
+from . import progress, review_budget, review_receipt, review_stages, resource_ownership
 from . import review_cap as followup
 
 
@@ -435,7 +434,7 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
     try:
         total = review_stages.stage_count(packet) if packet else 1
         staged = total > 1
-        with tempfile.TemporaryDirectory(prefix="agent-interface-review-") as work, \
+        with resource_ownership.temporary_directory(prefix="agent-interface-review-") as work, \
                 ReviewWatch(pwd, pr, actor_name, head) as watch:
             root = Path(work)
             deadline = monotonic() + timeout_s

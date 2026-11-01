@@ -8,7 +8,9 @@ import { BehaviorChainJournal, chainIdentity, type ChainBehavior } from '../../s
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../../server/behavior-chain-runtime'
 
 const wire = readFileSync(process.argv[2], 'utf8')
-const snapshot = parseAgentLogStdout(wire, 'actual native correlation-fence output')
+const mode = process.argv[3] ?? 'fence'
+assert.ok(['fence', 'pending', 'released', 'recovered'].includes(mode))
+const snapshot = parseAgentLogStdout(wire, 'actual native Call log output')
 assert.equal(snapshot.quarantined.length, 0, JSON.stringify(snapshot.quarantined))
 assert.equal(snapshot.entries.length, 1)
 const call = snapshot.entries[0]
@@ -39,19 +41,22 @@ try {
     perform: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {} }
   await new BehaviorChainRuntime(journal, operations).run()
   const current = journal.read(id)!
-  assert.equal(current.invocations[0].state, 'settled')
-  assert.equal(current.invocations[0].outcome, 'target_closed')
-  assert.equal(journal.liveModelInvocationCount(), 0)
-  assert.deepEqual(journal.reservedResources(), { memoryBytes: 0, diskBytes: 0, unaccounted: 0 })
+  const pending = mode === 'pending'
+  assert.equal(current.invocations[0].state, pending ? 'uncertain' : 'settled')
+  if (mode === 'fence') assert.equal(current.invocations[0].outcome, 'target_closed')
+  if (mode === 'released' || mode === 'recovered') assert.equal(current.invocations[0].outcome, 'commented')
+  if (pending || mode === 'recovered') assert.ok(call.resource_ownership!.errors.length > 0)
+  assert.equal(journal.liveModelInvocationCount(), pending ? 1 : 0)
+  assert.deepEqual(journal.reservedResources(), { memoryBytes: pending ? 8 : 0, diskBytes: pending ? 16 : 0, unaccounted: 0 })
   const events = journal.history(id)
   journal.rebuild()
   assert.deepEqual(journal.history(id), events)
   assert.deepEqual(journal.read(id), current)
-  for (const change of [{ artifact: null }, { source: 'poise:review-new-prs' }, { resources_settled_at: null },
+  if (mode === 'fence') for (const change of [{ artifact: null }, { source: 'poise:review-new-prs' }, { resources_settled_at: null },
     { head_sha: 'a'.repeat(40) }, { review_id: 91 }, { artifact: { phase: 'admission_fenced', publication: {} } }]) {
     const rejected = parseAgentLogStdout(JSON.stringify([{ ...call, ...change }]), 'invalid native fence proof')
     assert.equal(rejected.entries.length, 0, JSON.stringify(change))
     assert.equal(rejected.quarantined.length, 1)
   }
-  process.stdout.write(JSON.stringify({ accepted: 1, settled: 1, reservations: 0 }))
+  process.stdout.write(JSON.stringify({ accepted: 1, settled: pending ? 0 : 1, reservations: pending ? 1 : 0 }))
 } finally { db.close() }

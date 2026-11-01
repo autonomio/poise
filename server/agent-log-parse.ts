@@ -6,6 +6,7 @@
 
 import { parseProgress, type ModelProgress } from '../src/agent-progress'
 import { parseProcessDiagnostic, type ProcessDiagnostic } from './process-diagnostic'
+import { parseResourceOwnership, resourceReleaseContradicted, type ResourceOwnershipReceipt } from './behavior-resource-receipt'
 
 export interface LogEntry {
   id: string
@@ -45,6 +46,7 @@ export interface LogEntry {
   receipts?: IssueCommentReceipt[] | null
   artifact?: Record<string, unknown> | null
   resources_settled_at?: string | null
+  resource_ownership?: ResourceOwnershipReceipt | null
   issue_revision?: string | null
   // `external` for a Chat turn Poise recorded through `--record-turn`: no
   // Caller process ran, so `--stop` refuses it and Poise routes it to its
@@ -206,6 +208,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const error = optionalString('error') || ''
   const errorCode = optionalString('error_code')
   const resourcesSettledAt = optionalString('resources_settled_at')
+  const resourceOwnership = row.resource_ownership == null ? null : parseResourceOwnership(row.resource_ownership)
   const preflightFailed = status === 'failed'
     && action === 'not_started'
     && outcome === 'preflight_failed'
@@ -216,9 +219,13 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const managedReview = behavior === 'pr_review' || behavior === 'pr_approve' || (source === 'poise:behavior-chain' && issueReview)
   if (artifact !== null && ((!atomicWork && !managedReview) || typeof artifact !== 'object' || Array.isArray(artifact)
     || Buffer.byteLength(JSON.stringify(artifact)) > 128 * 1024)) throw new Error(`agent-interface log row ${index} has an invalid atomic artifact`)
+  if (resourceReleaseContradicted({ resources_settled_at: resourcesSettledAt, artifact, resource_ownership: resourceOwnership })) {
+    throw new Error(`agent-interface log row ${index} has contradictory resource-release evidence`)
+  }
   // A native correlation fence is not a review superseded by another head.
   // Only its exact no-provider/no-publication shape can release ownership.
   const closedFence = source === 'poise:behavior-chain' && (atomicWork || managedReview)
+    && resourceOwnership === null
     && status === 'superseded' && outcome === 'target_closed' && action === 'not_started' && errorCode === 'target_closed'
     && !error && headSha === null && !!completedAt && Number.isFinite(Date.parse(completedAt))
     && !!resourcesSettledAt && Number.isFinite(Date.parse(resourcesSettledAt)) && Date.parse(resourcesSettledAt) >= Date.parse(completedAt)
@@ -311,6 +318,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     receipts: parseReceipts(row.receipts),
     ...(artifact === null ? {} : { artifact: artifact as Record<string, unknown> }),
     ...(resourcesSettledAt === null ? {} : { resources_settled_at: resourcesSettledAt }),
+    ...(resourceOwnership === null ? {} : { resource_ownership: resourceOwnership }),
     ...(row.issue_revision === null || row.issue_revision === undefined ? {} : { issue_revision: optionalString('issue_revision') }),
     runner: runner as LogEntry['runner'],
   }
