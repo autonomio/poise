@@ -625,6 +625,11 @@ unexercised, never passed.
   their original claims and proof; expiry or a missing sample grants no
   release. These limits are fixed before the #815 implementation and do not
   claim the still-pending full campaign has passed.
+  Retained cleanup failures retry on the existing one-minute opportunity for
+  the first three failures, then after 120, 240 and 480 seconds, capped at
+  600 seconds. There is one coalesced cleanup command per workspace, rather
+  than one process per held Call. Ownership still must be positively verified
+  on every eligible attempt; a deadline or backoff expiry grants no authority.
 - Merge campaign: at least 3 unattended repetitions per achieved
   concurrency level (1, 2, 3), hence at least 9 confirmed merges
   on one frozen candidate. Each fault and breach case is
