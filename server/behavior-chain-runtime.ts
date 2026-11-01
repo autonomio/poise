@@ -54,6 +54,14 @@ function nativeResourcesReleased(call: LogEntry): boolean {
   return resourceReleaseProven(receipt(call), !fence)
 }
 
+function beforeNativeScope(call: LogEntry): boolean {
+  const ownership = call.resource_ownership
+  return call.status === 'failed' && call.error_code === 'launch_preflight_failed'
+    && call.action === 'not_started' && call.outcome === 'preflight_failed' && call.head_sha === null
+    && !call.artifact && !call.receipts && !call.review_id && !call.response && !call.runner && !call.resource_guard
+    && ownership?.version === 1 && ownership.roots.length === 0 && ownership.errors.length === 0 && !ownership.process_pending
+}
+
 function sameReceipt(prior: Record<string, unknown> | null, next: Record<string, unknown>): boolean {
   return Object.entries(next).every(([key, value]) => chainBasis(prior?.[key] ?? null) === chainBasis(value ?? null))
 }
@@ -340,7 +348,7 @@ export class BehaviorChainRuntime {
     if (calls.length !== 1) return invocation.state === 'uncertain' ? chain : this.append(chain, { type: 'invocation.uncertain', invocationId: invocation.id,
       reason: 'multiple native calls claim one admitted invocation' })
     const call = calls[0]
-    if (invocation.request.resourceLimits && call.outcome !== 'target_closed'
+    if (invocation.request.resourceLimits && call.outcome !== 'target_closed' && !beforeNativeScope(call)
       && chainBasis(call.resource_guard?.limits ?? null) !== chainBasis(invocation.request.resourceLimits)) {
       throw new Error('native resource ceilings differ from their immutable admission')
     }
@@ -354,7 +362,7 @@ export class BehaviorChainRuntime {
     }
     if (call.status === 'running') return chain
     const stopped = ['stopped', 'stopping'].includes(call.error_code || '')
-    const resourceStopped = ['resource_memory_exceeded', 'resource_disk_exceeded', 'resource_measurement_unavailable'].includes(call.error_code || '')
+    const resourceStopped = ['resource_memory_exceeded', 'resource_disk_exceeded', 'resource_measurement_unavailable', 'resource_receipt_unavailable'].includes(call.error_code || '')
     if (resourceStopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: call.error })
     if (stopped && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: `behavior invocation ${invocation.id} was stopped by the person` })
     if (!nativeResourcesReleased(call)) {
@@ -377,6 +385,7 @@ export class BehaviorChainRuntime {
         : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
     }
     if (resourceStopped && call.resource_guard?.failure?.noWrite === true) {
+      this.operations.received(invocation, call)
       return this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
         outcome: call.error_code!, evidence: receipt(call) })
     }

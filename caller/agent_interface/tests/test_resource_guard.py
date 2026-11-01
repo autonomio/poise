@@ -1,7 +1,10 @@
 """Resource accounting and durable-cause contracts; no provider is invoked."""
 import json
 import os
+import sqlite3
+import sys
 import threading
+import time
 
 import pytest
 
@@ -133,3 +136,65 @@ def test_parent_loss_before_a_breach_does_not_invent_a_limit_failure(database, m
     monkeypatch.setattr(api.process_identity, "state", lambda *args: "gone")
     assert api.reap_interrupted() == 1
     assert receipt(database)["error_code"] == "interrupted"
+
+
+def test_transient_database_writer_defers_a_healthy_summary_instead_of_killing_work(database):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 10, "diskBytes": None})
+    monitor.summary["samples"] = 1
+    with api.db() as writer:
+        writer.execute("begin immediate")
+        started = time.monotonic()
+        assert monitor.poll() is False
+        assert time.monotonic() - started < 0.2
+        assert receipt(database)["status"] == "running"
+    assert monitor.poll() is False
+    assert json.loads(receipt(database)["resource_guard"])["samples"] == 1
+
+
+def test_breach_waits_briefly_for_a_writer_then_commits_before_stop(database):
+    monitor = observer(database)
+    monitor.breach["completedMonotonic"] = time.monotonic()
+    with api.db() as writer:
+        writer.execute("begin immediate")
+        assert monitor.poll() is False
+        assert receipt(database)["status"] == "running"
+    assert monitor.poll() is True
+    assert receipt(database)["error_code"] == "resource_memory_exceeded"
+
+
+def test_journal_outage_cannot_make_the_physical_stop_wait_indefinitely(database):
+    monitor = observer(database)
+    monitor.breach["completedMonotonic"] = time.monotonic() - 2
+    with api.db() as writer:
+        writer.execute("begin immediate")
+        with pytest.raises(guard.ReceiptUnavailable, match="Cannot commit original resource stop receipt"):
+            monitor.poll()
+        assert receipt(database)["status"] == "running"
+
+
+def test_unexpected_database_errors_are_not_tolerated_as_contention(database, monkeypatch):
+    monitor = observer(database)
+    def corrupt(*args, **kwargs):
+        raise sqlite3.OperationalError("not a lock failure")
+    monkeypatch.setattr(guard.caller_store, "connect", corrupt)
+    with pytest.raises(sqlite3.OperationalError, match="not a lock failure"):
+        monitor.poll()
+
+
+def test_actual_pretrack_fallback_is_a_resource_released_no_worker_receipt(database, monkeypatch):
+    def preparation_failed():
+        raise RuntimeError("catalog preparation failed before tracking")
+    def forbidden(*args, **kwargs):
+        pytest.fail("pre-track fallback started a native boundary")
+    monkeypatch.setattr(api, "_main", preparation_failed)
+    monkeypatch.setattr(api.native_namespace, "Namespace", forbidden)
+    monkeypatch.setattr(sys, "argv", ['agent-interface', '--issue-review', 'example/repo#7',
+        '--model', 'fixture-model', '--actor', 'reviewer', '--source', 'poise:behavior-chain',
+        '--correlation-id', 'pretrack-fallback', '--resource-limits-json', '{"version":1,"memoryBytes":10,"diskBytes":null}'])
+    with pytest.raises(RuntimeError, match="before tracking"):
+        api.main()
+    value = api.logs_selected({'latest': [], 'ids': [], 'correlations': ['pretrack-fallback']})[0]
+    assert value['error_code'] == 'launch_preflight_failed'
+    assert value['action'] == 'not_started' and value['outcome'] == 'preflight_failed'
+    assert value['resource_ownership'] == {'version': 1, 'roots': [], 'errors': []}
+    assert value['resource_guard'] is None and value['resources_settled_at'] is not None

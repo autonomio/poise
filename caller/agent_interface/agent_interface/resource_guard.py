@@ -6,6 +6,7 @@ supervisor and Poise's event loop never walk a behavior's filesystem tree.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import stat
@@ -19,10 +20,15 @@ from . import caller_store, native_namespace, progress, resource_ownership
 SAMPLE_SECONDS = 1.0
 STALE_SECONDS = 5.0
 CODES = {"resource_memory_exceeded", "resource_disk_exceeded", "resource_measurement_unavailable"}
+logger = logging.getLogger(__name__)
 
 
 class GuardStopped(RuntimeError):
     pass
+
+
+class ReceiptUnavailable(RuntimeError):
+    code = "resource_receipt_unavailable"
 
 
 def limits(raw: str | None) -> dict | None:
@@ -144,6 +150,7 @@ class Guard:
         self.proc: int | None = None
         self.saved = (0, 0)
         self.disabled = False
+        self.pending_failure: dict | None = None
 
     def _read(self) -> dict:
         view = Path(f"/proc/self/fd/{self.proc}")
@@ -241,8 +248,8 @@ class Guard:
             sample = dict(self.breach) if self.breach else None
             stale, error = monotonic() - self.last_complete > STALE_SECONDS, self.error
             summary["longestUnavailableSeconds"] = max(summary["longestUnavailableSeconds"], monotonic() - self.last_complete)
-        failure = None
-        if sample:
+        failure = self.pending_failure
+        if failure is None and sample:
             for key, code in (("memoryBytes", "resource_memory_exceeded"), ("diskBytes", "resource_disk_exceeded")):
                 ceiling = self.limits[key]
                 if ceiling is not None and sample[key] > ceiling:
@@ -255,12 +262,28 @@ class Guard:
                        "observedAt": time(), "observedMonotonic": monotonic(),
                        "message": f"Behavior resource measurement unavailable for over {STALE_SECONDS:g}s: {error or 'no complete sample'}"}
         if failure:
+            self.pending_failure = failure
             summary.update(state="stopped", failure=failure)
         counters = (summary["samples"], summary["partialSamples"])
         if not failure and counters == self.saved:
             return False
+        previous = self.saved
+        try:
+            return self._persist(summary, failure, counters)
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", 0) & 0xff not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise
+            self.saved, self.disabled = previous, False
+            if failure and monotonic() - failure["observedMonotonic"] >= 1.5:
+                # The wait loop fails closed before the physical stop deadline.
+                # A locked journal cannot certify a first cause or no-write;
+                # normal interrupted/uncertain receipt recovery retains it.
+                raise ReceiptUnavailable(f"Cannot commit original resource stop receipt: {failure['message']}") from error
+            return False
+
+    def _persist(self, summary: dict, failure: dict | None, counters: tuple[int, int]) -> bool:
         encoded = json.dumps(summary, separators=(",", ":"))
-        with closing(caller_store.connect(self.database, timeout=1)) as conn, conn:
+        with closing(caller_store.connect(self.database, timeout=0.05)) as conn, conn:
             if failure:
                 conn.execute("begin immediate")
                 row = conn.execute("select behavior,artifact,action_plan,status,error_code from calls where id=?", (self.call_id,)).fetchone()
@@ -300,12 +323,26 @@ class Guard:
 
     def signalled(self) -> None:
         at = monotonic()
-        with closing(caller_store.connect(self.database, timeout=1)) as conn, conn:
-            conn.execute("update calls set resource_guard=json_set(resource_guard,'$.failure.signalMonotonic',?) "
-                         "where id=? and error_code in ('resource_memory_exceeded','resource_disk_exceeded','resource_measurement_unavailable')",
-                         (at, self.call_id))
+        try:
+            with closing(caller_store.connect(self.database, timeout=0.05)) as conn, conn:
+                conn.execute("update calls set resource_guard=json_set(resource_guard,'$.failure.signalMonotonic',?) "
+                             "where id=? and error_code in ('resource_memory_exceeded','resource_disk_exceeded','resource_measurement_unavailable')",
+                             (at, self.call_id))
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", 0) & 0xff not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise
+            # The cause is already durable and the signal already sent. An
+            # unavailable timing annotation is never fabricated as zero.
+            logger.warning("Resource stop timing annotation unavailable: Caller database is busy")
 
     def timeout(self) -> None:
-        with closing(caller_store.connect(self.database, timeout=1)) as conn, conn:
-            conn.execute("update calls set error_code='native_timeout',error='Native invocation exceeded its operation deadline' "
-                         "where id=? and status='running' and error_code is null", (self.call_id,))
+        try:
+            with closing(caller_store.connect(self.database, timeout=0.05)) as conn, conn:
+                conn.execute("update calls set error_code='native_timeout',error='Native invocation exceeded its operation deadline' "
+                             "where id=? and status='running' and error_code is null", (self.call_id,))
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", 0) & 0xff not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise
+            # Preserve the existing operation deadline even when Caller cannot
+            # persist its cause. The original exit remains interrupted/unknown.
+            logger.warning("Native timeout cause unavailable: Caller database is busy")

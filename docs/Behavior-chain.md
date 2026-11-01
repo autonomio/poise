@@ -274,6 +274,12 @@ the bounded `resource_guard` measurement summary; release still requires positiv
 process and disk receipts. Older consumers retain a possible-write failure rather
 than automatically retrying a breached preflight. Resume requires correcting the
 workload or reservation, then an explicit decision; it does not expand old limits.
+Brief SQLite contention defers summary persistence without terminating healthy
+work. A stop receipt that cannot commit within 1.5 seconds fails closed as
+receipt-unavailable through the original scope's teardown; it cannot certify a
+first cause or no-write result without that commit. Missing signal-timing
+annotations remain unavailable rather than zero. Proven failures before native
+scope creation retain their existing no-worker receipt and release path.
 
 These are sampled soft ceilings, not hard kernel quotas or a guarantee against
 instantaneous allocation. Component proof uses 256-MiB memory and 8-MiB disk

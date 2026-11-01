@@ -371,7 +371,7 @@ def _enter_native_call(call_id: str, correlation: str) -> None:
                 no_go = scope is None or not scope.go_sent
                 stopped = row["error_code"] in {"stopping", "stopped"}
                 finish(call_id, "failed", error="Stopped by user" if stopped else str(error)[:2000],
-                       error_code="stopped" if stopped else "native_cleanup_failed",
+                       error_code="stopped" if stopped else getattr(error, "code", "native_cleanup_failed"),
                        action="not_started" if no_go else None, outcome="preflight_failed" if no_go else None)
         raise
 

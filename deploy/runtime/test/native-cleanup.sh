@@ -60,7 +60,7 @@ if [ "$runtime" = runsc ]; then
   for fault in parent-loss before-active deleted-before-ack cleaner-loss partial-root partial-before-mkdir permission-zero unknown-process-error base-replaced data-replaced metadata-pid-collision native-coordination native-coordination-replaced paused-maintenance-tick; do
     docker exec "$container" /opt/caller/venv/bin/python /contract/recovery.py "$fault"
   done
-  for resource_case in memory disk deleted-home deleted-tmp unavailable; do
+  for resource_case in memory disk deleted-home deleted-tmp unavailable busy-memory; do
     headroom=$(node "$here/native-headroom.mjs" "$container")
     docker exec -e "POISE_COMPONENT_HEADROOM=$headroom" "$container" /opt/caller/venv/bin/python /contract/limits.py enforced "$resource_case"
   done

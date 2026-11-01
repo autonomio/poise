@@ -36,8 +36,9 @@ from agent_interface import native_namespace, resource_ownership
 mode = sys.argv[-1]
 correlation = f'limit-{mode}-{uuid4().hex}'
 MiB = 1024 * 1024
-ceilings = {'version': 1, 'memoryBytes': 256 * MiB if mode == 'memory' else None,
-            'diskBytes': 8 * MiB if mode != 'memory' else None}
+is_memory = mode in {'memory', 'busy-memory'}
+ceilings = {'version': 1, 'memoryBytes': 256 * MiB if is_memory else None,
+            'diskBytes': 8 * MiB if not is_memory else None}
 
 if sys.argv[1:2] == ['worker']:
     def allocation():
@@ -83,7 +84,7 @@ else:
         while True: time.sleep(0.1)
 while True: time.sleep(0.1)
 '''
-        child = subprocess.Popen([sys.executable, '-c', body, mode, str(root)])
+        child = subprocess.Popen([sys.executable, '-c', body, 'memory' if is_memory else mode, str(root)])
         child.wait()
         raise AssertionError('allocation child ended without enforcement')
 
@@ -109,6 +110,7 @@ try:
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     ready = json.loads(worker.stdout.readline())
     call, root = ready['call'], Path(ready['root'])
+    locked = False
     deadline = time.monotonic() + 35
     observed_overrun = False
     initial_memory = None
@@ -143,7 +145,12 @@ try:
                             seen.add((node.st_dev, node.st_ino))
                             disk += node.st_blocks * 512
                 observations.append({'at': time.monotonic(), 'rssBytes': rss, 'openAllocatedBytes': disk})
-                observed_overrun |= rss > 256 * MiB if mode == 'memory' else disk > 8 * MiB
+                observed_overrun |= rss > 256 * MiB if is_memory else disk > 8 * MiB
+                if mode == 'busy-memory' and not locked:
+                    with api.db() as writer:
+                        writer.execute('begin immediate')
+                        time.sleep(2.2)
+                    locked = True
             except (FileNotFoundError, ProcessLookupError, StopIteration, PermissionError) as error:
                 observations.append({'at': time.monotonic(), 'coverage': 'unavailable', 'error': str(error)[:300]})
         heartbeat = Path(other['root']) / 'heartbeat'
@@ -159,11 +166,11 @@ try:
             assert ownership['namespace']['state'] == 'settled'
             guard = json.loads(row['resource_guard'])
             failure = guard['failure']
-            expected = 'resource_memory_exceeded' if mode == 'memory' else 'resource_measurement_unavailable' if mode == 'unavailable' else 'resource_disk_exceeded'
+            expected = 'resource_memory_exceeded' if is_memory else 'resource_measurement_unavailable' if mode == 'unavailable' else 'resource_disk_exceeded'
             assert row['error_code'] == expected, row
             assert failure['signalMonotonic'] - failure['observedMonotonic'] <= 2, failure
             assert time.monotonic() - failure['observedMonotonic'] <= 10, failure
-            if mode == 'memory':
+            if is_memory:
                 assert guard['peakMemoryBytes'] <= 256 * MiB + 192 * MiB, guard
                 assert max(sample['rssBytes'] for sample in observations if 'rssBytes' in sample) <= 256 * MiB + 192 * MiB
             elif mode != 'unavailable':

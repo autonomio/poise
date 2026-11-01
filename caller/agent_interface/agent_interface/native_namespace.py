@@ -491,11 +491,6 @@ class Namespace:
             return False
         finally:
             failures = []
-            if monitor is not None:
-                try:
-                    monitor.close()
-                except (OSError, RuntimeError) as error:
-                    failures.append(error)
             if prior_sigterm is not None:
                 signal.signal(signal.SIGTERM, prior_sigterm)
             if os.getpid() == owner["pid"] and holder_fd is not None:
@@ -507,6 +502,11 @@ class Namespace:
                             raise TimeoutError("original native namespace holder did not terminate")
                         os.waitpid(holder, 0)
                 except (OSError, RuntimeError, TimeoutError) as error:
+                    failures.append(error)
+            if monitor is not None:
+                try:
+                    monitor.close()
+                except (OSError, RuntimeError) as error:
                     failures.append(error)
             for fd in list(descriptors):
                 try:

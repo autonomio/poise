@@ -174,6 +174,29 @@ describe('durable behavior resource reservations', () => {
 })
 
 describe('resource-aware behavior admission', () => {
+  it('settles a bounded pre-track failure without fabricating an enforced worker or aborting other reconciliation', async () => {
+    const { journal, chain } = setup()
+    const other = seed(journal, 8)
+    const limits = { version: 1 as const, memoryBytes: 6, diskBytes: null }
+    const original = invocation('pretrack-original', RESERVATION)
+    const admitted = { ...original, request: { ...original.request, resourceLimits: limits,
+      argv: [...original.request.argv, '--resource-limits-json', JSON.stringify(limits)] } }
+    record(journal, chain, { type: 'invocation.admitted', invocation: admitted })
+    const call = { ...completedReviewCall(chain.repository, chain.issue, 'a'.repeat(40), chain.reviewer),
+      behavior: 'issue_review', source: 'poise:behavior-chain', correlation_id: admitted.id, model: admitted.model,
+      status: 'failed', error_code: 'launch_preflight_failed', error: 'catalog preparation failed before track',
+      action: 'not_started', outcome: 'preflight_failed', head_sha: null, expected_head: null,
+      review_id: null, artifact: null, receipts: null, response: null,
+      resource_ownership: { version: 1, roots: [], errors: [] }, resources_settled_at: new Date().toISOString() }
+    const runtime = new BehaviorChainRuntime(journal, operations({ enabled: () => false,
+      readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'pre-track native serializer contract') }))
+    await runtime.run()
+    expect(journal.read(chain.id)!.invocations[0]).toMatchObject({ state: 'settled', outcome: 'preflight_failed' })
+    expect(journal.reservedResources().memoryBytes).toBe(0)
+    expect(journal.read(chain.id)!.invocations[0].evidence).not.toHaveProperty('resource_guard')
+    expect(journal.read(other.id)!.observation).not.toBeNull()
+  })
+
   it('journals execution ceilings and their exact arguments before launch and preserves old replay hashes', async () => {
     bounded('100', '60')
     const { journal, chain } = setup()
