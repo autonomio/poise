@@ -2893,7 +2893,9 @@ async function createSessionEntry(req: NewSessionRequest, draft: ComposerDraft |
         chatClient.subscribe(r.session.id, 0)
         e.loaded = true
         queueRender()
-        throw new PendingCreationCancelled(`The session was deleted before it finished starting, and removing it failed — ${(err as Error).message}`)
+        const message = `The new chat could not be deleted and is still listed — ${(err as Error).message}`
+        setNotice(message)
+        throw new PendingCreationCancelled(message)
       }
       queueRender()
       throw new PendingCreationCancelled('The session was deleted before it finished starting.')

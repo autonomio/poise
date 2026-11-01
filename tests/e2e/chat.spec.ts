@@ -1120,6 +1120,28 @@ test('deleting a pending creation removes the session that arrives late', async 
   await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0)
 })
 
+test('reports failed deletion of a late creation and keeps the real session visible', async ({ page }) => {
+  const state = makeState([], {})
+  state.deleteErrors = { 'new-1': { status: 500, json: { error: 'Removal unavailable' } } }
+  let release: () => void = () => {}
+  state.createDelay = () => new Promise<void>((resolve) => { release = resolve })
+  await installRoutes(page, state)
+  await installSocket(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New session' }).click()
+  await page.getByRole('dialog', { name: 'New session' }).getByRole('button', { name: 'Create' }).click()
+  const pending = page.locator('.chat-session-item.pending')
+  await expect(pending).toHaveCount(1)
+  await pending.hover()
+  await pending.locator('.chat-session-delete').click()
+  await pending.locator('.chat-session-delete').click()
+  await expect(page.locator('.chat-session-item')).toHaveCount(0)
+  release()
+  await expect(page.locator('.chat-session-item:not(.pending)')).toHaveCount(1)
+  await expect(page.locator('.chat-notice')).toContainText('Removal unavailable')
+  await expect(page.getByRole('dialog', { name: 'New session' })).toHaveCount(0)
+})
+
 test('offers an explicit fallback choice when the default provider is not signed in, and shows create errors', async ({ page }) => {
   const state = makeState([], {})
   state.agents = { ...AGENTS, defaults: { ...AGENTS.defaults, fallbackReason: 'Claude is not signed in' } }
