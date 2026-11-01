@@ -695,7 +695,8 @@ with a notice in its transcript, naming the update, and the agent keeps its
 context for the next prompt. Once an admitted drain reports the workspace idle
 the gateway recreates the container on the new image with the same home volume;
 past `POISE_DRAIN_TIMEOUT` seconds (90 minutes by default), cutting confirmed
-busy work requires a fresh admitted drain reporting zero unsettled native Calls.
+busy work requires a fresh admitted drain reporting zero unsettled native Calls,
+Caller processes and background operations, including launches before registration.
 Pending or unknown native cleanup, an older busy answer without that count, or
 an unreachable workspace defers replacement and releases the drain for the next
 pass (`workspace.upgrade.aborted`, `workspace.upgrade.native-pending`). This keeps

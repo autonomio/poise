@@ -482,10 +482,15 @@ describe('image upgrades', () => {
     expect(h.logs.find((entry) => entry.event === 'workspace.drain.timeout')).toMatchObject({ handle: 'alice', timeoutSeconds: 1 })
   })
 
-  it.each([1, null, undefined])('preserves the original container while native cleanup is %s past the drain deadline', async (pending) => {
+  it.each([
+    { pending: 1, background: 1, calls: 0 }, { pending: null, background: 1, calls: 0 },
+    { pending: undefined, background: 1, calls: 0 }, { pending: 0, background: 1, calls: 0 },
+    { pending: 0, background: 0, calls: 1 },
+  ])('preserves the original container while native work or cleanup is pending: %j', async ({ pending, background, calls }) => {
     await start({ env: { POISE_DRAIN_TIMEOUT: '1' } })
     const before = h.docker.containers.get('poise-ws-alice')?.id
-    h.workspace.health.backgroundWork = 1
+    h.workspace.health.backgroundWork = background
+    h.workspace.health.runningCallerCalls = calls
     h.workspace.health.unsettledNativeCalls = pending
     await h.orchestrator.upgradePass()
     expect(h.docker.containers.get('poise-ws-alice')?.id).toBe(before)
@@ -496,6 +501,7 @@ describe('image upgrades', () => {
     // The same upgrade proceeds once the original owner confirms release and retires its claim.
     h.workspace.health.unsettledNativeCalls = 0
     h.workspace.health.backgroundWork = 0
+    h.workspace.health.runningCallerCalls = 0
     await h.orchestrator.upgradePass()
     expect(h.docker.containers.get('poise-ws-alice')?.id).not.toBe(before)
   })

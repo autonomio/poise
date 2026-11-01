@@ -617,7 +617,9 @@ assertion may only resume, and anything else is refused with 403):
   budget (default 5400, 90 minutes) covers the whole workspace operation: every
   drain, recheck and re-drain. Once an admitted drain reports `idle` the gateway
   recreates the container. Past the budget, cutting confirmed busy work requires
-  a fresh admitted drain answer with `unsettledNativeCalls: 0`. Positive, null
+  a fresh admitted drain answer with `unsettledNativeCalls: 0` and no Caller or
+  background work. This covers launches still before their Call registration.
+  Positive, null
   or missing native counts, unreachable workspaces and unconfirmed drain answers
   abort replacement, preserving the original supervisor's cleanup witnesses and
   releasing its drain for the next pass (`workspace.upgrade.aborted`). While it

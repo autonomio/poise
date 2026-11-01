@@ -733,7 +733,7 @@ export class Orchestrator {
           }
           if (running && !drainedIdle) {
             const fresh = await this.idleUnderDrain(handle, login)
-            if (fresh.unknown || (!fresh.idle && fresh.unsettledNativeCalls !== 0)) {
+            if (fresh.unknown || (!fresh.idle && !fresh.nativeIdle)) {
               this.deps.log.warn('workspace.upgrade.native-pending', { handle,
                 unsettledNativeCalls: fresh.unsettledNativeCalls ?? null })
               return 'abort-unknown'
@@ -819,7 +819,7 @@ export class Orchestrator {
    * reports the drain as this answer showed it, so the caller learns a lost admission even when the
    * recheck cannot proceed; null when nothing observed it.
    */
-  private async idleUnderDrain(handle: string, login: string): Promise<{ idle: boolean; unknown: boolean; down: boolean; draining: boolean | null; unsettledNativeCalls?: number | null }> {
+  private async idleUnderDrain(handle: string, login: string): Promise<{ idle: boolean; unknown: boolean; down: boolean; draining: boolean | null; unsettledNativeCalls?: number | null; nativeIdle?: boolean }> {
     try {
       const health = await this.serviceCall(handle, login, 'POST', '/api/service/drain')
       // The recheck is the last gate before the stop: only an idle answer behind an applied drain lets
@@ -831,6 +831,8 @@ export class Orchestrator {
         return { idle: false, unknown: true, down: false, draining: health.ok ? health.draining : null }
       }
       return { idle: health.idle, unknown: false, down: false, draining: true,
+        // An admitted tick/launch can still be between spawn and Call registration.
+        nativeIdle: health.unsettledNativeCalls === 0 && health.runningCallerCalls === 0 && health.backgroundWork === 0,
         unsettledNativeCalls: health.unsettledNativeCalls }
     } catch (error) {
       if (error instanceof WorkspaceNetworkError) throw error
