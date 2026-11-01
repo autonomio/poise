@@ -1296,6 +1296,10 @@ older readers hold a guarded possible-write failure instead of retrying it as
 preflight work. [Accounting and limits](Behavior-chain.md) define coverage,
 overshoot and the component bounds. Forced-container lifecycle proof and the
 frozen real-provider campaign remain #806 obligations.
+The stable metadata interface remains resource protocol 2. Physical setup also
+requires the controller's `persistentCleanup: 1` feature and bounded admission
+requires Caller's `resourceGuard: 1` capability. Older images cannot advertise
+these guarantees; their v1 path stays available.
 
 Claimed disk recovery uses the same original Call and supervisor directory
 handles. A final unlink requires the original held directory's zero link count,

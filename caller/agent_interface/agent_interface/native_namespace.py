@@ -527,6 +527,8 @@ def require_resource_controller() -> None:
         reason = state.get("storeError")
         raise NamespaceUnavailable(reason if isinstance(reason, str) and reason else
                                    "v2 cleanup requires the current workspace image and original Caller metadata handles")
+    if state.get("persistentCleanup") != 1:
+        raise NamespaceUnavailable("v2 cleanup requires a workspace image with persistent-home reclamation support")
 
 
 def capability() -> dict:

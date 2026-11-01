@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -170,9 +171,15 @@ try:
                 assert max(sample['openAllocatedBytes'] for sample in observations if 'openAllocatedBytes' in sample) <= 8 * MiB + 8 * MiB
             assert not root.exists(), root
             assert row['action'] is None and row['outcome'] is None
+            with urllib.request.urlopen(f'http://127.0.0.1:5555/api/agent-logs?id={call}', timeout=10) as response:
+                decoded = json.load(response)
+            assert decoded['quarantined'] == [] and len(decoded['logs']) == 1, decoded
+            assert decoded['logs'][0]['resource_guard'] == guard, decoded
+            assert decoded['logs'][0]['resources_settled_at'] == row['resources_settled_at'], decoded
             print(json.dumps({'kind': 'actual-live-resource-stop', 'mode': mode, 'call': call,
                               'initialRssBytes': initial_memory, 'samples': observations, 'receipt': api.logs_selected({'latest': [], 'ids': [call], 'correlations': []}),
-                              'headroom': headroom, 'neighborAlive': True, 'emptyObservedMonotonic': time.monotonic()}), flush=True)
+                              'headroom': headroom, 'neighborAlive': True, 'installedServiceDecoderAccepted': True,
+                              'emptyObservedMonotonic': time.monotonic()}), flush=True)
             break
         if not baseline and worker.poll() is not None and not row['resources_settled_at']:
             raise AssertionError({'row': row, 'stdout': worker.stdout.read(), 'stderr': worker.stderr.read()})
