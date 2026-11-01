@@ -1102,8 +1102,9 @@ def run_issue_review(
                 if source == "poise:behavior-chain":
                     digest = persist_action_plan(id_, {"kind": "issue_review", "posts": posts, "model": name, "issue_revision": observed_revision})
                     with db() as conn:
-                        conn.execute("update calls set artifact=? where id=? and status='running'",
-                                     (json.dumps({"phase": "posting_issue_reviews", "plan_sha": digest}), id_))
+                        if conn.execute("update calls set artifact=? where id=? and status='running'",
+                                        (json.dumps({"phase": "posting_issue_reviews", "plan_sha": digest}), id_)).rowcount != 1:
+                            raise RuntimeError("issue review no longer owns its unstarted publication")
                 receipts = issue_review.post(posts, actor, id_, name, record, observed_revision)
             except subprocess.TimeoutExpired as e:
                 fail(review_budget.ReviewLimitError(
@@ -1230,10 +1231,12 @@ def persist_action_plan(call_id: str, plan: dict) -> str:
     if len(encoded.encode()) > issue_review.MAX_PACKET_BYTES:
         raise ValueError("native publication plan exceeds its durable byte bound")
     with db() as conn:
+        conn.execute("begin immediate")
         row = conn.execute("select action_plan, status from calls where id=?", (call_id,)).fetchone()
         if row is None or row["status"] != "running" or (row["action_plan"] is not None and row["action_plan"] != encoded):
             raise ValueError("native publication plan conflicts with its original durable record")
-        conn.execute("update calls set action_plan=? where id=?", (encoded, call_id))
+        if conn.execute("update calls set action_plan=? where id=? and status='running'", (encoded, call_id)).rowcount != 1:
+            raise RuntimeError("native publication no longer owns its unstarted plan")
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 

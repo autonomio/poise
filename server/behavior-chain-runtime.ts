@@ -376,6 +376,10 @@ export class BehaviorChainRuntime {
       return sameReceipt(invocation.evidence, evidence) ? chain
         : this.append(chain, { type: 'invocation.reconciled', invocationId: invocation.id, evidence })
     }
+    if (resourceStopped && call.resource_guard?.failure?.noWrite === true) {
+      return this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
+        outcome: call.error_code!, evidence: receipt(call) })
+    }
     if (invocation.model === null) {
       this.operations.received(invocation, call)
       const physical = { ...receipt(call), nativeCallId: call.id }

@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 from time import monotonic, time
 
-from . import caller_store, native_namespace, resource_ownership
+from . import caller_store, native_namespace, progress, resource_ownership
 
 SAMPLE_SECONDS = 1.0
 STALE_SECONDS = 5.0
@@ -262,12 +262,22 @@ class Guard:
         encoded = json.dumps(summary, separators=(",", ":"))
         with closing(caller_store.connect(self.database, timeout=1)) as conn, conn:
             if failure:
-                # Commit before signalling. No terminal result, person Stop or
-                # earlier cause can be relabelled by a later sample.
-                changed = conn.execute("update calls set resource_guard=?,error_code=?,error=?,action=null,outcome=null "
-                                       "where id=? and status='running' and error_code is null",
-                                       (encoded, failure["code"], failure["message"], self.call_id)).rowcount
+                conn.execute("begin immediate")
+                row = conn.execute("select behavior,artifact,action_plan,status,error_code from calls where id=?", (self.call_id,)).fetchone()
                 self.disabled = True
+                if not row or row[3] != "running" or row[4] is not None:
+                    return False
+                artifact = json.loads(row[1] or "{}")
+                phase = artifact.get("phase")
+                failure["noWrite"] = phase in {"preparing", "prepared", "executing", "reviewing"} \
+                    or row[0] == "native_action" and phase in {None, "preparing_native_action"} \
+                    or row[2] is None and row[0] in {"issue_review", "implement_issue", "repair_pr", "native_publication"}
+                encoded = json.dumps(summary, separators=(",", ":"))
+                # Terminal before signalling: the publication writers' running
+                # gate cannot advance a known pre-write phase after this cause.
+                changed = conn.execute("update calls set status='failed',ended_at=?,resource_guard=?,error_code=?,error=?,action=null,outcome=null,progress=coalesce(?,progress) "
+                                       "where id=? and status='running' and error_code is null",
+                                       (time(), encoded, failure["code"], failure["message"], progress.terminal("failed"), self.call_id)).rowcount
                 return changed == 1
             changed = conn.execute("update calls set resource_guard=? where id=? and status='running' and error_code is null",
                                    (encoded, self.call_id)).rowcount

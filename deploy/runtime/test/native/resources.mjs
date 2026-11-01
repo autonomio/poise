@@ -10,6 +10,7 @@ const stores = []
 const registry = () => { const value = resourceWitnesses(call); registries.push(value); return value }
 try {
   const literal = registry()
+  mkdirSync(`${work}/literal`)
   const literalRoot = `${work}/literal/native-resources/${call}`
   literal.allocate(literalRoot)
   const oldCwd = process.cwd()

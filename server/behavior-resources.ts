@@ -79,7 +79,7 @@ export interface ExecutionResourceGuard {
   lastCompleteAt: number | null
   longestUnavailableSeconds: number
   failure: null | { code: string, dimension: string, ceiling: number | null, observed: number | null,
-    observedAt: number, observedMonotonic: number, message: string, signalMonotonic?: number }
+    observedAt: number, observedMonotonic: number, message: string, signalMonotonic?: number, noWrite?: boolean }
 }
 
 export function parseExecutionResourceGuard(value: unknown): ExecutionResourceGuard | null {
@@ -95,11 +95,12 @@ export function parseExecutionResourceGuard(value: unknown): ExecutionResourceGu
     || (row.state === 'stopped') !== (row.failure !== null)) throw new Error('invalid native execution guard')
   validateExecutionLimits(row.limits, { memoryBytes: row.limits.memoryBytes ?? 0, diskBytes: row.limits.diskBytes ?? 0 })
   const failure = row.failure
-  if (failure && (Object.keys(failure).filter(key => key !== 'signalMonotonic').sort().join() !== ['code', 'dimension', 'ceiling', 'observed', 'observedAt', 'observedMonotonic', 'message'].sort().join()
+  if (failure && (Object.keys(failure).filter(key => !['signalMonotonic', 'noWrite'].includes(key)).sort().join() !== ['code', 'dimension', 'ceiling', 'observed', 'observedAt', 'observedMonotonic', 'message'].sort().join()
     || !['resource_memory_exceeded', 'resource_disk_exceeded', 'resource_measurement_unavailable'].includes(failure.code)
     || typeof failure.message !== 'string' || !failure.message || failure.message.length > 2000
     || !Number.isFinite(failure.observedAt) || failure.observedAt <= 0 || !Number.isFinite(failure.observedMonotonic) || failure.observedMonotonic < 0
     || failure.signalMonotonic !== undefined && (!Number.isFinite(failure.signalMonotonic) || failure.signalMonotonic < failure.observedMonotonic)
+    || failure.noWrite !== undefined && typeof failure.noWrite !== 'boolean'
     || (failure.code === 'resource_measurement_unavailable'
       ? failure.dimension !== 'coverage' || failure.ceiling !== null || failure.observed !== null
       : !['memoryBytes', 'diskBytes'].includes(failure.dimension) || failure.ceiling !== row.limits[failure.dimension as 'memoryBytes' | 'diskBytes']

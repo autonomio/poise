@@ -213,7 +213,7 @@ describe('resource-aware behavior admission', () => {
           failure: { code, dimension: code === 'resource_disk_exceeded' ? 'diskBytes' : code === 'resource_memory_exceeded' ? 'memoryBytes' : 'coverage',
             ceiling: code === 'resource_disk_exceeded' ? 1 : code === 'resource_memory_exceeded' ? 6 : null,
             observed: code === 'resource_disk_exceeded' ? 2 : code === 'resource_memory_exceeded' ? 7 : null,
-            observedAt: 11, observedMonotonic: 11, message: 'Behavior fixture resource coverage failed' } },
+            observedAt: 11, observedMonotonic: 11, message: 'Behavior fixture resource coverage failed', noWrite: true } },
         resource_ownership: { version: 2, roots: [], errors: [], namespace }, resources_settled_at: null as string | null }
       const runtime = new BehaviorChainRuntime(journal, operations({ readInvocations: async () => parseAgentLogStdout(JSON.stringify([call]), 'resource cause contract') }))
       await runtime.run()
@@ -225,6 +225,7 @@ describe('resource-aware behavior admission', () => {
       expect(journal.read(chain.id)!.held).toBe(call.error)
       expect(journal.reservedResources().memoryBytes).toBe(0)
       expect(journal.read(chain.id)!.invocations).toHaveLength(1)
+      expect(journal.read(chain.id)!.invocations[0].state).toBe('settled')
     })
 
   it('retains the person Stop intent while cleanup is uncertain and after its later verified release', async () => {

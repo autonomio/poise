@@ -110,8 +110,23 @@ def test_unavailable_sample_is_a_durable_stop_not_zero(database, monkeypatch):
 def test_breach_survives_original_parent_loss_and_reaping(database, monkeypatch):
     assert observer(database).poll() is True
     monkeypatch.setattr(api.process_identity, "state", lambda *args: "gone")
-    assert api.reap_interrupted() == 1
+    assert api.reap_interrupted() == 0
     assert receipt(database)["error_code"] == "resource_memory_exceeded"
+
+
+@pytest.mark.parametrize("phase,no_write", [("executing", True), ("publishing", False)])
+def test_terminal_guard_fences_new_publication_but_keeps_an_uncertain_existing_plan(database, phase, no_write):
+    call = database
+    with api.db() as conn:
+        conn.execute("update calls set artifact=?,action_plan=? where id=?",
+                     (json.dumps({"phase": phase}), '{"original":"plan"}', call))
+    assert observer(call).poll() is True
+    row = receipt(call)
+    assert row["status"] == "failed"
+    assert json.loads(row["resource_guard"])["failure"]["noWrite"] is no_write
+    assert row["action_plan"] == '{"original":"plan"}'
+    with pytest.raises(ValueError, match="original durable record"):
+        api.persist_action_plan(call, {"replacement": "forbidden"})
 
 
 def test_parent_loss_before_a_breach_does_not_invent_a_limit_failure(database, monkeypatch):
