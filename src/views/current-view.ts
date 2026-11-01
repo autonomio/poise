@@ -1067,12 +1067,8 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     paintLabelsList()
     labelsFilter.focus()
   }
-  // A pointer landing outside closes the panel. It fires before the icon's
-  // click, so the toggle suppresses the reopen the same press would cause.
-  let labelsOutsideClosed = false
   function outsideLabels(event: PointerEvent): void {
     if (labelsPop.hidden || labelsPop.contains(event.target as Node) || labelsBtn.contains(event.target as Node)) return
-    labelsOutsideClosed = true
     closeLabelsPop(false)
   }
   const loadLabels = async (repo: string, generation: number): Promise<void> => {
@@ -1118,7 +1114,6 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     void loadLabels(repo, labelGen)
   }
   labelsBtn.addEventListener('click', () => {
-    if (labelsOutsideClosed) { labelsOutsideClosed = false; return }
     if (labelsPop.hidden) openLabelsPop()
     else closeLabelsPop(true)
   })
@@ -1127,8 +1122,12 @@ function openIssueComposer(prefill?: IssueComposerPrefill) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLabelsPop(true) }
     else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit() }
   })
-  labelsList.addEventListener('change', () => {
-    selectedLabels = [...labelsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')].map((box) => box.value)
+  labelsList.addEventListener('change', (event) => {
+    const box = event.target
+    if (!(box instanceof HTMLInputElement) || box.type !== 'checkbox') return
+    if (box.checked) {
+      if (!selectedLabels.includes(box.value)) selectedLabels.push(box.value)
+    } else selectedLabels = selectedLabels.filter(name => name !== box.value)
     paintLabelsCount()
     paintLabelsFoot(null)
   })

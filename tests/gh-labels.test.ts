@@ -43,7 +43,7 @@ describe('list_repo_labels', () => {
       { name: 'wip', color: 'cccccc', description: null },
     ] })
     expect(mocks.runFile.mock.calls[0][1]).toEqual(['auth', 'token', '--hostname', 'github.com', '--user', 'octocat'])
-    expect(mocks.runFile.mock.calls[1][1]).toEqual(['api', 'repos/alpha/same/labels', '-f', 'per_page=100', '-f', 'page=1'])
+    expect(mocks.runFile.mock.calls[1][1]).toEqual(['api', 'repos/alpha/same/labels', '--method', 'GET', '-f', 'per_page=100', '-f', 'page=1'])
     // The pinned credential authenticates the read.
     expect(mocks.runFile.mock.calls[1][2].env).toMatchObject({ GH_HOST: 'github.com', GH_TOKEN: 'selected-token' })
   })

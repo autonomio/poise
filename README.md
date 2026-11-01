@@ -211,6 +211,9 @@ Current keeps an issue draft open while its write is pending and closes it
 after confirmation. A failed write retains the draft for an explicit retry.
 A later refresh failure does not reopen the draft or report the confirmed
 write as failed.
+The issue composer's label button reads the selected repository's labels.
+Filtering keeps selections that are out of view; changing repositories clears them.
+The create result names any selected labels GitHub did not apply.
 Archive paints its page before the full-history total is available, showing
 an available-row count until that read finishes.
 

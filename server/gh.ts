@@ -859,7 +859,7 @@ export async function handleGhBody(body: any): Promise<{ status: number, body: u
     try {
       const labels: { name: string, color: string, description: string | null }[] = []
       for (let page = 1; page <= LABEL_PAGES_MAX; page++) {
-        const { stdout } = await runFile(GH, ['api', `repos/${owner}/${repo}/labels`, '-f', `per_page=${LABEL_PAGE_SIZE}`, '-f', `page=${page}`], {
+        const { stdout } = await runFile(GH, ['api', `repos/${owner}/${repo}/labels`, '--method', 'GET', '-f', `per_page=${LABEL_PAGE_SIZE}`, '-f', `page=${page}`], {
           env: {
             GH_HOST: 'github.com',
             GH_TOKEN: token,
