@@ -84,7 +84,9 @@ If the selected model is absent or unavailable, the draft and choice are retaine
 and the reason is shown. There is no silent fallback. Session-creation and first-send errors
 preserve the message, and repeated submission while creating cannot launch
 another session. The console also returns to this writable state after the
-last session is deleted. A selected session still starting its native agent
+last session is deleted. While a new session is being created, typing remains
+available and the draft carries over; sending waits for creation confirmation.
+A selected session still starting its native agent
 accepts a prompt through the runtime's existing serialized turn queue.
 
 The sessions pane resizes from its right edge, remembers its width, and eases

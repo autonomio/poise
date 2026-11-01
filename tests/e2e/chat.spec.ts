@@ -1077,8 +1077,14 @@ test('creates a session from the dialog with a pending entry before the server a
   // Pending entry, selected, before the POST resolves.
   await expect(page.locator('.chat-session-item.pending')).toHaveCount(1)
   await expect(page.locator('.chat-session-item.pending')).toHaveClass(/active/)
-  await expect(input(page)).toBeDisabled()
+  await expect(input(page)).toBeEnabled()
   await expect(input(page)).toHaveAttribute('placeholder', 'Starting the session…')
+  const pendingDraft = 'Draft while the session starts'
+  await input(page).fill(pendingDraft)
+  await expect(page.locator('.chat-send')).toBeDisabled()
+  await input(page).press('Enter')
+  expect(sock.framesOf('prompt')).toHaveLength(0)
+  expect(sock.framesOf('steer')).toHaveLength(0)
   release()
   await expect(page.locator('.chat-session-item.pending')).toHaveCount(0)
   await expect(page.locator('.chat-session-item')).toHaveCount(1)
@@ -1092,6 +1098,10 @@ test('creates a session from the dialog with a pending entry before the server a
   sock.push('new-1', { type: 'session.updated', session: { ...state.sessions[0], status: 'idle' } })
   await expect(page.locator('.chat-h-status')).toHaveText('idle')
   await expect(input(page)).toBeEnabled()
+  await expect(input(page)).toHaveValue(pendingDraft)
+  await input(page).press('Enter')
+  await expect.poll(() => sock.framesOf('prompt').length).toBe(1)
+  expect(sock.framesOf('prompt')[0].command).toMatchObject({ sessionId: 'new-1', text: pendingDraft })
 })
 
 test('deleting a pending creation removes the session that arrives late', async ({ page }) => {

@@ -2699,7 +2699,7 @@ function composerStateFor(e: SessionEntry | null): void {
     composer.setCommands([], { model: true, modes: false, fork: false })
     const model = freshModelIdentity || agentsInfo?.defaults.model
     const restoring = !!restoredSnapshot?.activeSessionId
-    composer.setState({ running: false, disabled: !!quickSessionPromise || restoring, placeholder: restoring ? 'Loading your conversation…' : quickSessionPromise ? 'Starting the session…' : undefined, modelLabel: model ? consoleModelLabel(model) : 'Choose model', modelIdentity: model || undefined, sessionId: null })
+    composer.setState({ running: false, disabled: !!quickSessionPromise || restoring, allowDraft: !!quickSessionPromise && !restoring, placeholder: restoring ? 'Loading your conversation…' : quickSessionPromise ? 'Starting the session…' : undefined, modelLabel: model ? consoleModelLabel(model) : 'Choose model', modelIdentity: model || undefined, sessionId: null })
     return
   }
   const s = e.record
@@ -2713,7 +2713,7 @@ function composerStateFor(e: SessionEntry | null): void {
   else if (s.status === 'error') { disabled = true; placeholder = `The session failed — Resume to try again, or /reset to start fresh${wakeNote(s)}` }
   composer.setCommands(s.commands || [], { modes: !!s.capabilities?.modes, fork: !!s.capabilities?.fork })
   if (s.contextResetting) { disabled = true; placeholder = 'Resetting chat…' }
-  composer.setState({ running, maintaining: s.contextCompacting, disabled, placeholder, modelIdentity: s.model, resume: !s.contextResetting && (s.status === 'interrupted' || s.status === 'error'), sessionId: e.pending ? null : s.id })
+  composer.setState({ running, maintaining: s.contextCompacting, disabled, allowDraft: e.pending, placeholder, modelIdentity: s.model, resume: !s.contextResetting && (s.status === 'interrupted' || s.status === 'error'), sessionId: e.pending ? null : s.id })
 }
 
 // The next render pins the transcript to its end regardless of where the
