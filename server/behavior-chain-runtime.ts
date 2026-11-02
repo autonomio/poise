@@ -270,8 +270,18 @@ export class BehaviorChainRuntime {
             }
             if (resources) {
               const resourceLimits = executionLimits(resources)
+              const argv = [...request.argv]
+              if (request.command === 'agent-interface' && decision.reviewer) {
+                const guidance = `Enforced resource ceilings for this entire behavior invocation: ${JSON.stringify(resourceLimits)}. `
+                  + 'These cover the provider and all child processes, including tests and builds. '
+                  + 'Use explicit bounded test/build parallelism; start with one worker when the runner otherwise follows host CPU count. '
+                  + 'Preserve all required checks and assertions. Do not increase limits, disable enforcement or change repository test configuration to fit; report a concrete blocker if the work cannot fit.'
+                const note = argv.indexOf('--note')
+                if (note < 0) argv.push('--note', guidance)
+                else argv[note + 1] = `${argv[note + 1]}\n\n${guidance}`
+              }
               request = { ...request, resourceLimits, ...(request.command === 'agent-interface'
-                ? { argv: [...request.argv, '--resource-limits-json', JSON.stringify(resourceLimits)] } : {}) }
+                ? { argv: [...argv, '--resource-limits-json', JSON.stringify(resourceLimits)] } : {}) }
             }
             // Preparation can await provider/auth/configuration. Recheck admission
             // at the last boundary, before committing authority for an effect.

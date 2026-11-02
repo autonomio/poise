@@ -291,6 +291,12 @@ first cause or no-write result without that commit. Missing signal-timing
 annotations remain unavailable rather than zero. Proven failures before native
 scope creation retain their existing no-worker receipt and release path.
 
+The admitted model request also includes these immutable ceilings in its existing
+behavior note. The provider must bound test/build parallelism, starting with one
+worker when a runner otherwise follows host CPU count, while preserving every
+required check and assertion. This guidance grants no authority to change the
+ceilings or enforcement; the original resource guard still stops a breach.
+
 These are sampled soft ceilings, not hard kernel quotas or a guarantee against
 instantaneous allocation. Component proof uses 256-MiB memory and 8-MiB disk
 ceilings, at most 64 MiB/s memory and 2 MiB/s disk growth, at least 1 GiB of
