@@ -274,8 +274,9 @@ filesystem walk. A child born during that later walk belongs to the next
 process sample; it does not invalidate the earlier counters. A process change
 during the process counter pass still makes coverage partial. The counters
 are sampled across an interval, not one atomic memory/filesystem snapshot.
-An exit or changed membership during that pass gets one immediate fresh read
-in the same sampling opportunity. Only a complete successful read refreshes
+An exit or changed membership during that pass gets fresh reads within the
+same one-second sampling opportunity, with a short pause after the first retry
+to avoid busy spinning. Only a complete successful read refreshes
 coverage; persistent races and inaccessible counters retain the five-second
 fail-closed rule. The retry starts no process and grants no cleanup authority.
 

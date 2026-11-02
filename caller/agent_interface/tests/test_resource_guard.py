@@ -154,6 +154,41 @@ def test_unreadable_process_counter_is_not_retried_as_normal_exit(database, monk
     assert monitor.summary["samples"] == 0 and monitor.last_complete == original_complete
 
 
+def test_several_process_exits_can_recover_within_one_sampling_opportunity(database, monkeypatch):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 100, "diskBytes": None})
+    attempts = []
+    sample = {"memoryBytes": 7, "diskBytes": 0, "memoryModel": "rss",
+              "completedAt": time.time(), "completedMonotonic": time.monotonic()}
+    def read():
+        attempts.append(1)
+        if len(attempts) <= 3:
+            raise guard.MembershipChanged("resource membership changed during measurement")
+        return sample
+    monkeypatch.setattr(monitor, "_read", read)
+    assert monitor._sample() == sample
+    assert len(attempts) == 4
+    assert monitor.summary["partialSamples"] == 3
+
+
+def test_persistent_membership_changes_cannot_extend_coverage_or_retry_forever(database, monkeypatch):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 100, "diskBytes": None})
+    monitor.last_complete = 0
+    clock, attempts = [0.0], []
+    def read():
+        attempts.append(1)
+        clock[0] += 0.4
+        raise guard.MembershipChanged("resource membership changed during measurement")
+    monkeypatch.setattr(guard, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(monitor, "_read", read)
+    with pytest.raises(guard.MembershipChanged):
+        monitor._sample()
+    assert len(attempts) == 3 and monitor.last_complete == 0
+    assert monitor.summary["samples"] == 0
+    clock[0] = 5.01
+    assert monitor.poll() is True
+    assert receipt(database)["error_code"] == "resource_measurement_unavailable"
+
+
 @pytest.mark.parametrize("memory,disk,code", [(10, None, "resource_memory_exceeded"), (None, 8, "resource_disk_exceeded")])
 def test_breach_survives_completion_and_no_write_reclassification(database, memory, disk, code):
     call = database
