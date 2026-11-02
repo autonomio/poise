@@ -247,7 +247,7 @@ function settingCell(meta: typeof BEHAVIORS[number]): string {
 }
 
 // Reviewers cell — how many of the slots from the PR review place's slot on
-// (Settings → Models) review each new pull request, all at the same time.
+// (Settings → Models) review each new pull request.
 // One is the default; the other behaviors show a dash.
 const REVIEWER_OPTIONS: ReviewerCount[] = [1, 2, 3]
 const reviewersInFlight = new Set<BehaviorKey>()
@@ -259,7 +259,7 @@ function reviewersCell(meta: typeof BEHAVIORS[number]): string {
     `<option value="${count}"${count === current ? ' selected' : ''}>${count}</option>`
   ).join('')
   const reviews = meta.reviews ?? { place: 'PR review', item: 'pull request' }
-  const title = `How many of the ${reviews.place} models (Settings → Models) review each new ${reviews.item}, at the same time`
+  const title = `How many of the ${reviews.place} models (Settings → Models) review each new ${reviews.item}`
   return `
     <select class="behavior-reviewers" data-behavior="${escapeHtml(meta.key)}" aria-label="Reviewers for ${escapeHtml(meta.key)}" title="${escapeHtml(title)}"${stateUnknown() || reviewersInFlight.has(meta.key) ? ' disabled' : ''}>
       ${opts}
