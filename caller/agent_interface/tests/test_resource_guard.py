@@ -231,6 +231,19 @@ def test_unavailable_sample_is_a_durable_stop_not_zero(database, monkeypatch):
     assert "permission denied" in value["error"]
 
 
+def test_slow_sample_retains_its_current_stage_in_the_stop_cause(database, monkeypatch):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 10, "diskBytes": None})
+    monitor.last_complete = 1
+    monitor.reading_stage = "allocated blocks"
+    monitor.error = "an earlier transient process exit"
+    monkeypatch.setattr(guard, "monotonic", lambda: 7)
+    assert monitor.poll() is True
+    value = receipt(database)
+    assert value["error_code"] == "resource_measurement_unavailable"
+    assert "still reading allocated blocks" in value["error"]
+    assert "earlier transient" not in value["error"]
+
+
 def test_breach_survives_original_parent_loss_and_reaping(database, monkeypatch):
     assert observer(database).poll() is True
     monkeypatch.setattr(api.process_identity, "state", lambda *args: "gone")

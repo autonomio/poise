@@ -155,8 +155,14 @@ class Guard:
         self.saved = (0, 0)
         self.disabled = False
         self.pending_failure: dict | None = None
+        self.reading_stage: str | None = None
+
+    def _stage(self, name: str) -> None:
+        with self.lock:
+            self.reading_stage = name
 
     def _read(self) -> dict:
+        self._stage("native process counters")
         view = Path(f"/proc/self/fd/{self.proc}")
         pids = sorted(int(entry.name) for entry in view.iterdir() if entry.name.isdecimal())
         if 1 not in pids:
@@ -170,11 +176,13 @@ class Guard:
         seen: set[tuple[int, int]] = set()
         memory, disk, models = 0, 0, set()
         for directory in directories:
+            self._stage("native process counters")
             before = native_namespace.task_identity(int(directory.name), str(directory.parent))
             amount, model = process_memory(directory)
             memory += amount
             models.add(model)
             if self.limits["diskBytes"] is not None:
+                self._stage("open deleted files")
                 disk += deleted_bytes(directory, seen)
             if native_namespace.task_identity(int(directory.name), str(directory.parent)) != before:
                 raise MembershipChanged("resource process changed during measurement")
@@ -183,6 +191,7 @@ class Guard:
         if set(pids) != {int(entry.name) for entry in view.iterdir() if entry.name.isdecimal()}:
             raise MembershipChanged("resource membership changed during measurement")
         if self.limits["diskBytes"] is not None:
+            self._stage("Caller resource inventory")
             with closing(caller_store.connect(self.database, timeout=1)) as conn:
                 roots = resource_ownership.read(conn, self.call_id)["roots"]
             for root in roots:
@@ -190,12 +199,14 @@ class Guard:
                     continue
                 if root["state"] != "allocated":
                     raise RuntimeError("resource allocation is not yet measurable")
+                self._stage("original directory handle")
                 proof = self.scope.resource("read-root", Path(root["path"]))
                 if proof["state"] == "reclaimed":
                     continue
                 anchor = proof["anchor"]
                 fd = os.open(f"/proc/{anchor['pid']}/fd/{anchor['rootFd']}", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
                 try:
+                    self._stage("allocated blocks")
                     node = os.fstat(fd)
                     if {"device": str(node.st_dev), "inode": str(node.st_ino)} != {key: root[key] for key in ("device", "inode")}:
                         raise RuntimeError("resource root differs from its original allocation")
@@ -244,6 +255,9 @@ class Guard:
                 with self.lock:
                     self.error = str(error)[:500]
                     self.summary["partialSamples"] += 1
+            finally:
+                with self.lock:
+                    self.reading_stage = None
             if self.cancelled.wait(max(0, SAMPLE_SECONDS - (monotonic() - began))):
                 return
 
@@ -270,7 +284,8 @@ class Guard:
         with self.lock:
             summary = json.loads(json.dumps(self.summary))
             sample = dict(self.breach) if self.breach else None
-            stale, error = monotonic() - self.last_complete > STALE_SECONDS, self.error
+            stale = monotonic() - self.last_complete > STALE_SECONDS
+            error = f"still reading {self.reading_stage}" if self.reading_stage else self.error
             summary["longestUnavailableSeconds"] = max(summary["longestUnavailableSeconds"], monotonic() - self.last_complete)
         failure = self.pending_failure
         if failure is None and sample:

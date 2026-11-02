@@ -77,4 +77,12 @@ describe('behavior resource admission', () => {
       cgroupFile: cgroup({ 'memory.max': 'bogus\n', 'memory.current': '1\n' }),
     })).toThrow('behavior resource measurement unavailable: cgroup memory read is invalid')
   })
+
+  it.each([null, '', ' \n'])('refuses an absent cgroup counter under a configured limit: %j', (current) => {
+    expect(() => measureBehaviorHeadroom({
+      freeMemory: () => 64_000,
+      diskFree: () => 9,
+      cgroupFile: (name) => name === 'memory.max' ? '100\n' : current,
+    })).toThrow('behavior resource measurement unavailable: cgroup memory read is invalid')
+  })
 })
