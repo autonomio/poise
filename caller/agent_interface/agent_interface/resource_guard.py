@@ -206,17 +206,22 @@ class Guard:
                 "completedAt": time(), "completedMonotonic": monotonic()}
 
     def _sample(self) -> dict:
-        try:
-            return self._read()
-        except (FileNotFoundError, ProcessLookupError, MembershipChanged) as error:
-            if self.cancelled.is_set():
-                raise
-            # One fresh snapshot for a task that exited during enumeration.
-            # Nothing refreshes coverage until that full snapshot succeeds.
-            with self.lock:
-                self.error = str(error)[:500]
-                self.summary["partialSamples"] += 1
-            return self._read()
+        deadline = monotonic() + SAMPLE_SECONDS
+        retry = False
+        while True:
+            try:
+                return self._read()
+            except (FileNotFoundError, ProcessLookupError, MembershipChanged) as error:
+                if self.cancelled.is_set() or monotonic() >= deadline:
+                    raise
+                # Retry changing membership within this sampling opportunity.
+                # Only a complete snapshot refreshes the five-second coverage.
+                with self.lock:
+                    self.error = str(error)[:500]
+                    self.summary["partialSamples"] += 1
+                if retry and (self.cancelled.wait(0.01) or monotonic() >= deadline):
+                    raise
+                retry = True
 
     def _run(self) -> None:
         while not self.cancelled.is_set():
