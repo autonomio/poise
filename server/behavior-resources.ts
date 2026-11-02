@@ -123,8 +123,8 @@ function cgroupAllowance(read: (name: string) => string | null): number {
   } catch (error) {
     throw new Error(`behavior resource measurement unavailable: cgroup memory read failed: ${error instanceof Error ? error.message : String(error)}`)
   }
-  const max = Number(maxRaw.trim())
-  const current = Number((currentRaw ?? '').trim())
+  const max = maxRaw.trim() ? Number(maxRaw.trim()) : Number.NaN
+  const current = currentRaw?.trim() ? Number(currentRaw.trim()) : Number.NaN
   if (!Number.isSafeInteger(max) || max < 0 || !Number.isSafeInteger(current) || current < 0) {
     throw new Error('behavior resource measurement unavailable: cgroup memory read is invalid')
   }

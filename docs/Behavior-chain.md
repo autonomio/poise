@@ -248,6 +248,9 @@ Durable model admissions use the existing semaphore's behavior-lane ceiling, inc
 
 Resource-aware admission (#731) extends that boundary with memory/disk budgets instead of another scheduler. Each admitted native invocation holds a durable reservation covering its whole tree, including provider children and build/test descendants; the count and budget checks run in one journal transaction, so concurrent admissions cannot double-spend. A synchronous free-memory/free-disk probe guards the same boundary before provider preparation and again before spawn, and fails closed with an explicit reason. Blocked chains wait with that reason and no agent process, waking through the existing release paths. Verified settlement releases a reservation exactly once; cleanup uncertainty and pre-reservation live invocations retain or block it. Budgets and reservations are environment-only (`POISE_BEHAVIOR_MEMORY_BUDGET_BYTES`, `POISE_BEHAVIOR_DISK_BUDGET_BYTES`, `POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES`, `POISE_BEHAVIOR_DISK_RESERVATION_BYTES`); unset means unbounded and production behaves as before. Deletion authority stays with the Caller sweep's ownership proofs.
 
+A configured cgroup memory limit requires a readable, nonempty current-usage
+counter. Missing usage cannot masquerade as zero.
+
 For new bounded admissions, each bounded dimension's reservation is also its
 sampled execution ceiling. The immutable request records explicit null for an
 unbounded dimension, includes the limits in native arguments and binds fixed
@@ -282,7 +285,8 @@ fail-closed rule. The retry starts no process and grants no cleanup authority.
 
 A complete sample over its ceiling, or five seconds without a complete sample,
 commits the first typed cause before immediately killing the original pinned
-holder. There is no five-second grace for a resource breach. The chain is held;
+holder. A stalled read names its current measurement stage in that cause.
+There is no five-second grace for a resource breach. The chain is held;
 ordinary Stop, timeout, completion and reaping preserve whichever cause/result
 committed first. Publication remains guarded and original accepted/uncertain
 action receipts are retained. Ownership and cleanup failures stay separate from
