@@ -162,6 +162,13 @@ try:
                               'initialRssBytes': initial_memory, 'samples': observations, 'neighborAlive': True}), flush=True)
             break
         if not baseline and row['resources_settled_at']:
+            # Maintenance may publish release while the original owner is
+            # still committing its actual post-signal timing annotation.
+            if worker.poll() is None:
+                time.sleep(0.05)
+                continue
+            with api.db() as db:
+                row = dict(db.execute('select * from calls where id=?', (call,)).fetchone())
             assert initial_memory is not None and initial_memory < 256 * MiB
             assert ownership['namespace']['state'] == 'settled'
             guard = json.loads(row['resource_guard'])

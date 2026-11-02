@@ -264,6 +264,12 @@ disk; it is not added again to process memory. Symlinks are not followed. Known
 build caches use disposable paths; closed files in arbitrary shared user caches
 and inode quotas are outside this byte counter.
 
+The process counter pass validates membership before the independent pinned
+filesystem walk. A child born during that later walk belongs to the next
+process sample; it does not invalidate the earlier counters. A process change
+during the process counter pass still makes coverage partial. The counters
+are sampled across an interval, not one atomic memory/filesystem snapshot.
+
 A complete sample over its ceiling, or five seconds without a complete sample,
 commits the first typed cause before immediately killing the original pinned
 holder. There is no five-second grace for a resource breach. The chain is held;
