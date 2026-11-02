@@ -9,6 +9,12 @@ import { IDLE_TO_READY_MS, MAX_SERVICE_ANSWER_BYTES } from '../src/orchestrator.
 
 const ALICE = workspaceHost('alice')
 const NAVIGATE = { 'sec-fetch-mode': 'navigate', accept: 'text/html' }
+const BEHAVIOR_LIMITS = {
+  POISE_BEHAVIOR_MEMORY_BUDGET_BYTES: '6442450944',
+  POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES: '2147483648',
+  POISE_BEHAVIOR_DISK_BUDGET_BYTES: '1610612736',
+  POISE_BEHAVIOR_DISK_RESERVATION_BYTES: '536870912',
+}
 
 function dockerCalls(h: Harness): string[] {
   return h.docker.calls.map((call) => `${call.method} ${call.path.split('?')[0]}`)
@@ -71,6 +77,30 @@ describe('lazy start', () => {
   }
   afterEach(async () => {
     await h.close()
+  })
+
+  it('passes the configured native behavior budgets into the actual container specification', async () => {
+    const cookie = await start({ env: BEHAVIOR_LIMITS })
+    await h.request({ host: ALICE, path: '/', headers: { ...NAVIGATE, cookie } })
+    await h.orchestrator.startInProgress('alice')
+    expect(containerEnv(h, 'alice')).toEqual(expect.arrayContaining(
+      Object.entries(BEHAVIOR_LIMITS).map(([key, value]) => `${key}=${value}`)))
+  })
+
+  it.each(['added', 'changed', 'removed'])('recreates a stopped workspace when native behavior budgets are %s', async change => {
+    const desired = change === 'removed' ? {} : BEHAVIOR_LIMITS
+    const cookie = await start({ env: desired })
+    const previous = change === 'added' ? [] : Object.entries(BEHAVIOR_LIMITS)
+      .map(([key, value]) => `${key}=${change === 'changed' && key === 'POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES' ? '1073741824' : value}`)
+    addWorkspaceContainer(h, 'alice', CURRENT_IMAGE_ID, false, {
+      env: [`POISE_DRAIN_TIMEOUT=${h.config.drainTimeoutSeconds}`, ...previous],
+    })
+    await h.request({ host: ALICE, path: '/', headers: { ...NAVIGATE, cookie } })
+    await h.orchestrator.startInProgress('alice')
+    expect(h.logs.find(entry => entry.event === 'workspace.container.removed'))
+      .toMatchObject({ handle: 'alice', reason: 'changed native behavior resource budgets' })
+    const actual = containerEnv(h, 'alice').filter(value => value.startsWith('POISE_BEHAVIOR_'))
+    expect(actual.sort()).toEqual(Object.entries(desired).map(([key, value]) => `${key}=${value}`).sort())
   })
 
   it('creates the workspace on first request behind a starting page, then proxies to it', async () => {
@@ -504,6 +534,25 @@ describe('image upgrades', () => {
     h.workspace.health.runningCallerCalls = 0
     await h.orchestrator.upgradePass()
     expect(h.docker.containers.get('poise-ws-alice')?.id).not.toBe(before)
+  })
+
+  it('keeps original native cleanup intact while applying behavior budget changes', async () => {
+    await start({ env: { ...BEHAVIOR_LIMITS, POISE_DRAIN_TIMEOUT: '1' } })
+    h.docker.containers.get('poise-ws-alice')!.imageId = CURRENT_IMAGE_ID
+    const before = h.docker.containers.get('poise-ws-alice')?.id
+    h.workspace.health.unsettledNativeCalls = 1
+    h.workspace.health.backgroundWork = 1
+    await h.orchestrator.upgradePass()
+    expect(h.docker.containers.get('poise-ws-alice')?.id).toBe(before)
+    expect(dockerCalls(h)).not.toContain('POST /containers/poise-ws-alice/stop')
+    expect(h.logs.find(entry => entry.event === 'workspace.upgrade.native-pending' && entry.handle === 'alice')).toBeDefined()
+    expect(h.workspace.health.draining).toBe(false)
+    h.workspace.health.unsettledNativeCalls = 0
+    h.workspace.health.backgroundWork = 0
+    await h.orchestrator.upgradePass()
+    expect(h.docker.containers.get('poise-ws-alice')?.id).not.toBe(before)
+    expect(containerEnv(h, 'alice')).toEqual(expect.arrayContaining(
+      Object.entries(BEHAVIOR_LIMITS).map(([key, value]) => `${key}=${value}`)))
   })
 
   it('keeps cooperative idle upgrades compatible with older health answers', async () => {

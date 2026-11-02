@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { setTimeout as delay } from 'node:timers/promises'
 import { signAssertion } from './assertion.js'
-import type { Config } from './config.js'
+import { BEHAVIOR_RESOURCE_VARIABLES, type Config } from './config.js'
 import type { ContainerDetails, ContainerMount, ContainerSpec, ContainerSummary, DockerClient, TaskSpec } from './docker.js'
 import type { GatewayKeys } from './keys.js'
 import { errorMessage, type LogFields, type Logger } from './log.js'
@@ -250,6 +250,7 @@ export class Orchestrator {
         `POISE_PORT=${WORKSPACE_PORT}`,
         'HOME=/home/poise',
         this.drainTimeoutEnv(),
+        ...config.behaviorResourceEnv,
         ...(config.workspaceSkipCliBootstrap ? ['POISE_SKIP_CLI_BOOTSTRAP=1'] : []),
       ],
       Labels: {
@@ -1122,6 +1123,13 @@ export class Orchestrator {
   /** A container setting that differs from what the gateway would create now; only a new container applies it. */
   private changedSetting(details: ContainerDetails): string | null {
     if (!(details.Config.Env ?? []).includes(this.drainTimeoutEnv())) return 'changed drain timeout'
+    for (const name of BEHAVIOR_RESOURCE_VARIABLES) {
+      const actual = (details.Config.Env ?? []).filter(value => value.startsWith(`${name}=`))
+      const expected = this.deps.config.behaviorResourceEnv.find(value => value.startsWith(`${name}=`))
+      if (actual.length !== (expected === undefined ? 0 : 1) || actual[0] !== expected) {
+        return 'changed native behavior resource budgets'
+      }
+    }
     const resolver = details.Mounts?.find((mount) => mount.Destination === WORKSPACE_RESOLV_CONF)?.Source ?? null
     if (resolver !== (this.deps.workspaceResolvConf ?? null) || (details.Config.Labels?.['poise.dns'] ?? '') !== this.dnsLabel()) {
       return 'changed workspace DNS'

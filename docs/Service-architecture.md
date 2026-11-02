@@ -278,11 +278,16 @@ Environment the gateway passes:
 | `POISE_PORT` | `5555` |
 | `HOME` | `/home/poise` |
 | `POISE_DRAIN_TIMEOUT` | the gateway's own `POISE_DRAIN_TIMEOUT`, in seconds (default 5400), so both sides time a drain alike |
+| `POISE_BEHAVIOR_MEMORY_BUDGET_BYTES`, `POISE_BEHAVIOR_MEMORY_RESERVATION_BYTES`, `POISE_BEHAVIOR_DISK_BUDGET_BYTES`, `POISE_BEHAVIOR_DISK_RESERVATION_BYTES` | optional validated whole-byte native behavior settings from the gateway; unset remains unbounded ([configuration](../gateway/README.md)) |
 | `POISE_SKIP_CLI_BOOTSTRAP` | `1`, only when the gateway's `POISE_WORKSPACE_SKIP_CLI_BOOTSTRAP` is `1` (end-to-end tests); otherwise unset |
 
 A workspace container created with another `POISE_DRAIN_TIMEOUT` than the
 gateway's, or with none, is recreated as one on an outdated image is: drained
 first if it runs ([Deployment](#deployment)).
+Changed or removed native behavior budget/reservation settings use that same
+replacement path and its existing native resource-settlement barrier. Existing
+invocations retain their original immutable ceilings; no setting changes an
+already-admitted booking.
 
 The gateway reaches the workspace at `http://poise-ws-<handle>:5555`, over the
 workspace's network, which it joins by its own container name,
@@ -1085,7 +1090,8 @@ the checkout's commit as the build argument `POISE_SOURCE_SHA`, which
 `/api/service/health` reports as `version`.
 Upgrading is: pull, build, `docker compose up -d`. The gateway then drains and
 recreates any workspace whose image differs from `POISE_RUNTIME_IMAGE`, or
-whose `POISE_DRAIN_TIMEOUT` differs from its own, keeping its volume.
+whose `POISE_DRAIN_TIMEOUT` or configured native behavior budgets differ from
+its own, keeping its volume and respecting the native settlement barrier.
 
 **Provider CLIs** are installed into each person's home volume on first start
 and update themselves there, as Poise already does before each launch. The

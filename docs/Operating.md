@@ -760,6 +760,12 @@ gateway recreates every workspace the way it does for a new image: a running
 one drained first, a stopped one without starting it. It may be at most
 604800 seconds, a week.
 
+The optional [native behavior budgets and reservations](../gateway/README.md)
+also pass from `deploy/.env` to each workspace. Configure both values for every
+bounded dimension. Applying an addition, change or removal uses that same
+cooperative replacement and preserves unsettled native work. Unset budgets
+remain unbounded; existing invocation ceilings never change in place.
+
 ## Backups
 
 ```bash
