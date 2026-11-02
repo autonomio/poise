@@ -115,10 +115,13 @@ try:
     observed_overrun = False
     initial_memory = None
     observations = []
+    empty_observed = None
     while time.monotonic() < deadline:
         with api.db() as db:
             row = dict(db.execute('select * from calls where id=?', (call,)).fetchone())
         ownership = json.loads(row['resource_ownership'])
+        if empty_observed is None and row['resources_settled_at'] and ownership['namespace']['state'] == 'settled':
+            empty_observed = time.monotonic()
         binding = ownership['namespace']['binding']
         # This reader is independent of the new sampler and its receipt.
         if worker.poll() is None:
@@ -175,7 +178,12 @@ try:
             failure = guard['failure']
             expected = 'resource_memory_exceeded' if is_memory else 'resource_measurement_unavailable' if mode == 'unavailable' else 'resource_disk_exceeded'
             assert row['error_code'] == expected, row
-            assert failure['signalMonotonic'] - failure['observedMonotonic'] <= 2, failure
+            if 'signalMonotonic' in failure:
+                assert failure['signalMonotonic'] - failure['observedMonotonic'] <= 2, failure
+            else:
+                # Positive emptiness within two seconds is stronger evidence
+                # than stop initiation within two; it invents no signal time.
+                assert empty_observed is not None and empty_observed - failure['observedMonotonic'] <= 2, row
             assert time.monotonic() - failure['observedMonotonic'] <= 10, failure
             if is_memory:
                 assert guard['peakMemoryBytes'] <= 256 * MiB + 192 * MiB, guard
@@ -194,7 +202,8 @@ try:
             print(json.dumps({'kind': 'actual-live-resource-stop', 'mode': mode, 'call': call,
                               'initialRssBytes': initial_memory, 'samples': observations, 'receipt': receipt,
                               'headroom': headroom, 'neighborAlive': True, 'installedServiceDecoderAccepted': True,
-                              'emptyObservedMonotonic': time.monotonic()}), flush=True)
+                              'signalTimingAvailable': 'signalMonotonic' in failure,
+                              'emptyObservedMonotonic': empty_observed}), flush=True)
             break
         if not baseline and worker.poll() is not None and not row['resources_settled_at']:
             raise AssertionError({'row': row, 'stdout': worker.stdout.read(), 'stderr': worker.stderr.read()})
