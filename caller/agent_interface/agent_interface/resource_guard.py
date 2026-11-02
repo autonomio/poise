@@ -174,6 +174,10 @@ class Guard:
                 disk += deleted_bytes(directory, seen)
             if native_namespace.task_identity(int(directory.name), str(directory.parent)) != before:
                 raise RuntimeError("resource process changed during measurement")
+        # Validate the process counter pass before the independent filesystem
+        # walk. A child born later belongs to the next process sample.
+        if set(pids) != {int(entry.name) for entry in view.iterdir() if entry.name.isdecimal()}:
+            raise RuntimeError("resource membership changed during measurement")
         if self.limits["diskBytes"] is not None:
             with closing(caller_store.connect(self.database, timeout=1)) as conn:
                 roots = resource_ownership.read(conn, self.call_id)["roots"]
@@ -194,8 +198,6 @@ class Guard:
                     disk += tree_bytes(fd, seen, self.cancelled)
                 finally:
                     os.close(fd)
-        if set(pids) != {int(entry.name) for entry in view.iterdir() if entry.name.isdecimal()}:
-            raise RuntimeError("resource membership changed during measurement")
         return {"memoryBytes": memory, "diskBytes": disk, "memoryModel": "+".join(sorted(models)),
                 "completedAt": time(), "completedMonotonic": monotonic()}
 

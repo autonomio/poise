@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,6 +67,48 @@ def test_allocated_disk_deduplicates_links_and_never_follows_symlink(tmp_path):
         assert guard.tree_bytes(fd, seen, threading.Event()) == 0
     finally:
         os.close(fd)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires descriptor-backed procfs paths")
+@pytest.mark.parametrize("birth_during", ["memory", "disk"])
+def test_process_sample_is_not_invalidated_by_birth_during_later_disk_walk(database, tmp_path, monkeypatch, birth_during):
+    view, root = tmp_path / "process-view", tmp_path / "owned"
+    view.mkdir()
+    (view / "1").mkdir()
+    root.mkdir()
+    (root / "data").write_bytes(b"x" * 65536)
+    proc_fd, root_fd = os.open(view, os.O_RDONLY), os.open(root, os.O_RDONLY)
+    node = os.fstat(root_fd)
+    allocation = {"path": str(root), "state": "allocated", "device": str(node.st_dev), "inode": str(node.st_ino)}
+    scope = SimpleNamespace(binding={"owner": {"pid": 1}, "holder": {"pid": 2}},
+        resource=lambda *args: {"state": "allocated", "anchor": {"pid": os.getpid(), "rootFd": root_fd}})
+    monitor = guard.Guard(api.DB, database, scope, {"version": 1, "memoryBytes": 100, "diskBytes": 1000000})
+    monitor.proc = proc_fd
+    tree_bytes = guard.tree_bytes
+    def memory(directory):
+        if birth_during == "memory":
+            (view / "2").mkdir(exist_ok=True)
+        return 7, "rss"
+    def disk(fd, seen, cancelled):
+        (view / "2").mkdir(exist_ok=True)
+        return tree_bytes(fd, seen, cancelled)
+    monkeypatch.setattr(guard, "_identity", lambda *args: None)
+    monkeypatch.setattr(guard.native_namespace, "task_identity", lambda *args: {"start": "original"})
+    monkeypatch.setattr(guard, "process_memory", memory)
+    monkeypatch.setattr(guard, "deleted_bytes", lambda *args: 0)
+    monkeypatch.setattr(guard.resource_ownership, "read", lambda *args: {"roots": [allocation]})
+    monkeypatch.setattr(guard, "tree_bytes", disk)
+    try:
+        if birth_during == "memory":
+            with pytest.raises(RuntimeError, match="membership changed"):
+                monitor._read()
+        else:
+            sample = monitor._read()
+            assert sample["memoryBytes"] == 21
+            assert sample["diskBytes"] == root.stat().st_blocks * 512 + (root / "data").stat().st_blocks * 512
+    finally:
+        os.close(proc_fd)
+        os.close(root_fd)
 
 
 @pytest.mark.parametrize("memory,disk,code", [(10, None, "resource_memory_exceeded"), (None, 8, "resource_disk_exceeded")])
