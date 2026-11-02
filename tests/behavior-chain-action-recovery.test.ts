@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { BehaviorChainJournal, chainBasis, type BehaviorChain, type ChainAdmission, type ChainInvocation } from '../server/behavior-chain-store'
 import { BehaviorChainRuntime, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
 import { decideBehaviorChain, type ChainObservation } from '../server/behavior-chain-decision'
-import { matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement, nativePayloadSha } from '../server/behavior-chain-action'
+import { matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement, nativeRequestSha } from '../server/behavior-chain-action'
 import { BehaviorResourceRecovery } from '../server/behavior-chain-resource-recovery'
 import { completedReviewCall } from './review-response-fixture'
 import type { LogEntry } from '../server/agent-log-parse'
@@ -99,7 +99,7 @@ function releasedAction(invocation: ChainInvocation, result?: Record<string, unk
       correlation: invocation.id, settled_at: stamp / 1000, controller: { version: 1, instance: 'd'.repeat(32) },
       binding: { pid: 104, start: '12', namespace: 'pid:[91]', owner: { pid: 102, start: '10' },
         holder: { pid: 103, start: '11' }, epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
-    artifact: { phase: result ? 'received_native_action' : 'performing_native_action', request_sha: nativePayloadSha(invocation.request),
+    artifact: { phase: result ? 'received_native_action' : 'performing_native_action', request_sha: nativeRequestSha(invocation.request),
       ...(result ? { response_sha: chainBasis(result) } : {}) } }
 }
 
@@ -200,7 +200,7 @@ it('keeps a contained action reserved after its accepted response until original
         controller: { version: 1, instance: 'd'.repeat(32) }, binding: { pid: 104, start: '12', namespace: 'pid:[91]',
           owner: { pid: 102, start: '10' }, holder: { pid: 103, start: '11' },
           epoch: { boot: 'fixture', init_start: '1', namespace_dev: '2', namespace_ino: '3' } } } },
-    artifact: { phase: 'received_native_action', request_sha: nativePayloadSha(invocation.request), response_sha: chainBasis(result) } }
+    artifact: { phase: 'received_native_action', request_sha: nativeRequestSha(invocation.request), response_sha: chainBasis(result) } }
   const readActionResult = vi.fn(async () => result)
   const perform = vi.fn(async () => { throw new Error('must not repeat the action') })
   const runtime = new BehaviorChainRuntime(journal, operations(observation(), { enabled: () => false, perform, readActionResult,

@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto'
 import { canonicalJson } from './chat/protocol'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from './behavior-chain-store'
 
-/** Caller hashes request/plan JSON with sorted keys. Journal hashes retain
- * their original serialization; retained response bytes are hashed verbatim. */
-export function nativePayloadSha(value: unknown): string {
+/** Caller hashes native requests with sorted keys. Journal and plan hashes
+ * retain their original serialization; response bytes are hashed verbatim. */
+export function nativeRequestSha(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex')
 }
 

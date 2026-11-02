@@ -10,7 +10,7 @@ import { chainReviewResponse, type ChainDecision, type ChainObservation, type Ch
 import type { ChainRuntimeOperations, ChainSeed } from './behavior-chain-runtime'
 import { organizationArgs, organizationForRepository, type Organization } from './organizations'
 import { getBehaviorChainSettings, getSettings } from './settings'
-import { attributedNativeAction, nativePayloadSha } from './behavior-chain-action'
+import { attributedNativeAction, nativeRequestSha } from './behavior-chain-action'
 import { resourceReleaseProven } from './behavior-resource-receipt'
 import { runFile, spawnDetached } from './process'
 
@@ -72,7 +72,7 @@ async function actionPlan(callId: string, digest: unknown): Promise<Record<strin
     maxOutputBytes: 2 * 1024 * 1024 })
   const response = object(JSON.parse(stdout), 'native publication plan')
   const plan = object(response.plan, 'native publication plan')
-  if (response.id !== callId || response.sha !== digest || nativePayloadSha(plan) !== digest) throw new Error('native publication plan differs from its durable receipt')
+  if (response.id !== callId || response.sha !== digest || chainBasis(plan) !== digest) throw new Error('native publication plan differs from its durable receipt')
   return plan
 }
 
@@ -409,7 +409,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       return deferred ? { ...evidence, status: 'deferred', action: 'not_started', completedAt: Date.now() } : evidence
     },
     async readActionResult(invocation, call) {
-      if (call.artifact?.request_sha !== nativePayloadSha(invocation.request) || typeof call.artifact.response_sha !== 'string') {
+      if (call.artifact?.request_sha !== nativeRequestSha(invocation.request) || typeof call.artifact.response_sha !== 'string') {
         throw new Error('native action response differs from its immutable request')
       }
       const { stdout } = await runFile('agent-interface', ['--read-response', call.id],
