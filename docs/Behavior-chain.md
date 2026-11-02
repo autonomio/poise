@@ -160,6 +160,11 @@ Admission-mode transitions use `admission.changed` events under the reserved `@b
 
 Native Call rows and immutable action plans record effect intent before controlled publication. They provide execution evidence to the journal, not a second phase controller. Unique native correlations prevent duplicate processes from executing the same admission. Worker resource settlement is required before a handoff; a terminal model result is insufficient. A restart or interrupted process is reconciled against the original invocation, pushed branch, posted comments and exact-head review receipts.
 
+Native request and plan digests use Caller's recursively sorted JSON encoding.
+Journal event/state hashes keep their original serialization, while response
+digests verify the original retained bytes. These are separate contracts;
+reconciliation never rewrites historical events to make a digest match.
+
 An uncertain fixed action retains its first verified response and digest in
 the same journal, so unchanged passes and projection rebuilds do not launch
 another response reader or repeat uncertainty events. Observation-based recovery
