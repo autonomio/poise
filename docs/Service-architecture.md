@@ -547,7 +547,7 @@ otherwise offer it):
 **Service endpoints** (loopback, or the `admin` scope; the owner's `browser`
 assertion may only resume, and anything else is refused with 403):
 - `GET /api/service/health` returns `{ ok, mode, version, activeChatTurns,
-  runningCallerCalls, backgroundWork, idle, draining, release, switching,
+  runningCallerCalls, unsettledNativeCalls, backgroundWork, idle, draining, release, switching,
   eventLoop, desiredRelease, installedRelease, pendingSince, switchWaitingOn }`. `idle` is true only
   when `activeChatTurns`, `runningCallerCalls` and `backgroundWork` are all 0.
   It backs the container health check and the gateway's readiness check.
@@ -594,6 +594,9 @@ assertion may only resume, and anything else is refused with 403):
     which include those an earlier release started. That records read waits at
     most 100 ms; on contention health reports unknown (idle false) at once
     instead of blocking the loop.
+  - `unsettledNativeCalls` exposes the same bounded Caller read's count of
+    native Calls awaiting durable resource release or cleanup-claim retirement.
+    It is `null` when that read is unknown, never an assumed zero.
   - `backgroundWork` counts everything else a restart would cut: the Chat
     runtime's startups, operations and agent processes, process-owned
     background work (behavior ticks, provider CLI updates, the model check),
@@ -613,11 +616,17 @@ assertion may only resume, and anything else is refused with 403):
   `/api/service/drain` at least every 5 minutes. One `POISE_DRAIN_TIMEOUT`
   budget (default 5400, 90 minutes) covers the whole workspace operation: every
   drain, recheck and re-drain. Once an admitted drain reports `idle` the gateway
-  recreates the container; past the budget it recreates a workspace that confirmed
-  busy work behind an admitted drain or that it can no longer reach, and aborts one
-  whose drain was never admitted or whose answers only timed out or were refused,
+  recreates the container. Past the budget, cutting confirmed busy work requires
+  a fresh admitted drain answer with `unsettledNativeCalls: 0` and no Caller or
+  background work. This covers launches still before their Call registration.
+  Positive, null or missing native counts, unreachable workspaces and unconfirmed drain answers
+  abort replacement, preserving the original supervisor's cleanup witnesses and
   releasing its drain for the next pass (`workspace.upgrade.aborted`). While it
-  waits it logs `workspace.drain.waiting` at each renew with the counters and the
+  has pending or unknown native cleanup but no live Caller, it defers immediately
+  and releases the drain without activation or waiting out the deadline. Existing
+  maintenance retries cleanup independently; a permanent hold cannot keep Chat
+  continuously drained across upgrade passes. While waiting for live work, the gateway
+  logs `workspace.drain.waiting` at each renew with the counters and the
   time left, `workspace.drain.lifted` when a drain it saw on is gone while the
   workspace still isn't idle, and `workspace.drain.timeout` with the last known
   counters. After starting the replacement the gateway waits for its health before
@@ -635,9 +644,10 @@ assertion may only resume, and anything else is refused with 403):
     drain stops it through the person's Stop path, with a transcript notice
     naming the update, and the agent keeps its context for the next prompt.
     `idle` still means nothing a restart would cut; it follows once the
-    stopped turn settles. Past the gateway's own timeout a confirmed busy
-    container is recreated anyway, cutting whatever would not settle —
-    bounded Caller work finishes inside it, so that lands only on hung work.
+    stopped turn settles. Past the gateway's own timeout, confirmed busy work
+    can be cut only after native cleanup is positively clear. Older workspaces
+    without the native count still upgrade when cooperatively idle; they cannot
+    authorize a forced busy replacement.
   - The workspace lets a drain lapse `POISE_DRAIN_TIMEOUT` seconds (default
     5400) plus five minutes after the last drain call, so a gateway that
     stopped renewing it cannot leave the workspace refusing work.
@@ -1311,9 +1321,11 @@ directory before another request runs. Handle closure follows this positive
 proof; its first certificate survives a cleanup
 worker's death before the Caller receipt commits. Private claim attempts never
 enter journal evidence. A new container or lost supervisor without retained
-positive proof remains held: this child does not satisfy the frozen container
-replacement acceptance case. Positive lifecycle evidence for that case remains
-required under #806; its fault-matrix requirement is unchanged.
+positive proof remains held, with its disk and reservation retained. Managed
+replacement uses the existing service drain to finish native cleanup before
+destroying those witnesses. Neither a forced restart nor a changed inode after
+restart can authorize deletion or release; the abrupt-loss acceptance outcome
+is a visible hold, not reclaimed capacity.
 The same supervisor holds the original Caller metadata directory, database
 and response-directory descriptors. Its private control configuration names
 them; Caller and health/maintenance readers verify and use the held originals
