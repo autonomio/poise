@@ -290,6 +290,9 @@ receipt-unavailable through the original scope's teardown; it cannot certify a
 first cause or no-write result without that commit. Missing signal-timing
 annotations remain unavailable rather than zero. Proven failures before native
 scope creation retain their existing no-worker receipt and release path.
+When that optional annotation is unavailable, the component check requires the
+existing independent positive-empty observation within the same two-second bound;
+this proves completion, a stronger requirement than stop initiation.
 
 The admitted model request also includes these immutable ceilings in its existing
 behavior note. The provider must bound test/build parallelism, starting with one
