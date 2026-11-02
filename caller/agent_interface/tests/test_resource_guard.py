@@ -102,6 +102,7 @@ def test_process_sample_is_not_invalidated_by_birth_during_later_disk_walk(datab
         if birth_during == "memory":
             with pytest.raises(RuntimeError, match="membership changed"):
                 monitor._read()
+            assert monitor._sample()["memoryBytes"] == 28
         else:
             sample = monitor._read()
             assert sample["memoryBytes"] == 21
@@ -109,6 +110,48 @@ def test_process_sample_is_not_invalidated_by_birth_during_later_disk_walk(datab
     finally:
         os.close(proc_fd)
         os.close(root_fd)
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, ProcessLookupError])
+@pytest.mark.parametrize("recovers", [True, False])
+def test_short_lived_process_gets_one_fresh_read_before_waiting(database, monkeypatch, error_type, recovers):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 100, "diskBytes": None})
+    original_complete = monitor.last_complete
+    attempts = []
+    sample = {"memoryBytes": 7, "diskBytes": 0, "memoryModel": "rss",
+              "completedAt": time.time(), "completedMonotonic": time.monotonic()}
+    def read():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise error_type("process ended during counter read")
+        monitor.cancelled.set()
+        if not recovers:
+            raise error_type("still unavailable")
+        return sample
+    def wait(seconds):
+        assert len(attempts) == 2, "waited a full sampling interval before rereading transient membership"
+        return True
+    monkeypatch.setattr(monitor, "_read", read)
+    monkeypatch.setattr(monitor.cancelled, "wait", wait)
+    monitor._run()
+    assert monitor.summary["partialSamples"] == (1 if recovers else 2)
+    assert monitor.summary["samples"] == int(recovers)
+    assert monitor.last_complete == (sample["completedMonotonic"] if recovers else original_complete)
+    assert monitor.summary["failure"] is None
+
+
+def test_unreadable_process_counter_is_not_retried_as_normal_exit(database, monkeypatch):
+    monitor = guard.Guard(api.DB, database, None, {"version": 1, "memoryBytes": 100, "diskBytes": None})
+    attempts = []
+    original_complete = monitor.last_complete
+    def read():
+        attempts.append(1)
+        monitor.cancelled.set()
+        raise PermissionError("counter inaccessible")
+    monkeypatch.setattr(monitor, "_read", read)
+    monitor._run()
+    assert len(attempts) == 1 and monitor.summary["partialSamples"] == 1
+    assert monitor.summary["samples"] == 0 and monitor.last_complete == original_complete
 
 
 @pytest.mark.parametrize("memory,disk,code", [(10, None, "resource_memory_exceeded"), (None, 8, "resource_disk_exceeded")])

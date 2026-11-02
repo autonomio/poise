@@ -31,6 +31,10 @@ class ReceiptUnavailable(RuntimeError):
     code = "resource_receipt_unavailable"
 
 
+class MembershipChanged(RuntimeError):
+    pass
+
+
 def limits(raw: str | None) -> dict | None:
     if raw is None:
         return None
@@ -173,11 +177,11 @@ class Guard:
             if self.limits["diskBytes"] is not None:
                 disk += deleted_bytes(directory, seen)
             if native_namespace.task_identity(int(directory.name), str(directory.parent)) != before:
-                raise RuntimeError("resource process changed during measurement")
+                raise MembershipChanged("resource process changed during measurement")
         # Validate the process counter pass before the independent filesystem
         # walk. A child born later belongs to the next process sample.
         if set(pids) != {int(entry.name) for entry in view.iterdir() if entry.name.isdecimal()}:
-            raise RuntimeError("resource membership changed during measurement")
+            raise MembershipChanged("resource membership changed during measurement")
         if self.limits["diskBytes"] is not None:
             with closing(caller_store.connect(self.database, timeout=1)) as conn:
                 roots = resource_ownership.read(conn, self.call_id)["roots"]
@@ -201,11 +205,24 @@ class Guard:
         return {"memoryBytes": memory, "diskBytes": disk, "memoryModel": "+".join(sorted(models)),
                 "completedAt": time(), "completedMonotonic": monotonic()}
 
+    def _sample(self) -> dict:
+        try:
+            return self._read()
+        except (FileNotFoundError, ProcessLookupError, MembershipChanged) as error:
+            if self.cancelled.is_set():
+                raise
+            # One fresh snapshot for a task that exited during enumeration.
+            # Nothing refreshes coverage until that full snapshot succeeds.
+            with self.lock:
+                self.error = str(error)[:500]
+                self.summary["partialSamples"] += 1
+            return self._read()
+
     def _run(self) -> None:
         while not self.cancelled.is_set():
             began = monotonic()
             try:
-                sample = self._read()
+                sample = self._sample()
                 with self.lock:
                     self.sample, self.error = sample, None
                     self.summary["longestUnavailableSeconds"] = max(self.summary["longestUnavailableSeconds"],
