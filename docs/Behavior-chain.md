@@ -66,6 +66,10 @@ After completion, v2 owns new eligible seed issues; new legacy issue intake is f
 
 The chain list displays v2 ownership, actual phase/wait/hold/uncertainty, last recorded outcome and confirmed merge SHA, with links to the issue and PR. More chains and per-chain History/More events page through the existing journal readers. It refreshes on the application's existing refresh clock while General settings is open. Unavailable reads disable cutover controls instead of displaying a confident engine state. Repository/author triggers and the approval-round escape remain explicitly legacy-only; v2 uses its selected label/all-issues intake and never escapes unresolved blockers by approving.
 
+In v2, Review New Issues shows that saved seed scope instead of the inactive
+legacy repository filter. Its setting opens the existing General seed controls,
+using capacity data already returned by the Behaviors read.
+
 API summaries include nullable `reviewPending` and `reviewStatus` (`pending`,
 `complete`, `not-recorded`). Older merges without an explicit review verdict
 stay not-recorded; they acquire neither fabricated proof nor a new obligation.

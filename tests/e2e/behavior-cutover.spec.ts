@@ -12,6 +12,41 @@ async function general(page: Page) {
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
 
+for (const seedMode of ['label', 'all'] as const) {
+  test(`issue review shows v2 ${seedMode} intake and opens its actual seed controls`, async ({ page }) => {
+    await workspace(page)
+    const recorded = chainSummaryFixture('complete')
+    const snapshot = { ...recorded, settings: { ...recorded.settings, seedMode }, capacity: { ...recorded.capacity,
+      intake: { seedMode, label: seedMode === 'label' ? 'work-ready' : null } } }
+    await page.route('**/api/settings', route => route.fulfill({ json: { org: 'acme', me: 'octocat',
+      agentAccount: 'octo-agent', timezone: 'UTC', models: {}, behaviorChain: snapshot.settings,
+      organizations: [{ login: 'acme', managed: true, status: 'ready', stage: 'ready', error: null,
+        activatedAt: '2026-10-01T08:00:00Z' }] } }))
+    const writes: string[] = []
+    page.on('request', request => {
+      if (request.method() === 'POST' && /\/api\/(?:behaviors|behavior-chains|settings)(?:\/|$)/.test(new URL(request.url()).pathname)) writes.push(request.url())
+    })
+    await page.route('**/api/behavior-chains', route => route.fulfill({ json: snapshot }))
+    await page.route(/\/api\/behaviors$/, route => route.fulfill({ json: {
+      ...Object.fromEntries(BEHAVIORS.map(({ key }) => [key, { enabled: true, owner: 'octocat',
+        repos: [], authors: [], scratchpad: '', lastTriggered: null }])),
+      diagnostics: { status: 'ok', agentLogsError: null, datastore: { status: 'healthy', error: null },
+        identity: { status: 'valid', actor: 'octo-agent', error: null }, failures: [], deadLetters: [], holds: [],
+        chainCapacity: snapshot.capacity },
+    } }))
+    await page.getByRole('button', { name: 'Behaviors', exact: true }).click()
+    const scope = page.locator('tr[data-behavior="review-new-issues"] .behavior-triggers-btn')
+    await expect(scope).toHaveText(seedMode === 'label' ? 'Label work-ready' : 'All issues')
+    await scope.click()
+    const controls = page.getByRole('region', { name: 'Behavior chain settings' })
+    await expect(controls).toBeVisible()
+    await expect(controls.getByLabel('Seed issues', { exact: true })).toHaveValue(seedMode)
+    if (seedMode === 'label') await expect(controls.getByLabel('Issue label', { exact: true })).toHaveValue('work-ready')
+    await expect(page.getByRole('dialog', { name: 'Repositories and authors that trigger Review New Issues' })).toHaveCount(0)
+    expect(writes).toEqual([])
+  })
+}
+
 test('unsupported cleanup refuses v2 while v1 controls stay available, including drain cancellation', async ({ page }) => {
   await workspace(page)
   let draining = false
