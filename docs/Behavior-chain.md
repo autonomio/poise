@@ -745,7 +745,7 @@ in its declared cohort.
 | --- | --- | --- | --- |
 | Person Stop / cancellation | Observed stop of a live invocation | Worker tree terminated and settled; chain held even after settlement (`server/behavior-chain-runtime.ts`); no silent resume | Held |
 | Timeout | Budget expiry with worker alive | Tree terminated, settlement verified, ownership retained | Held or failed per cause |
-| Native worker/parent failure | Observed worker or Caller-parent death | Descendants reclaimed; surviving live descendant reconciled against the original invocation | Held |
+| Native worker/parent failure | Observed worker or Caller-parent death | Descendants reclaimed; surviving live descendant reconciled against the original invocation. A durable pre-write phase and verified resource release permit a fresh atomic attempt; a possible external write retains the original invocation for reconciliation | Continues only with proven no-write; otherwise held or uncertain |
 | In-container server replacement | New server process with observed surviving workers | Survivors keep no duplicate admissions; capacity reuses the lane ceiling across replacement | Continues or held |
 | Container restart | New container-init epoch with persistent disk and reservations | Caller epoch handling reconciles reservations; cleanup/restart settles exactly once | Continues or held |
 | Interrupted cleanup, before reclamation | Kill between outcome durability and deletion | Failed cleanup durable, visible and retryable; retry repeats no completed external action | Held until recovered |
@@ -763,6 +763,17 @@ hold end held; an explicitly logged test-control resume is allowed
 only where the case row names it, and never counts as an
 unattended merge. A regression-only path stays explicitly unproven
 in the real run.
+
+An interrupted status alone permits no retry. Caller's existing
+`mark_managed_no_write` boundary additionally requires positive resource
+settlement and a durable phase before controlled publication. Admitted or
+submitting writes stay excluded. The runtime retains that original failed
+attempt before admitting another invocation; it does not count the failed
+attempt as a completed review. A person's Stop and resource-limit failures
+still hold the chain even when no external write occurred. The earlier blanket
+Held expectation for parent loss was broader than these existing executable
+contracts; retained tests against that expectation record the mismatch rather
+than silently claiming a pass.
 
 ### Accumulation and return to idle
 
