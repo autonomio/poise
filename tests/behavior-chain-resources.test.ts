@@ -197,16 +197,24 @@ describe('resource-aware behavior admission', () => {
     expect(journal.read(other.id)!.observation).not.toBeNull()
   })
 
-  it('journals execution ceilings and their exact arguments before launch and preserves old replay hashes', async () => {
+  it('journals provider-visible execution ceilings before launch and preserves old replay hashes', async () => {
     bounded('100', '60')
     const { journal, chain } = setup()
     const launch = vi.fn(async () => true)
-    await new BehaviorChainRuntime(journal, operations({ launch })).run()
+    await new BehaviorChainRuntime(journal, operations({ launch,
+      request: async () => ({ command: 'agent-interface', argv: ['--model', 'fixture-model', '--note', 'Repository-specific instructions'], cwd: '/fixture' }),
+    })).run()
     const admitted = journal.read(chain.id)!.invocations[0]
     expect(admitted.reservation).toEqual({ memoryBytes: 60, diskBytes: 0 })
     expect(admitted.request.resourceLimits).toEqual({ version: 1, memoryBytes: 60, diskBytes: null })
     expect(JSON.parse(admitted.request.argv.at(-1)!)).toEqual(admitted.request.resourceLimits)
     expect(admitted.request.argv.at(-2)).toBe('--resource-limits-json')
+    const note = admitted.request.argv[admitted.request.argv.indexOf('--note') + 1]
+    expect(note).toContain('Repository-specific instructions')
+    expect(note).toContain(JSON.stringify(admitted.request.resourceLimits))
+    expect(note).toContain('provider and all child processes')
+    expect(note).toContain('one worker')
+    expect(note).toContain('Preserve all required checks and assertions')
     const before = journal.read(chain.id)
     journal.rebuild()
     expect(journal.read(chain.id)).toEqual(before)
@@ -425,6 +433,7 @@ describe('resource-aware behavior admission', () => {
     const admitted = journal.read(chain.id)!
     expect(admitted.invocations).toHaveLength(1)
     expect(admitted.invocations[0].reservation).toBeNull()
+    expect(admitted.invocations[0].request.argv).toEqual(['--model', 'fixture-model'])
   })
 })
 
