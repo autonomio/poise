@@ -6,7 +6,7 @@ import { chainReviewResponse, closedChainTarget, decideBehaviorChain, type Chain
 import { BehaviorChainJournal, chainBasis, chainIdentity, type BehaviorChain, type ChainEvent, type ChainInvocation } from './behavior-chain-store'
 import { budgetShortfall, executionLimits, headroomShortfall, measureBehaviorHeadroom, readBehaviorResourceAdmission,
   type BehaviorResourceAdmission, type BehaviorResourceHeadroom } from './behavior-resources'
-import { attributedNativeAction, matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement, nativePayloadSha } from './behavior-chain-action'
+import { attributedNativeAction, matchingNativeActionReceipt, nativeActionReceipt, nativeActionSettlement, nativeRequestSha } from './behavior-chain-action'
 
 export interface ChainSeed { repository: string, number: number }
 export interface ChainRuntimeOperations {
@@ -335,7 +335,7 @@ export class BehaviorChainRuntime {
         }
         if (continuation.source !== 'poise:behavior-chain' || continuation.behavior !== 'native_publication'
         || continuation.repo !== chain.repository || continuation.actor !== invocation.actor || continuation.expected_head !== resume.head
-        || continuation.artifact?.request_sha && continuation.artifact.request_sha !== nativePayloadSha({ kind: 'native_publication',
+        || continuation.artifact?.request_sha && continuation.artifact.request_sha !== nativeRequestSha({ kind: 'native_publication',
           call_id: resume.callId, digest: resume.plan, head: resume.head,
           ...(invocation.request.resourceLimits ? { resourceLimits: invocation.request.resourceLimits } : {}) })) throw new Error('native publication differs from its original completion request')
         const publicationReceipt = { ...receipt(continuation), callId: continuation.id }
@@ -402,7 +402,7 @@ export class BehaviorChainRuntime {
     if (invocation.model === null) {
       this.operations.received(invocation, call)
       const physical = { ...receipt(call), nativeCallId: call.id }
-      if (call.artifact?.request_sha && call.artifact.request_sha !== nativePayloadSha(invocation.request)) {
+      if (call.artifact?.request_sha && call.artifact.request_sha !== nativeRequestSha(invocation.request)) {
         throw new Error('native action Call conflicts with its immutable journal request')
       }
       const responded = call.artifact?.phase === 'received_native_action' && typeof call.artifact.response_sha === 'string' && !!call.response

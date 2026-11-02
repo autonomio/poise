@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import type { LogEntry } from '../server/agent-log-parse'
 import { chainBasis, type BehaviorChain, type ChainInvocation } from '../server/behavior-chain-store'
-import { nativePayloadSha } from '../server/behavior-chain-action'
 import type { Organization } from '../server/organizations'
 import type { NativeChainHooks } from '../server/behavior-chain-native'
 
@@ -185,7 +184,7 @@ it('reconciles planned review comments with and without the revision marker', as
     { issue: 'example/repo#7', body: 'Marked.' },
     { issue: 'example/repo#7', body: 'Legacy.' },
   ], model: 'fixture', issue_revision: 'd'.repeat(64) }
-  const digest = nativePayloadSha(plan)
+  const digest = chainBasis(plan)
   const marked = `Marked.\n\n---\n<sub>Issue review · \`fixture\` · rev \`dddddddd\`</sub>\n<!-- agent-interface issue-review call=${callId} -->`
   const legacy = `Legacy.\n\n---\n<sub>Issue review · \`fixture\`</sub>\n<!-- agent-interface issue-review call=${callId} -->`
   mocks.runFile.mockImplementation(async (_command: string, argv: string[]) => {
