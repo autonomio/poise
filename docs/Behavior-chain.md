@@ -897,3 +897,53 @@ artifacts, original failing regression and corrected checks are retained in
 the validation worktree at `test-results/server-v2-final-1508cbbb-20261103/`.
 These three merges are retained evidence, not completion of the frozen
 ten-cycle campaign. A corrected candidate requires its own campaign.
+
+### Corrected candidate `fe58f67e` — current real campaign
+
+The corrected campaign uses source `fe58f67ef92c066077edd65037e5b500e55f2989`
+and immutable manifest SHA-256
+`8b3ba7a63abbdb7eed8d037f3899442b4aa56c97e7225971d6bd084851405e30`.
+It runs actual Codex 0.166.0 behaviors in the separate service replica, with
+zero-bang authoring and llun-ved reviewing in the excluded test organization.
+Only settled prior history was retained; the initial 19 Caller IDs are excluded
+from new-cycle counts. The operator applied intake labels and performed no
+downstream review, implementation, repair, approval or merge actions.
+
+| Achieved level | Seed → actual PR | Confirmed merge |
+| --- | --- | --- |
+| 1 | 117 → 120 | `232d1aa9511e5fedae74a1d905a12407d5cf803b` |
+| 1 | 118 → 121 | `922b9175e5366544c2bf875aa78a26c4eeae6bf6` |
+| 1 | 119 → 122 | `ce8d9dc6ffd9fbd24bba3cb0fa263047b2332e1e` |
+| 2 | 94 → 123 | `2d1f880e041060f18de14f7bc8b9c4e267b55b83` |
+| 2 | 69 → 124 | `17cf07afca642d56e265f24cd6d2018317a8ff29` |
+| 2 | 109 → 125 | `af5f854934c902812e74033c4c82a23cdba9d0a6` |
+| 3 | 106 → 126 | `6ea2a9086c4ef61119f3541403a71432ab9c1866` |
+| 3 | 105 → 127 | `d2730559e129d193397fd13f7475c657145a4217` |
+| 3 | 92 → 128 | `8113026d76e9243c63788f3710d8990aef332ef7` |
+| 3 | 93 → 129 | `538553769b995d10da7226d56353d2de898a7c20` |
+
+All ten merges have independently verified current-head approval,
+successful exact-head and native-queue checks, preserved existing assertions,
+passing merged-API assertions and positive original process/disk settlement.
+The first 54 original Calls pass their ten-minute idle windows; the final six
+windows are still accumulating. Actual provider overlap is 451.54 seconds at
+level 2 and 355.39 seconds at level 3, with the required admitted/unmerged backlog
+throughout. Independent observation gaps are retained; the largest interval in
+these idle windows is 6.87 seconds. Missing observations are not counted as zero
+activity. The 671-event checkpoint rebuilds exactly: 13 chains and 78 invocations
+include three prior chains and 18 prior invocations, with zero reservations.
+Initial settlement timestamps remain unchanged; replay starts no worker.
+All 60 new Caller responses are copied and hashed. All 20 original issue-review
+comments match their actual GitHub identities; two older comments on seed 69
+remain retained without new credit. The final native queue check passes 3,212
+tests, and all 28 independent merged-API checks pass, including older APIs.
+
+This is ten verified merge cycles, not full resource acceptance. No repair round
+occurred at any level; that criterion remains unexercised. The final idle windows
+and evidence-bundle verification remain pending, as do the outstanding real
+fault/breach cases and paired throughput
+comparison. The 12-CPU/40-GiB replica differs from the retained 4-CPU/8-GiB
+baseline, so no matched-throughput claim is made. Production remains untouched.
+Evidence is retained at `test-results/server-v2-final-fe58f67e-20261103/` in the
+validation worktree, including the unchanged manifest, original receipts,
+consistent databases, paginated GitHub evidence, raw inventory and failed reads.
