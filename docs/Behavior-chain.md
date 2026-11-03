@@ -974,6 +974,35 @@ see Caller's in-memory scope, and a successfully repaired, freshly reviewed head
 could enter another repair solely for its answered but unresolved thread. The
 original failures, automatic publication continuations and extra repair are
 retained. The corrections above start a new candidate; the sealed campaign is
-not relabelled as execution on that candidate. Accepted-action acknowledgement
-loss, ordinary timeout, deliberate abrupt-container loss and the remaining
-frozen resource criteria still require their own complete evidence.
+not relabelled as execution on that candidate. On `039a0bd6`, the original
+complex repair reached actual PR 146 merge
+`fb09abc1b5fa030c8cbbdc98b6a35bcdeeadfc94`; its current-head approval,
+conversation resolution, head checks and native queue checks were verified.
+The accepted-response interruption for PR 150 killed its original Caller before
+the journal acknowledgement. Recovery retained one original physical Call and
+queue admission, reconciled the actual accepted response, and reached merge
+`a89103b431e69ddd3ffa61be8ada230120f946c1`. Two neighboring native behaviors
+completed normally. The original request/response hashes and first resource
+certificates remain unchanged.
+
+The real approval for PR 153 subsequently failed when GitHub rejected an inline
+path. Its uncertain submission remains retained, with no retry authorized by
+that rejection. Full-diff structured reviews now use the existing diff-line
+reader to validate inline anchors before submission, as follow-up reviews
+already did; an unanchored finding cannot be dropped or converted to approval.
+Regression coverage includes nonexistent paths, invalid lines on both sides,
+and reaffirmed unresolved outdated threads.
+
+The separate real 30-second native-action timeout on seed 143 retained the
+original uncertain merge invocation without repeating it. Positive process/disk
+release followed the timeout by 0.132 seconds; its concurrently running native
+implementation completed normally. Person Stop on seed 154 reclaimed its
+original worker and directories and held the chain until an explicit test-control
+resume. The next real worker was interrupted by killing its entire isolated
+container. Replacement preserved all 157 previously settled Caller rows and the
+1,706-event journal prefix, started no new physical Call, and retained the
+original unreclaimed directory and 2-GiB/512-MiB reservation as uncertain.
+That result proves a visible safe hold, not reclamation after lost kernel proof.
+These fault observations are retained under
+`test-results/server-v2-repair-039a0bd6-20261103/`; they do not replace the pending
+matched resource campaign or its per-level repair/throughput requirements.
