@@ -12,6 +12,22 @@ async function general(page: Page) {
 const row = (number: number) => ({ id: `acme/repo#${number}`, repository: 'acme/repo', issue: number, sequence: number,
   held: null, waiting: 'exact-head CI is running', mergeSha: null, pullNumber: number + 10, invocations: [] })
 
+for (const width of [390, 1280]) {
+  test(`uncertain resource paths wrap within settings at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await workspace(page)
+    const snapshot = chainSummaryFixture('pending-active')
+    snapshot.chains[0].invocations[0].outcome = 'native invocation ended without proof that its worker resources were released; '
+      + 'allocated directory at /home/poise/.poise/agent-interface/native-resources/df387febe8b346f8bb17b05927b7844a lacks a reclamation receipt'
+    await page.route('**/api/behavior-chains', route => route.fulfill({ json: snapshot }))
+    const controls = await general(page)
+    const list = controls.locator('[data-chain-list]')
+    await expect(list).toContainText('lacks a reclamation receipt')
+    await list.scrollIntoViewIfNeeded()
+    await expect.poll(() => list.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  })
+}
+
 for (const seedMode of ['label', 'all'] as const) {
   test(`issue review shows v2 ${seedMode} intake and opens its actual seed controls`, async ({ page }) => {
     await workspace(page)
