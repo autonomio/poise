@@ -64,6 +64,12 @@ The chain settings checkbox controls invocations only after the durable cutover 
 
 After completion, v2 owns new eligible seed issues; new legacy issue intake is fenced. Existing PR behaviors continue for PRs outside native chains, including PRs subsequently created manually or by Chats. They recheck canonical chain ownership immediately before acting, so v2-owned PRs cannot acquire a second behavior owner. Existing Chat bindings and linked PRs are not migrated, and standalone PRs do not acquire fabricated issue-chain history. The observed legacy boundary is retained across restart, and the UI labels its count as PRs retained at cutover, not a live remaining count. Cancel cutover is available while draining and records a return to v1; it does not terminate work or reverse a completed cutover. A failed or incomplete observation leaves the drain visible with its error. Ordinary chain pause remains available after cutover and never reopens v1 issue intake.
 
+Automatic PR behaviors also retain the published PR identity after a chain
+completes: a stale open datastore row cannot admit a legacy worker for a PR
+the journal already records as merged. This uses the existing bounded journal
+status reader. A later standalone PR on a completed chain's retired branch
+remains eligible; this fence does not change manual Chat binding controls.
+
 The chain list displays v2 ownership, actual phase/wait/hold/uncertainty, last recorded outcome and confirmed merge SHA, with links to the issue and PR. More chains and per-chain History/More events page through the existing journal readers. It refreshes on the application's existing refresh clock while General settings is open. Unavailable reads disable cutover controls instead of displaying a confident engine state. Repository/author triggers and the approval-round escape remain explicitly legacy-only; v2 uses its selected label/all-issues intake and never escapes unresolved blockers by approving.
 
 In v2, Review New Issues shows that saved seed scope instead of the inactive
@@ -869,3 +875,25 @@ production is never attached, followed repositories are verified
 absent from production before seeding and after the campaign, and
 production configuration, admissions, defaults and active work
 are untouched.
+
+The 3 November candidate `1508cbbbebed14b15d253bf4c058a8a829d4a703`
+stopped after its first three real merges: test-repository PRs #114–#116
+(`42be7131`, `ca17471f`, `462d9b4e`). Their exact-head approvals, native queue
+checks and independent functional assertions passed. All 18 original native
+Calls settled, their owned roots were physically absent, and their ten-minute
+handoff windows passed. The campaign nevertheless failed its ownership fence:
+after PR #116 merged, legacy review admitted Caller
+`f0db2bf4b1c24496a1dae11dea4cb9d2`. Its live closed-target check superseded it
+before any provider ran or review was posted. It is not a managed review or a
+successful lifecycle case. Levels 2–3 and the remaining seven cycles were not
+started. The fix retains completed PR provenance in automatic legacy admission
+using the existing journal reader; it changes neither manual Chat controls nor
+the eligibility of a later standalone PR on a retired branch.
+
+The immutable manifest SHA-256 is
+`0cedc250d10ab7a6e7a6badaae390491745a64d12be0666594ce22ae00d5a6fa`.
+The manifest, raw inventory, consistent journal/Caller backups, actual GitHub
+artifacts, original failing regression and corrected checks are retained in
+the validation worktree at `test-results/server-v2-final-1508cbbb-20261103/`.
+These three merges are retained evidence, not completion of the frozen
+ten-cycle campaign. A corrected candidate requires its own campaign.
