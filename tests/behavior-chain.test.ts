@@ -233,6 +233,37 @@ describe('completion-driven atomic behavior decisions', () => {
     obs.pull!.queueEntry = 'second-integration-attempt'
     expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'wait' })
   })
+
+  it('hands a published repair to approval after its fresh review instead of repeating repair for the answered thread', () => {
+    const { journal, chain } = setup(); const obs = observation(); pull(obs)
+    let current = reviewed(journal, chain, obs)
+    const repair = invocation('repair', 'repair-pr', 'original-findings')
+    repair.request.context = { head: NEXT, reviewRevision: 'original-findings' }
+    repair.request.argv = ['--atomic-work', 'Example/Repo#7', '--expected-issue-revision', obs.issue.revision]
+    current = record(journal, current, { type: 'invocation.admitted', invocation: repair })
+    current = record(journal, current, { type: 'invocation.settled', invocationId: repair.id, callId: 'repair-call', outcome: 'published',
+      evidence: { status: 'completed', action: 'published', outcome: 'published', head_sha: HEAD } })
+    obs.publication.head_invocation = 'repair-call'
+    obs.pull!.unresolved = 1
+    obs.pull!.reviewRevision = 'fresh-clean-review-with-original-thread'
+    expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'review-pr' })
+    current = finish(journal, current, 'pr-review', 'review-pr', chainBasis(['pr', HEAD, CONTEXT]),
+      { status: 'completed', action: 'reviewed_clean', outcome: 'clean', review_id: 27, head_sha: HEAD })
+    expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'approve-pr' })
+    for (const flag of ['conflict', 'behind', 'changesRequested'] as const) {
+      obs.pull![flag] = true
+      expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr' })
+      obs.pull![flag] = false
+    }
+    obs.pull!.failing = ['unit:failure']
+    expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr' })
+    obs.pull!.failing = []
+    obs.publication.head_invocation = 'unrelated-call'
+    expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr' })
+    obs.publication.head_invocation = 'repair-call'
+    current.invocations.find(item => item.id === repair.id)!.request.argv[3] = 'superseded-issue-revision'
+    expect(decideBehaviorChain(current, obs, NOW)).toMatchObject({ kind: 'invoke', behavior: 'repair-pr' })
+  })
 })
 
 describe('native admission and recovery', () => {

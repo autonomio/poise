@@ -25,7 +25,7 @@ class ManagedReceipts(TestCase):
         self.conn = sqlite3.connect(self.path)
         self.addCleanup(self.conn.close)
         self.conn.execute("create table calls (id text primary key, source text, status text, behavior text, error_code text, artifact text, "
-                          "action text, outcome text, head_sha text, resources_settled_at real, action_plan text, resource_ownership text)")
+                          "action text, outcome text, head_sha text, resources_settled_at real, action_plan text, resource_ownership text, namespace_control text)")
         self.conn.execute("insert into calls(id,source,status,behavior,artifact) values(?, 'poise:behavior-chain','running','pr_review',?)",
                           (CALL, json.dumps({"phase": "reviewing", "review_response": {"head_sha": HEAD, "completed_at": 1}})))
         self.conn.execute("update calls set resource_ownership=?", (resource_ownership.initial(),))
@@ -101,7 +101,31 @@ class ManagedReceipts(TestCase):
         self.active_publication()
         for scope in (None, SimpleNamespace(key={"callId": "d" * 32}, require_idle=MagicMock())):
             with self.subTest(scope=scope), patch.object(native_namespace, "active", return_value=scope), \
-                    self.assertRaisesRegex(RuntimeError, "native ownership"):
+                    self.assertRaises(RuntimeError):
+                review_receipt.work_publication(HEAD, start_replies=True)
+        self.assertFalse(json.loads(self.conn.execute("select artifact from calls").fetchone()[0])["replies_started"])
+
+    def test_original_executed_publication_helper_reserves_replies_without_borrowing_parent_memory(self):
+        self.active_publication()
+        scope = SimpleNamespace(binding={"namespace": "pid:[91]"}, read=MagicMock(return_value={"pids": [1, 2, 3]}))
+        with patch.object(native_namespace, "active", return_value=None), \
+                patch.object(resource_ownership, "original_scope", return_value=scope), \
+                patch.object(os, "getpid", return_value=3), patch.object(os, "getppid", return_value=2), \
+                patch.object(os, "readlink", return_value="pid:[91]"):
+            review_receipt.work_publication(HEAD, start_replies=True)
+            with self.assertRaisesRegex(RuntimeError, "already attempted"):
+                review_receipt.work_publication(HEAD, start_replies=True)
+        self.assertTrue(json.loads(self.conn.execute("select artifact from calls").fetchone()[0])["replies_started"])
+
+    def test_publication_helper_refuses_foreign_scope_parent_or_remaining_worker(self):
+        self.active_publication()
+        for parent, namespace, pids in ((9, "pid:[91]", [1, 2, 3]), (2, "pid:[92]", [1, 2, 3]), (2, "pid:[91]", [1, 2, 3, 4])):
+            scope = SimpleNamespace(binding={"namespace": "pid:[91]"}, read=lambda: {"pids": pids})
+            with self.subTest(parent=parent, namespace=namespace, pids=pids), \
+                    patch.object(native_namespace, "active", return_value=None), \
+                    patch.object(resource_ownership, "original_scope", return_value=scope), \
+                    patch.object(os, "getpid", return_value=3), patch.object(os, "getppid", return_value=parent), \
+                    patch.object(os, "readlink", return_value=namespace), self.assertRaises(RuntimeError):
                 review_receipt.work_publication(HEAD, start_replies=True)
         self.assertFalse(json.loads(self.conn.execute("select artifact from calls").fetchone()[0])["replies_started"])
 

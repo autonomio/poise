@@ -342,6 +342,15 @@ reply POST remains uncertain unless every original reply is found on GitHub;
 absence never authorizes another POST. Older receipts without an explicit
 unattempted checkpoint do not acquire this recovery authority.
 
+The executed publication helper verifies its original controller and PID
+namespace, its direct Caller parent and the absence of any other worker before
+reserving replies. It cannot inherit an in-memory Python scope across exec.
+After a repair publishes the current head and all required fresh reviews
+complete, answered conversations proceed to independent approval rather than
+another repair solely because the original thread is still unresolved. A new
+change request, failing CI, conflict, base update or changed seed still requires
+repair; approval and native conversation resolution retain their own gates.
+
 An uncertain grey-CI rerun is inspected through the existing native command in
 read-only mode. A later attempt of that exact workflow/head settles its original
 admission; an unchanged attempt remains uncertain. A confirmed preflight read
@@ -898,7 +907,7 @@ the validation worktree at `test-results/server-v2-final-1508cbbb-20261103/`.
 These three merges are retained evidence, not completion of the frozen
 ten-cycle campaign. A corrected candidate requires its own campaign.
 
-### Corrected candidate `fe58f67e` — current real campaign
+### Corrected candidate `fe58f67e` — sealed real campaign
 
 The corrected campaign uses source `fe58f67ef92c066077edd65037e5b500e55f2989`
 and immutable manifest SHA-256
@@ -925,8 +934,9 @@ downstream review, implementation, repair, approval or merge actions.
 All ten merges have independently verified current-head approval,
 successful exact-head and native-queue checks, preserved existing assertions,
 passing merged-API assertions and positive original process/disk settlement.
-The first 54 original Calls pass their ten-minute idle windows; the final six
-windows are still accumulating. Actual provider overlap is 451.54 seconds at
+All 60 original Calls pass their ten-minute idle windows. The final 30-minute
+idle window also passes with zero remaining behavior processes, unsettled Calls
+or reservations. Actual provider overlap is 451.54 seconds at
 level 2 and 355.39 seconds at level 3, with the required admitted/unmerged backlog
 throughout. Independent observation gaps are retained; the largest interval in
 these idle windows is 6.87 seconds. Missing observations are not counted as zero
@@ -938,12 +948,32 @@ comments match their actual GitHub identities; two older comments on seed 69
 remain retained without new credit. The final native queue check passes 3,212
 tests, and all 28 independent merged-API checks pass, including older APIs.
 
+The stopped campaign's 317 indexed files reopen and hash-verify from the sealed
+bundle, SHA-256 `f07ff66192a3f601349f080b5682a9024b0b6bb5ed82b1f2748829aa1590515c`.
+Its archived journal rebuilds to the same 671 events, 13 chains, 78 invocations
+and zero reservations, without starting workers or performing live writes.
+
 This is ten verified merge cycles, not full resource acceptance. No repair round
-occurred at any level; that criterion remains unexercised. The final idle windows
-and evidence-bundle verification remain pending, as do the outstanding real
-fault/breach cases and paired throughput
-comparison. The 12-CPU/40-GiB replica differs from the retained 4-CPU/8-GiB
+occurred at any level; that criterion remains unexercised. Real fault cases are
+kept in a separate cohort, not added to the ten frozen cycles. Paired throughput
+comparison remains pending. The 12-CPU/40-GiB replica differs from the retained 4-CPU/8-GiB
 baseline, so no matched-throughput claim is made. Production remains untouched.
 Evidence is retained at `test-results/server-v2-final-fe58f67e-20261103/` in the
 validation worktree, including the unchanged manifest, original receipts,
 consistent databases, paginated GitHub evidence, raw inventory and failed reads.
+
+The subsequent fault cohort retained the same resource implementation and
+proved real memory/disk breaches with unaffected neighbors, drained container
+replacement, maintenance reclamation after the registered cleanup owner's loss,
+and admission recovery after an actual unreadable kernel counter. Its seed
+145 subsequently reached PR 147 and actual merge
+`05cfdf846c83e7dc2f47f4a8a3d93272460181bf`, with all six original Calls positively
+settled. These are separate fault results, not new frozen-cycle credit.
+PR 146 then exposed two repair-path defects: an executed reply helper could not
+see Caller's in-memory scope, and a successfully repaired, freshly reviewed head
+could enter another repair solely for its answered but unresolved thread. The
+original failures, automatic publication continuations and extra repair are
+retained. The corrections above start a new candidate; the sealed campaign is
+not relabelled as execution on that candidate. Accepted-action acknowledgement
+loss, ordinary timeout, deliberate abrupt-container loss and the remaining
+frozen resource criteria still require their own complete evidence.

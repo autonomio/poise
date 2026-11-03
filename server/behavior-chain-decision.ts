@@ -199,8 +199,13 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   const repairBasis = chainBasis(['repair', pull.head, pull.failing, pull.conflict, pull.behind, pull.changesRequested, pull.unresolved, pull.reviewRevision, observation.issue.revision])
   const answered = chain.invocations.some((invocation) => invocation.behavior === 'repair-pr' && succeeded(invocation)
     && invocation.request.context?.head === pull.head && invocation.request.context.reviewRevision === pull.reviewRevision)
+  const publishedRepair = chain.invocations.some((invocation) => invocation.behavior === 'repair-pr' && succeeded(invocation)
+    && invocation.evidence?.action === 'published' && invocation.evidence.head_sha === pull.head
+    && invocation.callId === observation.publication.head_invocation
+    && invocation.request.argv.includes('--expected-issue-revision')
+    && invocation.request.argv[invocation.request.argv.indexOf('--expected-issue-revision') + 1] === observation.issue.revision)
   if (pull.failing.length || pull.conflict || pull.behind || pull.changesRequested || (pull.unresolved && !pull.approved)) {
-    if (answered && !pull.failing.length && !pull.conflict && !pull.behind) return propose(chain, 'approve-pr',
+    if ((answered || publishedRepair && !pull.changesRequested) && !pull.failing.length && !pull.conflict && !pull.behind) return propose(chain, 'approve-pr',
       queueVerification ?? chainBasis(['verify-repair', pull.head, pull.reviewRevision]), chain.reviewer, observation.approver,
       'verify the repair and its actual replies; unchanged code is not itself proof that the findings are addressed', now)
     return propose(chain, 'repair-pr', repairBasis, chain.author, observation.repairer, 'address actual reviews, failing CI and branch conflicts', now)
