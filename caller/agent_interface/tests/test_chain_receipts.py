@@ -221,6 +221,33 @@ class AtomicWorkLimits(TestCase):
         self.assertEqual((status, action, outcome), ("failed", "not_started", "preflight_failed"))
         self.assertIsNone(plan)
 
+    def test_explicit_work_blocker_keeps_its_own_code_without_attempting_publication(self):
+        modes = []
+        reason = "Review requires a product decision before implementation can continue"
+
+        def interface(*args, **_kwargs):
+            modes.append(args[args.index("--mode") + 1])
+            return {"outcome": "prepared", "checkout_head": HEAD}
+
+        def worker(_lease, _args, **kwargs):
+            (Path(kwargs["cwd"]).parent / "publication.json").write_text(json.dumps({"blocked": reason}))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
+                patch.object(issue_review, "interface", side_effect=interface), \
+                patch.object(issue_review, "command", return_value=(["fixture"], "", {})), \
+                patch.object(issue_review, "_terminal_failure", return_value=None), \
+                patch.object(issue_review, "stop_leftovers"), patch.object(issue_review, "_cwd_pids", return_value=[]), \
+                patch.object(api.atomic_work.checkout_lock, "Lease", return_value=MagicMock()), \
+                patch.object(api.atomic_work.checkout_lock, "run_gated", side_effect=worker), \
+                self.assertRaisesRegex(ValueError, reason):
+            self.run_behavior()
+        with sqlite3.connect(self.path) as conn:
+            status, code, action, outcome, plan = conn.execute("select status,error_code,action,outcome,action_plan from calls").fetchone()
+        self.assertEqual(modes, ["prepare"])
+        self.assertEqual((status, code, action, outcome), ("failed", "atomic_work_blocked", "not_started", "preflight_failed"))
+        self.assertIsNone(plan)
+
     def test_repair_completion_reuses_the_original_plan_without_a_worker_or_new_call(self):
         call = api.track("fixture-model", "repair", "3", "example/repo", "author", "repair_pr", source="poise:behavior-chain")
         publication = {"title": "fix: repair seed", "body": "Concrete repair", "replies": [{"commentId": 17, "body": "Fixed."}]}

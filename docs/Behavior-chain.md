@@ -152,6 +152,12 @@ The existing authorized HTTP API supports interactive and headless controls: `GE
 
 ## Handoffs and outcomes
 
+An implementation or repair that explicitly reports a blocker records
+`atomic_work_blocked` and holds its chain with that reason. Cleanup still
+requires its original positive proof and does not restart blocked work. The
+hold survives journal rebuild and server replacement; the person can resume
+through the existing control after resolving the blocker.
+
 1. Each configured issue-review slot must finish successfully and its native receipt must identify an actually posted comment on the current issue revision. Once all required slots satisfy that check, implementation is eligible immediately; no elapsed review delay authorizes it.
 2. Implementation reads the actual issue and comments, makes real changes in a fresh checkout and runs the repository's checks. After the model ends, Caller's publication primitive commits, pushes and opens the linked PR. Commit trailers and the PR's chain marker preserve artifact identity across lost responses.
 3. Each current PR head receives the configured review invocations. Repairs use a fresh model invocation and the actual review packet, CI evidence and branch state. They publish code and substantive model-written replies to original findings. A new head requires fresh reviews and approval. An unchanged-code repair still requires independent approval verification.
