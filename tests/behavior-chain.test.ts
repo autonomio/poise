@@ -206,6 +206,29 @@ describe('completion-driven atomic behavior decisions', () => {
     expect(decideBehaviorChain(current, obs, NOW)).toEqual({ kind: 'complete', mergeSha: MERGE })
   })
 
+  it('waits for a confirmed merge when the queue reports merged during an open-PR observation', () => {
+    const { journal, chain } = setup(); const obs = observation(); pull(obs)
+    let current = reviewed(journal, chain, obs)
+    current = finish(journal, current, 'pr-review', 'review-pr', chainBasis(['pr', HEAD, CONTEXT]),
+      { status: 'completed', action: 'reviewed_clean', outcome: 'clean', review_id: 27, head_sha: HEAD })
+    current = finish(journal, current, 'queue', 'merge-pr', 'queue-basis',
+      { status: 'completed', outcome: 'enqueued', head_sha: HEAD, queue_entry_id: 'original-entry' }, null)
+    obs.pull!.approved = true; obs.pull!.ready = true
+    obs.pull!.queueRemoval = { id: 'merged-removal', reason: 'merged', at: NOW, actor: null }
+    const decision = decideBehaviorChain(current, obs, NOW)
+    expect(decision).toEqual({ kind: 'wait', reason: 'GitHub queue reports a merge; awaiting confirmed merge evidence' })
+    if (decision.kind !== 'wait') throw new Error('expected merge observation wait')
+    current = record(journal, current, { type: 'chain.observed', observation: structuredClone(obs) })
+    current = record(journal, current, { type: 'chain.waiting', reason: decision.reason })
+    journal.rebuild()
+    current = journal.read(chain.id)!
+    expect(current.held).toBeNull()
+    expect(current.mergeSha).toBeNull()
+    expect(current.invocations).toHaveLength(3)
+    obs.pull!.merged = true; obs.pull!.state = 'closed'; obs.pull!.mergeSha = MERGE
+    expect(decideBehaviorChain(current, obs, NOW)).toEqual({ kind: 'complete', mergeSha: MERGE })
+  })
+
   it('requires a fresh diagnosis and approval before requeueing an unchanged rejected head', () => {
     const { journal, chain } = setup(); const obs = observation()
     let current = reviewed(journal, chain, obs); pull(obs)

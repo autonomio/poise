@@ -178,6 +178,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   if (lastQueue?.evidence?.head_sha === pull.head) {
     const removal = pull.queueRemoval
     if (!removal || removal.at < lastQueue.admittedAt) return { kind: 'wait', reason: 'queue entry disappeared; awaiting GitHub removal evidence' }
+    if (removal.reason === 'merged') return { kind: 'wait', reason: 'GitHub queue reports a merge; awaiting confirmed merge evidence' }
     if (!['failed_checks', 'merge_conflict'].includes(removal.reason || '')) return { kind: 'hold', reason: `queue removal requires a decision: ${removal.reason || 'unknown reason'} (${removal.id})` }
     const repair = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'repair-pr' && succeeded(invocation)
       && invocation.request.context?.head === pull.head && invocation.request.context.queueRemoval === removal.id)
