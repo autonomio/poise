@@ -275,3 +275,5 @@ export async function readAnalyticsHistory(bounds: string[], orgLogin?: string, 
   const { issues, prs, errors } = await readScoped({ since: bounds[0], until: bounds.at(-1)! }, orgLogin, signal)
   return computeHistory({ bounds, issues, prs, errors, behaviors: listCompletedBehaviorActions(), agent })
 }
+
+// Proof of the essential run on PR #868; never merged.

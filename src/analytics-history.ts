@@ -140,3 +140,5 @@ export function histogram(values: Array<number | null>, min?: number, max?: numb
   for (const n of known) bins[Math.max(0, Math.min(9, Math.floor((n - low) / width)))].count++
   return bins
 }
+
+// Proof of the essential run on PR #868; never merged.
