@@ -248,3 +248,15 @@ it('links no access settings for a held name that is not a repository', () => {
   expect(group?.message).toBe('review-bot has no access to not a repo')
   for (const entry of group?.entries ?? []) expect(entry.link).toBeUndefined()
 })
+
+it('omits the next check for a stopped budget hold', () => {
+  const diagnostics = snapshot()
+  const stopped = 'Review reached its total time limit; needs attention. Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head.'
+  diagnostics.failures.push({ behavior: 'review-new-prs', target: 'org/repo#1', kind: 'worker',
+    consecutiveFailures: 2, lastFailureAt: '2026-11-05T15:54:00.000Z', nextRetryAt: '2026-11-05T15:54:00.000Z',
+    error: stopped })
+  diagnostics.deadLetters.push({ id: 'x', behavior: 'review-new-prs', target: 'org/repo#1',
+    error: stopped, createdAt: '2026-11-05T15:54:00.000Z' })
+  const groups = behaviorDiagnosticGroups(diagnostics)
+  for (const entry of groups.flatMap((group) => group.entries)) expect(entry.next).toBeNull()
+})
