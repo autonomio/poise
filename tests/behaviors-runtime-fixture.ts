@@ -170,7 +170,11 @@ function arrangeCli(
           stderr: '',
         }
       }
-      return { stdout: JSON.stringify(listedPrs), stderr: '' }
+      const repo = args.includes('--repo') ? args[args.indexOf('--repo') + 1] : null
+      const number = args.includes('--number') ? Number(args[args.indexOf('--number') + 1]) : null
+      const status = args.includes('--status') ? args[args.indexOf('--status') + 1] : null
+      return { stdout: JSON.stringify(listedPrs.filter((row) => (!repo || row.repo === repo)
+        && (number === null || row.number === number) && (!status || row.status === status))), stderr: '' }
     }
     if (command === 'github-interface' && args[0] === '--local-checkout-path') {
       if (failCheckout) throw new Error('checkout unavailable')

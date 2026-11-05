@@ -1347,9 +1347,9 @@ export interface DeadLetterReconcileResult {
 }
 
 // One reconcile pass over the raw dead-letter inventory. Each open row is
-// resolved (a later completion settled its own request), superseded (its
-// pull request or issue closed, or a replacement request took over), or
-// explicitly held with the reason recorded. Nothing is deleted: resolved
+// resolved (a later completion settled its own request), superseded (a
+// replacement request took over), or explicitly held with the reason recorded.
+// Nothing is deleted: resolved
 // and superseded rows retire with their evidence, held rows stay open.
 // Unseen rows first, then least-recently rechecked, in bounded batches, so
 // a capped pass resumes where the previous one stopped and re-expired holds
@@ -1497,12 +1497,12 @@ export function reconcileBehaviorDeadLetters(
             { completedAt: completion.launch_completed_at, callId: completion.launch_call_id })
         }
       }
-      if (!unreadRepositories?.has(row.repo) && !openTargets.has(`${row.repo}#${row.pr}`)) {
-        return settle('superseded', `${row.repo}#${row.pr} is no longer open`, { open: false })
-      }
       if (unreadRepositories?.has(row.repo)) {
         return settle('held', `${row.repo} could not be listed; target state unknown`,
           { callId: row.call_id, open: null })
+      }
+      if (!openTargets.has(`${row.repo}#${row.pr}`)) {
+        return settle('held', `${row.repo}#${row.pr} closure is unconfirmed`, { callId: row.call_id, open: null })
       }
       return settle('held', 'no later completion; target still open', { callId: row.call_id, open: true })
     }

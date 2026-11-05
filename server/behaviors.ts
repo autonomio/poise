@@ -1631,6 +1631,15 @@ function settleClosedTargetHistoricalFirings(open: ReadonlySet<string>): void {
 
 function recordQuarantineIncident(claim: BehaviorLaunchClaim, error: string, callId: string | null): void {
   if (claim.launchQuarantine === 'invalid_result') return
+  // Closure retires visibility, not the quarantine. Re-reading its evidence
+  // must not recreate the same incident after it has left the held list.
+  if (db.prepare(`
+    SELECT 1 FROM behavior_dead_letters
+    WHERE behavior = ? AND target = ? AND correlation_id = ?
+      AND retired_at IS NOT NULL AND resolution = 'superseded'
+      AND resolution_evidence LIKE '%"open":false%'
+      AND resolution_evidence NOT LIKE '%"replacedBy":%'
+  `).get(claim.key, claim.target, claim.launchCorrelationId)) return
   const updated = db.prepare(`
     UPDATE behavior_dead_letters SET error = ?, call_id = COALESCE(call_id, ?)
     WHERE behavior = ? AND target = ? AND correlation_id = ? AND retired_at IS NULL
@@ -2728,6 +2737,47 @@ async function readPullRequest(repo: string, number: number): Promise<DatastoreP
     throw new Error(`github-datastore view pr returned rows other than ${repo}#${number}`)
   }
   return rows[0] ?? null
+}
+
+// Retirement is independent of launch admission and preserves every launch
+// fence. A filtered listing's absence cannot establish target closure.
+async function retireClosedTargetIncidents(): Promise<void> {
+  const targets = (db.prepare(`
+    SELECT DISTINCT behavior, repo, pr FROM behavior_dead_letters
+    WHERE retired_at IS NULL AND repo IS NOT NULL AND pr IS NOT NULL
+  `).all() as Array<{ behavior: BehaviorKey, repo: string, pr: number }>)
+    .filter((row) => organizationOwns(row.repo))
+  if (targets.length === 0) return
+  const release = trackReleaseBackground('behavior')
+  try {
+    await requireFreshDatastore()
+    const retire = db.prepare(`
+      UPDATE behavior_dead_letters
+      SET retired_at = ?, resolution = 'superseded', resolution_evidence = ?, resolved_at = ?
+      WHERE behavior = ? AND repo = ? AND pr = ? AND retired_at IS NULL
+    `)
+    for (const row of targets) {
+      try {
+        const target = row.behavior === ISSUES_KEY
+          ? await readIssue(row.repo, row.pr) : await readPullRequest(row.repo, row.pr)
+        if (behaviorAborted()) return
+        if (target?.status !== 'closed' && target?.status !== 'merged') continue
+        const now = new Date().toISOString()
+        retire.run(now, JSON.stringify({ open: false, status: target.status, checkedAt: now }), now,
+          row.behavior, row.repo, row.pr)
+        for (const failureTarget of behaviorFailureTargets(row.behavior)) {
+          if (failureTarget.match(/^[^#]+#\d+/)?.[0] === `${row.repo}#${row.pr}`) {
+            clearBehaviorFailureKeepHold(row.behavior, failureTarget)
+          }
+        }
+      } catch (error) {
+        if (behaviorAborted()) return
+        console.error(`[behaviors] cannot check incident target ${row.repo}#${row.pr}:`, error)
+      }
+    }
+  } finally {
+    release()
+  }
 }
 
 async function localCheckoutPath(owner: string, repo: string, number: number, head: string, actor: string): Promise<string> {
@@ -6603,7 +6653,6 @@ async function tickReviewNewIssues(): Promise<void> {
   }
   // An unread repository is unknown, not empty: preserve its incidents.
   reconcileBehaviorDeadLetters(open, [ISSUES_KEY], currentOrganization()?.login, unreadRepositories)
-  retireClosedTargetFailures(open, [ISSUES_KEY], unreadRepositories)
   candidates.sort((a, b) => a.order - b.order)
   let logs: Promise<AgentLogSnapshot> | null = null
   const readLogs = () => (logs ??= readBehaviorLogSnapshot())
@@ -7436,6 +7485,13 @@ export async function runEnabledBehaviorsOnce(
   prepareInitialReviewBaselines()
   if (behaviorOrganization.getStore() === undefined) {
     if (behaviorAdmissionDraining()) {
+      for (const org of readyOrganizations()) {
+        try {
+          await behaviorOrganization.run(org, retireClosedTargetIncidents)
+        } catch (error) {
+          console.error('[behaviors] closed-target incident reconciliation failed:', error)
+        }
+      }
       const configuration = () => JSON.stringify([getSettings().me, getSettings().agentAccount,
         getOrganizations().map((org) => [org.login.toLowerCase(), org.datastorePath]).sort()])
       const expectedConfiguration = configuration()
@@ -7497,6 +7553,11 @@ export async function runEnabledBehaviorsOnce(
   // This tick's PR behaviors share one open-PR listing, dropped when the
   // tick ends.
   return sharedPrListing.run({ promise: null, author: '' }, async () => {
+    try {
+      await retireClosedTargetIncidents()
+    } catch (error) {
+      console.error('[behaviors] closed-target incident reconciliation failed:', error)
+    }
     try {
       await runBehaviorChains()
       behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: null })

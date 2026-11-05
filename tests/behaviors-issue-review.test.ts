@@ -91,7 +91,9 @@ function arrangeCli(): void {
     if (command === 'github-datastore' && args[0] === 'view' && args[1] === 'issue') {
       // Deliberately not filtered by date: Poise must hold its own line.
       const repo = args[args.indexOf('--repo') + 1]
-      return { stdout: JSON.stringify(issues.filter((row) => row.repo === repo)), stderr: '' }
+      const number = args.includes('--number') ? Number(args[args.indexOf('--number') + 1]) : null
+      return { stdout: JSON.stringify(issues.filter((row) => row.repo === repo
+        && (number === null || row.number === number))), stderr: '' }
     }
     if (command === 'github-interface' && args[0] === '--sub-issues') {
       // Read as the agent account, as Caller's review reads them.
@@ -448,18 +450,19 @@ describe('Review New Issues', () => {
     expect(behaviors.getBehaviorsRuntimeHealth().status).toBe('ok')
     mocks.runFile.mockClear()
     await behaviors.runEnabledBehaviorsOnce()
-    expect(mocks.runFile.mock.calls.some(([command, args]) => command === 'github-datastore' && args[0] === 'view' && args[args.indexOf('--repo') + 1] === REPO)).toBe(false)
+    expect(mocks.runFile.mock.calls.some(([command, args]) => command === 'github-datastore' && args[0] === 'view'
+      && !args.includes('--number') && args[args.indexOf('--repo') + 1] === REPO)).toBe(false)
     expect(database.listBehaviorDeadLetters()).toMatchObject([{ target: `${REPO}#452` }])
     expect(behaviors.getBehaviorsRuntimeHealth().failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ target: `${REPO}:scan`, consecutiveFailures: 1 }),
       expect.objectContaining({ target: `${REPO}#452`, kind: 'worker' }),
     ]))
-    // An empty successful read clears its scan diagnostic without launching anything.
+    // An empty successful scan clears its diagnostic but cannot prove the held issue closed.
     issues = issues.filter((row) => row.repo === other)
     arrangeCli()
     skipBackoff()
     await behaviors.runEnabledBehaviorsOnce()
-    expect(behaviors.getBehaviorsRuntimeHealth()).toMatchObject({ status: 'ok', failures: [] })
+    expect(behaviors.getBehaviorsRuntimeHealth()).toMatchObject({ status: 'ok', failures: [{ target: `${REPO}#452`, kind: 'worker' }] })
     expect(launches()).toHaveLength(2)
   })
 
