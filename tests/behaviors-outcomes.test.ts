@@ -484,6 +484,59 @@ describe('review outcome evidence and registration', () => {
     }
   })
 
+  it('retires closed-PR meta-only failures without a dead letter', async () => {
+    arrangeCli()
+    fixture.listedPrs = []
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    // Prelaunch PR :check failures live only in meta, with no dead letter
+    // to enumerate. A closed PR must clear them; open and unknown targets
+    // must stay, even though no PR listing runs while disabled.
+    const closedReviewCheck = `${pr.repo}#301:check`
+    const closedApproveCheck = `${pr.repo}#302:check`
+    const openReviewCheck = `${pr.repo}#303:check`
+    const unknownApproveCheck = `${pr.repo}#304:check`
+    for (const [key, target] of [
+      ['review-new-prs', closedReviewCheck],
+      ['approve-prs', closedApproveCheck],
+      ['review-new-prs', openReviewCheck],
+      ['approve-prs', unknownApproveCheck],
+    ] as const) {
+      database.setMeta(`behavior_${key.replaceAll('-', '_')}_failure:${target}`, JSON.stringify({
+        kind: 'operation', consecutiveFailures: 1, lastFailureAtMs: Date.now(),
+        nextRetryAtMs: Date.now() + 3_600_000, error: 'old eligibility error',
+      }))
+    }
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        if (args[1] !== 'pr') return { stdout: JSON.stringify([]), stderr: '' }
+        const number = Number(args[args.indexOf('--number') + 1])
+        if (number === 301 || number === 302) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/${number}` }]), stderr: '' }
+        }
+        if (number === 303) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'open',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/303` }]), stderr: '' }
+        }
+        return { stdout: JSON.stringify([]), stderr: '' }
+      }
+      return implementation(command, args, ...rest)
+    })
+    for (let pass = 0; pass < 2; pass++) {
+      await behaviors.runEnabledBehaviorsOnce()
+      expect(database.getMeta(`behavior_review_new_prs_failure:${closedReviewCheck}`)).toBe('')
+      expect(database.getMeta(`behavior_approve_prs_failure:${closedApproveCheck}`)).toBe('')
+      expect(database.getMeta(`behavior_review_new_prs_failure:${openReviewCheck}`)).not.toBe('')
+      expect(database.getMeta(`behavior_approve_prs_failure:${unknownApproveCheck}`)).not.toBe('')
+      expect(database.listBehaviorDeadLetters()).toEqual([])
+      expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    }
+  })
+
   it('retains an ambiguous post-watermark review registration without retrying', async () => {
     const launched = await launchReviewBeforeCrash()
     const after = Date.parse(launched.requestedAt) + 1_000

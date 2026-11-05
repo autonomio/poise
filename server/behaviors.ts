@@ -2750,19 +2750,24 @@ async function retireClosedTargetIncidents(): Promise<void> {
     if (!organizationOwns(row.repo)) continue
     seen.set(`${row.behavior}|${row.repo.toLowerCase()}#${row.pr}`, row)
   }
-  // Prelaunch issue failures (:check, :sub-issues) live only in meta, with
-  // no dead letter to enumerate. Include their refs so a closed issue clears
-  // them too; an explicit closed read still decides, never listing absence.
-  for (const failureTarget of behaviorFailureTargets(ISSUES_KEY)) {
-    const ref = failureTarget.match(/^[^#]+#\d+/)?.[0]
-    if (!ref) continue
-    const separator = ref.lastIndexOf('#')
-    const repo = ref.slice(0, separator)
-    const pr = Number(ref.slice(separator + 1))
-    if (!Number.isSafeInteger(pr) || pr < 1) continue
-    if (!organizationOwns(repo)) continue
-    const key = `${ISSUES_KEY}|${repo.toLowerCase()}#${pr}`
-    if (!seen.has(key)) seen.set(key, { behavior: ISSUES_KEY, repo, pr })
+  // Prelaunch failures (:check, :sub-issues for issues; :check for PRs)
+  // live only in meta, with no dead letter to enumerate. Include their refs
+  // so a closed target clears them too; an explicit closed read still
+  // decides, never listing absence.
+  const metaBehaviors: readonly BehaviorKey[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking',
+    'merge-prs', 'rerun-grey-ci', ISSUES_KEY]
+  for (const behavior of metaBehaviors) {
+    for (const failureTarget of behaviorFailureTargets(behavior)) {
+      const ref = failureTarget.match(/^[^#]+#\d+/)?.[0]
+      if (!ref) continue
+      const separator = ref.lastIndexOf('#')
+      const repo = ref.slice(0, separator)
+      const pr = Number(ref.slice(separator + 1))
+      if (!Number.isSafeInteger(pr) || pr < 1) continue
+      if (!organizationOwns(repo)) continue
+      const key = `${behavior}|${repo.toLowerCase()}#${pr}`
+      if (!seen.has(key)) seen.set(key, { behavior, repo, pr })
+    }
   }
   const targets = [...seen.values()]
   if (targets.length === 0) return
