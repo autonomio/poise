@@ -51,6 +51,12 @@ export function targetRef(target: string): string {
   return target.match(/^[^#]+#\d+/)?.[0] ?? target
 }
 
+// A stopped budget hold never retries automatically, so it carries no next
+// check: operators must retry explicitly or push a new head.
+function isStoppedBudgetHold(error: unknown): boolean {
+  return typeof error === 'string' && error.includes('Automatic retries stopped after two time-outs')
+}
+
 function diagnosticMessage(code: string, cause: string): string {
   if (code === 'unknown' && isTimeoutCause(cause)) {
     return 'The sweep is stalled under load. Poise retries automatically.'
@@ -106,7 +112,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
       ? `GitHub target is unavailable to ${diagnostics.identity.actor || 'the reviewer'}; check repository access.`
       : diagnosticMessage(classification.code, cause)
     const detail = `${failure.org ? `${failure.org}: ` : ''}${failure.behavior}${failure.target ? ` ${failure.target}` : ''}: ${failure.consecutiveFailures} consecutive ${failure.kind} failure(s) — ${cause}`
-    add(classification, scope, message, detail, { behavior: failure.behavior, target: failure.target ?? null, at: failure.lastFailureAt || null, next: failure.nextRetryAt || null, callId: failure.callId, correlationId: failure.correlationId, ...evidenceAttachment(failure) })
+    add(classification, scope, message, detail, { behavior: failure.behavior, target: failure.target ?? null, at: failure.lastFailureAt || null, next: isStoppedBudgetHold(failure.error) ? null : failure.nextRetryAt || null, callId: failure.callId, correlationId: failure.correlationId, ...evidenceAttachment(failure) })
   }
   // One held state per repository the agent account cannot read, however
   // many behaviors it holds. No notice joins it: entries carry every held
@@ -133,7 +139,7 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
     if (existing && (!letter.diagnostic || (existing.code === classification.code && existing.severity === classification.severity))) continue
     add(classification, ref, diagnosticMessage(classification.code, cause),
       `${letter.behavior} ${letter.target}: ${cause} (${letter.attemptCount ?? 1} attempts)`,
-      { behavior: letter.behavior, target: letter.target, at: letter.createdAt || null, next: letter.nextRetryAt ?? null, callId: letter.callId, correlationId: letter.correlationId, ...evidenceAttachment(letter) })
+      { behavior: letter.behavior, target: letter.target, at: letter.createdAt || null, next: isStoppedBudgetHold(letter.error) ? null : letter.nextRetryAt ?? null, callId: letter.callId, correlationId: letter.correlationId, ...evidenceAttachment(letter) })
   }
   if (diagnostics.runtimeError) {
     add(diagnosticClassification('runtime_unhealthy'), 'Behaviors', diagnostics.runtimeError, 'Poise runtime needs repair.')

@@ -490,7 +490,7 @@ export function getBehaviorFailureState(key: BehaviorKey, target: string): Behav
   }
 }
 
-function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string }): void
+function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string, noBackoff?: boolean }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string, options?: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string } = {}): void {
   if (!isEnabled(key)) return
@@ -543,13 +543,14 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
 
 // Classification is presentation metadata. Rehydrating old truncated summaries
 // must not count a new failure or change the scheduler's existing retry clock.
-function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry): void {
+function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry, snapshot: AgentLogSnapshot): void {
   const previous = readBehaviorFailure(behavior, target)
   if (!previous || previous.kind !== 'worker') return
   if (previous.callId && previous.callId !== call.id) return
-  const error = behaviorErrorMessage(call.error || 'agent call failed')
+  const stopped = reviewBudgetRetryStop(call, snapshot)
+  const error = behaviorErrorMessage(stopped || call.error || 'agent call failed')
   const held = call.behavior === ISSUE_REVIEW_BEHAVIOR ? !issueFailureCanRetry(target, call)
-    : call.action !== 'not_started' || call.outcome !== 'preflight_failed' || !!call.head_sha
+    : !!stopped || call.action !== 'not_started' || call.outcome !== 'preflight_failed' || !!call.head_sha
       || call.review_id != null || call.receipts != null
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
   if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
@@ -994,7 +995,7 @@ function clearReviewerTrip(identity: string): void {
 // Trips the reviewer when a failed call is a provider failure before a
 // verdict, and releases the target so the next slot runs on the next tick —
 // true when the claim was released and reconciliation moves on.
-function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, call: LogEntry): boolean {
+function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, call: LogEntry, snapshot: AgentLogSnapshot): boolean {
   const kind = reviewerTripKind(call)
   const identity = kind ? tripIdentity(call) : null
   if (!kind || !identity || !postedNothing(call)) return false
@@ -1002,6 +1003,7 @@ function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, 
   // says so when it cannot: an uncertain submission holds on every slot
   // instead of risking a duplicate verdict.
   if (call.review_comments != null || /could not prove a safe recovery/.test(call.error || '')) return false
+  if (reviewBudgetRetryStop(call, snapshot)) return false
   tripReviewer(behavior, identity, kind, call.id)
   if (tripHoldsTarget(call)) return false
   releaseOwnedClaim(behavior, claim.target, claim.claimId)
@@ -2008,7 +2010,7 @@ async function reconcileBehaviorLaunchClaims(
       && call.actor?.toLowerCase() === letter.actor?.toLowerCase()
       && call.source === letter.source && call.correlation_id === letter.correlationId
       && newestLetters.get(letter.target) === letter.id) {
-      refreshFailureDiagnostic(behavior, letter.target, call)
+      refreshFailureDiagnostic(behavior, letter.target, call, snapshot)
     }
     const completedAt = String(call?.completed_at || '')
     const action = String(call?.action || '')
@@ -2222,11 +2224,12 @@ async function reconcileBehaviorLaunchClaims(
       continue
     }
     if (FAILED_AGENT_STATUSES.has(status) && boundedReviewFailure(call)) {
-      if (releaseTrippedCall(behavior, claim, call)) continue
-      const message = call.error || 'Review needs attention'
+      if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
+      const stopped = reviewBudgetRetryStop(call, snapshot)
+      const message = stopped || call.error || 'Review needs attention'
       if (deadLetterClaim(claim, message) && budgetExhaustedProvenNoAction(call)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target,
-          { errorCode: call.error_code, held: false, callId: call.id })
+          { errorCode: call.error_code, held: !!stopped, callId: call.id, noBackoff: !!stopped })
       }
       continue
     }
@@ -2249,7 +2252,7 @@ async function reconcileBehaviorLaunchClaims(
         if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
-        if (releaseTrippedCall(behavior, claim, call)) continue
+        if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
           recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false, callId: call.id })
@@ -2316,7 +2319,7 @@ async function reconcileBehaviorLaunchClaims(
       }
     } else if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
-      if (releaseTrippedCall(behavior, claim, call)) continue
+      if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
       if (deadLetterClaim(claim, message)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target)
         // A run the user stopped from Swarm, or one a restart cut off, says nothing about the provider.
@@ -2858,6 +2861,7 @@ async function prepareReviewTarget(
       // Recovery probe only: release a dead no-action launch so the claim
       // phase can reclaim this target. Its own writes are claim-guarded.
       await releaseFailedBehaviorIfNoAction('review-new-prs', pr.repo, pr.number, target)
+      if (getFailedBehaviorLaunch('review-new-prs', target)) return null
       const m = pr.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
       if (!m) throw new Error('not a github PR url: ' + pr.url)
       const [, owner, repo, num] = m
@@ -2880,6 +2884,15 @@ async function prepareReviewTarget(
       }
       const expectedHead = await currentHeadSha(pr.repo, pr.number, actor)
       if (!isEnabled('review-new-prs') || behaviorAborted() || !prAccountsMatch(accounts) || !stillEligible('review-new-prs', pr, actor)) return null
+      // The stop counts across every slot while the hold above only fences
+      // this target: a model stopped on another slot must not launch here.
+      // Retained holds (cleared by explicit retry or a new head) are the
+      // eligibility signal, so an explicit retry stays eligible. Retain the
+      // suppression for this target so it stays reported and retryable.
+      if (await isReviewModelStoppedForPr(pr.repo, pr.number, expectedHead, model, actor, target)) {
+        await recordStoppedReviewSuppression(pr.repo, pr.number, expectedHead, model, actor, target)
+        return null
+      }
       let changes: ChangesAddressedResult | null = null
       if (reviewer) {
         changes = await checkChangesAddressed(pr.repo, pr.number, reviewer)
@@ -3633,9 +3646,9 @@ function boundedReviewFailure(call: LogEntry): boolean {
 // A budget-exhausted run that proved it posted nothing is a provider-side
 // failure, not an ambiguous side effect: Caller verifies against live
 // GitHub before failing this way, and says so when it cannot. It retries
-// the same head on backoff once the provider answers again; only an
-// uncertain submission holds — as does deterministic input exhaustion,
-// which no other model can fix on this head.
+// the same head on backoff once the provider answers again, within the
+// per-input attempt bound below. Uncertain submissions and deterministic
+// input exhaustion always hold.
 function budgetExhaustedProvenNoAction(call: LogEntry): boolean {
   return call.review_policy === REVIEW_POLICY
     && call.error_code === 'review_budget_exhausted'
@@ -3643,6 +3656,152 @@ function budgetExhaustedProvenNoAction(call: LogEntry): boolean {
     && postedNothing(call)
     && call.review_comments == null
     && !/could not prove a safe recovery/.test(call.error || '')
+}
+
+// Marker in the retained failure message: a hold that never retries
+// automatically, so null-snapshot readers can omit its retry time without
+// re-reading Caller logs.
+const STOPPED_BUDGET_MARKER = 'Automatic retries stopped after two time-outs'
+function isStoppedBudgetHoldError(error: unknown): boolean {
+  return typeof error === 'string' && error.includes(STOPPED_BUDGET_MARKER)
+}
+
+// Whether the stopped call's model is still what the same head would run.
+// Trips substitute another model without changing settings and backoff
+// expiry moves the launch back, so the hold must not follow the momentary
+// launch selection. It follows the configured runnable set instead: only a
+// settings change to models that no longer include the stopped model makes
+// the same head eligible again. When no slot model can run there, the
+// catalog seed launches, so a stop on the seed holds until settings make a
+// slot runnable again.
+async function isStoppedBudgetModelCurrent(call: LogEntry, _repo: string, _number: number, _target: string): Promise<boolean> {
+  try {
+    const catalog = await loadCatalog()
+    const settings = getModelSettings()
+    const place = call.behavior === 'pr_approve' ? 'pr_approve' : 'pr_review'
+    const stored = settings.places?.[place]?.slot ?? 'primary'
+    const slots = resolveSlots(catalog, settings.slots)
+    const seed = catalog.behaviors[place]
+    if (stored === 'random') {
+      const runnable = MODEL_SLOTS.filter((slot) => isPlaceModel(catalog, place, slots[slot]))
+      if (runnable.length === 0) return call.model === seed
+      return runnable.some((slot) => slots[slot] === call.model)
+    }
+    const runnable = MODEL_SLOTS.slice(MODEL_SLOTS.indexOf(stored))
+      .filter((slot) => isPlaceModel(catalog, place, slots[slot]))
+    if (runnable.length === 0) return call.model === seed
+    return runnable.some((slot) => slots[slot] === call.model)
+  } catch {
+    return true
+  }
+}
+
+// An explicit retry unblocks its own target once: the operator asked for
+// one more attempt there, while other slots stay stopped.
+function hasOperatorRetryForTarget(target: string, expectedHead: string): boolean {
+  const prefix = scopedMetaKey(`${META_PREFIX}operator_retry:`)
+  const rows = db.prepare(
+    "SELECT value FROM meta WHERE substr(key, 1, ?) = ? AND value <> ''",
+  ).all(prefix.length, prefix) as Array<{ value: string }>
+  for (const row of rows) {
+    try {
+      const record = JSON.parse(row.value) as { target?: unknown, expectedHead?: unknown }
+      if (record.target === target && record.expectedHead === expectedHead) return true
+    } catch { /* corrupt value — not an explicit retry */ }
+  }
+  return false
+}
+
+// Whether the prospective review model already has two proven no-action
+// budget failures for this PR/head. Other slots stay stopped after one
+// slot's explicit retry, which only unblocks its own target.
+async function isReviewModelStoppedForPr(repo: string, number: number, head: string, model: string, actor: string, target: string): Promise<boolean> {
+  const snapshot = await readBehaviorLogSnapshot()
+  if (!budgetRetryStoppedForInput(snapshot, { behavior: 'pr_review', repo, pr_id: String(number),
+    expected_head: head, model, actor, source: 'poise:review-new-prs' })) return false
+  return !hasOperatorRetryForTarget(target, head)
+}
+
+// A suppression without a retained launch leaves the slot invisible: no held
+// row, no failure and no call id an explicit retry could use. Retain the
+// stopped input for this target so PR status reports it with no retry time
+// and the same explicit-retry path can run it once.
+async function recordStoppedReviewSuppression(repo: string, number: number, head: string, model: string, actor: string, target: string): Promise<void> {
+  try {
+    if (getFailedBehaviorLaunch('review-new-prs', target)) return
+    const snapshot = await readBehaviorLogSnapshot()
+    const calls = snapshot.entries.filter((row) => row.behavior === 'pr_review'
+      && row.repo === repo && row.pr_id === String(number) && row.expected_head === head
+      && row.model === model && row.actor?.toLowerCase() === actor.toLowerCase()
+      && row.source === 'poise:review-new-prs' && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
+      && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
+      .sort((a, b) => Date.parse(agentCallStartedAt(b)) - Date.parse(agentCallStartedAt(a)))
+    if (calls.length < 2) return
+    const heldIds = new Set(failedBehaviorLaunches('review-new-prs')
+      .map((claim) => claim.launchCallId).filter((id): id is string => !!id))
+    const pick = calls.find((row) => !heldIds.has(row.id)) ?? calls[0]
+    const stopped = reviewBudgetRetryStop(pick, snapshot)
+    if (!stopped) return
+    const existing = readBehaviorFailure('review-new-prs', target)
+    if (existing?.callId !== pick.id || !isStoppedBudgetHoldError(existing.error)) {
+      recordBehaviorFailure('review-new-prs', 'worker', stopped, target, { callId: pick.id, noBackoff: true })
+    }
+    if (pick.correlation_id) {
+      db.prepare(`
+        INSERT INTO behavior_seen(key, target, seen_at, claim_id, launch_behavior, launch_repo, launch_pr,
+          launch_requested_at, launch_call_id, launch_error, launch_expected_head, launch_actor, launch_source, launch_correlation_id)
+        VALUES('review-new-prs', ?, ?, '', 'pr_review', ?, ?, ?, ?, ?, ?, ?, 'poise:review-new-prs', ?)
+        ON CONFLICT(key, target) DO UPDATE SET
+          seen_at=excluded.seen_at,
+          launch_behavior=excluded.launch_behavior,
+          launch_repo=excluded.launch_repo,
+          launch_pr=excluded.launch_pr,
+          launch_requested_at=excluded.launch_requested_at,
+          launch_call_id=excluded.launch_call_id,
+          launch_error=excluded.launch_error,
+          launch_expected_head=excluded.launch_expected_head,
+          launch_actor=excluded.launch_actor,
+          launch_source=excluded.launch_source,
+          launch_correlation_id=excluded.launch_correlation_id
+        WHERE behavior_seen.claim_id = '' AND behavior_seen.launch_call_id IS NULL
+      `).run(target, new Date().toISOString(), repo, number, new Date().toISOString(),
+        pick.id, stopped.slice(0, 4_000), head, actor, String(pick.correlation_id))
+      if (!listBehaviorDeadLetters(500).some((letter) => letter.behavior === 'review-new-prs'
+        && letter.target === target && letter.callId === pick.id)) {
+        const claim: BehaviorLaunchClaim = {
+          key: 'review-new-prs', target, seenAt: new Date().toISOString(), claimId: '',
+          leaseUntil: null, launchBehavior: 'pr_review', launchRepo: repo, launchPr: number,
+          launchRequestedAt: new Date().toISOString(), launchCallId: pick.id, launchError: stopped,
+          launchQuarantine: null, launchQuarantineMayRun: true, launchExpectedHead: head,
+          launchActor: actor, launchSource: 'poise:review-new-prs',
+          launchCorrelationId: String(pick.correlation_id), launchCovers: [],
+        }
+        recordBehaviorDeadLetter(claim, stopped, pick.id)
+      }
+    }
+  } catch (error) {
+    console.error(`[behaviors] review-new-prs stopped suppression not recorded for ${repo}#${number} (${target}):`, error)
+  }
+}
+
+// Reviewer trips expire or clear on another PR's success. The unchanged
+// input's retry bound instead follows the durable automatic Call evidence.
+function budgetRetryStoppedForInput(snapshot: AgentLogSnapshot, input: { behavior: string | null, repo: string | null, pr_id: string | null, expected_head: string | null, model: string, actor: string | null, source: string | null }): boolean {
+  const attempts = snapshot.entries.filter((row) => row.behavior === input.behavior
+    && row.repo === input.repo && row.pr_id === input.pr_id && row.expected_head === input.expected_head
+    && row.model === input.model && row.actor?.toLowerCase() === input.actor?.toLowerCase()
+    && row.source === input.source && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
+    && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
+  return attempts.length >= 2
+}
+
+function reviewBudgetRetryStop(call: LogEntry, snapshot: AgentLogSnapshot): string | null {
+  if ((call.behavior !== 'pr_review' && call.behavior !== 'pr_approve')
+    || call.source !== `poise:${call.behavior === 'pr_review' ? 'review-new-prs' : 'approve-prs'}`
+    || !budgetExhaustedProvenNoAction(call)) return null
+  if (!budgetRetryStoppedForInput(snapshot, { behavior: call.behavior, repo: call.repo, pr_id: call.pr_id,
+    expected_head: call.expected_head, model: call.model, actor: call.actor, source: call.source })) return null
+  return `Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head. ${call.error || 'Review reached its total time limit'}`
 }
 
 // An explicit operator retry releases only failed slots whose live GitHub
@@ -3798,7 +3957,11 @@ async function releaseFailedBehaviorIfNoAction(
       }
     }
   }
-  if (boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === configuredModel
+  const stopped = reviewBudgetRetryStop(call, snapshot)
+  if (stopped) {
+    if (await isStoppedBudgetModelCurrent(call, repo, number, target)
+      && await currentHeadSha(repo, number, failed.launchActor) === failed.launchExpectedHead) return false
+  } else if ((boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === configuredModel)
     && await currentHeadSha(repo, number, failed.launchActor) === failed.launchExpectedHead) return false
   const blockedPacket = call.action === 'not_started'
     && call.outcome === 'preflight_failed'
@@ -4033,7 +4196,7 @@ async function dismissedApprovalHeld(pr: DatastorePr, head: string, model: strin
     claim.launchExpectedHead === head)
   if (!failed.length) return false
   const snapshot = await readBehaviorLogSnapshot()
-  return failed.some((claim) => {
+  for (const claim of failed) {
     const call = snapshot.entries.find((row) => row.id === claim.launchCallId)
     if (claim.launchQuarantine || !call || !unambiguousAgentCall(snapshot, call)
       || logQuarantine(snapshot, claimLogIdentity(claim), true)
@@ -4049,9 +4212,12 @@ async function dismissedApprovalHeld(pr: DatastorePr, head: string, model: strin
       || (!budgetExhaustedProvenNoAction(call)
         && (call.action !== 'not_started' || call.outcome !== 'preflight_failed'))
       || call.head_sha !== null || call.review_id != null || call.receipts != null || call.review_comments != null) return true
-    return boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === model
-      || !behaviorRetryDue('approve-prs', claim.target)
-  })
+    if (reviewBudgetRetryStop(call, snapshot)) {
+      if (await isStoppedBudgetModelCurrent(call, pr.repo, pr.number, claim.target)) return true
+    } else if (boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === model) return true
+    if (!behaviorRetryDue('approve-prs', claim.target)) return true
+  }
+  return false
 }
 
 async function fireApprove(
@@ -6853,7 +7019,7 @@ async function reconcileIssueReviewClaims(): Promise<void> {
     }
     if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
-      if (releaseTrippedCall(ISSUES_KEY, claim, call)) {
+      if (releaseTrippedCall(ISSUES_KEY, claim, call, snapshot)) {
         // A time-limit trip still relaunches the review once with the next
         // reviewer — but the attempt counts toward the retry bound, so
         // repeated time-limits hold instead of relaunching without end.
@@ -7790,10 +7956,17 @@ export function getBehaviorDiagnosticIncidents(snapshot: AgentLogSnapshot | null
     BEHAVIOR_KEYS.flatMap((behavior) => [...listBehaviorLaunchClaims(behavior), ...failedBehaviorLaunches(behavior)]))
     // A held row shows when its automatic retry runs: the failure clock for
     // this exact attempt, never a newer attempt's clock on an older row.
+    // A stopped budget hold never retries automatically, so it carries no
+    // retry time: operators must retry explicitly or push a new head.
     .map((incident): typeof incident & { nextRetryAt?: string } => {
       if (!incident.callId || !(BEHAVIOR_KEYS as readonly string[]).includes(incident.behavior)) return incident
       const failure = readBehaviorFailure(incident.behavior as BehaviorKey, incident.target)
       if (failure?.callId !== incident.callId) return incident
+      if (isStoppedBudgetHoldError(failure.error)) return incident
+      if (snapshot) {
+        const call = snapshot.entries.find((row) => row.id === incident.callId)
+        if (call && reviewBudgetRetryStop(call, snapshot)) return incident
+      }
       return { ...incident, nextRetryAt: new Date(failure.nextRetryAtMs).toISOString() }
     })
   if (behaviorOrganization.getStore() !== undefined) return scoped()

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ChatRuntime } from '../server/chat/runtime'
 import { mocks, pr, HEAD_SHA, NEXT_HEAD_SHA, loadModules, restartModules, resetLogCache, arrangeCli, recordCompletedInitialReview, launchApprovalBeforeCrash, agentLog, fixture, type ReviewActivityFixture } from './behaviors-runtime-fixture'
+import { NARROW_CATALOG } from './model-catalog-fixture'
 
 function modelOf(call: unknown[]): string {
   const args = call[1] as string[]
@@ -10,6 +11,783 @@ function modelOf(call: unknown[]): string {
 }
 
 describe('approval eligibility and review activity', () => {
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'stops matching automatic timeouts after two attempts (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: model, tertiary: model },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      expect(modules.behaviors.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+        target: held.target, error: expect.stringContaining('Automatic retries stopped'),
+      }))
+
+      // Another PR still runs, and its successful verdict cannot clear this hold.
+      const other = { ...pr, number: 18, url: 'https://github.com/Vaquum/poise-test/pull/18' }
+      fixture.listedPrs = [pr, other]
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        pull: other, outcome: 'changes_requested', headSha: NEXT_HEAD_SHA, callId: 'd'.repeat(32),
+      })
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+      expect(mocks.spawnDetached.mock.calls[2][1]).toContain('#18')
+      const otherClaim = modules.database.listBehaviorLaunchClaims(behavior).find((row) => row.launchPr === 18)!
+      fixture.agentLogs.push(agentLog({ id: '3'.repeat(32), behavior: upstream, model, pr_id: '18',
+        started_at: otherClaim.launchRequestedAt, started_at_precise: otherClaim.launchRequestedAt,
+        status: 'completed', action: upstream === 'pr_review' ? 'reviewed_clean' : 'approved',
+        outcome: upstream === 'pr_review' ? 'clean' : 'approved', head_sha: HEAD_SHA,
+        expected_head: HEAD_SHA, source: otherClaim.launchSource, actor: otherClaim.launchActor,
+        correlation_id: otherClaim.launchCorrelationId,
+      }))
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+
+      fixture.listedPrs = [pr]
+      arrange(HEAD_SHA, true)
+      await expect(modules.behaviors.retryFailedPrReviews(['2'.repeat(32)])).resolves.toEqual({
+        ok: true, targets: [held.target],
+      })
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(4)
+      expect(mocks.spawnDetached.mock.calls[3][1]).toContain('#17')
+      await timeout('4'.repeat(32))
+      arrange('e'.repeat(40))
+      vi.setSystemTime(Date.now() + 3_600_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(5)
+      expect(mocks.spawnDetached.mock.calls[4][1]).toEqual(expect.arrayContaining(['--expected-head', 'e'.repeat(40)]))
+    },
+  )
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'releases stopped budget hold after a model change (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const modelA = 'gpt-5.6-sol-max'
+      const modelB = 'gpt-6-astra-ultra'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: modelA, secondary: modelA, tertiary: modelA },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model: modelA, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+      // Selecting another model makes the same head eligible again.
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: modelB, secondary: modelB, tertiary: modelB },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+      expect(modelOf(mocks.spawnDetached.mock.calls[2]!)).toBe(modelB)
+    },
+  )
+
+  it('omits any retry time for a stopped budget hold', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const behavior = 'review-new-prs'
+    const model = 'gpt-5.6-sol-max'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    let modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: model, secondary: model, tertiary: model },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+    const timeout = async (id: string) => {
+      const claim = modules.database.listBehaviorLaunchClaims(behavior)
+        .find((row) => row.launchPr === pr.number)!
+      vi.setSystemTime(Date.now() + 24 * 60_000)
+      const call = agentLog({ id, behavior: 'pr_review', model, status: 'failed',
+        started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+        completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+        actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+        review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+        error: 'Review reached its total time limit; needs attention',
+      })
+      fixture.agentLogs.push(call)
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      return claim
+    }
+    await timeout('1'.repeat(32))
+    vi.setSystemTime(Date.now() + 61_000)
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const held = await timeout('2'.repeat(32))
+
+    vi.setSystemTime(Date.now() + 2 * 3_600_000)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+    // A stopped hold never retries automatically, so it schedules no retry
+    // clock and its diagnostic incident carries no retry time, even for
+    // null-snapshot readers like PR status.
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === held.target)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect(Date.parse(failure!.nextRetryAt)).toBeLessThanOrEqual(Date.parse(failure!.lastFailureAt))
+    const incidents = modules.behaviors.getBehaviorDiagnosticIncidents(
+      { entries: fixture.agentLogs as never[], quarantined: [] },
+    )
+    const incident = incidents.find((row) => row.callId === '2'.repeat(32))
+    expect(incident).toBeDefined()
+    expect(incident).not.toHaveProperty('nextRetryAt')
+    const nullSnapshotIncidents = modules.behaviors.getBehaviorDiagnosticIncidents(null)
+    const nullIncident = nullSnapshotIncidents.find((row) => row.callId === '2'.repeat(32))
+    expect(nullIncident).toBeDefined()
+    expect(nullIncident).not.toHaveProperty('nextRetryAt')
+  })
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'holds a stopped budget through a reviewer trip (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const substitute = 'gpt-6-astra-ultra'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: substitute, tertiary: substitute },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      expect((mocks.spawnDetached.mock.calls[0]![1] as string[])).toEqual(
+        expect.arrayContaining(['--model', model]))
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      const held = await timeout('2'.repeat(32))
+
+      // A trip on another PR changes the momentary launch selection without
+      // changing settings; the stopped hold must survive it and its expiry.
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        modules.database.setMeta(`behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`, JSON.stringify({
+          kind: 'operation',
+          consecutiveFailures: 1,
+          lastFailureAtMs: Date.now(),
+          nextRetryAtMs: Date.now() + 3_600_000,
+          error: `${model} cannot review delivery probe`,
+        }))
+      }
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        const metaKey = `behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`
+        const stored = JSON.parse(modules.database.getMeta(metaKey)!)
+        modules.database.setMeta(metaKey, JSON.stringify({ ...stored, nextRetryAtMs: Date.now() - 1 }))
+      }
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+    },
+  )
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'holds a stopped substitute while the configured model stays tripped (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const substitute = 'gpt-6-astra-ultra'
+      const fresh = 'grok-4.6-xhigh'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: substitute, tertiary: substitute },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        modules.database.setMeta(`behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`, JSON.stringify({
+          kind: 'operation',
+          consecutiveFailures: 1,
+          lastFailureAtMs: Date.now(),
+          nextRetryAtMs: Date.now() + 4 * 3_600_000,
+          error: `${model} cannot review delivery probe`,
+        }))
+      }
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      expect(modelOf(mocks.spawnDetached.mock.calls[0]!)).toBe(substitute)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model: substitute, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modelOf(mocks.spawnDetached.mock.calls[1]!)).toBe(substitute)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: fresh, secondary: fresh, tertiary: fresh },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+      expect(modelOf(mocks.spawnDetached.mock.calls[2]!)).toBe(fresh)
+    },
+  )
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'holds a stopped substitute through configured trip expiry (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const substitute = 'gpt-6-astra-ultra'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: substitute, tertiary: substitute },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        modules.database.setMeta(`behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`, JSON.stringify({
+          kind: 'operation',
+          consecutiveFailures: 1,
+          lastFailureAtMs: Date.now(),
+          nextRetryAtMs: Date.now() + 4 * 3_600_000,
+          error: `${model} cannot review delivery probe`,
+        }))
+      }
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      expect(modelOf(mocks.spawnDetached.mock.calls[0]!)).toBe(substitute)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model: substitute, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      const held = await timeout('2'.repeat(32))
+
+      // The configured model's backoff expires with no settings change. The
+      // stopped substitute must stay held instead of probing the configured
+      // model and then relaunching the substitute a third time.
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        const metaKey = `behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`
+        const stored = JSON.parse(modules.database.getMeta(metaKey)!)
+        modules.database.setMeta(metaKey, JSON.stringify({ ...stored, nextRetryAtMs: Date.now() - 1 }))
+      }
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+    },
+  )
+
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'holds a stopped seed when no slot can run there (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const unrunnable = 'grok-4.6-xhigh'
+      const seed = NARROW_CATALOG.behaviors[upstream as keyof typeof NARROW_CATALOG.behaviors]
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      const baseImpl = mocks.runFile.getMockImplementation()!
+      mocks.runFile.mockImplementation(async (command: string, args: string[], options?: { cwd?: string }) => {
+        if (command === 'agent-interface' && args[0] === '--models') {
+          return { stdout: JSON.stringify(NARROW_CATALOG), stderr: '' }
+        }
+        return (baseImpl as (...params: unknown[]) => Promise<unknown>)(command, args, options) as Promise<{ stdout: string, stderr: string }>
+      })
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: unrunnable, secondary: unrunnable, tertiary: unrunnable },
+        places: { [upstream]: { slot: 'random' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      expect(modelOf(mocks.spawnDetached.mock.calls[0]!)).toBe(seed)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model: seed, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modelOf(mocks.spawnDetached.mock.calls[1]!)).toBe(seed)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      expect(modules.behaviors.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+        target: held.target, error: expect.stringContaining('Automatic retries stopped'),
+      }))
+    },
+  )
+
+  it('retains the stop marker for a long checkout time-out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const behavior = 'review-new-prs'
+    const model = 'gpt-5.6-sol-max'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    let modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: model, secondary: model, tertiary: model },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+    const longError = `cannot inspect review checkout: Command timed out after 120000ms: git fetch --no-tags --prune origin ${HEAD_SHA} ${NEXT_HEAD_SHA} ${'b'.repeat(40)} -- argv ${'x'.repeat(350)}`
+    expect(longError.length).toBeGreaterThan(300)
+    const timeout = async (id: string) => {
+      const claim = modules.database.listBehaviorLaunchClaims(behavior)
+        .find((row) => row.launchPr === pr.number)!
+      vi.setSystemTime(Date.now() + 24 * 60_000)
+      const call = agentLog({ id, behavior: 'pr_review', model, status: 'failed',
+        started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+        completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+        actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+        review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+        error: longError,
+      })
+      fixture.agentLogs.push(call)
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      return claim
+    }
+    await timeout('1'.repeat(32))
+    vi.setSystemTime(Date.now() + 61_000)
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const held = await timeout('2'.repeat(32))
+
+    vi.setSystemTime(Date.now() + 2 * 3_600_000)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === held.target)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect((failure?.error ?? '').startsWith('Automatic retries stopped')).toBe(true)
+    const incidents = modules.behaviors.getBehaviorDiagnosticIncidents(
+      { entries: fixture.agentLogs as never[], quarantined: [] },
+    )
+    const incident = incidents.find((row) => row.callId === '2'.repeat(32))
+    expect(incident).toBeDefined()
+    expect(incident).not.toHaveProperty('nextRetryAt')
+    const nullSnapshotIncidents = modules.behaviors.getBehaviorDiagnosticIncidents(null)
+    const nullIncident = nullSnapshotIncidents.find((row) => row.callId === '2'.repeat(32))
+    expect(nullIncident).toBeDefined()
+    expect(nullIncident).not.toHaveProperty('nextRetryAt')
+  })
+
+  it('holds a stopped model on the other slot of a two-reviewer panel', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    // Two proven no-action budget time-outs for the secondary model on this
+    // head, without any failed-launch hold on the secondary target itself.
+    // The stop counts across every slot; the next secondary preparation for
+    // the same model must not launch a third attempt.
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const launchedModels = mocks.spawnDetached.mock.calls.map((call) => modelOf(call))
+    expect(launchedModels).toContain(modelA)
+    expect(launchedModels).not.toContain(modelB)
+    // A new head stays eligible for the stopped model.
+    arrangeCli(false, false, { headSha: NEXT_HEAD_SHA })
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelB)
+  })
+
+  it('reports and retries a stopped model suppressed on another slot', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelA)
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
+
+    // The suppressed slot retains the stopped input instead of staying invisible.
+    const secondaryTarget = `${pr.repo}#${pr.number}:secondary`
+    const held = modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)
+    expect(held?.launchCallId).toBe('b'.repeat(32))
+    expect(held?.launchError).toContain('Automatic retries stopped')
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === secondaryTarget)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect(Date.parse(failure!.nextRetryAt)).toBeLessThanOrEqual(Date.parse(failure!.lastFailureAt))
+    for (const incidents of [
+      modules.behaviors.getBehaviorDiagnosticIncidents({ entries: fixture.agentLogs as never[], quarantined: [] }),
+      modules.behaviors.getBehaviorDiagnosticIncidents(null),
+    ]) {
+      const incident = incidents.find((row) => row.callId === 'b'.repeat(32))
+      expect(incident).toBeDefined()
+      expect(incident).not.toHaveProperty('nextRetryAt')
+    }
+
+    // Settle the primary launch with a single timeout so no completion retires
+    // the suppressed hold and no worker stays active for the explicit retry.
+    const primaryClaim = modules.database.listBehaviorLaunchClaims('review-new-prs')
+      .find((row) => row.launchPr === pr.number)!
+    vi.setSystemTime(Date.now() + 24 * 60_000)
+    fixture.agentLogs.push(agentLog({ id: 'c'.repeat(32), behavior: 'pr_review', model: modelA,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: primaryClaim.launchActor, source: primaryClaim.launchSource,
+      correlation_id: primaryClaim.launchCorrelationId,
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+
+    // The suppressed slot stays explicitly retryable on the same head. The A
+    // trip moves secondary to C, so the retry launches C while B stays stopped.
+    arrangeCli(false, false, { headSha: HEAD_SHA, reviewerReviewIdsSince: [] })
+    await expect(modules.behaviors.retryFailedPrReviews(['b'.repeat(32)])).resolves.toEqual({
+      ok: true, targets: [secondaryTarget],
+    })
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelC)
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
+  })
 
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
