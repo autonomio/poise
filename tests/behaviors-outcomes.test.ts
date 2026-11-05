@@ -537,6 +537,125 @@ describe('review outcome evidence and registration', () => {
     }
   })
 
+  it('retains unknown PR meta-only failures when an enabled scan lists open PRs', async () => {
+    arrangeCli()
+    fixture.listedPrs = [{ ...pr, number: 303, status: 'open',
+      url: `https://github.com/${pr.repo}/pull/303`, created_at: '2026-07-15T10:00:00Z' }]
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    database.setMeta('behavior_review_new_prs_enabled', '1')
+    const closedCheck = `${pr.repo}#301:check`
+    const openCheck = `${pr.repo}#303:check`
+    const unknownCheck = `${pr.repo}#304:check`
+    for (const target of [closedCheck, openCheck, unknownCheck]) {
+      database.setMeta(`behavior_review_new_prs_failure:${target}`, JSON.stringify({
+        kind: 'operation', consecutiveFailures: 1, lastFailureAtMs: Date.now(),
+        nextRetryAtMs: Date.now() + 3_600_000, error: 'old eligibility error',
+      }))
+    }
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        if (args[1] !== 'pr') return { stdout: JSON.stringify([]), stderr: '' }
+        const number = Number(args[args.indexOf('--number') + 1])
+        if (number === 301) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/301` }]), stderr: '' }
+        }
+        if (number === 303) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'open',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/303` }]), stderr: '' }
+        }
+        return { stdout: JSON.stringify([]), stderr: '' }
+      }
+      return implementation(command, args, ...rest)
+    })
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(database.getMeta(`behavior_review_new_prs_failure:${closedCheck}`)).toBe('')
+    expect(database.getMeta(`behavior_review_new_prs_failure:${openCheck}`)).not.toBe('')
+    expect(database.getMeta(`behavior_review_new_prs_failure:${unknownCheck}`)).not.toBe('')
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+  })
+
+  it('does not recreate a retired closed-target incident when its unreadable launch later reports a failure', async () => {
+    const launched = await launchReviewBeforeCrash()
+    const target = launched.target
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'agent-interface' && args[0] === '--logs') throw new Error('agent log unavailable')
+      return implementation(command, args, ...rest)
+    })
+    await resetLogCache()
+    let modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toHaveLength(1)
+    fixture.listedPrs = [{ ...pr, status: 'closed' }]
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+    const failed = agentLog({ id: 'f'.repeat(32), started_at: launched.requestedAt, started_at_precise: launched.requestedAt,
+      status: 'failed', error: 'review behavior produced duplicate GitHub reviews; needs attention',
+      error_code: 'review_contract_violation', review_policy: 'bounded-v1', model: 'opus-5-xhigh',
+      expected_head: launched.expectedHead, actor: launched.actor, source: launched.source, correlation_id: launched.correlationId })
+    // The failed run starts after the launch it reports for.
+    const startedAt = new Date(Date.parse(launched.requestedAt) + 1_000).toISOString()
+    failed.started_at = startedAt
+    failed.started_at_precise = startedAt
+    fixture.agentLogs = [failed]
+    await resetLogCache()
+    mocks.runFile.mockImplementation(implementation)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', target)).not.toBeNull()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+  })
+
+  it('retires closed targets concurrently so one slow read does not stall the tick', async () => {
+    arrangeCli()
+    fixture.listedPrs = []
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    for (const number of [301, 302]) {
+      const target = `${pr.repo}#${number}`
+      const claimId = database.claimSeenOwned('review-new-prs', target)!
+      expect(database.markBehaviorLaunchIntentOwned({ key: 'review-new-prs', target, claimId,
+        launchBehavior: 'pr_review', repo: pr.repo, pr: number, requestedAt: new Date().toISOString(),
+        expectedHead: HEAD_SHA, actor: 'review-bot', source: 'poise:review-new-prs', correlationId: claimId })).toBe(true)
+      const claim = database.listBehaviorLaunchClaims('review-new-prs').find((entry) => entry.target === target)!
+      database.recordBehaviorDeadLetter(claim, 'original uncertain failure')
+      database.setBehaviorLaunchErrorOwned('review-new-prs', target, claimId, 'original uncertain failure')
+      database.completeSeenOwned('review-new-prs', target, claimId)
+    }
+    let active = 0
+    let peak = 0
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        active += 1
+        peak = Math.max(peak, active)
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 60))
+          const number = Number(args[args.indexOf('--number') + 1])
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/${number}` }]), stderr: '' }
+        } finally {
+          active -= 1
+        }
+      }
+      return implementation(command, args, ...rest)
+    })
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(peak).toBeGreaterThan(1)
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+  })
+
   it('retains an ambiguous post-watermark review registration without retrying', async () => {
     const launched = await launchReviewBeforeCrash()
     const after = Date.parse(launched.requestedAt) + 1_000
