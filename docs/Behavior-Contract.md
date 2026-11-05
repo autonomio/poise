@@ -452,15 +452,21 @@ repository's pull requests are evaluated on the next tick like any other.
 
 ## Dead-letter reconciliation
 
-Every behavior tick reconciles the dead-letter inventory against the launch
-ledger and the open targets it just listed. Each open row is resolved (a
-later completion settled its target), superseded (its pull request or issue
-closed), or explicitly held, with the disposition, the evidence and the
-check time recorded on the row. Resolved and superseded rows retire; held
-rows stay open. Nothing is deleted. Quarantined rows are never resolved or
-superseded, and a repository that could not be listed holds its rows instead
-of proving anything about them. Unseen rows reconcile before rechecks of
-held rows, least-recently rechecked first.
+Every behavior tick checks incident targets directly in the fresh datastore,
+independently of enablement, pauses, model availability and v1/v2 admission.
+An explicitly closed issue or closed/merged pull request retires its incidents
+as superseded, including quarantined incidents, and clears held prelaunch
+failures stored only in meta (issue `:check` and `:sub-issues`, PR `:check`). Retirement removes
+the held entry and its notice while retaining history, original errors,
+launch claims, quarantines and uncertain outcomes. It grants no success or retry authority,
+and later quarantine reconciliation cannot recreate that incident. Open or
+unknown targets remain; absence from a filtered listing never proves closure.
+
+Enabled behaviors also reconcile the inventory against the launch ledger:
+a later completion resolves its incident, a replacement approval request
+supersedes its obsolete incident, and outstanding quarantine evidence stays
+held. Each disposition records its evidence and check time. Nothing is deleted.
+Unseen rows reconcile before rechecks of held rows, least-recently rechecked first.
 
 ## Replays
 

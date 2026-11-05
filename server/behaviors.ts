@@ -731,19 +731,6 @@ function behaviorFailureTargets(key: BehaviorKey): string[] {
   return rows.map((row) => row.key.slice(prefix.length))
 }
 
-function retireClosedTargetFailures(open: ReadonlySet<string>, behaviors: readonly BehaviorKey[], unreadRepositories?: ReadonlySet<string>): void {
-  for (const behavior of behaviors) {
-    for (const target of behaviorFailureTargets(behavior)) {
-      if (behavior === 'resolve-unblocking' && getMeta(resolveRecoveryKey(target))) continue
-      const ref = target.match(/^[^#]+#\d+/)?.[0]
-      if (ref && !unreadRepositories?.has(ref.split('#')[0]) && !open.has(ref)) {
-        // A closed PR proves nothing about repository access.
-        clearBehaviorFailureKeepHold(behavior, target)
-      }
-    }
-  }
-}
-
 // Per-behavior setting (the priority ceiling for review-new-prs:
 // "p0" / "p1" / "p2" / "p3" / "p4"). Default "p2" so a freshly-enabled
 // behavior catches p0..p2 unless the user narrows or widens it.
@@ -1515,6 +1502,13 @@ function completeClaimSafely(claim: BehaviorLaunchClaim, error: string | null = 
 }
 
 function deadLetterClaim(claim: BehaviorLaunchClaim, error: string, observe = true): boolean {
+  // A target already retired as closed must not become visible again when a
+  // readable follow-up reports for the same launch. Keep the fence without a
+  // new open incident; the retirement already settled the firing.
+  if (closedTargetIncidentRetired(claim)) {
+    completeClaimSafely(claim, error)
+    return false
+  }
   recordBehaviorDeadLetter(claim, error)
   const completed = completeClaimSafely(claim, error)
   if (completed && observe) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId,
@@ -1629,8 +1623,21 @@ function settleClosedTargetHistoricalFirings(open: ReadonlySet<string>): void {
   }
 }
 
+function closedTargetIncidentRetired(claim: BehaviorLaunchClaim): boolean {
+  return !!db.prepare(`
+    SELECT 1 FROM behavior_dead_letters
+    WHERE behavior = ? AND target = ? AND correlation_id = ?
+      AND retired_at IS NOT NULL AND resolution = 'superseded'
+      AND resolution_evidence LIKE '%"open":false%'
+      AND resolution_evidence NOT LIKE '%"replacedBy":%'
+  `).get(claim.key, claim.target, claim.launchCorrelationId)
+}
+
 function recordQuarantineIncident(claim: BehaviorLaunchClaim, error: string, callId: string | null): void {
   if (claim.launchQuarantine === 'invalid_result') return
+  // Closure retires visibility, not the quarantine. Re-reading its evidence
+  // must not recreate the same incident after it has left the held list.
+  if (closedTargetIncidentRetired(claim)) return
   const updated = db.prepare(`
     UPDATE behavior_dead_letters SET error = ?, call_id = COALESCE(call_id, ?)
     WHERE behavior = ? AND target = ? AND correlation_id = ? AND retired_at IS NULL
@@ -1843,6 +1850,10 @@ function restoreReadableFailedClaim(claim: BehaviorLaunchClaim, call: LogEntry |
     || !Number.isFinite(Date.parse(claim.launchRequestedAt))
     || !Number.isFinite(Date.parse(agentCallStartedAt(call)))
     || Date.parse(agentCallStartedAt(call)) < Date.parse(claim.launchRequestedAt)) return
+  // Closure retires visibility: restoring a readable failure after its
+  // incident retired would return the closed target to runtime health until
+  // the next tick. Keep the fence as the retirement left it.
+  if (closedTargetIncidentRetired(claim)) return
   const message = call.error || `agent call terminated with status ${call.status.toLowerCase()}`
   db.transaction(() => {
     const changed = db.prepare(`
@@ -2249,6 +2260,12 @@ async function reconcileBehaviorLaunchClaims(
         if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
+        // A target already retired as closed must not become visible again
+        // when a readable preflight follow-up reports for the same launch.
+        if (closedTargetIncidentRetired(claim)) {
+          completeClaimSafely(claim, message)
+          continue
+        }
         if (releaseTrippedCall(behavior, claim, call)) continue
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
@@ -2632,7 +2649,8 @@ async function readOpenPrsByAuthor(_pair: string): Promise<DatastorePr[]> {
   settleSupersededApprovalFirings(reconciled)
   settleClosedTargetFirings(reconciled)
   settleClosedTargetHistoricalFirings(seen)
-  retireClosedTargetFailures(seen, ['review-new-prs', 'approve-prs', 'resolve-unblocking', 'merge-prs', 'rerun-grey-ci'])
+  // Meta-only failures retire only on explicit closed status in
+  // retireClosedTargetIncidents; listing absence never proves closure.
   retireClosedQueueAdmissions(seen)
   return prs.filter((pr) => organizationOwns(pr.repo) && !ownPullRequestRefusal(getMeta('me') || '', `${pr.repo}#${pr.number}`, pr))
 }
@@ -2728,6 +2746,97 @@ async function readPullRequest(repo: string, number: number): Promise<DatastoreP
     throw new Error(`github-datastore view pr returned rows other than ${repo}#${number}`)
   }
   return rows[0] ?? null
+}
+
+// Retirement is independent of launch admission and preserves every launch
+// fence. A filtered listing's absence cannot establish target closure.
+const retireClosedTargetInFlight = new Map<string, Promise<void>>()
+async function retireClosedTargetIncidents(): Promise<void> {
+  // Coalesce overlapping ticks per organization: a retire already running
+  // for this org covers this one. The key is captured now, inside the
+  // organization's scope, so staggered orgs do not share a pass.
+  const scope = currentOrganization()?.login.toLowerCase() ?? 'legacy'
+  const pending = retireClosedTargetInFlight.get(scope)
+  if (pending) {
+    await pending
+    return
+  }
+  // Bind the pass to the lifecycle signal so shutdown aborts queued reads
+  // and stop can await the pass instead of letting it continue afterwards.
+  const lifecycle = behaviorAbortController?.signal
+  const run = (async () => {
+    const execute = async () => {
+    const seen = new Map<string, { behavior: BehaviorKey, repo: string, pr: number }>()
+    for (const row of (db.prepare(`
+      SELECT DISTINCT behavior, repo, pr FROM behavior_dead_letters
+      WHERE retired_at IS NULL AND repo IS NOT NULL AND pr IS NOT NULL
+    `).all() as Array<{ behavior: BehaviorKey, repo: string, pr: number }>)) {
+      if (!organizationOwns(row.repo)) continue
+      seen.set(`${row.behavior}|${row.repo.toLowerCase()}#${row.pr}`, row)
+    }
+    // Prelaunch failures (:check, :sub-issues for issues; :check for PRs)
+    // live only in meta, with no dead letter to enumerate. Include their refs
+    // so a closed target clears them too; an explicit closed read still
+    // decides, never listing absence.
+    const metaBehaviors: readonly BehaviorKey[] = ['review-new-prs', 'approve-prs', 'resolve-unblocking',
+      'merge-prs', 'rerun-grey-ci', ISSUES_KEY]
+    for (const behavior of metaBehaviors) {
+      for (const failureTarget of behaviorFailureTargets(behavior)) {
+        const ref = failureTarget.match(/^[^#]+#\d+/)?.[0]
+        if (!ref) continue
+        const separator = ref.lastIndexOf('#')
+        const repo = ref.slice(0, separator)
+        const pr = Number(ref.slice(separator + 1))
+        if (!Number.isSafeInteger(pr) || pr < 1) continue
+        if (!organizationOwns(repo)) continue
+        const key = `${behavior}|${repo.toLowerCase()}#${pr}`
+        if (!seen.has(key)) seen.set(key, { behavior, repo, pr })
+      }
+    }
+    const targets = [...seen.values()]
+    if (targets.length === 0) return
+    const release = trackReleaseBackground('behavior')
+    try {
+      await requireFreshDatastore()
+      const retire = db.prepare(`
+        UPDATE behavior_dead_letters
+        SET retired_at = ?, resolution = 'superseded', resolution_evidence = ?, resolved_at = ?
+        WHERE behavior = ? AND repo = ? AND pr = ? AND retired_at IS NULL
+      `)
+      // Bounded concurrency: one slow datastore read must not stall the
+      // tick 30 s per target. forEachPool also honors the operation abort
+      // between items so an ended sweep stops starting new reads.
+      await forEachPool(targets, PR_READ_BATCH_SIZE, async (row) => {
+        try {
+          const target = row.behavior === ISSUES_KEY
+            ? await readIssue(row.repo, row.pr) : await readPullRequest(row.repo, row.pr)
+          if (behaviorAborted()) return
+          if (target?.status !== 'closed' && target?.status !== 'merged') return
+          const now = new Date().toISOString()
+          retire.run(now, JSON.stringify({ open: false, status: target.status, checkedAt: now }), now,
+            row.behavior, row.repo, row.pr)
+          for (const failureTarget of behaviorFailureTargets(row.behavior)) {
+            if (failureTarget.match(/^[^#]+#\d+/)?.[0]?.toLowerCase() === `${row.repo}#${row.pr}`.toLowerCase()) {
+              clearBehaviorFailureKeepHold(row.behavior, failureTarget)
+            }
+          }
+        } catch (error) {
+          if (behaviorAborted()) return
+          console.error(`[behaviors] cannot check incident target ${row.repo}#${row.pr}:`, error)
+        }
+      })
+    } finally {
+      release()
+    }
+    }
+    return lifecycle ? behaviorOperationSignal.run(lifecycle, execute) : execute()
+  })()
+  retireClosedTargetInFlight.set(scope, run)
+  try {
+    await run
+  } finally {
+    if (retireClosedTargetInFlight.get(scope) === run) retireClosedTargetInFlight.delete(scope)
+  }
 }
 
 async function localCheckoutPath(owner: string, repo: string, number: number, head: string, actor: string): Promise<string> {
@@ -6603,7 +6712,6 @@ async function tickReviewNewIssues(): Promise<void> {
   }
   // An unread repository is unknown, not empty: preserve its incidents.
   reconcileBehaviorDeadLetters(open, [ISSUES_KEY], currentOrganization()?.login, unreadRepositories)
-  retireClosedTargetFailures(open, [ISSUES_KEY], unreadRepositories)
   candidates.sort((a, b) => a.order - b.order)
   let logs: Promise<AgentLogSnapshot> | null = null
   const readLogs = () => (logs ??= readBehaviorLogSnapshot())
@@ -7436,6 +7544,13 @@ export async function runEnabledBehaviorsOnce(
   prepareInitialReviewBaselines()
   if (behaviorOrganization.getStore() === undefined) {
     if (behaviorAdmissionDraining()) {
+      for (const org of readyOrganizations()) {
+        try {
+          await behaviorOrganization.run(org, retireClosedTargetIncidents)
+        } catch (error) {
+          console.error('[behaviors] closed-target incident reconciliation failed:', error)
+        }
+      }
       const configuration = () => JSON.stringify([getSettings().me, getSettings().agentAccount,
         getOrganizations().map((org) => [org.login.toLowerCase(), org.datastorePath]).sort()])
       const expectedConfiguration = configuration()
@@ -7497,6 +7612,12 @@ export async function runEnabledBehaviorsOnce(
   // This tick's PR behaviors share one open-PR listing, dropped when the
   // tick ends.
   return sharedPrListing.run({ promise: null, author: '' }, async () => {
+    // Start closed-target retirement alongside scheduled work so one slow
+    // datastore read does not delay starting behaviors. The retire pass is
+    // bounded and coalesced; it joins the tick at the end.
+    const retirePromise = retireClosedTargetIncidents().catch((error) => {
+      console.error('[behaviors] closed-target incident reconciliation failed:', error)
+    })
     try {
       await runBehaviorChains()
       behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: null })
@@ -7568,7 +7689,7 @@ export async function runEnabledBehaviorsOnce(
         })
       }))
     }
-    await Promise.all(operations)
+    await Promise.all([...operations, retirePromise])
   })
 }
 
@@ -7882,8 +8003,11 @@ export async function stopBehaviorsRuntime(): Promise<void> {
   checkSlotRetryTimer = null
   checkSlotRetryPending = false
   behaviorAbortController?.abort()
+  // Await the closed-target retire pass alongside operation tails while the
+  // aborted lifecycle signal is still installed, so queued datastore reads
+  // observe the abort instead of retiring after shutdown.
+  await Promise.allSettled([...retireClosedTargetInFlight.values(), ...behaviorOperationTails.values()])
   behaviorAbortController = null
-  await Promise.allSettled([...behaviorOperationTails.values()])
   // Detached workers survive Poise itself, but spawn acceptance is not proof
   // of a successful side effect. Leave launched claims with their durable
   // identity so a later runtime reconciles exact log status before retrying;
