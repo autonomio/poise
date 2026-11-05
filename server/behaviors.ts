@@ -543,13 +543,14 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
 
 // Classification is presentation metadata. Rehydrating old truncated summaries
 // must not count a new failure or change the scheduler's existing retry clock.
-function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry): void {
+function refreshFailureDiagnostic(behavior: BehaviorKey, target: string, call: LogEntry, snapshot: AgentLogSnapshot): void {
   const previous = readBehaviorFailure(behavior, target)
   if (!previous || previous.kind !== 'worker') return
   if (previous.callId && previous.callId !== call.id) return
-  const error = behaviorErrorMessage(call.error || 'agent call failed')
+  const stopped = reviewBudgetRetryStop(call, snapshot)
+  const error = behaviorErrorMessage(stopped || call.error || 'agent call failed')
   const held = call.behavior === ISSUE_REVIEW_BEHAVIOR ? !issueFailureCanRetry(target, call)
-    : call.action !== 'not_started' || call.outcome !== 'preflight_failed' || !!call.head_sha
+    : !!stopped || call.action !== 'not_started' || call.outcome !== 'preflight_failed' || !!call.head_sha
       || call.review_id != null || call.receipts != null
   const diagnostic = classifyBehaviorDiagnostic(error, { errorCode: call.error_code, held })
   if (previous.error !== error || previous.diagnostic?.code !== diagnostic.code
@@ -994,7 +995,7 @@ function clearReviewerTrip(identity: string): void {
 // Trips the reviewer when a failed call is a provider failure before a
 // verdict, and releases the target so the next slot runs on the next tick —
 // true when the claim was released and reconciliation moves on.
-function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, call: LogEntry): boolean {
+function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, call: LogEntry, snapshot: AgentLogSnapshot): boolean {
   const kind = reviewerTripKind(call)
   const identity = kind ? tripIdentity(call) : null
   if (!kind || !identity || !postedNothing(call)) return false
@@ -1002,6 +1003,7 @@ function releaseTrippedCall(behavior: TripBehavior, claim: BehaviorLaunchClaim, 
   // says so when it cannot: an uncertain submission holds on every slot
   // instead of risking a duplicate verdict.
   if (call.review_comments != null || /could not prove a safe recovery/.test(call.error || '')) return false
+  if (reviewBudgetRetryStop(call, snapshot)) return false
   tripReviewer(behavior, identity, kind, call.id)
   if (tripHoldsTarget(call)) return false
   releaseOwnedClaim(behavior, claim.target, claim.claimId)
@@ -2008,7 +2010,7 @@ async function reconcileBehaviorLaunchClaims(
       && call.actor?.toLowerCase() === letter.actor?.toLowerCase()
       && call.source === letter.source && call.correlation_id === letter.correlationId
       && newestLetters.get(letter.target) === letter.id) {
-      refreshFailureDiagnostic(behavior, letter.target, call)
+      refreshFailureDiagnostic(behavior, letter.target, call, snapshot)
     }
     const completedAt = String(call?.completed_at || '')
     const action = String(call?.action || '')
@@ -2222,11 +2224,12 @@ async function reconcileBehaviorLaunchClaims(
       continue
     }
     if (FAILED_AGENT_STATUSES.has(status) && boundedReviewFailure(call)) {
-      if (releaseTrippedCall(behavior, claim, call)) continue
-      const message = call.error || 'Review needs attention'
+      if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
+      const stopped = reviewBudgetRetryStop(call, snapshot)
+      const message = stopped || call.error || 'Review needs attention'
       if (deadLetterClaim(claim, message) && budgetExhaustedProvenNoAction(call)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target,
-          { errorCode: call.error_code, held: false, callId: call.id })
+          { errorCode: call.error_code, held: !!stopped, callId: call.id })
       }
       continue
     }
@@ -2249,7 +2252,7 @@ async function reconcileBehaviorLaunchClaims(
         if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
-        if (releaseTrippedCall(behavior, claim, call)) continue
+        if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
           recordBehaviorFailure(behavior, 'worker', message, claim.target, { errorCode: call.error_code, held: false, callId: call.id })
@@ -2316,7 +2319,7 @@ async function reconcileBehaviorLaunchClaims(
       }
     } else if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
-      if (releaseTrippedCall(behavior, claim, call)) continue
+      if (releaseTrippedCall(behavior, claim, call, snapshot)) continue
       if (deadLetterClaim(claim, message)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target)
         // A run the user stopped from Swarm, or one a restart cut off, says nothing about the provider.
@@ -2858,6 +2861,7 @@ async function prepareReviewTarget(
       // Recovery probe only: release a dead no-action launch so the claim
       // phase can reclaim this target. Its own writes are claim-guarded.
       await releaseFailedBehaviorIfNoAction('review-new-prs', pr.repo, pr.number, target)
+      if (getFailedBehaviorLaunch('review-new-prs', target)) return null
       const m = pr.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
       if (!m) throw new Error('not a github PR url: ' + pr.url)
       const [, owner, repo, num] = m
@@ -3633,9 +3637,9 @@ function boundedReviewFailure(call: LogEntry): boolean {
 // A budget-exhausted run that proved it posted nothing is a provider-side
 // failure, not an ambiguous side effect: Caller verifies against live
 // GitHub before failing this way, and says so when it cannot. It retries
-// the same head on backoff once the provider answers again; only an
-// uncertain submission holds — as does deterministic input exhaustion,
-// which no other model can fix on this head.
+// the same head on backoff once the provider answers again, within the
+// per-input attempt bound below. Uncertain submissions and deterministic
+// input exhaustion always hold.
 function budgetExhaustedProvenNoAction(call: LogEntry): boolean {
   return call.review_policy === REVIEW_POLICY
     && call.error_code === 'review_budget_exhausted'
@@ -3643,6 +3647,21 @@ function budgetExhaustedProvenNoAction(call: LogEntry): boolean {
     && postedNothing(call)
     && call.review_comments == null
     && !/could not prove a safe recovery/.test(call.error || '')
+}
+
+// Reviewer trips expire or clear on another PR's success. The unchanged
+// input's retry bound instead follows the durable automatic Call evidence.
+function reviewBudgetRetryStop(call: LogEntry, snapshot: AgentLogSnapshot): string | null {
+  if ((call.behavior !== 'pr_review' && call.behavior !== 'pr_approve')
+    || call.source !== `poise:${call.behavior === 'pr_review' ? 'review-new-prs' : 'approve-prs'}`
+    || !budgetExhaustedProvenNoAction(call)) return null
+  const attempts = snapshot.entries.filter((row) => row.behavior === call.behavior
+    && row.repo === call.repo && row.pr_id === call.pr_id && row.expected_head === call.expected_head
+    && row.model === call.model && row.actor?.toLowerCase() === call.actor?.toLowerCase()
+    && row.source === call.source && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
+    && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
+  return attempts.length < 2 ? null
+    : `${call.error || 'Review reached its total time limit'}. Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head.`
 }
 
 // An explicit operator retry releases only failed slots whose live GitHub
@@ -3798,7 +3817,8 @@ async function releaseFailedBehaviorIfNoAction(
       }
     }
   }
-  if (boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === configuredModel
+  const stopped = reviewBudgetRetryStop(call, snapshot)
+  if ((stopped || boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === configuredModel)
     && await currentHeadSha(repo, number, failed.launchActor) === failed.launchExpectedHead) return false
   const blockedPacket = call.action === 'not_started'
     && call.outcome === 'preflight_failed'
@@ -4049,7 +4069,8 @@ async function dismissedApprovalHeld(pr: DatastorePr, head: string, model: strin
       || (!budgetExhaustedProvenNoAction(call)
         && (call.action !== 'not_started' || call.outcome !== 'preflight_failed'))
       || call.head_sha !== null || call.review_id != null || call.receipts != null || call.review_comments != null) return true
-    return boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === model
+    return !!reviewBudgetRetryStop(call, snapshot)
+      || boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === model
       || !behaviorRetryDue('approve-prs', claim.target)
   })
 }
@@ -6853,7 +6874,7 @@ async function reconcileIssueReviewClaims(): Promise<void> {
     }
     if (FAILED_AGENT_STATUSES.has(status)) {
       const message = call.error || `agent call terminated with status ${status}`
-      if (releaseTrippedCall(ISSUES_KEY, claim, call)) {
+      if (releaseTrippedCall(ISSUES_KEY, claim, call, snapshot)) {
         // A time-limit trip still relaunches the review once with the next
         // reviewer — but the attempt counts toward the retry bound, so
         // repeated time-limits hold instead of relaunching without end.

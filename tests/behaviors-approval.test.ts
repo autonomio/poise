@@ -11,6 +11,110 @@ function modelOf(call: unknown[]): string {
 
 describe('approval eligibility and review activity', () => {
 
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'stops matching automatic timeouts after two attempts (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: model, tertiary: model },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+      expect(modules.behaviors.getBehaviorsRuntimeHealth().failures).toContainEqual(expect.objectContaining({
+        target: held.target, error: expect.stringContaining('Automatic retries stopped'),
+      }))
+
+      // Another PR still runs, and its successful verdict cannot clear this hold.
+      const other = { ...pr, number: 18, url: 'https://github.com/Vaquum/poise-test/pull/18' }
+      fixture.listedPrs = [pr, other]
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        pull: other, outcome: 'changes_requested', headSha: NEXT_HEAD_SHA, callId: 'd'.repeat(32),
+      })
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+      expect(mocks.spawnDetached.mock.calls[2][1]).toContain('#18')
+      const otherClaim = modules.database.listBehaviorLaunchClaims(behavior).find((row) => row.launchPr === 18)!
+      fixture.agentLogs.push(agentLog({ id: '3'.repeat(32), behavior: upstream, model, pr_id: '18',
+        started_at: otherClaim.launchRequestedAt, started_at_precise: otherClaim.launchRequestedAt,
+        status: 'completed', action: upstream === 'pr_review' ? 'reviewed_clean' : 'approved',
+        outcome: upstream === 'pr_review' ? 'clean' : 'approved', head_sha: HEAD_SHA,
+        expected_head: HEAD_SHA, source: otherClaim.launchSource, actor: otherClaim.launchActor,
+        correlation_id: otherClaim.launchCorrelationId,
+      }))
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+
+      fixture.listedPrs = [pr]
+      arrange(HEAD_SHA, true)
+      await expect(modules.behaviors.retryFailedPrReviews(['2'.repeat(32)])).resolves.toEqual({
+        ok: true, targets: [held.target],
+      })
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(4)
+      expect(mocks.spawnDetached.mock.calls[3][1]).toContain('#17')
+      await timeout('4'.repeat(32))
+      arrange('e'.repeat(40))
+      vi.setSystemTime(Date.now() + 3_600_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(5)
+      expect(mocks.spawnDetached.mock.calls[4][1]).toEqual(expect.arrayContaining(['--expected-head', 'e'.repeat(40)]))
+    },
+  )
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,
