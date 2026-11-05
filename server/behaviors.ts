@@ -3658,38 +3658,30 @@ function isStoppedBudgetHoldError(error: unknown): boolean {
 }
 
 // Whether the stopped call's model is still what the same head would run.
-// A trip substitutes another model on the same target without changing
-// settings, so a hold on the substitute must survive while the configured
-// model stays tripped; only an actual settings change to an untried model
-// makes the same head eligible again. Hold when the stopped model is either
-// the configured setting or the current launch selection.
-async function isStoppedBudgetModelCurrent(call: LogEntry, repo: string, number: number, target: string): Promise<boolean> {
+// Trips substitute another model without changing settings and backoff
+// expiry moves the launch back, so the hold must not follow the momentary
+// launch selection. It follows the configured runnable set instead: only a
+// settings change to models that no longer include the stopped model makes
+// the same head eligible again. When no slot model can run there, the
+// catalog seed launches, so a stop on the seed holds until settings make a
+// slot runnable again.
+async function isStoppedBudgetModelCurrent(call: LogEntry, _repo: string, _number: number, _target: string): Promise<boolean> {
   try {
     const catalog = await loadCatalog()
     const settings = getModelSettings()
-    if (call.behavior === 'pr_approve') {
-      const stored = settings.places?.['pr_approve']?.slot ?? 'primary'
-      const slots = resolveSlots(catalog, settings.slots)
-      if (stored === 'random') {
-        return MODEL_SLOTS.some((slot) => isPlaceModel(catalog, 'pr_approve', slots[slot]) && slots[slot] === call.model)
-      }
-      if (resolvePlace(catalog, 'pr_approve', settings).model === call.model) return true
-      const launch = await approvalSlot()
-      if (!launch) return true
-      return launch.model === call.model
-    }
-    const stored = settings.places?.['pr_review']?.slot ?? 'primary'
+    const place = call.behavior === 'pr_approve' ? 'pr_approve' : 'pr_review'
+    const stored = settings.places?.[place]?.slot ?? 'primary'
     const slots = resolveSlots(catalog, settings.slots)
+    const seed = catalog.behaviors[place]
     if (stored === 'random') {
-      return MODEL_SLOTS.some((slot) => isPlaceModel(catalog, 'pr_review', slots[slot]) && slots[slot] === call.model)
+      const runnable = MODEL_SLOTS.filter((slot) => isPlaceModel(catalog, place, slots[slot]))
+      if (runnable.length === 0) return call.model === seed
+      return runnable.some((slot) => slots[slot] === call.model)
     }
-    const panel = await reviewPanel(getReviewers('review-new-prs'), 'pr_review', seededRandom(panelSeedKey(repo, number, 'pr_review')))
-    const slot = reviewSlotOfTarget(target)
-    const entry = panel.reviewers.find((row) => row.slot === slot)
-    if ((entry ? entry.model : slots[slot]) === call.model) return true
-    const launch = await slotModel(slot, panelSeedKey(repo, number, 'pr_review'))
-    if (!launch) return true
-    return launch.model === call.model
+    const runnable = MODEL_SLOTS.slice(MODEL_SLOTS.indexOf(stored))
+      .filter((slot) => isPlaceModel(catalog, place, slots[slot]))
+    if (runnable.length === 0) return call.model === seed
+    return runnable.some((slot) => slots[slot] === call.model)
   } catch {
     return true
   }
