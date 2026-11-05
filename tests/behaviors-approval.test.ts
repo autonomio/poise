@@ -344,6 +344,158 @@ describe('approval eligibility and review activity', () => {
     },
   )
 
+  it.each(['pr_review', 'pr_approve', 'dismissed approval'] as const)(
+    'holds a stopped substitute while the configured model stays tripped (%s)', async (mode) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+      const behavior = mode === 'pr_review' ? 'review-new-prs' : 'approve-prs'
+      const upstream = mode === 'pr_review' ? 'pr_review' : 'pr_approve'
+      const model = 'gpt-5.6-sol-max'
+      const substitute = 'gpt-6-astra-ultra'
+      const fresh = 'grok-4.6-xhigh'
+      const arrange = (headSha = HEAD_SHA, inventory = false) => arrangeCli(mode === 'pr_approve', false, {
+        headSha, ...(inventory ? { reviewerReviewIdsSince: [] } : {}),
+        ...(mode === 'dismissed approval' ? {
+          reviewerLatestState: 'DISMISSED', latestActivityAt: new Date().toISOString(),
+        } : {}),
+      }, mode === 'dismissed approval' ? { reviewer_latest_state: 'DISMISSED' } : {})
+      arrange()
+      mocks.spawnDetached.mockResolvedValue(undefined)
+      let modules = await loadModules()
+      modules.database.setMeta('me', 'poise-user')
+      modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+      modules.database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
+      modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+      modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: model, secondary: substitute, tertiary: substitute },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      if (mode === 'dismissed approval') recordCompletedInitialReview(modules.database, {
+        outcome: 'changes_requested', headSha: NEXT_HEAD_SHA,
+      })
+      for (const key of ['review-new-prs', 'approve-prs', 'review-new-issues'] as const) {
+        modules.database.setMeta(`behavior_${key.replaceAll('-', '_')}_failure:reviewer:${model}`, JSON.stringify({
+          kind: 'operation',
+          consecutiveFailures: 1,
+          lastFailureAtMs: Date.now(),
+          nextRetryAtMs: Date.now() + 4 * 3_600_000,
+          error: `${model} cannot review delivery probe`,
+        }))
+      }
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      expect(modelOf(mocks.spawnDetached.mock.calls[0]!)).toBe(substitute)
+
+      const timeout = async (id: string) => {
+        const claim = modules.database.listBehaviorLaunchClaims(behavior)
+          .find((row) => row.launchPr === pr.number)!
+        vi.setSystemTime(Date.now() + 24 * 60_000)
+        const call = agentLog({ id, behavior: upstream, model: substitute, status: 'failed',
+          started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+          completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+          actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+          review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+          error: 'Review reached its total time limit; needs attention',
+        })
+        fixture.agentLogs.push(call)
+        await resetLogCache()
+        await modules.behaviors.runEnabledBehaviorsOnce()
+        return claim
+      }
+      await timeout('1'.repeat(32))
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modelOf(mocks.spawnDetached.mock.calls[1]!)).toBe(substitute)
+      const held = await timeout('2'.repeat(32))
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      modules = await restartModules()
+      modules.behaviors.startBehaviorsRuntime()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+      expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+      modules.database.setMeta('models', JSON.stringify({
+        slots: { primary: fresh, secondary: fresh, tertiary: fresh },
+        places: { [upstream]: { slot: 'primary' } },
+      }))
+      vi.setSystemTime(Date.now() + 61_000)
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      expect(mocks.spawnDetached).toHaveBeenCalledTimes(3)
+      expect(modelOf(mocks.spawnDetached.mock.calls[2]!)).toBe(fresh)
+    },
+  )
+
+  it('retains the stop marker for a long checkout time-out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const behavior = 'review-new-prs'
+    const model = 'gpt-5.6-sol-max'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    let modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: model, secondary: model, tertiary: model },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+    const longError = `cannot inspect review checkout: Command timed out after 120000ms: git fetch --no-tags --prune origin ${HEAD_SHA} ${NEXT_HEAD_SHA} ${'b'.repeat(40)} -- argv ${'x'.repeat(350)}`
+    expect(longError.length).toBeGreaterThan(300)
+    const timeout = async (id: string) => {
+      const claim = modules.database.listBehaviorLaunchClaims(behavior)
+        .find((row) => row.launchPr === pr.number)!
+      vi.setSystemTime(Date.now() + 24 * 60_000)
+      const call = agentLog({ id, behavior: 'pr_review', model, status: 'failed',
+        started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+        completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+        actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+        review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+        error: longError,
+      })
+      fixture.agentLogs.push(call)
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      return claim
+    }
+    await timeout('1'.repeat(32))
+    vi.setSystemTime(Date.now() + 61_000)
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const held = await timeout('2'.repeat(32))
+
+    vi.setSystemTime(Date.now() + 2 * 3_600_000)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === held.target)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect((failure?.error ?? '').startsWith('Automatic retries stopped')).toBe(true)
+    const incidents = modules.behaviors.getBehaviorDiagnosticIncidents(
+      { entries: fixture.agentLogs as never[], quarantined: [] },
+    )
+    const incident = incidents.find((row) => row.callId === '2'.repeat(32))
+    expect(incident).toBeDefined()
+    expect(incident).not.toHaveProperty('nextRetryAt')
+    const nullSnapshotIncidents = modules.behaviors.getBehaviorDiagnosticIncidents(null)
+    const nullIncident = nullSnapshotIncidents.find((row) => row.callId === '2'.repeat(32))
+    expect(nullIncident).toBeDefined()
+    expect(nullIncident).not.toHaveProperty('nextRetryAt')
+  })
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,

@@ -3657,10 +3657,12 @@ function isStoppedBudgetHoldError(error: unknown): boolean {
   return typeof error === 'string' && error.includes(STOPPED_BUDGET_MARKER)
 }
 
-// Whether the stopped call's model is still the configured model setting.
-// Trips, backoff probes and Random draws change the momentary launch
-// selection without changing settings, so they must not lift the hold:
-// only an actual settings change makes the same head eligible again.
+// Whether the stopped call's model is still what the same head would run.
+// A trip substitutes another model on the same target without changing
+// settings, so a hold on the substitute must survive while the configured
+// model stays tripped; only an actual settings change to an untried model
+// makes the same head eligible again. Hold when the stopped model is either
+// the configured setting or the current launch selection.
 async function isStoppedBudgetModelCurrent(call: LogEntry, repo: string, number: number, target: string): Promise<boolean> {
   try {
     const catalog = await loadCatalog()
@@ -3671,7 +3673,10 @@ async function isStoppedBudgetModelCurrent(call: LogEntry, repo: string, number:
       if (stored === 'random') {
         return MODEL_SLOTS.some((slot) => isPlaceModel(catalog, 'pr_approve', slots[slot]) && slots[slot] === call.model)
       }
-      return resolvePlace(catalog, 'pr_approve', settings).model === call.model
+      if (resolvePlace(catalog, 'pr_approve', settings).model === call.model) return true
+      const launch = await approvalSlot()
+      if (!launch) return true
+      return launch.model === call.model
     }
     const stored = settings.places?.['pr_review']?.slot ?? 'primary'
     const slots = resolveSlots(catalog, settings.slots)
@@ -3681,8 +3686,10 @@ async function isStoppedBudgetModelCurrent(call: LogEntry, repo: string, number:
     const panel = await reviewPanel(getReviewers('review-new-prs'), 'pr_review', seededRandom(panelSeedKey(repo, number, 'pr_review')))
     const slot = reviewSlotOfTarget(target)
     const entry = panel.reviewers.find((row) => row.slot === slot)
-    if (entry) return entry.model === call.model
-    return slots[slot] === call.model
+    if ((entry ? entry.model : slots[slot]) === call.model) return true
+    const launch = await slotModel(slot, panelSeedKey(repo, number, 'pr_review'))
+    if (!launch) return true
+    return launch.model === call.model
   } catch {
     return true
   }
@@ -3700,7 +3707,7 @@ function reviewBudgetRetryStop(call: LogEntry, snapshot: AgentLogSnapshot): stri
     && row.source === call.source && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
     && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
   return attempts.length < 2 ? null
-    : `${call.error || 'Review reached its total time limit'}. Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head.`
+    : `Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head. ${call.error || 'Review reached its total time limit'}`
 }
 
 // An explicit operator retry releases only failed slots whose live GitHub
