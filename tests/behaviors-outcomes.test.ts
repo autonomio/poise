@@ -615,6 +615,148 @@ describe('review outcome evidence and registration', () => {
     expect(modules.database.listBehaviorDeadLetters()).toEqual([])
   })
 
+  it('does not recreate a retired closed-target incident when a preflight failure reports after retirement', async () => {
+    const launched = await launchReviewBeforeCrash()
+    const target = launched.target
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'agent-interface' && args[0] === '--logs') throw new Error('agent log unavailable')
+      return implementation(command, args, ...rest)
+    })
+    await resetLogCache()
+    let modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toHaveLength(1)
+    fixture.listedPrs = [{ ...pr, status: 'closed' }]
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+    const preflight = agentLog({ id: 'f'.repeat(32), started_at: launched.requestedAt, started_at_precise: launched.requestedAt,
+      status: 'failed', action: 'not_started', outcome: 'preflight_failed',
+      error: 'agent preflight failed before any action', error_code: 'review_provider_blocked',
+      model: 'opus-5-xhigh',
+      expected_head: launched.expectedHead, actor: launched.actor, source: launched.source, correlation_id: launched.correlationId })
+    const startedAt = new Date(Date.parse(launched.requestedAt) + 1_000).toISOString()
+    preflight.started_at = startedAt
+    preflight.started_at_precise = startedAt
+    preflight.head_sha = null
+    fixture.agentLogs = [preflight]
+    await resetLogCache()
+    mocks.runFile.mockImplementation(implementation)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', target)).not.toBeNull()
+    expect(modules.behaviors.getBehaviorsRuntimeHealth().failures).toEqual([])
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.listBehaviorDeadLetters()).toEqual([])
+    expect(modules.behaviors.getBehaviorsRuntimeHealth().failures).toEqual([])
+  })
+
+  it('does not restore a readable failure for a retired closed target', async () => {
+    arrangeCli()
+    fixture.listedPrs = []
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.setMeta('behavior_review_new_prs_enabled', '1')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    const target = `${pr.repo}#401`
+    const requestedAt = new Date(Date.now() - 10_000).toISOString()
+    const callId = 'a'.repeat(32)
+    const claimId = database.claimSeenOwned('review-new-prs', target)!
+    expect(database.markBehaviorLaunchIntentOwned({ key: 'review-new-prs', target, claimId,
+      launchBehavior: 'pr_review', repo: pr.repo, pr: 401, requestedAt,
+      expectedHead: HEAD_SHA, actor: 'review-bot', source: 'poise:review-new-prs', correlationId: claimId })).toBe(true)
+    expect(database.linkBehaviorLaunchCallOwned('review-new-prs', target, claimId, callId)).toBe(true)
+    expect(database.quarantineBehaviorLaunchOwned('review-new-prs', target, claimId,
+      'unreadable', 'original uncertain failure', true)).toBe(true)
+    const active = database.listBehaviorLaunchClaims('review-new-prs').find((entry) => entry.target === target)!
+    database.recordBehaviorDeadLetter(active, 'original uncertain failure', callId)
+    expect(database.completeSeenOwned('review-new-prs', target, claimId)).toBe(true)
+    expect(database.getFailedBehaviorLaunch('review-new-prs', target)?.launchQuarantine).toBe('unreadable')
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        const number = Number(args[args.indexOf('--number') + 1])
+        if (number === 401) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/401` }]), stderr: '' }
+        }
+        return { stdout: JSON.stringify([]), stderr: '' }
+      }
+      return implementation(command, args, ...rest)
+    })
+    behaviors.startBehaviorsRuntime()
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+    expect(behaviors.getBehaviorsRuntimeHealth().failures).toEqual([])
+    const failed = agentLog({ id: callId, pr_id: '401', repo: pr.repo, started_at: requestedAt, started_at_precise: requestedAt,
+      status: 'failed', error: 'provider timed out before reporting', error_code: 'provider_timeout',
+      model: 'opus-5-xhigh',
+      expected_head: HEAD_SHA, actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: claimId })
+    const startedAt = new Date(Date.parse(requestedAt) + 1_000).toISOString()
+    failed.started_at = startedAt
+    failed.started_at_precise = startedAt
+    fixture.agentLogs = [failed]
+    await resetLogCache()
+    await behaviors.runEnabledBehaviorsOnce()
+    expect(database.listBehaviorDeadLetters()).toEqual([])
+    expect(behaviors.getBehaviorsRuntimeHealth().failures).toEqual([])
+    expect(database.getFailedBehaviorLaunch('review-new-prs', target)?.launchQuarantine).toBe('unreadable')
+  })
+
+  it('stops the closed-target retire pass on shutdown without retiring afterwards', async () => {
+    arrangeCli()
+    fixture.listedPrs = []
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    const numbers = Array.from({ length: 11 }, (_, index) => 501 + index)
+    for (const number of numbers) {
+      const target = `${pr.repo}#${number}`
+      const claimId = database.claimSeenOwned('review-new-prs', target)!
+      expect(database.markBehaviorLaunchIntentOwned({ key: 'review-new-prs', target, claimId,
+        launchBehavior: 'pr_review', repo: pr.repo, pr: number, requestedAt: new Date().toISOString(),
+        expectedHead: HEAD_SHA, actor: 'review-bot', source: 'poise:review-new-prs', correlationId: claimId })).toBe(true)
+      const claim = database.listBehaviorLaunchClaims('review-new-prs').find((entry) => entry.target === target)!
+      database.recordBehaviorDeadLetter(claim, 'original uncertain failure')
+      database.setBehaviorLaunchErrorOwned('review-new-prs', target, claimId, 'original uncertain failure')
+      database.completeSeenOwned('review-new-prs', target, claimId)
+    }
+    const implementation = mocks.runFile.getMockImplementation()!
+    let viewCalls = 0
+    mocks.runFile.mockImplementation(async (command: string, args: string[], options: { signal?: AbortSignal } & Record<string, unknown>, ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        viewCalls += 1
+        const signal = options?.signal
+        if (signal?.aborted) throw (signal as AbortSignal).reason ?? new Error('aborted')
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 80)
+          signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject((signal as AbortSignal).reason ?? new Error('aborted'))
+          }, { once: true })
+        })
+        const number = Number(args[args.indexOf('--number') + 1])
+        return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+          created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/pull/${number}` }]), stderr: '' }
+      }
+      return (implementation as (...args: unknown[]) => Promise<{ stdout: string, stderr: string }>)(command, args, options, ...rest)
+    })
+    behaviors.startBehaviorsRuntime()
+    const tick = behaviors.runEnabledBehaviorsOnce()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await behaviors.stopBehaviorsRuntime()
+    const callsAtStop = viewCalls
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await tick.catch(() => undefined)
+    expect(viewCalls).toBe(callsAtStop)
+    expect(database.listBehaviorDeadLetters()).toHaveLength(numbers.length)
+  })
+
   it('retires closed targets concurrently so one slow read does not stall the tick', async () => {
     arrangeCli()
     fixture.listedPrs = []

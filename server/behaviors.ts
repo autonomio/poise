@@ -1850,6 +1850,10 @@ function restoreReadableFailedClaim(claim: BehaviorLaunchClaim, call: LogEntry |
     || !Number.isFinite(Date.parse(claim.launchRequestedAt))
     || !Number.isFinite(Date.parse(agentCallStartedAt(call)))
     || Date.parse(agentCallStartedAt(call)) < Date.parse(claim.launchRequestedAt)) return
+  // Closure retires visibility: restoring a readable failure after its
+  // incident retired would return the closed target to runtime health until
+  // the next tick. Keep the fence as the retirement left it.
+  if (closedTargetIncidentRetired(claim)) return
   const message = call.error || `agent call terminated with status ${call.status.toLowerCase()}`
   db.transaction(() => {
     const changed = db.prepare(`
@@ -2256,6 +2260,12 @@ async function reconcileBehaviorLaunchClaims(
         if (held) captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'held', activity: 'unknown', stateSource: 'native' })
       } else {
+        // A target already retired as closed must not become visible again
+        // when a readable preflight follow-up reports for the same launch.
+        if (closedTargetIncidentRetired(claim)) {
+          completeClaimSafely(claim, message)
+          continue
+        }
         if (releaseTrippedCall(behavior, claim, call)) continue
         recordBehaviorDeadLetter(claim, message, call.id)
         if (releaseOwnedClaim(behavior, claim.target, claim.claimId)) {
@@ -2751,7 +2761,11 @@ async function retireClosedTargetIncidents(): Promise<void> {
     await pending
     return
   }
+  // Bind the pass to the lifecycle signal so shutdown aborts queued reads
+  // and stop can await the pass instead of letting it continue afterwards.
+  const lifecycle = behaviorAbortController?.signal
   const run = (async () => {
+    const execute = async () => {
     const seen = new Map<string, { behavior: BehaviorKey, repo: string, pr: number }>()
     for (const row of (db.prepare(`
       SELECT DISTINCT behavior, repo, pr FROM behavior_dead_letters
@@ -2814,6 +2828,8 @@ async function retireClosedTargetIncidents(): Promise<void> {
     } finally {
       release()
     }
+    }
+    return lifecycle ? behaviorOperationSignal.run(lifecycle, execute) : execute()
   })()
   retireClosedTargetInFlight.set(scope, run)
   try {
@@ -7987,8 +8003,11 @@ export async function stopBehaviorsRuntime(): Promise<void> {
   checkSlotRetryTimer = null
   checkSlotRetryPending = false
   behaviorAbortController?.abort()
+  // Await the closed-target retire pass alongside operation tails while the
+  // aborted lifecycle signal is still installed, so queued datastore reads
+  // observe the abort instead of retiring after shutdown.
+  await Promise.allSettled([...retireClosedTargetInFlight.values(), ...behaviorOperationTails.values()])
   behaviorAbortController = null
-  await Promise.allSettled([...behaviorOperationTails.values()])
   // Detached workers survive Poise itself, but spawn acceptance is not proof
   // of a successful side effect. Leave launched claims with their durable
   // identity so a later runtime reconciles exact log status before retrying;
