@@ -174,7 +174,8 @@ held. Uncertain submissions are reconciled from live receipts before any retry.
 A budget-exhausted run that proved it posted nothing retries the same head
 automatically on backoff once the provider answers again. After two automatic
 budget failures for the same PR, head, behavior and model, Poise retains the
-failed launch and reports that automatic retries stopped. Backoff, restarts
+failed launch and reports that automatic retries stopped, with no retry time.
+Backoff, restarts
 and a successful review on another PR do not lift that hold. A new head or
 an explicit retry remains eligible; uncertain submissions stay held.
 After account recovery, a successful explicit replay on the same head, model,

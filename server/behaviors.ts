@@ -490,7 +490,7 @@ export function getBehaviorFailureState(key: BehaviorKey, target: string): Behav
   }
 }
 
-function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string }): void
+function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown, target: string, options?: DiagnosticOptions & { callId?: string, noBackoff?: boolean }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string, options?: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string } = {}): void {
   if (!isEnabled(key)) return
@@ -2229,7 +2229,7 @@ async function reconcileBehaviorLaunchClaims(
       const message = stopped || call.error || 'Review needs attention'
       if (deadLetterClaim(claim, message) && budgetExhaustedProvenNoAction(call)) {
         recordBehaviorFailure(behavior, 'worker', message, claim.target,
-          { errorCode: call.error_code, held: !!stopped, callId: call.id })
+          { errorCode: call.error_code, held: !!stopped, callId: call.id, noBackoff: !!stopped })
       }
       continue
     }
@@ -7811,10 +7811,16 @@ export function getBehaviorDiagnosticIncidents(snapshot: AgentLogSnapshot | null
     BEHAVIOR_KEYS.flatMap((behavior) => [...listBehaviorLaunchClaims(behavior), ...failedBehaviorLaunches(behavior)]))
     // A held row shows when its automatic retry runs: the failure clock for
     // this exact attempt, never a newer attempt's clock on an older row.
+    // A stopped budget hold never retries automatically, so it carries no
+    // retry time: operators must retry explicitly or push a new head.
     .map((incident): typeof incident & { nextRetryAt?: string } => {
       if (!incident.callId || !(BEHAVIOR_KEYS as readonly string[]).includes(incident.behavior)) return incident
       const failure = readBehaviorFailure(incident.behavior as BehaviorKey, incident.target)
       if (failure?.callId !== incident.callId) return incident
+      if (snapshot) {
+        const call = snapshot.entries.find((row) => row.id === incident.callId)
+        if (call && reviewBudgetRetryStop(call, snapshot)) return incident
+      }
       return { ...incident, nextRetryAt: new Date(failure.nextRetryAtMs).toISOString() }
     })
   if (behaviorOrganization.getStore() !== undefined) return scoped()

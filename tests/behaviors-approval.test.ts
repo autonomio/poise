@@ -190,6 +190,68 @@ describe('approval eligibility and review activity', () => {
     },
   )
 
+  it('omits any retry time for a stopped budget hold', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const behavior = 'review-new-prs'
+    const model = 'gpt-5.6-sol-max'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    let modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: model, secondary: model, tertiary: model },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
+
+    const timeout = async (id: string) => {
+      const claim = modules.database.listBehaviorLaunchClaims(behavior)
+        .find((row) => row.launchPr === pr.number)!
+      vi.setSystemTime(Date.now() + 24 * 60_000)
+      const call = agentLog({ id, behavior: 'pr_review', model, status: 'failed',
+        started_at: claim.launchRequestedAt, started_at_precise: claim.launchRequestedAt,
+        completed_at: new Date().toISOString(), expected_head: claim.launchExpectedHead,
+        actor: claim.launchActor, source: claim.launchSource, correlation_id: claim.launchCorrelationId,
+        review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+        error: 'Review reached its total time limit; needs attention',
+      })
+      fixture.agentLogs.push(call)
+      await resetLogCache()
+      await modules.behaviors.runEnabledBehaviorsOnce()
+      return claim
+    }
+    await timeout('1'.repeat(32))
+    vi.setSystemTime(Date.now() + 61_000)
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const held = await timeout('2'.repeat(32))
+
+    vi.setSystemTime(Date.now() + 2 * 3_600_000)
+    modules = await restartModules()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.getFailedBehaviorLaunch(behavior, held.target)?.launchCallId).toBe('2'.repeat(32))
+
+    // A stopped hold never retries automatically, so it schedules no retry
+    // clock and its diagnostic incident carries no retry time.
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === held.target)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect(Date.parse(failure!.nextRetryAt)).toBeLessThanOrEqual(Date.parse(failure!.lastFailureAt))
+    const incidents = modules.behaviors.getBehaviorDiagnosticIncidents(
+      { entries: fixture.agentLogs as never[], quarantined: [] },
+    )
+    const incident = incidents.find((row) => row.callId === '2'.repeat(32))
+    expect(incident).toBeDefined()
+    expect(incident).not.toHaveProperty('nextRetryAt')
+  })
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,
