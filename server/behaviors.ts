@@ -3818,7 +3818,7 @@ async function releaseFailedBehaviorIfNoAction(
     }
   }
   const stopped = reviewBudgetRetryStop(call, snapshot)
-  if ((stopped || boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === configuredModel)
+  if (((!!stopped || boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call)) && call.model === configuredModel)
     && await currentHeadSha(repo, number, failed.launchActor) === failed.launchExpectedHead) return false
   const blockedPacket = call.action === 'not_started'
     && call.outcome === 'preflight_failed'
@@ -4069,7 +4069,7 @@ async function dismissedApprovalHeld(pr: DatastorePr, head: string, model: strin
       || (!budgetExhaustedProvenNoAction(call)
         && (call.action !== 'not_started' || call.outcome !== 'preflight_failed'))
       || call.head_sha !== null || call.review_id != null || call.receipts != null || call.review_comments != null) return true
-    return !!reviewBudgetRetryStop(call, snapshot)
+    return !!reviewBudgetRetryStop(call, snapshot) && call.model === model
       || boundedReviewFailure(call) && !budgetExhaustedProvenNoAction(call) && call.model === model
       || !behaviorRetryDue('approve-prs', claim.target)
   })
