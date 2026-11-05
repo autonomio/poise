@@ -190,19 +190,21 @@ describe('review outcome evidence and registration', () => {
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
   })
 
-  it('releases a superseded review without degradation and reviews the current head', async () => {
+  it.each([HEAD_SHA, NEXT_HEAD_SHA])('releases a checkout-superseded review and reviews the current head (%s)', async (head) => {
     const launched = await launchReviewBeforeCrash()
     fixture.agentLogs = [agentLog({
       id: 'd'.repeat(32),
       started_at: new Date(Date.parse(launched.requestedAt) + 1_000).toISOString(),
       started_at_precise: new Date(Date.parse(launched.requestedAt) + 1_001).toISOString(),
-      status: 'failed',
-      error: 'pull-request head changed during behavior execution',
+      status: 'superseded', outcome: 'superseded', action: null, head_sha: head,
+      completed_at: new Date(Date.parse(launched.requestedAt) + 2_000).toISOString(),
+      error: '', error_code: null, review_id: null,
       expected_head: launched.expectedHead,
       actor: launched.actor,
       source: launched.source,
       correlation_id: launched.correlationId,
     })]
+    arrangeCli(false, false, { headSha: head })
     await resetLogCache()
 
     const { database: db, behaviors: runtime } = await restartModules()
@@ -210,6 +212,9 @@ describe('review outcome evidence and registration', () => {
     await runtime.runEnabledBehaviorsOnce()
 
     expect(mocks.spawnDetached).toHaveBeenCalledTimes(2)
+    const argv = mocks.spawnDetached.mock.calls[1][1]
+    expect(argv[argv.indexOf('--expected-head') + 1]).toBe(head)
+    expect(db.countReviewRounds(pr.repo, pr.number)).toBe(0)
     expect(runtime.getBehaviorsRuntimeHealth().failures).toEqual([])
     expect(db.listBehaviorDeadLetters()).toEqual([])
     expect(mocks.captureOutcome).toHaveBeenCalledWith(expect.objectContaining({
