@@ -2884,6 +2884,11 @@ async function prepareReviewTarget(
       }
       const expectedHead = await currentHeadSha(pr.repo, pr.number, actor)
       if (!isEnabled('review-new-prs') || behaviorAborted() || !prAccountsMatch(accounts) || !stillEligible('review-new-prs', pr, actor)) return null
+      // The stop counts across every slot while the hold above only fences
+      // this target: a model stopped on another slot must not launch here.
+      // Retained holds (cleared by explicit retry or a new head) are the
+      // eligibility signal, so an explicit retry stays eligible.
+      if (await isReviewModelStoppedForPr(pr.repo, pr.number, expectedHead, model, actor, target)) return null
       let changes: ChangesAddressedResult | null = null
       if (reviewer) {
         changes = await checkChangesAddressed(pr.repo, pr.number, reviewer)
@@ -3687,19 +3692,50 @@ async function isStoppedBudgetModelCurrent(call: LogEntry, _repo: string, _numbe
   }
 }
 
+// An explicit retry unblocks its own target once: the operator asked for
+// one more attempt there, while other slots stay stopped.
+function hasOperatorRetryForTarget(target: string, expectedHead: string): boolean {
+  const prefix = scopedMetaKey(`${META_PREFIX}operator_retry:`)
+  const rows = db.prepare(
+    "SELECT value FROM meta WHERE substr(key, 1, ?) = ? AND value <> ''",
+  ).all(prefix.length, prefix) as Array<{ value: string }>
+  for (const row of rows) {
+    try {
+      const record = JSON.parse(row.value) as { target?: unknown, expectedHead?: unknown }
+      if (record.target === target && record.expectedHead === expectedHead) return true
+    } catch { /* corrupt value — not an explicit retry */ }
+  }
+  return false
+}
+
+// Whether the prospective review model already has two proven no-action
+// budget failures for this PR/head. Other slots stay stopped after one
+// slot's explicit retry, which only unblocks its own target.
+async function isReviewModelStoppedForPr(repo: string, number: number, head: string, model: string, actor: string, target: string): Promise<boolean> {
+  const snapshot = await readBehaviorLogSnapshot()
+  if (!budgetRetryStoppedForInput(snapshot, { behavior: 'pr_review', repo, pr_id: String(number),
+    expected_head: head, model, actor, source: 'poise:review-new-prs' })) return false
+  return !hasOperatorRetryForTarget(target, head)
+}
+
 // Reviewer trips expire or clear on another PR's success. The unchanged
 // input's retry bound instead follows the durable automatic Call evidence.
+function budgetRetryStoppedForInput(snapshot: AgentLogSnapshot, input: { behavior: string | null, repo: string | null, pr_id: string | null, expected_head: string | null, model: string, actor: string | null, source: string | null }): boolean {
+  const attempts = snapshot.entries.filter((row) => row.behavior === input.behavior
+    && row.repo === input.repo && row.pr_id === input.pr_id && row.expected_head === input.expected_head
+    && row.model === input.model && row.actor?.toLowerCase() === input.actor?.toLowerCase()
+    && row.source === input.source && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
+    && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
+  return attempts.length >= 2
+}
+
 function reviewBudgetRetryStop(call: LogEntry, snapshot: AgentLogSnapshot): string | null {
   if ((call.behavior !== 'pr_review' && call.behavior !== 'pr_approve')
     || call.source !== `poise:${call.behavior === 'pr_review' ? 'review-new-prs' : 'approve-prs'}`
     || !budgetExhaustedProvenNoAction(call)) return null
-  const attempts = snapshot.entries.filter((row) => row.behavior === call.behavior
-    && row.repo === call.repo && row.pr_id === call.pr_id && row.expected_head === call.expected_head
-    && row.model === call.model && row.actor?.toLowerCase() === call.actor?.toLowerCase()
-    && row.source === call.source && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
-    && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
-  return attempts.length < 2 ? null
-    : `Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head. ${call.error || 'Review reached its total time limit'}`
+  if (!budgetRetryStoppedForInput(snapshot, { behavior: call.behavior, repo: call.repo, pr_id: call.pr_id,
+    expected_head: call.expected_head, model: call.model, actor: call.actor, source: call.source })) return null
+  return `Automatic retries stopped after two time-outs for this PR, head, behavior and model. Retry explicitly or change the PR head. ${call.error || 'Review reached its total time limit'}`
 }
 
 // An explicit operator retry releases only failed slots whose live GitHub

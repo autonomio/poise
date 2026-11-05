@@ -663,6 +663,52 @@ describe('approval eligibility and review activity', () => {
     expect(nullIncident).not.toHaveProperty('nextRetryAt')
   })
 
+  it('holds a stopped model on the other slot of a two-reviewer panel', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    // Two proven no-action budget time-outs for the secondary model on this
+    // head, without any failed-launch hold on the secondary target itself.
+    // The stop counts across every slot; the next secondary preparation for
+    // the same model must not launch a third attempt.
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const launchedModels = mocks.spawnDetached.mock.calls.map((call) => modelOf(call))
+    expect(launchedModels).toContain(modelA)
+    expect(launchedModels).not.toContain(modelB)
+    // A new head stays eligible for the stopped model.
+    arrangeCli(false, false, { headSha: NEXT_HEAD_SHA })
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelB)
+  })
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,
