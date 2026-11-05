@@ -455,9 +455,10 @@ repository's pull requests are evaluated on the next tick like any other.
 Every behavior tick checks incident targets directly in the fresh datastore,
 independently of enablement, pauses, model availability and v1/v2 admission.
 An explicitly closed issue or closed/merged pull request retires its incidents
-as superseded, including quarantined incidents. Retirement removes the held
-entry and its notice while retaining history, original errors, launch claims,
-quarantines and uncertain outcomes. It grants no success or retry authority,
+as superseded, including quarantined incidents, and clears held issue
+failures stored only in meta (`:check`, `:sub-issues`). Retirement removes
+the held entry and its notice while retaining history, original errors,
+launch claims, quarantines and uncertain outcomes. It grants no success or retry authority,
 and later quarantine reconciliation cannot recreate that incident. Open or
 unknown targets remain; absence from a filtered listing never proves closure.
 

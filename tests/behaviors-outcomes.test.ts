@@ -433,6 +433,57 @@ describe('review outcome evidence and registration', () => {
     expect(mocks.spawnDetached).not.toHaveBeenCalled()
   })
 
+  it('retires closed-issue meta-only failures without a dead letter', async () => {
+    arrangeCli()
+    fixture.listedPrs = []
+    const { database, behaviors } = await loadModules()
+    database.setMeta('me', 'poise-user')
+    database.setMeta('behavior_review_new_prs_keyver', '3')
+    database.recordSeen('review-new-prs', '__snapshot_v3__')
+    database.setMeta('behavior_review_new_issues_repos', JSON.stringify([{ repo: pr.repo, since: new Date().toISOString() }]))
+    // Prelaunch :check/:sub-issues failures live only in meta, with no dead
+    // letter to enumerate. A closed issue must clear them; open, unknown and
+    // scan targets must stay.
+    const closedCheck = `${pr.repo}#201:check`
+    const closedSub = `${pr.repo}#201:sub-issues`
+    const openCheck = `${pr.repo}#202:check`
+    const unknownCheck = `${pr.repo}#203:check`
+    const scan = `${pr.repo}:scan`
+    for (const target of [closedCheck, closedSub, openCheck, unknownCheck, scan]) {
+      database.setMeta(`behavior_review_new_issues_failure:${target}`, JSON.stringify({
+        kind: 'operation', consecutiveFailures: 1, lastFailureAtMs: Date.now(),
+        nextRetryAtMs: Date.now() + 3_600_000, error: 'old eligibility error',
+      }))
+    }
+    const implementation = mocks.runFile.getMockImplementation()!
+    mocks.runFile.mockImplementation(async (command: string, args: string[], ...rest: unknown[]) => {
+      if (command === 'github-datastore' && args[0] === 'view' && args.includes('--number')) {
+        if (args[1] !== 'issue') return { stdout: JSON.stringify([]), stderr: '' }
+        const number = Number(args[args.indexOf('--number') + 1])
+        if (number === 201) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'closed',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/issues/201` }]), stderr: '' }
+        }
+        if (number === 202) {
+          return { stdout: JSON.stringify([{ ...pr, number, status: 'open',
+            created_at: '2026-07-15T10:00:00Z', url: `https://github.com/${pr.repo}/issues/202` }]), stderr: '' }
+        }
+        return { stdout: JSON.stringify([]), stderr: '' }
+      }
+      return implementation(command, args, ...rest)
+    })
+    for (let pass = 0; pass < 2; pass++) {
+      await behaviors.runEnabledBehaviorsOnce()
+      expect(database.getMeta(`behavior_review_new_issues_failure:${closedCheck}`)).toBe('')
+      expect(database.getMeta(`behavior_review_new_issues_failure:${closedSub}`)).toBe('')
+      expect(database.getMeta(`behavior_review_new_issues_failure:${openCheck}`)).not.toBe('')
+      expect(database.getMeta(`behavior_review_new_issues_failure:${unknownCheck}`)).not.toBe('')
+      expect(database.getMeta(`behavior_review_new_issues_failure:${scan}`)).not.toBe('')
+      expect(database.listBehaviorDeadLetters()).toEqual([])
+      expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    }
+  })
+
   it('retains an ambiguous post-watermark review registration without retrying', async () => {
     const launched = await launchReviewBeforeCrash()
     const after = Date.parse(launched.requestedAt) + 1_000

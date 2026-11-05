@@ -2742,11 +2742,29 @@ async function readPullRequest(repo: string, number: number): Promise<DatastoreP
 // Retirement is independent of launch admission and preserves every launch
 // fence. A filtered listing's absence cannot establish target closure.
 async function retireClosedTargetIncidents(): Promise<void> {
-  const targets = (db.prepare(`
+  const seen = new Map<string, { behavior: BehaviorKey, repo: string, pr: number }>()
+  for (const row of (db.prepare(`
     SELECT DISTINCT behavior, repo, pr FROM behavior_dead_letters
     WHERE retired_at IS NULL AND repo IS NOT NULL AND pr IS NOT NULL
-  `).all() as Array<{ behavior: BehaviorKey, repo: string, pr: number }>)
-    .filter((row) => organizationOwns(row.repo))
+  `).all() as Array<{ behavior: BehaviorKey, repo: string, pr: number }>)) {
+    if (!organizationOwns(row.repo)) continue
+    seen.set(`${row.behavior}|${row.repo.toLowerCase()}#${row.pr}`, row)
+  }
+  // Prelaunch issue failures (:check, :sub-issues) live only in meta, with
+  // no dead letter to enumerate. Include their refs so a closed issue clears
+  // them too; an explicit closed read still decides, never listing absence.
+  for (const failureTarget of behaviorFailureTargets(ISSUES_KEY)) {
+    const ref = failureTarget.match(/^[^#]+#\d+/)?.[0]
+    if (!ref) continue
+    const separator = ref.lastIndexOf('#')
+    const repo = ref.slice(0, separator)
+    const pr = Number(ref.slice(separator + 1))
+    if (!Number.isSafeInteger(pr) || pr < 1) continue
+    if (!organizationOwns(repo)) continue
+    const key = `${ISSUES_KEY}|${repo.toLowerCase()}#${pr}`
+    if (!seen.has(key)) seen.set(key, { behavior: ISSUES_KEY, repo, pr })
+  }
+  const targets = [...seen.values()]
   if (targets.length === 0) return
   const release = trackReleaseBackground('behavior')
   try {
@@ -2766,7 +2784,7 @@ async function retireClosedTargetIncidents(): Promise<void> {
         retire.run(now, JSON.stringify({ open: false, status: target.status, checkedAt: now }), now,
           row.behavior, row.repo, row.pr)
         for (const failureTarget of behaviorFailureTargets(row.behavior)) {
-          if (failureTarget.match(/^[^#]+#\d+/)?.[0] === `${row.repo}#${row.pr}`) {
+          if (failureTarget.match(/^[^#]+#\d+/)?.[0]?.toLowerCase() === `${row.repo}#${row.pr}`.toLowerCase()) {
             clearBehaviorFailureKeepHold(row.behavior, failureTarget)
           }
         }
