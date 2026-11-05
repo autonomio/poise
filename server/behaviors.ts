@@ -2887,8 +2887,12 @@ async function prepareReviewTarget(
       // The stop counts across every slot while the hold above only fences
       // this target: a model stopped on another slot must not launch here.
       // Retained holds (cleared by explicit retry or a new head) are the
-      // eligibility signal, so an explicit retry stays eligible.
-      if (await isReviewModelStoppedForPr(pr.repo, pr.number, expectedHead, model, actor, target)) return null
+      // eligibility signal, so an explicit retry stays eligible. Retain the
+      // suppression for this target so it stays reported and retryable.
+      if (await isReviewModelStoppedForPr(pr.repo, pr.number, expectedHead, model, actor, target)) {
+        await recordStoppedReviewSuppression(pr.repo, pr.number, expectedHead, model, actor, target)
+        return null
+      }
       let changes: ChangesAddressedResult | null = null
       if (reviewer) {
         changes = await checkChangesAddressed(pr.repo, pr.number, reviewer)
@@ -3716,6 +3720,68 @@ async function isReviewModelStoppedForPr(repo: string, number: number, head: str
   if (!budgetRetryStoppedForInput(snapshot, { behavior: 'pr_review', repo, pr_id: String(number),
     expected_head: head, model, actor, source: 'poise:review-new-prs' })) return false
   return !hasOperatorRetryForTarget(target, head)
+}
+
+// A suppression without a retained launch leaves the slot invisible: no held
+// row, no failure and no call id an explicit retry could use. Retain the
+// stopped input for this target so PR status reports it with no retry time
+// and the same explicit-retry path can run it once.
+async function recordStoppedReviewSuppression(repo: string, number: number, head: string, model: string, actor: string, target: string): Promise<void> {
+  try {
+    if (getFailedBehaviorLaunch('review-new-prs', target)) return
+    const snapshot = await readBehaviorLogSnapshot()
+    const calls = snapshot.entries.filter((row) => row.behavior === 'pr_review'
+      && row.repo === repo && row.pr_id === String(number) && row.expected_head === head
+      && row.model === model && row.actor?.toLowerCase() === actor.toLowerCase()
+      && row.source === 'poise:review-new-prs' && FAILED_AGENT_STATUSES.has(row.status.toLowerCase())
+      && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
+      .sort((a, b) => Date.parse(agentCallStartedAt(b)) - Date.parse(agentCallStartedAt(a)))
+    if (calls.length < 2) return
+    const heldIds = new Set(failedBehaviorLaunches('review-new-prs')
+      .map((claim) => claim.launchCallId).filter((id): id is string => !!id))
+    const pick = calls.find((row) => !heldIds.has(row.id)) ?? calls[0]
+    const stopped = reviewBudgetRetryStop(pick, snapshot)
+    if (!stopped) return
+    const existing = readBehaviorFailure('review-new-prs', target)
+    if (existing?.callId !== pick.id || !isStoppedBudgetHoldError(existing.error)) {
+      recordBehaviorFailure('review-new-prs', 'worker', stopped, target, { callId: pick.id, noBackoff: true })
+    }
+    if (pick.correlation_id) {
+      db.prepare(`
+        INSERT INTO behavior_seen(key, target, seen_at, claim_id, launch_behavior, launch_repo, launch_pr,
+          launch_requested_at, launch_call_id, launch_error, launch_expected_head, launch_actor, launch_source, launch_correlation_id)
+        VALUES('review-new-prs', ?, ?, '', 'pr_review', ?, ?, ?, ?, ?, ?, ?, 'poise:review-new-prs', ?)
+        ON CONFLICT(key, target) DO UPDATE SET
+          seen_at=excluded.seen_at,
+          launch_behavior=excluded.launch_behavior,
+          launch_repo=excluded.launch_repo,
+          launch_pr=excluded.launch_pr,
+          launch_requested_at=excluded.launch_requested_at,
+          launch_call_id=excluded.launch_call_id,
+          launch_error=excluded.launch_error,
+          launch_expected_head=excluded.launch_expected_head,
+          launch_actor=excluded.launch_actor,
+          launch_source=excluded.launch_source,
+          launch_correlation_id=excluded.launch_correlation_id
+        WHERE behavior_seen.claim_id = '' AND behavior_seen.launch_call_id IS NULL
+      `).run(target, new Date().toISOString(), repo, number, new Date().toISOString(),
+        pick.id, stopped.slice(0, 4_000), head, actor, String(pick.correlation_id))
+      if (!listBehaviorDeadLetters(500).some((letter) => letter.behavior === 'review-new-prs'
+        && letter.target === target && letter.callId === pick.id)) {
+        const claim: BehaviorLaunchClaim = {
+          key: 'review-new-prs', target, seenAt: new Date().toISOString(), claimId: '',
+          leaseUntil: null, launchBehavior: 'pr_review', launchRepo: repo, launchPr: number,
+          launchRequestedAt: new Date().toISOString(), launchCallId: pick.id, launchError: stopped,
+          launchQuarantine: null, launchQuarantineMayRun: true, launchExpectedHead: head,
+          launchActor: actor, launchSource: 'poise:review-new-prs',
+          launchCorrelationId: String(pick.correlation_id), launchCovers: [],
+        }
+        recordBehaviorDeadLetter(claim, stopped, pick.id)
+      }
+    }
+  } catch (error) {
+    console.error(`[behaviors] review-new-prs stopped suppression not recorded for ${repo}#${number} (${target}):`, error)
+  }
 }
 
 // Reviewer trips expire or clear on another PR's success. The unchanged

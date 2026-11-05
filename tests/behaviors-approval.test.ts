@@ -709,6 +709,86 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelB)
   })
 
+  it('reports and retries a stopped model suppressed on another slot', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelA)
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
+
+    // The suppressed slot retains the stopped input instead of staying invisible.
+    const secondaryTarget = `${pr.repo}#${pr.number}:secondary`
+    const held = modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)
+    expect(held?.launchCallId).toBe('b'.repeat(32))
+    expect(held?.launchError).toContain('Automatic retries stopped')
+    const failure = modules.behaviors.getBehaviorsRuntimeHealth().failures
+      .find((row) => row.target === secondaryTarget)
+    expect(failure?.error).toContain('Automatic retries stopped')
+    expect(Date.parse(failure!.nextRetryAt)).toBeLessThanOrEqual(Date.parse(failure!.lastFailureAt))
+    for (const incidents of [
+      modules.behaviors.getBehaviorDiagnosticIncidents({ entries: fixture.agentLogs as never[], quarantined: [] }),
+      modules.behaviors.getBehaviorDiagnosticIncidents(null),
+    ]) {
+      const incident = incidents.find((row) => row.callId === 'b'.repeat(32))
+      expect(incident).toBeDefined()
+      expect(incident).not.toHaveProperty('nextRetryAt')
+    }
+
+    // Settle the primary launch with a single timeout so no completion retires
+    // the suppressed hold and no worker stays active for the explicit retry.
+    const primaryClaim = modules.database.listBehaviorLaunchClaims('review-new-prs')
+      .find((row) => row.launchPr === pr.number)!
+    vi.setSystemTime(Date.now() + 24 * 60_000)
+    fixture.agentLogs.push(agentLog({ id: 'c'.repeat(32), behavior: 'pr_review', model: modelA,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: primaryClaim.launchActor, source: primaryClaim.launchSource,
+      correlation_id: primaryClaim.launchCorrelationId,
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+
+    // The suppressed slot stays explicitly retryable on the same head. The A
+    // trip moves secondary to C, so the retry launches C while B stays stopped.
+    arrangeCli(false, false, { headSha: HEAD_SHA, reviewerReviewIdsSince: [] })
+    await expect(modules.behaviors.retryFailedPrReviews(['b'.repeat(32)])).resolves.toEqual({
+      ok: true, targets: [secondaryTarget],
+    })
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelC)
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
+  })
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,
