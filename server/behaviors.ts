@@ -2949,6 +2949,7 @@ async function spawnReviewLaunch(prepared: PreparedReviewTarget, claimId: string
       captureBehaviorOutcome({ nativeId: claimId, state: 'failed', activity: 'settled', stateSource: 'native', outcome: 'spawn_failed' })
       throw error
     }
+    consumeOperatorRetryForTarget(claimTarget, prepared.expectedHead)
     markClaimLaunched(claimId)
   })
 }
@@ -3712,6 +3713,26 @@ function hasOperatorRetryForTarget(target: string, expectedHead: string): boolea
   return false
 }
 
+// The bypass is single-use: launching the explicit attempt consumes it, so
+// a later timeout on another model cannot reuse it for the stopped model.
+function consumeOperatorRetryForTarget(target: string, expectedHead: string): void {
+  try {
+    const prefix = scopedMetaKey(`${META_PREFIX}operator_retry:`)
+    const rows = db.prepare(
+      "SELECT key, value FROM meta WHERE substr(key, 1, ?) = ? AND value <> ''",
+    ).all(prefix.length, prefix) as Array<{ key: string, value: string }>
+    const del = db.prepare("DELETE FROM meta WHERE key = ?")
+    for (const row of rows) {
+      try {
+        const record = JSON.parse(row.value) as { target?: unknown, expectedHead?: unknown }
+        if (record.target === target && record.expectedHead === expectedHead) del.run(row.key)
+      } catch { /* corrupt value — leave it */ }
+    }
+  } catch (error) {
+    console.error(`[behaviors] operator retry not consumed for ${target}:`, error)
+  }
+}
+
 // Whether the prospective review model already has two proven no-action
 // budget failures for this PR/head. Other slots stay stopped after one
 // slot's explicit retry, which only unblocks its own target.
@@ -3737,9 +3758,14 @@ async function recordStoppedReviewSuppression(repo: string, number: number, head
       && budgetExhaustedProvenNoAction(row) && unambiguousAgentCall(snapshot, row))
       .sort((a, b) => Date.parse(agentCallStartedAt(b)) - Date.parse(agentCallStartedAt(a)))
     if (calls.length < 2) return
-    const heldIds = new Set(failedBehaviorLaunches('review-new-prs')
+    // Every matching call already retained by another slot: sharing its call
+    // id would give two holds the same launch_call_id and make neither
+    // explicitly retryable, so this slot stays suppressed without a hold.
+    const heldIds = new Set([...failedBehaviorLaunches('review-new-prs'),
+      ...retainedFailedLaunchesForPr('review-new-prs', repo, number)]
       .map((claim) => claim.launchCallId).filter((id): id is string => !!id))
-    const pick = calls.find((row) => !heldIds.has(row.id)) ?? calls[0]
+    const pick = calls.find((row) => !heldIds.has(row.id))
+    if (!pick) return
     const stopped = reviewBudgetRetryStop(pick, snapshot)
     if (!stopped) return
     const existing = readBehaviorFailure('review-new-prs', target)

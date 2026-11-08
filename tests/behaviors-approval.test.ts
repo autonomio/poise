@@ -789,6 +789,203 @@ describe('approval eligibility and review activity', () => {
     expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
   })
 
+  it('keeps a stopped hold reported and retryable after its sibling completes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const secondaryTarget = `${pr.repo}#${pr.number}:secondary`
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)?.launchCallId).toBe('b'.repeat(32))
+
+    // The sibling primary review completes on the same head. The stopped
+    // secondary hold must stay reported with no retry time and retryable.
+    const primaryClaim = modules.database.listBehaviorLaunchClaims('review-new-prs')
+      .find((row) => row.launchPr === pr.number)!
+    vi.setSystemTime(Date.now() + 24 * 60_000)
+    fixture.agentLogs.push(agentLog({ id: 'c'.repeat(32), behavior: 'pr_review', model: modelA,
+      status: 'completed', action: 'reviewed_clean', outcome: 'clean', head_sha: HEAD_SHA,
+      started_at: primaryClaim.launchRequestedAt, started_at_precise: primaryClaim.launchRequestedAt,
+      completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: primaryClaim.launchActor, source: primaryClaim.launchSource,
+      correlation_id: primaryClaim.launchCorrelationId, review_id: 91,
+    }))
+    await resetLogCache()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)?.launchCallId).toBe('b'.repeat(32))
+    for (const incidents of [
+      modules.behaviors.getBehaviorDiagnosticIncidents({ entries: fixture.agentLogs as never[], quarantined: [] }),
+      modules.behaviors.getBehaviorDiagnosticIncidents(null),
+    ]) {
+      const incident = incidents.find((row) => row.callId === 'b'.repeat(32))
+      expect(incident).toBeDefined()
+      expect(incident).not.toHaveProperty('nextRetryAt')
+    }
+    arrangeCli(false, false, { headSha: HEAD_SHA, reviewerReviewIdsSince: [] })
+    await expect(modules.behaviors.retryFailedPrReviews(['b'.repeat(32)])).resolves.toEqual({
+      ok: true, targets: [secondaryTarget],
+    })
+  })
+
+  it('consumes an explicit retry so the stopped model cannot relaunch automatically', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const modelA = 'gpt-5.6-sol-max'
+    const modelB = 'gpt-6-astra-ultra'
+    const modelC = 'grok-4.6-xhigh'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: modelA, secondary: modelB, tertiary: modelC },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model: modelB,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'cross-slot-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const secondaryTarget = `${pr.repo}#${pr.number}:secondary`
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)?.launchCallId).toBe('b'.repeat(32))
+
+    const primaryClaim = modules.database.listBehaviorLaunchClaims('review-new-prs')
+      .find((row) => row.launchPr === pr.number)!
+    vi.setSystemTime(Date.now() + 24 * 60_000)
+    fixture.agentLogs.push(agentLog({ id: 'c'.repeat(32), behavior: 'pr_review', model: modelA,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: primaryClaim.launchActor, source: primaryClaim.launchSource,
+      correlation_id: primaryClaim.launchCorrelationId,
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    arrangeCli(false, false, { headSha: HEAD_SHA, reviewerReviewIdsSince: [] })
+    await expect(modules.behaviors.retryFailedPrReviews(['b'.repeat(32)])).resolves.toEqual({
+      ok: true, targets: [secondaryTarget],
+    })
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).toContain(modelC)
+    const launched = mocks.spawnDetached.mock.calls.length
+
+    // The explicit attempt spent its bypass: when its C run times out once
+    // and the slot later resolves the stopped B model, B must stay held.
+    const retryClaim = modules.database.listBehaviorLaunchClaims('review-new-prs')
+      .find((row) => row.launchPr === pr.number && row.target === secondaryTarget)!
+    vi.setSystemTime(Date.now() + 24 * 60_000)
+    fixture.agentLogs.push(agentLog({ id: 'd'.repeat(32), behavior: 'pr_review', model: modelC,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: retryClaim.launchActor, source: retryClaim.launchSource,
+      correlation_id: retryClaim.launchCorrelationId,
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    expect(mocks.spawnDetached.mock.calls.map((call) => modelOf(call))).not.toContain(modelB)
+    expect(mocks.spawnDetached.mock.calls.length).toBe(launched)
+  })
+
+  it('keeps distinct holds when every matching call is already retained', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'))
+    const model = 'gpt-5.6-sol-max'
+    arrangeCli(false, false, { headSha: HEAD_SHA })
+    mocks.spawnDetached.mockResolvedValue(undefined)
+    const modules = await loadModules()
+    modules.database.setMeta('me', 'poise-user')
+    modules.database.setMeta('behavior_review_new_prs_keyver', '3')
+    modules.database.setMeta('behavior_review_new_prs_enabled', '1')
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '1')
+    modules.database.recordSeen('review-new-prs', '__snapshot_v3__')
+    modules.database.setMeta('models', JSON.stringify({
+      slots: { primary: model, secondary: model, tertiary: model },
+      places: { pr_review: { slot: 'primary' } },
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'a'.repeat(32), behavior: 'pr_review', model,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'shared-1',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    fixture.agentLogs.push(agentLog({ id: 'b'.repeat(32), behavior: 'pr_review', model,
+      status: 'failed', completed_at: new Date().toISOString(), expected_head: HEAD_SHA,
+      actor: 'review-bot', source: 'poise:review-new-prs', correlation_id: 'shared-2',
+      review_policy: 'bounded-v1', error_code: 'review_budget_exhausted',
+      error: 'Review reached its total time limit; needs attention',
+    }))
+    await resetLogCache()
+    modules.behaviors.startBehaviorsRuntime()
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const primaryTarget = `${pr.repo}#${pr.number}`
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', primaryTarget)?.launchCallId).toBe('b'.repeat(32))
+
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '2')
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const secondaryTarget = `${pr.repo}#${pr.number}:secondary`
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)?.launchCallId).toBe('a'.repeat(32))
+
+    // A third slot has no unheld matching call: it stays suppressed without
+    // sharing a call id, so the two existing holds stay retryable.
+    modules.database.setMeta('behavior_review_new_prs_reviewers', '3')
+    await modules.behaviors.runEnabledBehaviorsOnce()
+    const tertiaryTarget = `${pr.repo}#${pr.number}:tertiary`
+    expect(modules.database.getFailedBehaviorLaunch('review-new-prs', tertiaryTarget)).toBeNull()
+    const heldIds = [
+      modules.database.getFailedBehaviorLaunch('review-new-prs', primaryTarget)?.launchCallId,
+      modules.database.getFailedBehaviorLaunch('review-new-prs', secondaryTarget)?.launchCallId,
+    ].sort()
+    expect(heldIds).toEqual(['a'.repeat(32), 'b'.repeat(32)].sort())
+    arrangeCli(false, false, { headSha: HEAD_SHA, reviewerReviewIdsSince: [] })
+    await expect(modules.behaviors.retryFailedPrReviews(['b'.repeat(32)])).resolves.toEqual({
+      ok: true, targets: [primaryTarget],
+    })
+  })
+
   it('starts a current-head follow-up for a public author reply without a newer commit', async () => {
     arrangeCli(true, false, { headSha: NEXT_HEAD_SHA }, {
       commits_after_request: 0,

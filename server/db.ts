@@ -1355,6 +1355,12 @@ export interface DeadLetterReconcileResult {
 // a capped pass resumes where the previous one stopped and re-expired holds
 // cannot starve newer rows; a hold is re-recorded at most hourly so repeats
 // stay quiet.
+// A stopped budget hold never retries automatically and stays explicitly
+// retryable, so a sibling slot completing must not resolve it.
+const STOPPED_BUDGET_MARKER = 'Automatic retries stopped after two time-outs'
+function isStoppedBudgetDeadLetter(error: unknown): boolean {
+  return typeof error === 'string' && error.includes(STOPPED_BUDGET_MARKER)
+}
 export function reconcileBehaviorDeadLetters(
   openTargets: ReadonlySet<string>,
   behaviors: readonly string[] = ['review-new-prs', 'approve-prs'],
@@ -1490,11 +1496,13 @@ export function reconcileBehaviorDeadLetters(
             { callId: row.call_id, open, replacedBy: link }, link)
         }
       } else {
-        const completion = recovered.get(row.behavior, row.repo, row.pr, row.created_at, row.behavior, row.target) as
-          { launch_completed_at: string, launch_call_id: string | null } | undefined
-        if (completion) {
-          return settle('resolved', `later completion at ${completion.launch_completed_at}`,
-            { completedAt: completion.launch_completed_at, callId: completion.launch_call_id })
+        if (!isStoppedBudgetDeadLetter(row.error)) {
+          const completion = recovered.get(row.behavior, row.repo, row.pr, row.created_at, row.behavior, row.target) as
+            { launch_completed_at: string, launch_call_id: string | null } | undefined
+          if (completion) {
+            return settle('resolved', `later completion at ${completion.launch_completed_at}`,
+              { completedAt: completion.launch_completed_at, callId: completion.launch_call_id })
+          }
         }
       }
       if (!unreadRepositories?.has(row.repo) && !openTargets.has(`${row.repo}#${row.pr}`)) {
@@ -1617,7 +1625,9 @@ function readBehaviorDeadLetters(
     WHERE dead.retired_at IS NULL
       AND (? IS NULL OR lower(substr(COALESCE(dead.repo, dead.target), 1, instr(COALESCE(dead.repo, dead.target), '/') - 1)) = ?)
       AND (? IS NULL OR (dead.behavior = ? AND COALESCE(dead.repo || '#' || dead.pr, dead.target) = ?))
-      AND NOT EXISTS (
+      AND (
+        dead.error LIKE '%Automatic retries stopped after two time-outs%'
+        OR NOT EXISTS (
       SELECT 1
       FROM behavior_seen AS recovered
       WHERE recovered.key = dead.behavior
@@ -1634,7 +1644,8 @@ function readBehaviorDeadLetters(
           WHERE held.key = dead.behavior AND held.target = dead.target
             AND held.launch_quarantine IS NOT NULL
         )
-    )
+        )
+      )
     ), ranked AS (
       SELECT *,
         COUNT(*) OVER (PARTITION BY behavior, COALESCE(repo || '#' || pr, target)) AS attempt_count,
