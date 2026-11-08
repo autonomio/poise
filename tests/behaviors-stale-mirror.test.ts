@@ -209,6 +209,20 @@ it('shares reporting with native discovery and cutover without admitting a faile
   expect(mocks.spawnDetached).not.toHaveBeenCalled()
 })
 
+it('drops the stale episode from runtime health once its behaviors are disabled', async () => {
+  const { database, behaviors } = await start()
+  await behaviors.runEnabledBehaviorsOnce()
+  expect(episodes(database)).toHaveLength(1)
+  expect(behaviors.getBehaviorsRuntimeHealth().failures.length).toBeGreaterThan(0)
+  for (const behavior of ['review_new_prs', 'approve_prs', 'resolve_unblocking']) {
+    database.setMeta(`behavior_${behavior}_enabled`, '0')
+  }
+  const health = behaviors.getBehaviorsRuntimeHealth()
+  expect(health.failures).toEqual([])
+  expect(health.status).toBe('ok')
+  expect(episodes(database)[0].recoveredAt).toBeNull()
+})
+
 it('retains a failed recovery command separately from the stale episode', async () => {
   const { database, behaviors } = await start()
   const recovery = await import('../server/legacy-datastore-recovery')

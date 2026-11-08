@@ -85,8 +85,12 @@ export function behaviorDiagnosticGroups(diagnostics: BehaviorDiagnostics): Beha
   for (const [scope, error] of [
     ['Agent log', diagnostics.agentLogsError], ['Datastore', diagnostics.datastore.error], ['Identity', diagnostics.identity.error],
   ]) {
-    const stale = scope === 'Datastore' && diagnostics.failures.some((failure) => failure.diagnostic?.code === 'datastore_stale'
-      && failure.error && error && (error.includes(failureCause(failure.error)) || failureCause(failure.error).includes(error)))
+    // A later probe refreshes the Datastore error's age without rewriting
+    // persisted behavior failures, so full-text comparison drifts apart.
+    // Match the stable stale shape instead; other faults stay separate.
+    const hasStaleGroup = scope === 'Datastore' && diagnostics.failures.some((failure) => failure.diagnostic?.code === 'datastore_stale'
+      && failure.correlationId)
+    const stale = !!error && !!hasStaleGroup && error.includes('Datastore stale:') && error.includes('exceeds')
     if (error && !stale) add(classifyBehaviorDiagnostic(error), scope!, failureCause(error), error)
   }
   const failureCauses = new Map<string, DiagnosticClassification>()

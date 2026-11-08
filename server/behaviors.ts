@@ -7185,6 +7185,9 @@ export interface RunEnabledBehaviorsOptions {
 
 const behaviorChains = new Map<string, BehaviorChainRuntime>()
 const behaviorChainHealth = new Map<string, { lastSweepAt: number, error: string | null, stale?: boolean }>()
+const behaviorChainOverlaps = new Map<string, { since: number, skips: number, warned: boolean }>()
+// Measure from the first overlap, independent of check-slot retry frequency.
+const CHAIN_SWEEP_PROGRESS_BUDGET_MS = 2 * BEHAVIOR_TICK_MS
 const CHAIN_SWEEP_BUSY_MESSAGE = 'behavior chain sweep is already running'
 class ChainSweepBusyError extends Error {}
 export interface BehaviorChainCapacity {
@@ -7485,17 +7488,34 @@ export async function runEnabledBehaviorsOnce(
   // This tick's PR behaviors share one open-PR listing, dropped when the
   // tick ends.
   return sharedPrListing.run({ promise: null, author: '' }, async () => {
+    const organization = org.login.toLowerCase()
+    let sweepSkipped = false
     try {
       await runBehaviorChains()
-      behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: null })
+      behaviorChainHealth.set(organization, { lastSweepAt: Date.now(), error: null })
     } catch (error) {
       if (error instanceof ChainSweepBusyError) {
-        console.warn(`[behaviors] behavior chain sweep skipped for ${org.login}: ${error.message}`)
+        sweepSkipped = true
+        const overlap = behaviorChainOverlaps.get(organization) ?? { since: Date.now(), skips: 0, warned: false }
+        overlap.skips += 1
+        behaviorChainOverlaps.set(organization, overlap)
+        const elapsedMs = Date.now() - overlap.since
+        if (!overlap.warned && elapsedMs > CHAIN_SWEEP_PROGRESS_BUDGET_MS) {
+          overlap.warned = true
+          console.warn(`[behaviors] behavior chain sweep overlap exceeded ${CHAIN_SWEEP_PROGRESS_BUDGET_MS}ms progress budget for ${org.login}: skipped ticks: ${overlap.skips}; elapsed: ${elapsedMs}ms`)
+        }
       } else {
         const message = error instanceof Error ? error.message : String(error)
         const stale = !!staleDatastoreFailure(error)
-        behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: message, stale })
+        behaviorChainHealth.set(organization, { lastSweepAt: Date.now(), error: message, stale })
         if (!stale) console.error(`[behaviors] behavior chain failed for ${org.login}: ${message}`)
+      }
+    }
+    if (!sweepSkipped) {
+      const overlap = behaviorChainOverlaps.get(organization)
+      if (overlap) {
+        behaviorChainOverlaps.delete(organization)
+        console.log(`[behaviors] behavior chain sweep overlap ended for ${org.login}: skipped ticks: ${overlap.skips}; elapsed: ${Date.now() - overlap.since}ms`)
       }
     }
     const operations: Promise<void>[] = []
@@ -7702,6 +7722,7 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
   for (const episode of staleEpisodes) {
     for (const behavior of episode.behaviors) {
       if (!(BEHAVIOR_KEYS as readonly string[]).includes(behavior)
+        || !isEnabled(behavior as BehaviorKey)
         || failures.some((failure) => failure.behavior === behavior && failure.correlationId === episode.id)) continue
       failures.push({ behavior: behavior as BehaviorKey, kind: 'operation', consecutiveFailures: 1,
         lastFailureAt: episode.startedAt, nextRetryAt: '', error: staleMirrorMessage(episode),
@@ -7747,13 +7768,18 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
     error: identityError,
   }
   const datastoreUnavailable = anyEnabled && datastoreFreshness().status === 'unavailable'
-  const chainStale = behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.stale
-  const chainError = chainStale && staleEpisodes.length === 0 ? null
-    : behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.error
+  const organization = currentOrganization()?.login.toLowerCase() || ''
+  const overlap = behaviorChainOverlaps.get(organization)
+  const overlapError = overlap && now - overlap.since > CHAIN_SWEEP_PROGRESS_BUDGET_MS
+    ? 'A behavior chain sweep overlap exceeded its progress budget.' : null
+  const chainStale = behaviorChainHealth.get(organization)?.stale
+  const chainRawError = behaviorChainHealth.get(organization)?.error
+  const chainError = chainStale && staleEpisodes.length === 0 ? overlapError
+    : chainRawError || overlapError
   return {
     runtimeError: !tickerStarted ? 'The behavior scheduler has stopped.'
       : heartbeatStale ? 'The behavior scheduler is no longer responding.'
-        : operationStale ? 'A behavior operation exceeded its execution deadline.' : (!chainStale && chainError) || chainCapacity.error || null,
+        : operationStale ? 'A behavior operation exceeded its execution deadline.' : (!chainStale ? chainError : overlapError) || chainCapacity.error || null,
     status: tickerStarted
       && !heartbeatStale
       && !operationStale
