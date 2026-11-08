@@ -13,6 +13,7 @@ import { getBehaviorChainSettings, getSettings } from './settings'
 import { attributedNativeAction, nativeRequestSha } from './behavior-chain-action'
 import { resourceReleaseProven } from './behavior-resource-receipt'
 import { runFile, spawnDetached } from './process'
+import { runDatastoreHealth } from './datastore-health'
 
 type Roster = Pick<ChainObservation, 'issueReviewers' | 'prReviewers' | 'implementer' | 'repairer' | 'approver'>
 type Invoke = Extract<ChainDecision, { kind: 'invoke' }>
@@ -97,7 +98,8 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
     wake: hooks.wake,
     received: hooks.received,
     async discover(): Promise<ChainSeed[]> {
-      await runFile('github-datastore', organizationArgs(org, ['health', '--max-age-seconds', '120']), { timeoutMs: 30_000 })
+      // Discovery supplies the v2 Review New Issues intake.
+      await runDatastoreHealth(org, { timeoutMs: 30_000 }, ['review-new-issues'])
       const settings = getBehaviorChainSettings()
       const base = ['view', 'issue', '--status', 'open', '--format', 'json', '--limit', '100',
         ...(settings.seedMode === 'label' ? ['--label', settings.label] : [])]

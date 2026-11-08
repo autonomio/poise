@@ -91,6 +91,7 @@ import { eventLoopDelayStats, type EventLoopDelayStats } from './event-loop-dela
 import { behaviorErrorMessage, behaviorIncidentDiagnostics } from './behavior-diagnostics'
 import { classifyBehaviorDiagnostic, diagnosticClassification, isRepoAccessDenied, isTimeoutCause, rateLimitRetryAtMs, type DiagnosticClassification, type DiagnosticOptions } from '../src/behavior-failure-cause'
 import { recoverLegacyDatastore } from './legacy-datastore-recovery'
+import { DATASTORE_MAX_AGE_SECONDS, datastoreFreshnessByOrganization, initialDatastoreFreshness, openStaleMirrors, recordStaleMirrorBlock, runDatastoreHealth, staleDatastoreFailure, staleMirrorMessage, type DatastoreFreshness, type StaleDatastoreError } from './datastore-health'
 import { resolveReviewCheckout } from './review-checkout'
 import { claudeSubscriptionEnvironment, runFile, runningCallerLaunches, spawnDetached } from './process'
 import { CheckSemaphore, DEFAULT_CHECK_SLOT_CAP, checkSlotsBusyError, type CheckSlotStats } from './check-semaphore'
@@ -108,7 +109,7 @@ const AGENT_INTERFACE = 'agent-interface'
 const LEGACY_REVIEW_SNAPSHOT_TARGET = '__snapshot_v2__'
 const REVIEW_SNAPSHOT_TARGET = '__snapshot_v3__'
 /** Sync age past this fails the datastore freshness gate. */
-export const DATASTORE_MAX_AGE_SECONDS = 120
+export { DATASTORE_MAX_AGE_SECONDS } from './datastore-health'
 const SHA_PATTERN = /^[0-9a-f]{40}$/
 const GITHUB_USERNAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?$/
 
@@ -494,6 +495,8 @@ function recordBehaviorFailure(key: BehaviorKey, kind: 'worker', cause: unknown,
 function recordBehaviorFailure(key: BehaviorKey, kind: 'operation', cause?: unknown, target?: string, options?: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string }): void
 function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, cause?: unknown, target?: string, options: DiagnosticOptions & { callId?: string, hold?: boolean, noBackoff?: boolean, actingAccount?: string } = {}): void {
   if (!isEnabled(key)) return
+  const stale = staleDatastoreFailure(cause)
+  if (stale) recordStaleMirrorBlock(stale, key)
   const error = cause === undefined ? undefined : behaviorErrorMessage(cause)
   if (kind === 'operation' && target !== undefined && options.hold !== false && error !== undefined
     && isSkippableBehavior(key)) {
@@ -520,7 +523,7 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
     transient ? BEHAVIOR_RETRY_TRANSIENT_MAX_MS : BEHAVIOR_RETRY_MAX_MS,
   )
   const now = Date.now()
-  const diagnostic = classifyBehaviorDiagnostic(error ?? '', { held: kind === 'worker', ...options })
+  const diagnostic = stale ? diagnosticClassification('datastore_stale') : classifyBehaviorDiagnostic(error ?? '', { held: kind === 'worker', ...options })
   // A rate limit states its own reset: resume then, not on a backoff that
   // fires inside the blocked window or parks the check for an hour while
   // quota sits available. The reset only moves the retry inside today's
@@ -537,7 +540,8 @@ function recordBehaviorFailure(key: BehaviorKey, kind: BehaviorFailureKind, caus
     ...(error ? { error } : {}),
     diagnostic,
     ...(options.callId ? { callId: options.callId } : {}),
-    ...(diagnosticIdentity(cause)?.correlationId ? { correlationId: diagnosticIdentity(cause)!.correlationId } : {}),
+    ...(stale ? { correlationId: stale.episode.id }
+      : diagnosticIdentity(cause)?.correlationId ? { correlationId: diagnosticIdentity(cause)!.correlationId } : {}),
   } satisfies PersistedBehaviorFailure))
 }
 
@@ -2351,24 +2355,6 @@ export interface DatastorePr extends PullRequestFacts {
   headRepo: string | null
 }
 
-interface DatastoreFreshness {
-  status: 'unchecked' | 'healthy' | 'unavailable'
-  checkedAt: string
-  ageSeconds: number | null
-  lastSuccessAt: string | null
-  error: string | null
-}
-
-const initialDatastoreFreshness: DatastoreFreshness = {
-  status: 'unchecked',
-  checkedAt: new Date(0).toISOString(),
-  ageSeconds: null,
-  lastSuccessAt: null,
-  error: null,
-}
-
-const datastoreFreshnessByOrganization = new Map<string, DatastoreFreshness>()
-
 function datastoreFreshness(): DatastoreFreshness {
   return datastoreFreshnessByOrganization.get(operationKey('review-new-prs')) ?? initialDatastoreFreshness
 }
@@ -2493,18 +2479,20 @@ async function requireFreshDatastore(): Promise<void> {
   try {
     let stdout: string
     let unhealthyExit: unknown
+    let stale: StaleDatastoreError | null = null
     try {
-      const result = await runFile(
-        DATASTORE,
-        datastoreArgs(['health', '--max-age-seconds', String(DATASTORE_MAX_AGE_SECONDS)]),
+      const result = await runDatastoreHealth(
+        currentOrganization(),
         { timeoutMs: 30_000, maxOutputBytes: 1 * 1024 * 1024, signal: behaviorSignal() },
       )
       stdout = result.stdout
+      stale = result.stale
     } catch (error) {
       const failure = error as { code?: unknown, stdout?: unknown }
       if (failure.code !== 1 || typeof failure.stdout !== 'string' || !failure.stdout.trim()) throw error
       stdout = failure.stdout
       unhealthyExit = error
+      stale = staleDatastoreFailure(error)
     }
     const data = objectValue(parseJson(stdout, 'github-datastore health'), 'github-datastore health')
     const org = currentOrganization()
@@ -2522,7 +2510,7 @@ async function requireFreshDatastore(): Promise<void> {
       })
       try { await recoverLegacyDatastore(org, behaviorSignal()) }
       catch (error) { console.error('[behaviors] legacy datastore sync recovery failed:', behaviorErrorMessage(error)) }
-      throw new Error(message)
+      throw stale ?? new Error(message)
     }
     if (unhealthyExit) throw unhealthyExit
     if (data.action !== 'health'
@@ -2995,7 +2983,7 @@ async function snapshotReviewNewPrs(): Promise<void> {
     setMeta(INITIAL_REVIEW_BASELINE_KEY, '')
   } catch (err) {
     releaseSeen('review-new-prs', snapshotTarget())
-    console.error('[behaviors] snapshot failed:', err)
+    if (!staleDatastoreFailure(err)) console.error('[behaviors] snapshot failed:', err)
     throw err
   }
 }
@@ -3411,7 +3399,7 @@ async function tickReviewNewPrs(): Promise<void> {
     })))
     if (failure) throw failure
   } catch (err) {
-    console.error('[behaviors] tick failed:', err)
+    if (!staleDatastoreFailure(err)) console.error('[behaviors] tick failed:', err)
     throw err
   }
 }
@@ -4610,7 +4598,7 @@ async function tickApprovePrs(): Promise<void> {
     }
     if (failure) throw failure
   } catch (err) {
-    console.error('[behaviors] approve-prs tick failed:', err)
+    if (!staleDatastoreFailure(err)) console.error('[behaviors] approve-prs tick failed:', err)
     throw err
   }
 }
@@ -5256,7 +5244,7 @@ async function tickResolveUnblocking(): Promise<void> {
     }
     await retireClosedResolveRecoveries(new Set(prs.map((pr) => `${pr.repo}#${pr.number}`)))
   } catch (err) {
-    console.error('[behaviors] resolve-unblocking tick failed:', err)
+    if (!staleDatastoreFailure(err)) console.error('[behaviors] resolve-unblocking tick failed:', err)
     throw err
   }
 }
@@ -7090,7 +7078,7 @@ export async function setEnabled(key: BehaviorKey, enabled: boolean): Promise<vo
       if (lifecycle?.aborted === true || error instanceof BehaviorProcessLockContentionError || !enabled) throw error
       if (!isEnabled(key)) return
       recordBehaviorFailure(key, 'operation', error)
-      console.error(`[behaviors] ${org.login} ${key} enable reconciliation failed:`, error)
+      if (!staleDatastoreFailure(error)) console.error(`[behaviors] ${org.login} ${key} enable reconciliation failed:`, error)
     }
   }))
   // Include removed accounts' existing work too. Disable is acknowledged only
@@ -7196,7 +7184,7 @@ export interface RunEnabledBehaviorsOptions {
 }
 
 const behaviorChains = new Map<string, BehaviorChainRuntime>()
-const behaviorChainHealth = new Map<string, { lastSweepAt: number, error: string | null }>()
+const behaviorChainHealth = new Map<string, { lastSweepAt: number, error: string | null, stale?: boolean }>()
 const CHAIN_SWEEP_BUSY_MESSAGE = 'behavior chain sweep is already running'
 class ChainSweepBusyError extends Error {}
 export interface BehaviorChainCapacity {
@@ -7238,7 +7226,7 @@ export function getBehaviorChainCapacity(): BehaviorChainCapacity {
 
 export function getBehaviorChainRuntimeHealth() {
   return [...behaviorChainHealth].filter(([organization]) => organization !== '@cutover' || behaviorAdmissionDraining())
-    .map(([organization, health]) => ({ organization, ...health }))
+    .map(([organization, { lastSweepAt, error }]) => ({ organization, lastSweepAt, error }))
 }
 export function chainBehaviorKey(behavior: ChainBehavior): BehaviorKey | null {
   return ({ 'review-issue': 'review-new-issues', 'review-pr': 'review-new-prs', 'approve-pr': 'approve-prs',
@@ -7423,7 +7411,7 @@ async function runBehaviorCycle(
     }
     if (lifecycle?.aborted !== true) {
       recordBehaviorFailure(key, 'operation', error)
-      console.error(`[behaviors] ${key} operation failed:`, error)
+      if (!staleDatastoreFailure(error)) console.error(`[behaviors] ${key} operation failed:`, error)
     }
   }
 }
@@ -7447,7 +7435,7 @@ export async function runEnabledBehaviorsOnce(
         const organizations = getOrganizations()
         if (readyOrganizations().length !== organizations.length) throw new Error('Cutover waits for every followed organization to be ready')
         for (const org of organizations) {
-          await runFile('github-datastore', organizationArgs(org, ['health', '--max-age-seconds', '120']), { timeoutMs: 30_000 })
+          await runDatastoreHealth(org, { timeoutMs: 30_000 })
           let cursor: { repo: string, number: number } | undefined
           for (;;) {
             const page = await readOpenPrClosingRefs(org, cursor)
@@ -7505,8 +7493,9 @@ export async function runEnabledBehaviorsOnce(
         console.warn(`[behaviors] behavior chain sweep skipped for ${org.login}: ${error.message}`)
       } else {
         const message = error instanceof Error ? error.message : String(error)
-        behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: message })
-        console.error(`[behaviors] behavior chain failed for ${org.login}: ${message}`)
+        const stale = !!staleDatastoreFailure(error)
+        behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: message, stale })
+        if (!stale) console.error(`[behaviors] behavior chain failed for ${org.login}: ${message}`)
       }
     }
     const operations: Promise<void>[] = []
@@ -7663,6 +7652,7 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
     || now - heartbeatAt > (2 * BEHAVIOR_TICK_MS) + BEHAVIOR_HEALTH_GRACE_MS
   const operationStale = busyEntries
     .some(([key, startedAt]) => now > (behaviorOperationClocks.get(key)?.expiresAt ?? startedAt + BEHAVIOR_OPERATION_TIMEOUT_MS) + BEHAVIOR_HEALTH_GRACE_MS)
+  const staleEpisodes = openStaleMirrors(currentOrganization())
   const failures = BEHAVIOR_KEYS.flatMap((behavior) => {
     if (!isEnabled(behavior)) return []
     return [undefined, ...behaviorFailureTargets(behavior)].flatMap((target) => {
@@ -7705,7 +7695,19 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
         ...(recovered ? { recovered: true } : {}),
       }] : []
     })
-  })
+  }).filter((failure) => failure.diagnostic?.code !== 'datastore_stale'
+    || staleEpisodes.some((episode) => episode.id === failure.correlationId))
+  // An unreadable/crashed probe cannot close a previously validated stale
+  // episode. Keep its blocked behaviors beside any newer, independent fault.
+  for (const episode of staleEpisodes) {
+    for (const behavior of episode.behaviors) {
+      if (!(BEHAVIOR_KEYS as readonly string[]).includes(behavior)
+        || failures.some((failure) => failure.behavior === behavior && failure.correlationId === episode.id)) continue
+      failures.push({ behavior: behavior as BehaviorKey, kind: 'operation', consecutiveFailures: 1,
+        lastFailureAt: episode.startedAt, nextRetryAt: '', error: staleMirrorMessage(episode),
+        diagnostic: diagnosticClassification('datastore_stale'), correlationId: episode.id })
+    }
+  }
   const enabledForRuntime = (key: BehaviorKey) => isEnabled(key)
     && (key !== 'implement-issues' && key !== 'repair-prs' || getBehaviorChainSettings().enabled)
   const anyEnabled = BEHAVIOR_KEYS.some(enabledForRuntime)
@@ -7745,11 +7747,13 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
     error: identityError,
   }
   const datastoreUnavailable = anyEnabled && datastoreFreshness().status === 'unavailable'
-  const chainError = behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.error
+  const chainStale = behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.stale
+  const chainError = chainStale && staleEpisodes.length === 0 ? null
+    : behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.error
   return {
     runtimeError: !tickerStarted ? 'The behavior scheduler has stopped.'
       : heartbeatStale ? 'The behavior scheduler is no longer responding.'
-        : operationStale ? 'A behavior operation exceeded its execution deadline.' : chainError || chainCapacity.error || null,
+        : operationStale ? 'A behavior operation exceeded its execution deadline.' : (!chainStale && chainError) || chainCapacity.error || null,
     status: tickerStarted
       && !heartbeatStale
       && !operationStale
