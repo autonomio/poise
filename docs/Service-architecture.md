@@ -284,7 +284,7 @@ Environment the gateway passes:
 Beside each release, the gateway installs agents' test offload into the home
 volume by running `/opt/poise/scripts/test-offload/install.sh` in a short-lived
 container of the image. With `POISE_TEST_RENDER_API_KEY` and
-`POISE_TEST_BASE_SERVICE` set, it passes `POISE_TEST_RELAY_URL`, which is
+`POISE_TEST_WORKSPACE` set, it passes `POISE_TEST_RELAY_URL`, which is
 `/api/link/test-relay` on the workspace's host or on `POISE_PROXY_LISTEN`, and
 `POISE_TEST_RELAY_KEY`, the workspace's handle signed by the gateway. That writes the hooks and `relay`, holding those
 two, to `~/.poise/test-offload`; without them it removes `relay`. Poise starts its
@@ -1157,6 +1157,9 @@ at its last confirmed time; restart remains initializing until a fresh scan.
 Canonical host selection and redaction run on the edge before transmission,
 then attribution and normalization run again at the gateway. See the
 [external reader installation contract](../deploy/ingress/README.md).
+The edge also derives the fixed `/api/link/events` route label before removing
+the URI. All ingress paths apply the narrow native cancellation exception and
+retain other redacted causes as defined in [Logging](Logging.md#collection-and-operation).
 
 `GET /api/service/diagnostics?cursor=OPAQUE` is a maintenance-only delivery
 route: loopback or the existing gateway `admin` assertion, never browser/link
@@ -1251,7 +1254,10 @@ unreadable, and its backlog excludes proven chain-owned issues. See
 Chain/status summaries also expose derived reconciliation timing for quiescent
 ownership. The existing scheduler and indexed journal projection bound GitHub
 rechecks while preserving the public active/merged filters, native resource
-settlement and immutable history. The normal-work page precedes due quiescent
+settlement and immutable history. Confirmed closed seeds without remaining
+obligations leave the active list before pagination, retaining ownership and
+unfiltered/history reads as defined in [Behavior chain](Behavior-chain.md).
+The normal-work page precedes due quiescent
 reconciliation; observation failures remain reported after unrelated progress.
 Merged direct-action recovery reads original journal responses without another
 GitHub observation. The optional `reconciliation` read fields add no write

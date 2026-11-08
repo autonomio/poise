@@ -1624,12 +1624,20 @@ function settleClosedTargetHistoricalFirings(open: ReadonlySet<string>): void {
 }
 
 function closedTargetIncidentRetired(claim: BehaviorLaunchClaim): boolean {
+  // A restored open incident ends the retirement: a reopened target
+  // reconciles normally again instead of staying invisible.
   return !!db.prepare(`
     SELECT 1 FROM behavior_dead_letters
     WHERE behavior = ? AND target = ? AND correlation_id = ?
       AND retired_at IS NOT NULL AND resolution = 'superseded'
       AND resolution_evidence LIKE '%"open":false%'
       AND resolution_evidence NOT LIKE '%"replacedBy":%'
+      AND NOT EXISTS (
+        SELECT 1 FROM behavior_dead_letters AS open_incident
+        WHERE open_incident.behavior = behavior_dead_letters.behavior
+          AND open_incident.target = behavior_dead_letters.target
+          AND open_incident.retired_at IS NULL
+      )
   `).get(claim.key, claim.target, claim.launchCorrelationId)
 }
 
@@ -2748,6 +2756,19 @@ async function readPullRequest(repo: string, number: number): Promise<DatastoreP
   return rows[0] ?? null
 }
 
+// A retired-closed incident whose target reopened regains held visibility:
+// a new open incident records the retained failure without touching its
+// launch fence, quarantine, error or uncertain outcome.
+function restoreReopenedTargetIncident(behavior: BehaviorKey, repo: string, pr: number): void {
+  const target = `${repo}#${pr}`
+  const failed = getFailedBehaviorLaunch(behavior, target)
+  if (!failed || !failed.launchRepo || !failed.launchPr) return
+  if (db.prepare(`
+    SELECT 1 FROM behavior_dead_letters WHERE behavior = ? AND target = ? AND retired_at IS NULL
+  `).get(behavior, target)) return
+  recordBehaviorDeadLetter(failed, failed.launchError || 'behavior launch failed; target reopened')
+}
+
 // Retirement is independent of launch admission and preserves every launch
 // fence. A filtered listing's absence cannot establish target closure.
 const retireClosedTargetInFlight = new Map<string, Promise<void>>()
@@ -2793,6 +2814,36 @@ async function retireClosedTargetIncidents(): Promise<void> {
         if (!seen.has(key)) seen.set(key, { behavior, repo, pr })
       }
     }
+    // Reopened targets keep no open incident or failure: their incident
+    // retired while closed and the guards hold later follow-ups. Watch the
+    // retained failed launches behind retired-closed incidents (at most one
+    // row per behavior target) so an explicit open read restores held
+    // visibility instead of leaving the target silently stuck.
+    const reopenWatch = new Set<string>()
+    for (const row of (db.prepare(`
+      SELECT DISTINCT seen.key AS behavior, seen.launch_repo AS repo, seen.launch_pr AS pr
+      FROM behavior_seen AS seen
+      WHERE seen.claim_id = '' AND seen.launch_requested_at IS NOT NULL
+        AND seen.launch_call_id IS NOT NULL AND seen.launch_error IS NOT NULL AND seen.launch_outcome IS NULL
+        AND seen.launch_repo IS NOT NULL AND seen.launch_pr IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM behavior_dead_letters AS retired
+          WHERE retired.behavior = seen.key AND retired.target = seen.target
+            AND retired.retired_at IS NOT NULL AND retired.resolution = 'superseded'
+            AND retired.resolution_evidence LIKE '%"open":false%'
+            AND retired.resolution_evidence NOT LIKE '%"replacedBy":%'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM behavior_dead_letters AS open_incident
+          WHERE open_incident.behavior = seen.key AND open_incident.target = seen.target
+            AND open_incident.retired_at IS NULL
+        )
+    `).all() as Array<{ behavior: BehaviorKey, repo: string, pr: number }>)) {
+      if (!organizationOwns(row.repo)) continue
+      const key = `${row.behavior}|${row.repo.toLowerCase()}#${row.pr}`
+      reopenWatch.add(key)
+      if (!seen.has(key)) seen.set(key, row)
+    }
     const targets = [...seen.values()]
     if (targets.length === 0) return
     const release = trackReleaseBackground('behavior')
@@ -2811,11 +2862,23 @@ async function retireClosedTargetIncidents(): Promise<void> {
           const target = row.behavior === ISSUES_KEY
             ? await readIssue(row.repo, row.pr) : await readPullRequest(row.repo, row.pr)
           if (behaviorAborted()) return
-          if (target?.status !== 'closed' && target?.status !== 'merged') return
+          if (target?.status !== 'closed' && target?.status !== 'merged') {
+            // An explicit open read ends a closed retirement: restore the
+            // retained failure to the held list instead of leaving a
+            // reopened target with no entry or notice.
+            if (target?.status === 'open'
+              && reopenWatch.has(`${row.behavior}|${row.repo.toLowerCase()}#${row.pr}`)) {
+              restoreReopenedTargetIncident(row.behavior, row.repo, row.pr)
+            }
+            return
+          }
           const now = new Date().toISOString()
           retire.run(now, JSON.stringify({ open: false, status: target.status, checkedAt: now }), now,
             row.behavior, row.repo, row.pr)
           for (const failureTarget of behaviorFailureTargets(row.behavior)) {
+            // A pending resolver recovery keeps its failure visible: closing
+            // the PR must not hide unfinished recovery work.
+            if (row.behavior === 'resolve-unblocking' && getMeta(resolveRecoveryKey(failureTarget))) continue
             if (failureTarget.match(/^[^#]+#\d+/)?.[0]?.toLowerCase() === `${row.repo}#${row.pr}`.toLowerCase()) {
               clearBehaviorFailureKeepHold(row.behavior, failureTarget)
             }
@@ -7305,6 +7368,9 @@ export interface RunEnabledBehaviorsOptions {
 
 const behaviorChains = new Map<string, BehaviorChainRuntime>()
 const behaviorChainHealth = new Map<string, { lastSweepAt: number, error: string | null }>()
+const behaviorChainOverlaps = new Map<string, { since: number, skips: number, warned: boolean }>()
+// Measure from the first overlap, independent of check-slot retry frequency.
+const CHAIN_SWEEP_PROGRESS_BUDGET_MS = 2 * BEHAVIOR_TICK_MS
 const CHAIN_SWEEP_BUSY_MESSAGE = 'behavior chain sweep is already running'
 class ChainSweepBusyError extends Error {}
 export interface BehaviorChainCapacity {
@@ -7618,16 +7684,33 @@ export async function runEnabledBehaviorsOnce(
     const retirePromise = retireClosedTargetIncidents().catch((error) => {
       console.error('[behaviors] closed-target incident reconciliation failed:', error)
     })
+    const organization = org.login.toLowerCase()
+    let sweepSkipped = false
     try {
       await runBehaviorChains()
-      behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: null })
+      behaviorChainHealth.set(organization, { lastSweepAt: Date.now(), error: null })
     } catch (error) {
       if (error instanceof ChainSweepBusyError) {
-        console.warn(`[behaviors] behavior chain sweep skipped for ${org.login}: ${error.message}`)
+        sweepSkipped = true
+        const overlap = behaviorChainOverlaps.get(organization) ?? { since: Date.now(), skips: 0, warned: false }
+        overlap.skips += 1
+        behaviorChainOverlaps.set(organization, overlap)
+        const elapsedMs = Date.now() - overlap.since
+        if (!overlap.warned && elapsedMs > CHAIN_SWEEP_PROGRESS_BUDGET_MS) {
+          overlap.warned = true
+          console.warn(`[behaviors] behavior chain sweep overlap exceeded ${CHAIN_SWEEP_PROGRESS_BUDGET_MS}ms progress budget for ${org.login}: skipped ticks: ${overlap.skips}; elapsed: ${elapsedMs}ms`)
+        }
       } else {
         const message = error instanceof Error ? error.message : String(error)
-        behaviorChainHealth.set(org.login.toLowerCase(), { lastSweepAt: Date.now(), error: message })
+        behaviorChainHealth.set(organization, { lastSweepAt: Date.now(), error: message })
         console.error(`[behaviors] behavior chain failed for ${org.login}: ${message}`)
+      }
+    }
+    if (!sweepSkipped) {
+      const overlap = behaviorChainOverlaps.get(organization)
+      if (overlap) {
+        behaviorChainOverlaps.delete(organization)
+        console.log(`[behaviors] behavior chain sweep overlap ended for ${org.login}: skipped ticks: ${overlap.skips}; elapsed: ${Date.now() - overlap.since}ms`)
       }
     }
     const operations: Promise<void>[] = []
@@ -7866,7 +7949,11 @@ function scopedBehaviorsRuntimeHealth(chainCapacity: BehaviorChainCapacity): Beh
     error: identityError,
   }
   const datastoreUnavailable = anyEnabled && datastoreFreshness().status === 'unavailable'
-  const chainError = behaviorChainHealth.get(currentOrganization()?.login.toLowerCase() || '')?.error
+  const organization = currentOrganization()?.login.toLowerCase() || ''
+  const overlap = behaviorChainOverlaps.get(organization)
+  const chainError = behaviorChainHealth.get(organization)?.error
+    || (overlap && now - overlap.since > CHAIN_SWEEP_PROGRESS_BUDGET_MS
+      ? 'A behavior chain sweep overlap exceeded its progress budget.' : null)
   return {
     runtimeError: !tickerStarted ? 'The behavior scheduler has stopped.'
       : heartbeatStale ? 'The behavior scheduler is no longer responding.'
