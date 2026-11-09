@@ -175,10 +175,10 @@ function parseRequestedReviewers(value: unknown): string[] | null {
   }
 }
 
-export async function runCli(org: Organization, args: string[]): Promise<DatastoreRecord[]> {
+export async function runCli(org: Organization, args: string[], maxOutputBytes = 32 * 1024 * 1024): Promise<DatastoreRecord[]> {
   const { stdout } = await runFile(CLI, organizationArgs(org, args), {
     timeoutMs: 30_000,
-    maxOutputBytes: 32 * 1024 * 1024,
+    maxOutputBytes,
   })
   const trimmed = stdout.trim()
   if (!trimmed) throw new Error('datastore returned empty output')

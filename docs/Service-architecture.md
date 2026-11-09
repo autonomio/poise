@@ -193,11 +193,12 @@ client sent.
   | `iss` | `poise-gateway` |
   | `aud` | `workspace:<handle>` |
   | `sub` | the GitHub login, in GitHub's case |
-  | `scope` | `browser`, `link` or `admin` |
+  | `scope` | `browser`, `link`, `admin` or `mcp` |
   | `iat`, `exp` | seconds; `exp` is `iat + 60` |
   | `jti` | random, unique per assertion |
   | `sid` | browser only: opaque hash reference to the authenticated workspace session |
   | `gport` | browser only: gateway listening port for private Google delegation |
+  | `mcp` | MCP only: `{resource, ownerId, handle, grantId}`; exact installation resource, immutable owner and selected workspace |
 
 - The gateway generates its key pair on first start and keeps it in its data
   volume. Workspaces receive the public key as `POISE_GATEWAY_PUBLIC_KEY`, the
@@ -207,9 +208,13 @@ client sent.
   most 5 seconds in the future, `exp` has not passed (5 seconds of skew), and
   `exp - iat` is at most 120.
 - Scopes:
-  - `browser`: the owner's browser; every route.
+  - `browser`: the owner's browser; ordinary routes, excluding the private MCP dispatch.
   - `link`: a paired Poise Link device; only `/api/link/*`.
   - `admin`: the gateway itself; only `/api/service/*`.
+  - `mcp`: only `POST /api/mcp/read`, including on loopback. Browser, Link,
+    admin and unsigned local requests cannot enter this typed read dispatch.
+    The workspace verifies the installation's apex `/mcp` resource as well as
+    its normal owner/workspace audience. No public bearer token reaches it.
 - The gateway also sets `X-Forwarded-For`, `X-Forwarded-Proto: https` and
   `X-Forwarded-Host`, and keeps the browser's `Host` and `Origin` headers. It
   forwards no `Cookie` header at all: neither its own cookies (`poise_gw`,
@@ -240,6 +245,29 @@ client sent.
   upgrade is relayed only up to 64 KiB, and anything longer gets `502`. The
   gateway reads at most 64 KiB of a workspace's health or drain answer, and
   treats a longer one as a refused health check.
+
+## MCP read connection
+
+With `POISE_MCP_ENABLED=1`, the apex `/mcp` offers stateless Streamable HTTP,
+protected-resource and authorization-server discovery, S256 PKCE, existing
+Poise sign-in and explicit owner consent for the `poise:read` scope. It is
+disabled by default. Grants pin the exact resource, client, immutable GitHub
+owner ID and workspace; live access and revocation are checked before and after
+each read. The gateway's separate hash-only grant store stays in its own data
+volume. No device, browser cookie or public bearer token is forwarded.
+
+The only private hop is `POST /api/mcp/read` with the dedicated assertion. Both
+boundaries validate `poise_describe` or `poise_work` and their typed arguments.
+Only configured workspace repositories are readable. The issue-driven page
+uses existing datastore repo/label/keyset selectors and exact chain/ledger
+joins; it never enumerates work from chain or Call inventories. Cursors are
+signed over owner, workspace, resource, grant and query. Missing evidence under
+partial coverage leaves the stage unknown, and GitHub merge evidence preserves
+the separate pending/complete/not-recorded Poise review status.
+
+[Poise MCP](Poise-MCP.md) defines bounds, private plugin packaging, operator
+setup, CI fixtures and the required staging desktop proof before production
+activation.
 
 ## Workspace runtime contract
 
@@ -272,6 +300,7 @@ Environment the gateway passes:
 | `POISE_MODE` | `service` |
 | `POISE_WORKSPACE_HANDLE` | `<handle>` |
 | `POISE_WORKSPACE_OWNER` | the GitHub login |
+| `POISE_WORKSPACE_OWNER_ID` | immutable GitHub account id; required for MCP assertions, absent in older containers which retain ordinary access |
 | `POISE_PUBLIC_ORIGIN` | `https://<handle>.<POISE_DOMAIN>` |
 | `POISE_GATEWAY_PUBLIC_KEY` | see above |
 | `POISE_HOST` | `0.0.0.0` |
@@ -478,7 +507,7 @@ computer.
 **Requests**
 - Binding to a non-loopback address is allowed only in service mode.
 - Loopback requests keep today's rules; they come from inside the owner's own
-  container.
+  container. The private MCP read dispatch always requires its dedicated assertion.
 - Native chats discover Poise through a private connection file and
   `POST /api/chat/control`. This endpoint additionally requires a per-chat
   credential that survives restarts, a loopback peer and no browser

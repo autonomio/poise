@@ -1,0 +1,7 @@
+{
+  "name": "poise",
+  "version": "1.0.0",
+  "description": "Trace your Poise workspace's issues, native work and merge evidence.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

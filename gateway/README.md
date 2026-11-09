@@ -108,3 +108,10 @@ npm run build
 ```
 
 The tests run in-process with no Docker: a fake GitHub, a fake Docker Engine API on a unix socket, and a real upstream that echoes HTTP and WebSocket traffic. The one exception is `tests/docker.integration.test.ts`. With `POISE_GATEWAY_DOCKER_TESTS=1` it creates and reaches a workspace on the local Docker Engine, recreates the gateway's container, which must join the workspace's network again to drain it before an upgrade, and recreates the workspace for a new drain timeout. CI runs it after building the image; otherwise it is skipped.
+
+## Read-only MCP
+
+`POISE_MCP_ENABLED=1` enables the installation's apex `/mcp` endpoint and
+OAuth discovery/consent. Unset is disabled (404). See
+[Poise MCP](../docs/Poise-MCP.md) for private plugin packaging, grants,
+bounded work reads and the staging desktop activation gate.

@@ -1,5 +1,9 @@
 # Operating Poise
 
+For the optional, disabled-by-default work-trail endpoint and its private Codex
+plugin, see [Poise MCP](Poise-MCP.md). Its staging desktop activation gate is
+separate from ordinary service upgrades.
+
 Open Menu → Logging to investigate retained diagnostics; Export NDJSON downloads
 a fresh bounded snapshot of the applied filters. Diagnostic HTTP reads are for
 the owner's same-origin workspace page. Typing or

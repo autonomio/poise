@@ -106,3 +106,5 @@ tests/behaviors-repo-skips-api.test.ts
 tests/notification-evidence.test.ts
 tests/organizations-api.test.ts
 tests/view-cleanup-wired.test.ts
+tests/mcp-work.test.ts
+tests/mcp-plugin.test.ts
