@@ -152,6 +152,16 @@ advance timestamps nor become success: their error remains in runtime health
 after unrelated work is allowed to advance, with at most one attempt per
 target per existing pass under the existing account/native budgets.
 
+An explicitly CI-only repair blocker retains the supplied head and failed
+check/job identities and URLs in its original native artifact. Its automatic
+hold records that invocation and head and stays eligible every two minutes,
+using the same scheduler. Once that original settles with `action: not_started`
+and positive resource-release proof, a fresh matching-head `checksState: SUCCESS`
+with no pending or failing checks records `ciRecovery` on the existing resume
+event. The normal decision path then rechecks review, approval and merge gates;
+overall readiness is not required to release this hold. A generic worker
+blocker, uncertain publication or a later operator Hold cannot auto-resume.
+
 Merged `merge-pr` and `resolve-threads` uncertainty uses original journal
 receipts only. A missing original response schedules no GitHub read; retaining
 that response makes its original settlement eligible without another mutation.
@@ -268,13 +278,13 @@ has no PR; a closed PR blocks all model behaviors, and a closed seed also blocks
 issue review, implementation and repair. A never-started admission with no
 conflicting or quarantined Call settles as deferred `target_closed`, with
 explicit no-effect evidence and no failed-attempt charge. A started original
-with no Call can use Caller's atomic correlation fence: only winning the
-original unique correlation creates a terminal no-effect native Call. A late
-original cannot claim that correlation before its provider, checkout or writes.
+with no Call becomes `uncertain`: a partial receipt-store recovery can lose the
+unique correlation that once protected it. It cannot be relaunched or given a
+synthetic no-effect fence, even while held or disabled. Unreadable receipt
+snapshots also journal this uncertainty before reconciliation resumes.
 An existing Call is never altered, and normal validated receipt reconciliation
-must prove release. Fence failures remain reported and retain ownership; the
-existing tick retries that idempotent command at most once per two minutes,
-using a durable attempt time rather than a new timer.
+must prove release. [Receipt-store recovery](Operating.md#caller-receipt-store-recovery)
+defines preservation and activation requirements.
 The receipt reader accepts only the fence's exact no-provider, no-publication
 shape with its native resource-release timestamp. Other superseded outcomes
 retain their original validation; malformed fence rows stay quarantined.

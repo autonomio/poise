@@ -141,7 +141,8 @@ else { process.stderr.write('Forbidden fixture operation: ' + op); process.exit(
   expect(journal.history(TARGET)).toEqual(missingHistory)
   expect(failures).not.toHaveBeenCalled()
   expect(launch).toHaveBeenCalledTimes(1)
-  expect(journal.read('historical/repo#8')?.invocations[0].state).toBe('started')
+  expect(journal.read('historical/repo#8')?.invocations[0]).toMatchObject({ state: 'uncertain',
+    outcome: expect.stringContaining('without a durable Call receipt') })
   expect(behaviorChainSummary(absent).invocations[0].evidence?.publicationPlan).toEqual(condition)
 
   for (const [mode, message, observed] of [
