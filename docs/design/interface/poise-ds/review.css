@@ -1,0 +1,29 @@
+/* The element review. Tokens only, like everything else. */
+
+.review { padding: var(--sp-8) var(--sp-10) var(--sp-16); }
+.review h1 { font-size: var(--fs-h2); }
+.review .lede { font-size: var(--fs-read); line-height: var(--lh-read); color: var(--c-text-soft); margin-top: var(--sp-4); max-width: calc(var(--sp-unit) * 190); }
+.rv-sum { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-6); padding: var(--sp-4) var(--sp-5); border: var(--line-hair) solid var(--c-line); border-radius: var(--r-panel); background: var(--c-surface); }
+.rv-sum div { display: flex; flex-direction: column; gap: var(--sp-half); }
+.rv-sum b { font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-h3); line-height: var(--lh-tight); color: var(--c-text); }
+.rv-sum .cov { margin-left: auto; align-self: center; display: flex; flex-direction: row; align-items: center; gap: var(--sp-3); font-size: var(--fs-row); color: var(--c-text-soft); }
+.rv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-6) 0 var(--sp-3); }
+.rv-tools .count { margin-left: auto; }
+
+.rv-table col.c-n { width: calc(var(--sp-unit) * 11); }
+.rv-table col.c-was { width: 18%; }
+.rv-table col.c-now { width: 15%; }
+.rv-table col.c-purpose { width: 24%; }
+.rv-table col.c-serves { width: calc(var(--sp-unit) * 22); }
+.rv-table col.c-dec { width: calc(var(--sp-unit) * 22); }
+.rv-table col.c-see { width: calc(var(--sp-unit) * 18); }
+.rv-table td { white-space: normal; height: auto; padding-top: var(--sp-3); padding-bottom: var(--sp-3); vertical-align: top; line-height: var(--lh-body); }
+.rv-table td.was { color: var(--c-text-soft); }
+.rv-table td.now b { display: block; font-weight: var(--fw-strong); }
+.rv-table td.now .t-mono { color: var(--c-text-muted); }
+.rv-table td.why, .rv-table td.purpose { color: var(--c-text-soft); }
+.rv-table td.dec .chip { font-weight: var(--fw-strong); }
+.rv-table td.see a { font-size: var(--fs-micro); font-weight: var(--fw-strong); color: var(--c-agent-on); }
+.rv-table td.see a:hover { color: var(--c-text); }
+.rv-table tr.is-remove td.was { text-decoration: line-through; text-decoration-color: var(--c-text-muted); }
+.chip.is-strong { color: var(--c-text); border: var(--line-hair) solid var(--c-edge-strong); background: none; }

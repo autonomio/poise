@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="setup.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="ob-page" data-view="setup">
+<!-- Everything behind setup is dimmed and cannot be reached until it is finished, or left for later. -->
+<div class="frame" inert aria-hidden="true">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html">Overview</a><a href="board.html">Board</a><a href="chat.html">Chat</a><a href="editor.html">Editor</a><a href="observe.html">Observe</a>
+      <button class="nav">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right"><span class="live">Live</span></div>
+  </header>
+  <main class="ob-behind"></main>
+</div>
+
+<div class="ob-scrim">
+  <div class="ob" role="dialog" aria-modal="true" aria-labelledby="ob-title" aria-describedby="ob-intro">
+    <header class="ob-head">
+      <div class="ob-rail" aria-hidden="true" data-rail data-ref="ob.rail"></div>
+      <div class="ob-meta"><span class="ob-count" data-count data-ref="ob.count"></span><button class="lnk" data-act="later" data-ref="ob.later">Finish later</button></div>
+      <h2 class="ob-title" id="ob-title" tabindex="-1" data-title data-ref="ob.dialog"></h2>
+      <p class="ob-intro" id="ob-intro" data-intro></p>
+    </header>
+    <div class="ob-body" data-body></div>
+    <footer class="ob-foot">
+      <button class="btn-ghost" data-act="back" data-ref="ob.back">Back</button>
+      <span class="ob-status" role="status" aria-live="polite" data-status></span>
+      <button class="btn-ghost" data-act="skip" data-ref="ob.skip">Skip for now</button>
+      <button class="btn btn-primary" data-act="next" data-ref="ob.next">Continue</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-setup.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="setup.js"></script>
+</body>
+</html>

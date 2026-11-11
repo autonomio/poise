@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Swarm, round 4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="swarm.css">
+<script src="style.js"></script>
+</head>
+<body class="obs-page">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a class="on" href="observe.html" aria-current="page" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 3 open" data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>3</span></button>
+    </div>
+  </header>
+
+  <main class="runs">
+    <div class="obs-head"><span class="t-micro">Swarm</span><span class="t-gloss">every agent run, live</span><span class="select">All orgs</span><input class="search" type="search" placeholder="Filter…" aria-label="Filter runs"><span class="count">11 shown</span></div>
+    <p class="history"><span class="spin"></span><span>Showing the <b>50 newest</b> of 312 runs while the full history loads. Active runs refresh every 15 seconds.</span></p>
+    <table class="table">
+      <thead>
+        <tr>
+          <th class="c-group"><span class="t-micro">×</span><span class="t-gloss">same</span></th>
+          <th class="c-model"><span class="t-micro">Model</span><span class="t-gloss">who</span></th>
+          <th class="c-behavior"><span class="t-micro">Behavior</span><span class="t-gloss">the standing order</span></th>
+          <th class="c-org"><span class="t-micro">Org</span><span class="t-gloss">whose</span></th>
+          <th class="c-repo"><span class="t-micro">Repo</span><span class="t-gloss">where</span></th>
+          <th class="c-status"><span class="t-micro">Status</span><span class="t-gloss">how it’s going, or how it went</span></th>
+          <th class="c-started"><span class="t-micro">Started</span><span class="t-gloss">when</span></th>
+          <th class="c-elapsed"><span class="t-micro">Elapsed</span><span class="t-gloss">so far</span></th>
+          <th class="c-replay"><span class="t-micro">Replay</span><span class="t-gloss">again</span></th>
+          <th class="c-stop"><span class="t-micro">Stop</span><span class="t-gloss">end it</span></th>
+          <th class="c-more"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- 1 · running, opened -->
+        <tr class="is-running" data-phases="Waiting for provider|Reasoning reported|Receiving response|Validating result|Posting review comments">
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Claude</b><span>Opus 5 · High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#481</span></span></td>
+          <td class="status"><span class="status-word is-live"><span class="spin"></span>Running</span><span class="status-note"><span class="stage"><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><em>Receiving</em><b></b><i></i></span><span class="phase">Receiving response</span></span></td>
+          <td class="num">14:02</td>
+          <td class="num" data-tick="252">4:12</td>
+          <td><span class="dash">—</span></td>
+          <td><button class="btn-ghost" data-stop aria-label="Stop this run"><i data-i="stop" class="sm solid"></i></button></td>
+          <td><button class="ib more" data-expand aria-expanded="true" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail">
+          <td colspan="11"><div class="detail-b">
+            <div>
+              <p class="facts"><span>Worker heartbeat <b>4 s</b> ago</span><span>Last provider event <b>2 s</b> ago</span><span>Stage deadline in <b>12 m</b></span></p>
+              <ol class="events">
+                <li><time>14:02:11</time><span>Checking PR state</span></li>
+                <li><time>14:02:19</time><span>Preparing a fresh checkout</span></li>
+                <li><time>14:03:40</time><span>Waiting for provider</span></li>
+                <li><time>14:04:02</time><span>Reasoning reported</span></li>
+                <li><time>14:05:30</time><span>Tool execution reported · npm run check</span></li>
+                <li class="now"><time>now</time><span>Receiving response</span></li>
+              </ol>
+            </div>
+            <div class="side-facts">
+              <div><span class="t-micro">Head</span><span class="v t-mono">9f3c2e1</span></div>
+              <div><span class="t-micro">Reviewer</span><span class="v">1 of 1 · Claude Code</span></div>
+              <details class="reasoning"><summary>Provider reasoning</summary><p>The diff raises the PR-run limit only. Checking whether main keeps 15 minutes, then whether the Firefox job inherits the same template…</p></details>
+            </div>
+          </div></td>
+        </tr>
+
+        <!-- 2 · running -->
+        <tr class="is-running">
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Codex</b><span>High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Issues</td>
+          <td class="cell-org org">Acme</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">Limen</span><span class="num">#1141</span></span></td>
+          <td class="status"><span class="status-word is-live"><span class="spin"></span>Running</span><span class="status-note"><span class="stage"><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><em>Tool</em></span><span class="phase">Tool execution reported</span></span></td>
+          <td class="num">13:58</td>
+          <td class="num" data-tick="520">8:40</td>
+          <td><span class="dash">—</span></td>
+          <td><button class="btn-ghost" data-stop aria-label="Stop this run"><i data-i="stop" class="sm solid"></i></button></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Worker heartbeat <b>6 s</b> ago</span><span>Last provider event <b>1 s</b> ago</span><span>Stage deadline in <b>21 m</b></span></p><ol class="events"><li><time>13:58:04</time><span>Reading the issue</span></li><li><time>13:58:40</time><span>Preparing a fresh checkout</span></li><li class="now"><time>now</time><span>Tool execution reported · pytest -q tests/allocation</span></li></ol></div><div class="side-facts"><div><span class="t-micro">Reviewers</span><span class="v">2 of 2 · Codex, Claude Code</span></div><details class="reasoning"><summary>Provider reasoning</summary><p>Running the allocation tests before commenting on the sizing claim…</p></details></div></div></td></tr>
+
+        <!-- 3 · running, provider quiet -->
+        <tr class="is-running is-attention">
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Muse</b><span>spark 1.3</span></span></td>
+          <td class="cell-behavior t-strong">Approve Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#474</span></span></td>
+          <td class="status"><span class="status-word is-live"><span class="spin"></span>Running</span><span class="status-note is-warn">No provider update for 2 m; last: waiting for provider</span></td>
+          <td class="num">14:05</td>
+          <td class="num" data-tick="135">2:15</td>
+          <td><span class="dash">—</span></td>
+          <td><button class="btn-ghost" data-stop aria-label="Stop this run"><i data-i="stop" class="sm solid"></i></button></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Worker heartbeat <b>3 s</b> ago</span><span>Last provider event <b>2 m</b> ago</span><span>Stage deadline in <b>8 m</b></span></p><p class="warn-line"><span class="cap is-attention"></span>No provider update for 2 m; last: waiting for provider. This is an observation, not a retry.</p><ol class="events"><li><time>14:05:02</time><span>Checking PR state</span></li><li class="now"><time>14:05:20</time><span>Waiting for provider</span></li></ol></div><div class="side-facts"><div><span class="t-micro">Head</span><span class="v t-mono">2b7d0a4</span></div></div></div></td></tr>
+
+        <!-- 4 · clean -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Claude</b><span>Opus 5 · High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Pull Requests</td>
+          <td class="cell-org org">Acme</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">Limen</span><span class="num">#1128</span></span></td>
+          <td class="status"><span class="status-word is-quiet"><i data-i="done" class="sm"></i>Clean</span><span class="status-note">No comments</span></td>
+          <td class="num">13:40</td>
+          <td class="num">6:12</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><pre class="response">No findings. The shim sizing is bounded by the fold length and the tests cover both edges.</pre></div><div class="side-facts"><div><span class="t-micro">Posted</span><span class="v">as your agent account · 13:46</span></div></div></div></td></tr>
+
+        <!-- 5 · changes requested -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Claude</b><span>Opus 5 · High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#475</span></span></td>
+          <td class="status"><span class="status-word is-warn"><i data-i="changes" class="sm"></i>Changes requested</span><span class="status-note">2 comments</span></td>
+          <td class="num">13:10</td>
+          <td class="num">9:31</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><pre class="response">1. browser.yml:42 — the condition also matches pull_request_target; scope it to pull_request only.
+2. docs/Testing.md still says every shard stops at 15 minutes.</pre></div><div class="side-facts"><div><span class="t-micro">Posted</span><span class="v">as your agent account · 13:20</span></div></div></div></td></tr>
+
+        <!-- 6 · approved -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Grok</b><span>Build</span></span></td>
+          <td class="cell-behavior t-strong">Approve Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#474</span></span></td>
+          <td class="status"><span class="status-word is-ok"><i data-i="done" class="sm"></i>Approved</span></td>
+          <td class="num">12:55</td>
+          <td class="num">3:02</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><pre class="response">Approved. Reruns are limited to the failed shard and the marker prevents a second automatic rerun on the same head.</pre></div><div class="side-facts"></div></div></td></tr>
+
+        <!-- 7 · commented, three identical -->
+        <tr>
+          <td><span class="group-n" title="3 identical runs">×3</span></td>
+          <td class="cell-model"><span class="agent"><b>Codex</b><span>High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Issues</td>
+          <td class="cell-org org">mikkokotila</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">Eight-Characters</span><span class="num">#110</span></span></td>
+          <td class="status"><span class="status-word is-ok"><i data-i="posted" class="sm"></i>Commented</span></td>
+          <td class="num">12:20</td>
+          <td class="num">5:44</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><pre class="response">Commented on the issue and its two sub-issues; the parent’s review covers the third.</pre></div><div class="side-facts"></div></div></td></tr>
+
+        <!-- 8 · superseded -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Claude</b><span>Opus 5 · High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#466</span></span></td>
+          <td class="status"><span class="status-word is-flat"><i data-i="superseded" class="sm"></i>Superseded</span><span class="status-note">New commits arrived while it ran</span></td>
+          <td class="num">11:48</td>
+          <td class="num">2:10</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Head when started <b class="t-mono">5ac1e09</b></span><span>Head now <b class="t-mono">7e9f2b3</b></span></p></div><div class="side-facts"></div></div></td></tr>
+
+        <!-- 9 · stopped -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Claude</b><span>Opus 5 · High</span></span></td>
+          <td class="cell-behavior t-strong">Approve Pull Requests</td>
+          <td class="cell-org org">Acme</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">Limen</span><span class="num">#1099</span></span></td>
+          <td class="status"><span class="status-word is-flat"><i data-i="stopped" class="sm"></i>Stopped</span><span class="status-note">held for this head; the next tick will not relaunch it</span></td>
+          <td class="num">11:30</td>
+          <td class="num">1:05</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Stopped by you at <b class="t-mono">11:31:05</b></span><span>Not counted against the Claude sign-in</span></p></div><div class="side-facts"></div></div></td></tr>
+
+        <!-- 10 · failed, replay refused -->
+        <tr data-refuse="1">
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Muse</b><span>spark 1.3</span></span></td>
+          <td class="cell-behavior t-strong">Review New Issues</td>
+          <td class="cell-org org">Acme</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">Limen</span><span class="num">#1097</span></span></td>
+          <td class="status"><span class="status-word is-bad"><i data-i="failed" class="sm"></i>Failed</span><span class="status-note">The review outcome needs verification before retry.</span></td>
+          <td class="num">10:12</td>
+          <td class="num">12:00</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="refusal" hidden><td colspan="11">Replay refused: this issue’s author is not on the trusted list for Review New Issues. Replay runs only what the scheduler itself would run.</td></tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Worker finished at <b class="t-mono">10:24:00</b></span><span>No action was posted</span></p></div><div class="side-facts"></div></div></td></tr>
+
+        <!-- 11 · preflight failed -->
+        <tr>
+          <td></td>
+          <td class="cell-model"><span class="agent"><b>Codex</b><span>High</span></span></td>
+          <td class="cell-behavior t-strong">Review New Pull Requests</td>
+          <td class="cell-org org">autonomio</td>
+          <td class="cell-repo"><span class="repo-pr"><span class="strong">poise</span><span class="num">#470</span></span></td>
+          <td class="status"><span class="status-word is-bad"><i data-i="failed" class="sm"></i>Preflight failed</span><span class="status-note">The pull request is a draft</span></td>
+          <td class="num">09:40</td>
+          <td class="num">0:04</td>
+          <td><button class="ib" data-replay aria-label="Replay this run"><i data-i="replay" class="sm"></i></button></td>
+          <td><span class="dash">—</span></td>
+          <td><button class="ib more" data-expand aria-expanded="false" aria-label="Run activity"><i data-i="chev" class="sm"></i></button></td>
+        </tr>
+        <tr class="detail" hidden><td colspan="11"><div class="detail-b"><div><p class="facts"><span>Checked at <b class="t-mono">09:40:02</b></span><span>Nothing was launched</span></p></div><div class="side-facts"></div></div></td></tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?from=observe#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row">General</button>
+  <button class="menu-row">Navigation</button>
+  <button class="menu-row">Models</button>
+  <button class="menu-row">Accounts</button>
+  <button class="menu-row">Publishing</button>
+  <button class="menu-row" data-style-open><i data-i="palette" class="sm"></i>Style<span class="chip is-special new">was Typography</span></button>
+  <button class="menu-row">Admin</button>
+</div>
+
+<template id="tpl-run"><tr class="is-running"><td></td><td class="cell-model"></td><td class="cell-behavior t-strong"></td><td class="cell-org org"></td><td class="cell-repo"></td><td class="status"><span class="status-word is-live"><span class="spin"></span>Running</span><span class="status-note"><span class="phase">Checking PR state · replayed by you</span></span></td><td class="num">now</td><td class="num" data-tick="0">0:00</td><td><span class="dash">—</span></td><td><button class="btn-ghost" data-stop aria-label="Stop this run"><svg class="i sm solid"><use href="#i-stop"/></svg></button></td><td></td></tr></template>
+<script src="refdefs.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="views.js"></script>
+</body>
+</html>

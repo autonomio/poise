@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="ov-shared.css">
+<link rel="stylesheet" href="overview-b.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="ov-page ovb-page" data-view="overview">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a class="on" href="overview-b.html" aria-current="page" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open" data-ref="bell" data-act="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <main class="ovb" data-scroll>
+    <div class="ovb-col">
+      <header class="ovb-top">
+        <p class="ovb-date"><span data-ref="nav.overview">Overview</span><span class="dim">·</span><span data-when>Friday 23 October, 19:41</span></p>
+        <div class="odir" data-ref="ov.direction"><span>Direction</span><span class="seg"><a href="overview.html">A · Cockpit</a><a href="overview-b.html" aria-current="page">B · Briefing</a></span></div>
+        <p class="ovb-brief" data-brief data-ref="ov.briefing" aria-live="polite"></p>
+      </header>
+      <nav class="ovb-toc" aria-label="On this page" data-toc data-ref="ov.toc">
+        <a href="#answer" data-toc-to="answer">Answer now <span class="ocount" data-toc-count></span></a>
+        <a href="#today" data-toc-to="today">Today so far</a>
+        <a href="#motion" data-toc-to="motion">In motion</a>
+        <a href="#behaviors" data-toc-to="behaviors">Behaviors</a>
+        <a href="#api" data-toc-to="api">GitHub API</a>
+      </nav>
+
+      <section class="ovb-sec ovb-answer" id="answer" aria-labelledby="h-answer" data-answers>
+        <header class="ovb-sh">
+          <h2 id="h-answer" data-ref="ov.answer">Answer now <span class="ocount" data-ncount data-ref="ov.count-open">0</span></h2>
+          <p class="t-gloss">The most pressing is open, with its answers. J and K move; 1 to 9 answer; Enter opens.</p>
+          <div class="ovb-level"><span class="t-micro">Show</span><div data-levelbox></div></div>
+        </header>
+        <p class="oheld" data-held data-ref="ov.held" hidden></p>
+        <div class="ovb-list" data-nlist></div>
+      </section>
+
+      <section class="ovb-sec" id="today" aria-labelledby="h-today">
+        <header class="ovb-sh">
+          <h2 id="h-today" data-today-title>Today so far</h2>
+          <p class="t-gloss" data-dayline></p>
+          <div class="ovb-ctl" data-dayctl></div>
+        </header>
+        <div class="ovb-pace">
+          <div class="ovb-table" data-pace></div>
+          <aside class="ovb-chart" data-chart aria-live="polite"></aside>
+        </div>
+      </section>
+
+      <section class="ovb-sec" id="motion" aria-labelledby="h-motion" data-ref="ov.motion">
+        <header class="ovb-sh">
+          <h2 id="h-motion">In motion</h2>
+          <p class="t-gloss">What went wrong first, each with its next step; the rest on request.</p>
+        </header>
+        <div data-motion></div>
+        <div class="ovb-mgr" data-mgr>
+          <h3 class="ovb-mh"><span class="t-micro" data-ref="mgr">The Manager</span><span class="t-gloss">same settings as its pane</span></h3>
+          <div data-mgrbox></div>
+        </div>
+      </section>
+
+      <section class="ovb-sec" id="behaviors" aria-labelledby="h-beh">
+        <header class="ovb-sh">
+          <h2 id="h-beh">Behaviors</h2>
+          <p class="t-gloss">What Poise did on its own.</p>
+        </header>
+        <p class="ovb-lead" data-behlead></p>
+        <div data-behaviors></div>
+      </section>
+
+      <section class="ovb-sec" id="api" aria-labelledby="h-api">
+        <header class="ovb-sh">
+          <h2 id="h-api">GitHub API</h2>
+          <p class="t-gloss">Live, every 15 seconds, whatever the day.</p>
+        </header>
+        <div data-quota></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=overview" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-overview.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="tasks-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="overview-ui.js"></script>
+<script src="overview-b.js"></script>
+</body>
+</html>

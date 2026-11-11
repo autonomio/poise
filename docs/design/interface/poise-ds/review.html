@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Element review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="review.css">
+<script src="style.js"></script>
+</head>
+<body>
+<div class="frame">
+  <header class="topbar">
+    <span class="t-micro">Poise · element review</span>
+    <nav class="rooms" aria-label="Views">
+      <a class="room" href="overview.html">Overview</a><a class="room" href="board.html">Board</a><a class="room" href="chat.html">Chat</a><a class="room" href="editor.html">Editor</a><a class="room" href="manager.html">Manager</a><a class="room" href="observe.html">Observe</a><a class="room" href="settings.html">Settings</a><a class="room" href="guide.html">Style guide</a><a class="room" href="index.html">All mocks</a>
+    </nav>
+  </header>
+
+  <main class="review">
+    <h1 class="t-display">Every control and display, reviewed</h1>
+    <p class="lede">Each element of Overview, Board, Chat, Editor, the Manager, Observe and Settings, and of setup and the states any page can be in: what it was in the live app, what it is now, the purpose it serves, and the decision. Names and purposes are read from the same registry the tooltips and references use, so this page cannot disagree with them. “See it” opens the element in place with its full reference.</p>
+
+    <div class="rv-sum" data-sum></div>
+
+    <div class="rv-tools">
+      <div class="seg" aria-label="Decision" data-filter="dec"><button aria-pressed="true" data-v="">All</button><button aria-pressed="false" data-v="Keep">Keep</button><button aria-pressed="false" data-v="Move">Move</button><button aria-pressed="false" data-v="Merge">Merge</button><button aria-pressed="false" data-v="Remove">Remove</button><button aria-pressed="false" data-v="New">New</button></div>
+      <div class="seg" aria-label="Purpose" data-filter="serves"><button aria-pressed="true" data-v="">Any purpose</button><button aria-pressed="false" data-v="Work">Work</button><button aria-pressed="false" data-v="Observe">Observe</button><button aria-pressed="false" data-v="Settings">Settings</button></div>
+      <div class="seg" aria-label="View" data-filter="view"><button aria-pressed="true" data-v="">All views</button><button aria-pressed="false" data-v="overview">Overview</button><button aria-pressed="false" data-v="current">Board</button><button aria-pressed="false" data-v="chat">Chat</button><button aria-pressed="false" data-v="editor">Editor</button><button aria-pressed="false" data-v="manager">Manager</button><button aria-pressed="false" data-v="observe">Observe</button><button aria-pressed="false" data-v="settings">Settings</button><button aria-pressed="false" data-v="states">Setup and states</button></div>
+      <span class="count" data-count></span>
+    </div>
+
+    <table class="table rv-table">
+      <colgroup><col class="c-n"><col class="c-was"><col class="c-now"><col class="c-purpose"><col class="c-serves"><col class="c-dec"><col><col class="c-see"></colgroup>
+      <thead><tr>
+        <th><span class="t-micro">#</span><span class="t-gloss">today’s list</span></th>
+        <th><span class="t-micro">Was</span><span class="t-gloss">in the live app</span></th>
+        <th><span class="t-micro">Now</span><span class="t-gloss">name and key</span></th>
+        <th><span class="t-micro">Purpose</span><span class="t-gloss">from the registry</span></th>
+        <th><span class="t-micro">Serves</span><span class="t-gloss">work, observe, settings</span></th>
+        <th><span class="t-micro">Decision</span><span class="t-gloss">keep, move, merge, remove</span></th>
+        <th><span class="t-micro">Why</span><span class="t-gloss">and what changed</span></th>
+        <th><span class="t-micro">In place</span><span class="t-gloss">with its reference</span></th>
+      </tr></thead>
+      <tbody data-rows></tbody>
+    </table>
+  </main>
+</div>
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-current.js"></script>
+<script src="refdefs-editor.js"></script>
+<script src="refdefs-settings.js"></script>
+<script src="refdefs-overview.js"></script>
+<script src="refdefs-observe.js"></script>
+<script src="refdefs-setup.js"></script>
+<script src="icons.js"></script>
+<script src="review.js"></script>
+</body>
+</html>

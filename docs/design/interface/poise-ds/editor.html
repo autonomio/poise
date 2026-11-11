@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="editor.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="ed-page" data-view="editor">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a class="on" href="editor.html" aria-current="page" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open. Opens Answer here in Overview." data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <main class="ed">
+    <div class="ed-head">
+      <a class="back" href="#" data-back hidden data-ref="back"></a>
+      <button class="doc-pick" data-menu="doc-menu" aria-haspopup="menu" aria-expanded="false" data-ref="ed.doc"><span class="t" data-doc-title>HELIOS</span><i data-i="down" class="sm"></i></button>
+      <div class="ed-groups">
+        <div class="egrp" role="group" aria-labelledby="eg-doc"><span class="t-micro" id="eg-doc" data-ref="ed.group.document">Document</span>
+          <button class="btn-ghost" data-act="new" data-ref="ed.new"><i data-i="plus" class="sm"></i>New</button>
+          <button class="btn-ghost" data-act="import" data-ref="ed.import"><i data-i="import" class="sm"></i>Import</button><input type="file" accept=".md,.markdown,.txt" hidden data-import-file aria-label="Markdown file to import">
+          <button class="btn-ghost" data-act="copy" data-ref="ed.copy"><i data-i="copy" class="sm"></i>Copy</button>
+          <button class="btn-ghost" data-act="delete" data-ref="ed.delete"><i data-i="cross" class="sm"></i>Delete</button>
+        </div>
+        <div class="egrp" role="group" aria-labelledby="eg-write"><span class="t-micro" id="eg-write" data-ref="ed.group.write">Write</span>
+          <button class="sbtn" data-act="writer" aria-pressed="false" data-ref="ed.writer"><span class="switch"></span>Writer mode</button>
+        </div>
+        <div class="egrp" role="group" aria-labelledby="eg-ask"><span class="t-micro" id="eg-ask" data-ref="ed.group.ask">Ask</span>
+          <button class="btn-ghost" data-act="tab" data-tab="chat" aria-pressed="false" data-ref="ed.ask-pane"><i data-i="chat" class="sm"></i>Chat beside</button>
+          <button class="btn-ghost" data-act="open-chat" data-ref="ed.ask-chat"><i data-i="session" class="sm"></i>Open in Chat</button>
+        </div>
+        <div class="egrp" role="group" aria-labelledby="eg-share"><span class="t-micro" id="eg-share" data-ref="ed.group.share">Share</span>
+          <button class="btn-ghost" data-act="tab" data-tab="publish" aria-pressed="false" data-ref="ed.publish"><i data-i="publish" class="sm"></i>Publish</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ed-body">
+      <div class="ed-col">
+        <div class="ed-scroll" data-scroll>
+          <div class="ed-paper" data-paper>
+            <div class="ed-doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Document" data-doc data-ref="ed.page" data-placeholder="# A title, then write…"></div>
+            <div class="ed-marks" data-marks aria-hidden="true"></div>
+            <div class="ed-away" data-away hidden>
+              <h2 data-away-title>Document</h2>
+              <p data-ref="ed.away">This mock opens HELIOS in full. In Poise, this document opens here, at the place you left it.</p>
+              <button class="back" data-act="back" data-ref="back"><i data-i="chev" class="sm"></i>Back to HELIOS</button>
+            </div>
+          </div>
+        </div>
+        <div class="ed-status" role="status" data-status data-ref="ed.status"></div>
+      </div>
+
+      <aside class="ed-pane" aria-label="Comments, reviews, publishing and chat">
+        <div class="pane-tabs" role="tablist" aria-label="Side pane" data-tabs></div>
+        <div class="pane-body" role="tabpanel" data-pane></div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<button class="btn btn-line writer-exit" data-act="writer" data-ref="ed.writer">Leave writer mode <span class="kbd">Esc</span></button>
+
+<div class="selbar" data-selbar hidden role="toolbar" aria-label="Selection" data-ref="ed.selbar">
+  <button data-act="sel-comment" data-ref="ed.sel.comment"><i data-i="chat" class="sm"></i>Comment</button>
+  <button data-act="sel-ask" data-ref="ed.sel.ask"><i data-i="think" class="sm"></i>Ask an agent</button>
+  <button data-act="sel-issue" data-ref="ed.sel.issue"><i data-i="issue" class="sm"></i>Create issue</button>
+  <button data-act="sel-snippet" data-ref="ed.sel.snippet"><i data-i="snippet" class="sm"></i>Save as snippet</button>
+</div>
+<div class="popover" data-popover hidden role="dialog"></div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=editor" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=editor#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+<div class="menu doc-menu" id="doc-menu" hidden role="menu" aria-label="Documents" data-docmenu></div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-editor.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="editor.js"></script>
+<script src="overview-data.js"></script>
+<script src="bell.js"></script>
+</body>
+</html>

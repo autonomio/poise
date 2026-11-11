@@ -1,0 +1,34 @@
+{
+  "tokens_defined": 176,
+  "files": {
+    "chat.css": [],
+    "chat.html": [],
+    "components.css": [],
+    "current.css": [],
+    "current.html": [],
+    "editor.css": [],
+    "editor.html": [],
+    "guide.css": [],
+    "guide.html": [],
+    "index.html": [],
+    "manager.css": [],
+    "manager.html": [],
+    "overview.css": [],
+    "review.css": [],
+    "review.html": [],
+    "swarm.css": [],
+    "swarm.html": []
+  },
+  "violations": 0,
+  "tokens_used": 138,
+  "tokens_unused": [
+    "--c-text-strong",
+    "--dur-tip",
+    "--dur-tip-hide",
+    "--fs-h1",
+    "--ls-none",
+    "--r-unit",
+    "--w-side",
+    "--w-sidebar"
+  ]
+}

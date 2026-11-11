@@ -1,0 +1,90 @@
+/* Overview B, the Briefing: one column, read from the top in order of what
+   matters. The section strip stays on top; the chart stays beside its table. */
+.ovb { min-height: 0; overflow-y: auto; }
+.ovb-col { width: 100%; max-width: calc(var(--w-read) + var(--w-pane)); margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-16); display: flex; flex-direction: column; gap: var(--sp-8); }
+
+/* ---------- The briefing ---------- */
+.ovb-top { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4); }
+.ovb-date { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-micro); font-weight: var(--fw-strong); letter-spacing: var(--ls-micro); text-transform: uppercase; color: var(--c-text-muted); }
+.ovb-top .odir { margin-left: auto; }
+.ovb-brief { flex-basis: 100%; max-width: calc(var(--w-read) * 1.25); font-size: var(--fs-h3); line-height: var(--lh-ui); color: var(--c-text-soft); }
+.bk { color: var(--c-text); text-decoration: underline; text-decoration-thickness: var(--line-hair); text-underline-offset: calc(var(--sp-1) * 1.5); text-decoration-color: var(--c-edge-strong); transition: text-decoration-color var(--dur-feedback) var(--ease-out); }
+.bk:hover { text-decoration-color: var(--c-text-soft); }
+.bk .sc { margin-right: var(--sp-2); vertical-align: middle; }
+.bk-a { margin-right: var(--sp-1); font-weight: var(--fw-regular); color: var(--c-text-soft); }
+.bk-a.is-good { color: var(--c-done-on); }
+.bk-a.is-bad { color: var(--c-attention-on); }
+
+/* ---------- On this page ---------- */
+.ovb-toc { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: 0 calc(var(--sp-6) * -1); padding: var(--sp-2) var(--sp-6); background: var(--c-canvas); border-bottom: var(--line-hair) solid var(--c-line); }
+.ovb-toc a { display: inline-flex; align-items: center; gap: var(--sp-2); height: var(--size-control-sm); padding: 0 var(--sp-3); border-radius: var(--r-pill); font-size: var(--fs-micro); font-weight: var(--fw-strong); color: var(--c-text-muted); transition: color var(--dur-feedback) var(--ease-out), background var(--dur-feedback) var(--ease-out); }
+.ovb-toc a:hover { color: var(--c-text); }
+.ovb-toc a[aria-current="true"] { background: var(--c-surface); color: var(--c-text); }
+.ovb-toc .ocount { min-width: var(--sp-5); height: var(--sp-5); }
+
+/* ---------- Sections ---------- */
+.ovb-sec { display: flex; flex-direction: column; gap: var(--sp-4); scroll-margin-top: calc(var(--size-control) + var(--sp-6)); }
+.ovb-sh { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); padding-bottom: var(--sp-3); border-bottom: var(--line-hair) solid var(--c-line); }
+.ovb-sh h2 { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lead); font-weight: var(--fw-strong); line-height: var(--lh-tight); color: var(--c-text); }
+.ovb-level, .ovb-ctl { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
+.ovb-level .t-micro { font-size: var(--fs-tiny); }
+.ovb-level .olevel.stops { width: calc(var(--sp-unit) * 92); }
+.ovb-lead { max-width: var(--w-read); font-size: var(--fs-row); line-height: var(--lh-body); color: var(--c-text-soft); }
+
+/* ---------- Answer now: the first open, the rest one line each ---------- */
+.ovb-list { display: flex; flex-direction: column; }
+.ovb-list .nc:not(.is-compact) { gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); }
+.ovb-list .nc:not(.is-compact) .nc-t { font-size: var(--fs-lead); line-height: var(--lh-tight); }
+.ovb-list .nc-b { max-width: var(--w-read); }
+.ovb-answer .oheld { align-self: flex-start; }
+
+/* ---------- Today so far: the table, and the chosen number's year ---------- */
+.ovb-pace { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-6); }
+.ovb-table { flex: 1.3 1 calc(var(--sp-unit) * 130); min-width: 0; }
+.ovb-chart { flex: 1 1 calc(var(--sp-unit) * 90); min-width: 0; position: sticky; top: calc(var(--size-control) + var(--sp-6)); display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--r-panel); border: var(--line-hair) solid var(--c-line); background: var(--c-surface); }
+.ovb-chh { display: flex; flex-direction: column; gap: var(--sp-1); }
+.ovb-chh .t-micro { font-size: var(--fs-tiny); }
+.ovb-chv { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-3); }
+.ovb-big { font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-h2); line-height: var(--lh-tight); color: var(--c-text); }
+.opace .og th { padding-top: var(--sp-5); font-weight: var(--fw-regular); }
+.opace tbody:first-of-type .og th { padding-top: var(--sp-2); }
+.opace .og .t-micro { margin-right: var(--sp-2); font-size: var(--fs-tiny); }
+.opace tr[data-prow] { cursor: pointer; outline-offset: calc(var(--line-focus) * -1); transition: background var(--dur-feedback) var(--ease-out); }
+.opace tr[data-prow]:hover { background: var(--c-surface); }
+.opace tr[aria-selected="true"] { background: var(--c-surface); box-shadow: inset var(--route-w-minor) 0 0 var(--c-agent); }
+.opace tr[data-prow] th .onote { display: inline; margin-left: var(--sp-2); }
+.opace .v { color: var(--c-text); font-size: var(--fs-row); }
+.opace .bl { width: calc(var(--sp-unit) * 22); }
+.ovb-wt { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-5); }
+.ovb-wth { display: flex; align-items: baseline; gap: var(--sp-2); }
+.ovb-wth .t-micro { font-size: var(--fs-tiny); }
+.ovb-wt svg { display: block; width: 100%; height: var(--sp-2); border-radius: var(--r-pill); overflow: hidden; }
+.wt-s { fill: var(--c-edge-strong); }
+.ovb-wtl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); font-size: var(--fs-micro); color: var(--c-text-soft); }
+.ovb-wtl b { font-weight: var(--fw-strong); color: var(--c-text); }
+
+/* ---------- In motion ---------- */
+.ovb-st { display: flex; flex-direction: column; }
+.ovb-sth { display: flex; align-items: baseline; gap: var(--sp-2); padding-bottom: var(--sp-1); }
+.ovb-sth .t-micro { font-size: var(--fs-tiny); }
+.ovb-sth .n { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--c-text-muted); }
+.ovb-next { flex: none; display: inline-flex; align-items: center; margin-left: var(--sp-2); }
+.ovb-next .nc-done { display: inline-flex; }
+.ovb-rest { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.ovb-mgr { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--r-panel); border: var(--line-hair) solid var(--c-line); background: var(--c-surface); }
+.ovb-mh { display: flex; align-items: baseline; gap: var(--sp-2); }
+.ovb-mh .t-micro { font-size: var(--fs-tiny); }
+.ovb-mh .t-gloss { margin-left: auto; }
+
+/* ---------- GitHub API: one quiet line ---------- */
+.oqline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-panel); border: var(--line-hair) solid var(--c-line); font-size: var(--fs-micro); color: var(--c-text-soft); }
+.oqline.is-risk { border-color: var(--c-attention-edge); background: var(--c-attention-wash); }
+.oq-a { display: inline-flex; align-items: baseline; gap: var(--sp-4); }
+.oq-a .t-mono { color: var(--c-text); }
+.oq-b b { font-family: var(--font-mono); font-weight: var(--fw-strong); }
+.oq-b.is-low, .oq-b.is-mid { color: var(--c-attention-on); }
+.oq-b.is-high { color: var(--c-failed-on); }
+.oq-note { margin-left: auto; }
+.oqline .lnk { font-size: var(--fs-micro); }
+[data-quota] .oquota { margin-top: var(--sp-3); }
+

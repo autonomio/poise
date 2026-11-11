@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="chat.css">
+<link rel="stylesheet" href="manager.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="chat-page hide-reasoning" data-view="manager" data-selected="mgr">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a class="on" href="chat.html" aria-current="page" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open. Opens Answer here in Overview." data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <div class="chat-layout mgr-layout list-hidden">
+    <div class="seg mgr-panes" role="group" aria-label="Pane" data-ref="mgr.panes"><button data-mgr-pane="chat" aria-pressed="true">Manager</button><button data-mgr-pane="work" aria-pressed="false">Work table</button></div>
+    <aside class="list" aria-label="Chats" data-order="attention" data-grouped="true">
+      <div class="list-head"><h2 data-ref="list">Chats</h2><button class="ib" data-act="new" aria-label="New chat" data-ref="list.new"><i data-i="plus"></i></button><button class="ib" data-act="list" aria-pressed="true" aria-label="Hide chat list" data-ref="list.hide"><i data-i="sidebar"></i></button></div>
+      <div class="order"><span class="t-micro">Order</span><button class="order-btn" data-act="order" data-menu="order-menu" aria-haspopup="menu" aria-expanded="false" data-ref="list.order"><span data-order-label>Attention</span><i data-i="down" class="sm"></i></button><span class="held" role="status" data-ref="list.held" hidden></span></div>
+      <div class="bulk" data-bulk hidden role="toolbar" aria-label="Selected chats"><span data-bulk-n>0 chats selected</span><button class="btn-ghost" data-act="bulk-del" data-ref="list.bulk.delete">Delete</button><button class="lnk" data-act="bulk-clear" data-ref="list.bulk.clear">Clear</button></div>
+      <div class="list-scroll" data-list role="list"></div>
+      <div class="list-resize" role="separator" aria-orientation="vertical" aria-label="Resize chat list" tabindex="0" data-ref="list.resize"></div>
+    </aside>
+
+    <!-- 1 · The Manager's chat -->
+    <main class="convo" data-chat-state="running">
+      <div class="chat-head">
+        <div class="head-1">
+          <button class="ib show-list" data-act="list" aria-pressed="false" aria-label="Show chat list" data-ref="list.show"><i data-i="sidebar"></i></button>
+          <span class="st" data-state="running" data-ref="state" data-head-state><span data-term="state.running">Running</span></span>
+          <h1 class="title is-mgr" data-ref="mgr">Manager</h1>
+          <span class="lede">files tickets, gives each to a worker, and watches it to its merge</span>
+          <button class="btn-ghost" data-act="pause-mgr" aria-label="Hold the Manager" data-ref="mgr.pause"><i data-i="pause" class="sm"></i><span data-pause-label>Hold</span></button>
+          <button class="btn-ghost" data-act="controls" aria-pressed="false" aria-controls="mgr-sheet" data-ref="mgr.controls"><i data-i="sliders" class="sm"></i>Controls</button>
+        </div>
+        <div class="head-2">
+          <div class="ident">
+            <span class="agent" data-ref="hdr.agent"><b>Claude Code</b></span>
+            <button class="pick" aria-disabled="true" data-ref="hdr.model">Opus 5</button>
+            <button class="pick" aria-disabled="true" data-ref="hdr.effort">high</button>
+          </div>
+          <div class="wake" data-ref="mgr.wake"><label class="t-micro" for="mgr-wake">Wake every</label><span class="sselect"><select id="mgr-wake" data-wake aria-label="Wake the Manager every"><option value="60">60 min</option><option value="30">30 min</option><option value="15">15 min</option><option value="10">10 min</option><option value="5">5 min</option></select></span><span class="t-gloss" data-wake-status role="status"></span></div>
+          <div class="sgroups">
+            <div class="sgrp" role="group" aria-labelledby="g-show"><span class="t-micro" id="g-show" data-ref="grp.show">Show</span>
+              <button class="sbtn" data-act="activity" aria-pressed="true" data-ref="sw.activity"><span class="switch"></span>Activity</button>
+              <button class="sbtn" data-act="reasoning" aria-pressed="false" data-ref="sw.reasoning"><span class="switch"></span>Reasoning</button>
+              <button class="sbtn" data-act="tools" aria-pressed="true" data-ref="sw.tools"><span class="switch"></span>Tools</button>
+            </div>
+            <div class="sgrp" role="group" aria-labelledby="g-this"><span class="t-micro" id="g-this" data-ref="grp.chat">This chat</span>
+              <button class="sbtn plain" data-act="timers" aria-pressed="false" data-ref="sw.timers">Timers <span class="n">2</span></button>
+            </div>
+            <div class="sgrp" role="group" aria-labelledby="g-shared"><span class="t-micro" id="g-shared" data-ref="grp.shared">Shared</span>
+              <button class="sbtn plain" data-act="memories" aria-pressed="false" data-ref="sw.memories">Memories</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scroll" data-scroll>
+        <div class="col fresh fresh-wrap">
+          <h2>What should we work on?</h2>
+          <p>Chats and their files stay local to Poise. Type at once: your first message sends the moment the chat is ready.</p>
+          <fieldset class="newtype" data-newtype data-ref="new.type"><legend class="t-micro">Type</legend><label><input type="radio" name="newtype" value="chat"> Chat</label><label><input type="radio" name="newtype" value="worker"> Worker</label><label class="is-off"><input type="radio" name="newtype" value="manager" disabled> Manager</label><a class="lnk" href="manager.html" data-ref="new.manager">Open the Manager</a><span class="t-gloss">A worker carries the /worker charter on every turn. There is one Manager, and it exists.</span></fieldset>
+          <button class="pick" data-ref="composer.model">Claude Code · Opus 5 · High</button>
+          <button class="back" data-act="back" data-ref="back"><i data-i="chev" class="sm"></i>Back to the Manager</button>
+        </div>
+        <div class="col away fresh-wrap" data-away>
+          <span class="st" data-state="idle" data-ref="state" data-away-state><span data-away-word>Idle</span></span>
+          <h2 data-away-title>Chat</h2>
+          <p data-ref="away">This mock shows the Manager and #475 in full. In Poise, this chat’s conversation opens here with its own situation and queue.</p>
+          <button class="back" data-act="back" data-ref="back"><i data-i="chev" class="sm"></i>Back to the Manager</button>
+        </div>
+
+        <div class="col not-fresh" data-transcript>
+          <!-- Your instruction, and the Manager's work on it -->
+          <section class="turn" data-active-turn>
+            <div class="ticket" data-ref="msg.you">Work through the shard reliability issues on poise this evening: #474, #478 and #482, and finish #471. Keep Limen moving, but don’t touch the gate until #1141 lands.
+              <div class="life" data-ref="life" data-life="Executing" data-turn-life><i class="d"></i><b class="d"></b><i class="skip"></i><b class="d"></b><i class="now"></i><b></b><i></i><span class="lbl"><b>Executing</b> · since 18:40</span></div>
+            </div>
+            <div class="route" data-route>
+              <div class="stop is-special activity"><p class="ev">Filed #474, #478 and #482, and gave each to its own worker<span class="t-mono">18:40</span></p></div>
+              <div class="stop is-special activity"><p class="ev">Started <b>W1</b> on #474, <b>W2</b> on #471, <b>W3</b> on #478 and <b>W4</b> on the note review (#477)<span class="t-mono">18:41</span></p></div>
+              <div class="stop is-special activity"><p class="ev">#482 and #483 wait for a slot, in that order: each gets its own worker when one frees<span class="t-mono">18:41</span></p></div>
+              <div class="stop is-special activity"><p class="ev"><b>W5</b> is blocked until Acme/Limen#1141 is reviewed; it will not touch the gate<span class="t-mono">18:51</span></p></div>
+              <div class="stop is-special activity"><p class="ev">Woken on schedule: reviewed the workspace from the work table; W7 stalled with 2 commits unpushed, and Poise woke it<span class="t-mono">19:00</span></p></div>
+              <div class="stop is-special activity"><p class="ev">Woken by your message: with Rhythm now 7, gave #482 to <b>W6</b> in the new slot; #483 is next<span class="t-mono">19:26</span></p></div>
+              <div class="stop is-prose"><div class="md"><p>Seven workers hold the slots and #471 is closest to done. W4 needs your choice of note: it is first in the Switchboard. #483 gets a worker on my first turn after a slot frees; a worker keeps its slot until you close its chat, so close each one whose task is done.</p></div><button class="copy" data-act="copy" data-ref="copy"><i data-i="copy" class="sm"></i><span>Copy</span></button></div>
+              <div class="stop is-prose" data-dots><span class="dots"><i></i><i></i><i></i></span></div>
+            </div>
+            <div class="foot" data-ref="foot" data-turn-foot hidden></div>
+          </section>
+        </div>
+      </div>
+      <div class="dock">
+        <div class="col">
+          <div class="situation not-fresh" data-sit data-ref="sit">
+            <div data-ref="sit.now"><span class="t-micro">Now</span><span class="v obs" data-sit-now>7 of 7 slots in use</span></div>
+            <div data-ref="sit.next"><span class="t-micro">Next</span><span class="v"><span class="int" data-sit-next>Give #483 to a worker when a slot frees</span></span></div>
+            <div data-ref="sit.waiting"><span class="t-micro">Waiting for</span><span class="v obs" data-sit-wait>You: 1 decision</span></div>
+            <div data-ref="sit.decision"><span class="t-micro">Decision</span><span class="v" data-sit-dec><button class="dec-btn" data-act="goto-req">Needs you · Answer</button></span></div>
+            <div class="asof"><span class="t-micro">As of</span><span class="v" data-asof data-ref="sit.fresh">just now</span><span class="v est" data-est data-ref="sit.est" hidden></span></div>
+          </div>
+          <form class="composer" data-composer>
+            <textarea rows="1" aria-label="Message" data-ref="composer" placeholder="Instruct the Manager (Enter)"></textarea>
+            <div class="ctl">
+              <button type="button" class="ib" aria-label="Attach file" data-ref="composer.attach"><i data-i="attach"></i></button>
+              <span class="q-hint not-fresh">The Manager’s chat never uses a slot</span>
+              <span class="spacer"></span>
+              <button type="button" class="send" data-act="send" aria-label="Send" data-ref="composer.send"><i data-i="send"></i></button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </main>
+
+    <!-- 2 · The work table: every task, whoever drives it -->
+    <section class="work" aria-label="Work table" data-work>
+      <div class="work-h">
+        <h2 data-ref="mgr.table">Work</h2>
+        <span class="t-gloss" data-table-asof data-ref="mgr.table.asof">observed 19:41 · serving autonomio/poise@3f9c2ab</span>
+        <span class="slotline" data-slotline data-ref="mgr.slotline"></span>
+        <button class="eff" data-act="controls-open" data-ref="mgr.effective" data-eff><span class="t-micro">Rhythm</span><b data-eff-r>7</b><span class="t-micro">Stability</span><b data-eff-s>Balanced</b><span class="t-micro">Autonomy</span><b data-eff-a>Balanced</b></button>
+      </div>
+      <p class="work-key t-gloss" data-ref="mgr.col.flags"><b>C</b> conflicts · <b>R</b> an open review · <b>B</b> behind main · <b>CI</b> failing checks · ☑ seen · ☐ clear · ? not seen yet</p>
+      <p class="work-stale is-attn" data-table-stale hidden></p>
+      <div class="work-scroll">
+        <table class="wt" data-wt>
+          <thead><tr>
+            <th scope="col" data-ref="mgr.col.task">Task</th>
+            <th scope="col" data-ref="mgr.col.driver">Driven by</th>
+            <th scope="col" data-ref="mgr.col.now">Now</th>
+            <th scope="col" class="fl" data-ref="mgr.col.flags" title="Conflicts" aria-label="Conflicts">C</th>
+            <th scope="col" class="fl" data-ref="mgr.col.flags" title="Open review" aria-label="Open review">R</th>
+            <th scope="col" class="fl" data-ref="mgr.col.flags" title="Behind main" aria-label="Behind main">B</th>
+            <th scope="col" class="fl" data-ref="mgr.col.flags" title="CI failing" aria-label="CI failing">CI</th>
+          </tr></thead>
+          <tbody data-wt-body></tbody>
+        </table>
+      </div>
+
+      <!-- The Manager's controls open over the work table -->
+      <div class="sheet" id="mgr-sheet" data-sheet hidden>
+        <section data-panel="controls">
+          <div class="pane-h"><h3 tabindex="-1">Manager controls</h3><button class="ib" data-act="controls" aria-label="Close Manager controls" data-ref="pane.close"><i data-i="cross"></i></button></div>
+          <p class="pane-d">The same settings as Settings → Manager. They ride on every Manager turn and take precedence over its standing instructions.</p>
+          <div class="mc" data-ref="mgr.effective">
+            <div class="mc-h"><span class="t-micro">In effect</span></div>
+            <p class="sentence" data-sentence></p>
+            <span class="t-gloss scope" data-ref="mgr.scope" data-mgr-scope>Scope: every followed repository</span>
+          </div>
+          <div class="mc" data-rhythm data-limit="7" data-used="7" data-paused="1" data-waiting-slot="1">
+            <div class="mc-h"><span class="t-micro" data-ref="mgr.rhythm">Rhythm</span><span class="t-gloss">how many workers hold a task at once</span></div>
+            <div class="rhythm">
+              <button class="ib" data-act="rhythm" data-step="-1" aria-label="One slot fewer" data-ref="mgr.rhythm"><i data-i="minus"></i></button>
+              <output class="rh-n" data-rh-n data-ref="mgr.rhythm">7</output>
+              <button class="ib" data-act="rhythm" data-step="1" aria-label="One slot more" data-ref="mgr.rhythm"><i data-i="plus"></i></button>
+              <div class="slots" role="slider" tabindex="0" aria-label="Rhythm" aria-valuemin="1" aria-valuemax="10" aria-valuenow="7" data-slots data-ref="mgr.slots"></div>
+            </div>
+            <p class="mc-now" data-rh-now></p>
+          </div>
+          <div class="mc" data-stability="2">
+            <div class="mc-h"><span class="t-micro" data-ref="mgr.stability">Stability ↔ Expansion</span><span class="t-gloss">what it does when Poise releases</span></div>
+            <div class="stops" role="radiogroup" aria-label="Stability ↔ Expansion" data-stops="stability"></div>
+            <p class="mc-now" data-policy="stability"></p>
+          </div>
+          <div class="mc" data-autonomy="2">
+            <div class="mc-h"><span class="t-micro" data-ref="mgr.autonomy">Autonomy</span><span class="t-gloss">what it decides, what comes to you</span></div>
+            <div class="stops" role="radiogroup" aria-label="Autonomy" data-stops="autonomy"></div>
+            <p class="mc-now" data-policy="autonomy"></p>
+          </div>
+          <div class="mc">
+            <div class="mc-h"><span class="t-micro" data-ref="mgr.paused">Pause</span><span class="t-gloss">new work waits; it still wakes</span></div>
+            <button class="sbtn" data-act="mgr-paused" aria-pressed="false" data-ref="mgr.paused"><span class="switch"></span>Pause new work</button>
+            <p class="mc-now" data-paused-now></p>
+          </div>
+          <div class="mc">
+            <div class="mc-h"><span class="t-micro" data-ref="mgr.instructions">Standing instructions</span><span class="t-gloss">the /manager snippet</span><span class="n" data-mgr-instr-n>7</span></div>
+            <ol class="sil" data-mgr-instr></ol>
+            <a class="lnk" href="settings.html?open=manager&amp;back=manager#snippets" data-ref="set.mgr.charter.edit">Edit in Snippets</a>
+          </div>
+        </section>
+        <section data-panel="timers" hidden>
+          <div class="pane-h"><h3 tabindex="-1" data-ref="timers">Timers</h3><button class="ib" data-act="timers" aria-label="Close timers" data-ref="pane.close"><i data-i="cross"></i></button></div>
+        <p class="pane-d" data-timers-d></p>
+        <p class="tdown" data-timers-down hidden></p>
+        <span class="cline"><button class="sbtn" data-act="timer-holdchat" aria-pressed="false" data-ref="timer.holdchat"><span class="switch"></span>Hold this chat</button><button class="sbtn" data-act="timer-hold" aria-pressed="false" data-ref="timer.hold"><span class="switch"></span>Hold all timers</button></span>
+        <ul class="timers" data-timers></ul>
+        <form class="tadd" data-timer-add data-ref="timer.add">
+          <p class="t-micro">A new timer</p>
+          <input class="sinput" data-t="label" placeholder="Label" aria-label="Timer label" autocomplete="off">
+          <textarea class="sarea" data-t="message" rows="2" placeholder="The message it sends this chat" aria-label="Message it sends"></textarea>
+          <span class="cline"><span class="seg" role="group" aria-label="Schedule"><button type="button" aria-pressed="true" data-act="timer-kind" data-v="once">Once in</button><button type="button" aria-pressed="false" data-act="timer-kind" data-v="every">Every</button></span><input class="sinput is-short" data-t="minutes" value="30" inputmode="numeric" aria-label="Minutes"><span class="t-gloss">min</span><button type="button" class="btn-ghost" data-act="timer-add">Add timer</button></span>
+          <p class="t-gloss" data-timer-held hidden>On hold: new timers start when you resume.</p>
+        </form>
+        </section>
+        <section data-panel="memories" hidden>
+          <div class="pane-h"><h3 data-ref="mem">Memories</h3><button class="ib" data-act="memories" aria-label="Close memories" data-ref="pane.close"><i data-i="cross"></i></button></div>
+          <p class="pane-d">Included last in every message, across chats and agents. Closing this keeps them active.</p>
+          <textarea class="mem-text" aria-label="Memories text" data-mem data-ref="mem">Prefer small pull requests, one concern each.
+Never merge without green checks.
+Ask before touching deploy/ or anything with credentials.
+Write commit messages in the imperative.</textarea>
+          <div class="saved" data-saved>Saved automatically</div>
+        </section>
+      </div>
+    </section>
+
+    <!-- 3 · The Switchboard: what every chat is doing, and what needs you -->
+    <aside class="sb" aria-label="Switchboard" data-sb>
+      <div class="sb-h">
+        <div class="sb-t"><h2 data-ref="sb">Switchboard</h2><span class="st" data-state="running" data-sb-state data-ref="sb.state"><span data-term="state.running">Running</span></span><span class="t-gloss" data-sb-meta>watching 14 chats · last check 19:38, 41k tokens · next 19:48</span></div>
+        <div class="sb-acts">
+          <button class="btn-ghost" data-act="sb-check" data-ref="sb.check">Check now</button>
+          <button class="btn-ghost" data-act="sb-pause" data-ref="sb.pause">Pause checks</button>
+          <a class="lnk" href="chat.html?back=manager" data-ref="sb.chat">Open its chat</a>
+          <button class="btn-ghost" data-act="sb-off" data-ref="sb.off">Turn off</button>
+          <button class="ib" data-act="sb-hide" aria-label="Hide the Switchboard" data-ref="sb.hide"><i data-i="cross" class="sm"></i></button>
+        </div>
+        <div class="sb-alert" data-sb-alert hidden></div>
+        <div class="sb-counts" role="group" aria-label="Filter chats" data-sb-counts></div>
+      </div>
+      <div class="sb-scroll">
+        <section class="sb-sec"><h3 class="t-micro">Needs you</h3><div data-sb-needs></div></section>
+        <section class="sb-sec"><h3 class="t-micro">All chats</h3><ul class="sb-chats" data-sb-chats></ul></section>
+        <p class="sb-cover" data-ref="sb.cover">Covers the Poise chats in this workspace. Sessions outside Poise and GPT browser chats are not observed.</p>
+      </div>
+    </aside>
+    <button class="sb-tab" data-act="sb-show" hidden aria-label="Show the Switchboard" data-ref="sb.hide"><span>Switchboard</span><span class="badge" data-sb-badge>1</span></button>
+  </div>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <button class="menu-row" role="menuitem" data-act="controls-open" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></button>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=manager#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="menu order-menu" id="order-menu" hidden role="menu" aria-label="Order">
+  <button class="menu-row" role="menuitemradio" data-order="attention" aria-checked="true" data-ref="list.order"><b>Attention</b><span>Needs you, Blocked, Failed, Running, Waiting, then the rest</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="recent" aria-checked="false" data-ref="list.order"><b>Recent activity</b><span>Most recently active first</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="project" aria-checked="false" data-ref="list.order"><b>Project</b><span>By repository, then by attention</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="manual" aria-checked="false" data-ref="list.order"><b>Manual</b><span>Your own order; drag rows to arrange</span></button>
+</div>
+
+<div class="menu slash" id="slash-menu" hidden role="listbox" aria-label="Commands">
+  <button class="menu-row" data-cmd="/create"><code>/create</code><span>Save a reusable switch · /name instructions</span></button>
+  <button class="menu-row" data-cmd="/model"><code>/model</code><span>Choose model and effort</span></button>
+  <button class="menu-row" data-cmd="/compact"><code>/compact</code><span>Compact model context; keep chat history</span></button>
+  <button class="menu-row" data-cmd="/reset"><code>/reset</code><span>Clear chat history and start fresh</span></button>
+  <button class="menu-row" data-cmd="/review"><code>/review</code><span>Critically review the latest reply · [focus]</span></button>
+  <button class="menu-row" data-cmd="/content"><code>/content</code><span>Author an article from a topic · &lt;topic&gt;</span></button>
+  <button class="menu-row" data-cmd="/consensus"><code>/consensus</code><span>Debate a topic across models · &lt;topic&gt;</span></button>
+  <button class="menu-row" data-cmd="/mode"><code>/mode</code><span>Switch mode · &lt;mode&gt;</span></button>
+  <button class="menu-row" data-cmd="/fork"><code>/fork</code><span>Fork this chat</span></button>
+  <button class="menu-row" data-cmd="/queue"><code>/queue</code><span>Queue a message after the current or next task · &lt;message&gt;</span></button>
+  <button class="menu-row" data-cmd="/poise"><code>/poise</code><span>Implement and release a Poise change · &lt;request&gt;</span></button>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="tasks-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="chat.js"></script>
+<script src="manager.js"></script>
+<script src="bell.js"></script>
+</body>
+</html>

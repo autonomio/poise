@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="chat.css">
+<link rel="stylesheet" href="jev.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="chat-page hide-reasoning" data-view="chat" data-selected="c475">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a class="on" href="chat.html" aria-current="page" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open. Opens Answer here in Overview." data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <div class="chat-layout">
+    <!-- The chat list: ordered by attention unless you choose otherwise -->
+    <aside class="list" aria-label="Chats" data-order="attention" data-grouped="true">
+      <div class="list-head"><h2 data-ref="list">Chats</h2><button class="ib" data-act="new" aria-label="New chat" data-ref="list.new"><i data-i="plus"></i></button><button class="ib" data-act="list" aria-pressed="true" aria-label="Hide chat list" data-ref="list.hide"><i data-i="sidebar"></i></button></div>
+      <div class="order"><span class="t-micro">Order</span><button class="order-btn" data-act="order" data-menu="order-menu" aria-haspopup="menu" aria-expanded="false" data-ref="list.order"><span data-order-label>Attention</span><i data-i="down" class="sm"></i></button><span class="held" role="status" data-ref="list.held" hidden></span></div>
+      <div class="bulk" data-bulk hidden role="toolbar" aria-label="Selected chats"><span data-bulk-n>0 chats selected</span><button class="btn-ghost" data-act="bulk-del" data-ref="list.bulk.delete">Delete</button><button class="lnk" data-act="bulk-clear" data-ref="list.bulk.clear">Clear</button></div>
+      <div class="list-scroll" data-list role="list"></div>
+      <div class="list-resize" role="separator" aria-orientation="vertical" aria-label="Resize chat list" tabindex="0" data-ref="list.resize"></div>
+    </aside>
+
+    <!-- The conversation -->
+    <main class="convo" data-chat-state="needs-you">
+      <div class="chat-head">
+        <div class="head-1">
+          <button class="ib show-list" data-act="list" aria-pressed="true" aria-label="Show chat list" data-ref="list.show"><i data-i="sidebar"></i></button>
+          <span class="st" data-state="needs-you" data-ref="state" data-head-state><span data-term="state.needs-you">Needs you</span></span>
+          <h1 class="title">#475 Stop Browser Chromium shards being cancelled at 15 minutes</h1>
+          <button class="btn-stop" data-act="stop" data-ref="hdr.stop"><i data-i="stop" class="sm"></i>Stop<span class="kbd">⌘.</span></button>
+          <button class="btn-ghost" data-act="fork" aria-disabled="true" data-ref="hdr.fork"><i data-i="fork" class="sm"></i>Fork</button>
+          <button class="btn-ghost" data-act="handoff" data-menu="handoff-menu" data-menu-align="right" aria-haspopup="menu" data-ref="hdr.handoff"><i data-i="handoff" class="sm"></i>Hand off…</button>
+        </div>
+        <div class="head-2">
+          <div class="ident">
+            <span class="agent" data-ref="hdr.agent"><b>Muse</b></span>
+            <button class="pick" aria-disabled="true" data-ref="hdr.model">spark 1.3 contributor</button>
+            <button class="pick" aria-disabled="true" data-ref="hdr.effort">max</button>
+            <span class="ws" data-ref="hdr.workspace"><span class="t-mono">autonomio/poise</span><span class="t-mono">fix/browser-shard-timeout</span><span class="dirty">1 file changed</span></span>
+          </div>
+          <div class="sgroups">
+            <div class="sgrp" role="group" aria-labelledby="g-chat"><span class="t-micro" id="g-chat" data-ref="grp.chat">This chat</span>
+              <button class="sbtn" data-act="automerge" aria-pressed="false" data-ref="sw.automerge"><span class="switch"></span>Auto-merge</button>
+              <button class="sbtn" data-act="safemode" aria-pressed="false" data-ref="sw.safemode"><span class="switch"></span>Safe mode</button>
+              <button class="sbtn plain" data-act="timers" aria-pressed="false" data-ref="sw.timers">Timers <span class="n">4</span></button>
+            </div>
+            <div class="sgrp" role="group" aria-labelledby="g-show"><span class="t-micro" id="g-show" data-ref="grp.show">Show</span>
+              <button class="sbtn" data-act="activity" aria-pressed="true" data-ref="sw.activity"><span class="switch"></span>Activity</button>
+              <button class="sbtn" data-act="reasoning" aria-pressed="false" data-ref="sw.reasoning"><span class="switch"></span>Reasoning</button>
+              <button class="sbtn" data-act="tools" aria-pressed="true" data-ref="sw.tools"><span class="switch"></span>Tools</button>
+            </div>
+            <div class="sgrp" role="group" aria-labelledby="g-shared"><span class="t-micro" id="g-shared" data-ref="grp.shared">Shared</span>
+              <button class="sbtn plain" data-act="memories" aria-pressed="false" data-ref="sw.memories">Memories</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scroll" data-scroll>
+        <!-- New chat: nothing starts until the first send -->
+        <div class="col fresh fresh-wrap">
+          <h2>What should we work on?</h2>
+          <p>Chats and their files stay local to Poise. Type at once: your first message sends the moment the chat is ready.</p>
+          <fieldset class="newtype" data-newtype data-ref="new.type"><legend class="t-micro">Type</legend><label><input type="radio" name="newtype" value="chat"> Chat</label><label><input type="radio" name="newtype" value="worker"> Worker</label><label class="is-off"><input type="radio" name="newtype" value="manager" disabled> Manager</label><a class="lnk" href="manager.html" data-ref="new.manager">Open the Manager</a><span class="t-gloss">A worker carries the /worker charter on every turn. There is one Manager, and it exists.</span></fieldset>
+          <button class="pick" data-ref="composer.model">Claude Code · Opus 5 · High</button>
+          <p class="fresh-jev"><button class="lnk" data-act="new-jev" data-ref="new.jev">JEV · Primitive builder</button> Build Choice, Score and Noul questions; get typed results, not chat replies.</p>
+          <button class="back" data-act="back" data-ref="back"><i data-i="chev" class="sm"></i>Back to #475</button>
+        </div>
+        <!-- Another chat, outside this mock: a dependable route back -->
+        <div class="col away fresh-wrap" data-away>
+          <span class="st" data-state="idle" data-ref="state" data-away-state><span data-away-word>Idle</span></span>
+          <h2 data-away-title>Chat</h2>
+          <p data-ref="away">This mock shows #475 in full. In Poise, this chat’s conversation opens here with its own situation and queue.</p>
+          <a class="lnk" data-away-shut hidden></a>
+          <button class="back" data-act="back" data-ref="back"><i data-i="chev" class="sm"></i>Back to #475</button>
+        </div>
+
+        <div class="col not-fresh" data-transcript>
+          <section class="deploy-card" data-ref="deploy" data-deploy>
+            <div class="top"><span class="chip is-special">Poise change</span><span data-deploy-text>Implementing in this chat</span><span class="spin" hidden></span></div>
+            <p>Stop Browser Chromium shards being cancelled at 15 minutes on PR runs · <span class="t-mono" data-deploy-pr>no pull request yet</span></p>
+            <div class="stage-row"><span class="stage" data-stage><em>Implement</em><b></b><i></i><b></b><i></i><b></b><i></i><b></b><i></i><b></b><i></i></span><span class="t-gloss" data-stage-gloss>then Checks, CI, Merge, Verify, Live</span></div>
+          </section>
+
+          <!-- Turn 1 -->
+          <section class="turn">
+            <div class="ticket" data-ref="msg.you">#475 Stop Browser Chromium shards being cancelled at 15 minutes on PR runs
+              <div class="extras"><span class="extra">browser-shards.log</span><span class="extra t-mono">@.github/workflows/browser.yml</span></div>
+              <div class="life" data-ref="life" data-life="Completed"><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><span class="lbl"><b>Completed</b> · 19:12</span></div>
+            </div>
+            <div class="route">
+              <div class="stop is-special activity"><p class="ev" data-ref="msg.extension">Extensions: Sentry is not available in this chat: Muse takes local commands and Streamable HTTP servers, not SSE.<span class="t-mono">19:02</span></p></div>
+              <div class="stop is-ok activity">
+                <div class="plan" data-ref="plan"><span class="t-micro">Plan</span>
+                  <ul><li><span class="cap is-done"></span>Find where the shard timeout is set</li><li><span class="cap is-done"></span>Raise the PR-run limit; keep main at 15 minutes</li><li class="now"><span class="cap is-now"></span>Run the browser gate</li><li><span class="cap is-idle"></span>Open the pull request</li></ul>
+                </div>
+              </div>
+              <div class="stop is-ok activity"><div class="tool"><button class="tool-h" data-act="tool" aria-expanded="false" data-ref="tool"><i data-i="read" class="sm"></i><span class="ttl">read 6 files</span><i data-i="check" class="sm ok"></i></button>
+                <div class="tool-b"><div class="pre">.github/workflows/browser.yml
+.github/workflows/ci.yml
+playwright.config.ts
+scripts/browser-shards.mjs
+docs/Testing.md
+package.json</div></div></div></div>
+              <div class="stop is-ok activity"><div class="tool open"><button class="tool-h" data-act="tool" aria-expanded="true" data-ref="tool"><i data-i="term" class="sm"></i><span class="ttl">rg -n "timeout-minutes" .github/workflows</span><span class="el" data-ref="tool.elapsed">0.3s</span><i data-i="check" class="sm ok"></i></button>
+                <div class="tool-b"><span class="t-micro">Output</span><div class="pre">.github/workflows/browser.yml:42:    timeout-minutes: 15
+.github/workflows/ci.yml:18:    timeout-minutes: 25</div><span class="exit">exit 0</span></div></div></div>
+              <div class="stop is-ok activity"><div class="diff" data-ref="diff"><div class="diff-h"><i data-i="edit" class="sm"></i><span class="t-mono">.github/workflows/browser.yml</span><button class="btn-ghost" data-act="revert" data-ref="diff.revert">Revert</button></div>
+                <div class="diff-b"><div class="dl del">−    timeout-minutes: 15</div><div class="dl add">+    timeout-minutes: ${{ github.event_name == 'pull_request' &amp;&amp; 30 || 15 }}</div></div></div></div>
+              <div class="stop is-prose"><div class="md"><p>The Chromium shards hit the 15-minute job limit on PR runs because a PR run builds the extension first. I raised the PR-run limit to 30 minutes in <a class="file" tabindex="0" data-act="file" data-ref="file">.github/workflows/browser.yml:42</a> and left main at 15, so a hung shard on main still fails fast.</p></div><button class="copy" data-act="copy" data-ref="copy"><i data-i="copy" class="sm"></i><span>Copy</span></button></div>
+            </div>
+            <div class="foot" data-ref="foot"><span class="t-mono" title="Finished Friday 23 October 2026 at 19:12:40 EEST">19:12</span><span class="ft-activity">· 4m 10s · 88,204 tokens</span></div>
+          </section>
+
+          <!-- Turn 2: from the work monitor; the Manager answered -->
+          <section class="turn">
+            <div class="src" data-ref="msg.src">From <b>Poise work monitor</b></div>
+            <div class="ticket is-src"><div class="md"><p>Review New Issues commented on <code>autonomio/poise#475</code>. One launch is still waiting for a durable agent result.</p></div></div>
+            <div class="route">
+              <div class="stop is-ok activity"><div class="tool"><button class="tool-h" data-act="tool" aria-expanded="false" data-ref="tool"><i data-i="tool" class="sm"></i><span class="ttl">work_list</span><span class="el" data-ref="tool.elapsed">0.0s</span><i data-i="check" class="sm ok"></i></button>
+                <div class="tool-b"><span class="t-micro">Input</span><div class="pre">{}</div><span class="t-micro">Output</span><div class="pre">{"items":[{"display_label":"Run required local gate suite","family":"managed_bash","status":"active","stoppable":true}]}</div></div></div></div>
+              <div class="stop is-resolved activity"><div class="req is-resolved" data-ref="question"><div class="req-t"><span class="t-micro">Question</span>Monitor notice</div><p class="req-d">Keep waiting for the local gate, or post the partial result now?</p>
+                <div class="opts"><span class="opt is-chosen" aria-disabled="true"><span class="k">1</span>Keep waiting; post the full result with the PR link</span><span class="opt" aria-disabled="true"><span class="k">2</span>Post the partial result now</span></div>
+                <div class="req-acts"><span class="chip is-special" data-ref="answered">Answered by <a class="lnk" href="manager.html?back=chat" data-ref="answered.who">the Manager</a></span><span class="why" data-ref="answered.why">Autonomy: Balanced · standing instruction “wait for green before posting”.</span></div></div></div>
+              <div class="stop is-prose"><div class="md"><p>No action needed on the monitor notice. The local gate is still running; I will post the final result with the PR link once it completes.</p></div><button class="copy" data-act="copy" data-ref="copy"><i data-i="copy" class="sm"></i><span>Copy</span></button></div>
+            </div>
+            <div class="foot" data-ref="foot"><span class="t-mono" title="Finished Friday 23 October 2026 at 19:37:27 EEST">19:37</span><span class="ft-activity">· 50s · 101,394 tokens</span></div>
+          </section>
+
+          <!-- Turn 3: the active turn, paused for your permission -->
+          <section class="turn" data-active-turn>
+            <div class="ticket" data-ref="msg.you">Run the browser gate, then open the pull request.
+              <div class="life" data-ref="life" data-life="Executing" data-turn-life><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="now"></i><b></b><i></i><span class="lbl"><b>Executing</b> · since 19:38</span></div>
+            </div>
+            <div class="route" data-route>
+              <div class="stop is-steer"><div class="ticket" data-ref="msg.steer"><span class="steer-tag" data-term="term.steer">Steer</span>Also run the Firefox shard before you open the PR.
+                <div class="life" data-ref="life" data-life="Executing" data-steer-life><i class="d"></i><b class="d"></b><i class="skip"></i><b class="d"></b><i class="now"></i><b></b><i></i><span class="lbl"><b>Executing</b> · received at the next step</span></div></div></div>
+              <div class="stop is-thought"><div class="thought"><button class="thought-t" data-act="thought" aria-expanded="true" data-ref="thought"><i data-i="think" class="sm"></i>Thinking</button><p class="thought-b">The Firefox project shares the Chromium job template, so the same limit applies. Run it once locally with the shard flag before asking to open the PR.</p></div></div>
+              <div class="stop is-ok activity"><div class="tool"><button class="tool-h" data-act="tool" aria-expanded="false" data-ref="tool"><i data-i="term" class="sm"></i><span class="ttl">npm run check:browser -- --project=firefox</span><span class="el" data-ref="tool.elapsed">2m 41s</span><i data-i="check" class="sm ok"></i></button>
+                <div class="tool-b"><span class="t-micro">Output</span><div class="pre">Running 48 tests using 4 workers
+  ✓  48 passed (2.6m)</div><span class="exit">exit 0</span></div></div></div>
+              <div class="stop is-ask" data-req-stop><div class="req is-focused" id="req-475" tabindex="-1" data-ref="perm" data-req><div class="req-t"><span class="t-micro">Permission</span>Run gh pr create</div>
+                <p class="req-d">Open a pull request for <code>fix/browser-shard-timeout</code> on autonomio/poise.</p>
+                <div class="pre">gh pr create --fill --base main</div>
+                <div class="opts"><button class="opt" data-opt="allow"><span class="k">1</span>Allow once</button><button class="opt" data-opt="always"><span class="k">2</span>Always allow in this session</button><button class="opt" data-opt="deny"><span class="k">3</span>Deny</button></div></div></div>
+              <div class="stop is-prose" data-dots hidden><span class="dots"><i></i><i></i><i></i></span></div>
+            </div>
+            <div class="foot" data-ref="foot" data-turn-foot hidden></div>
+          </section>
+        </div>
+      </div>
+      <!-- Dock: the situation in three registers, the queue, the composer -->
+      <div class="dock">
+        <div class="col">
+          <div class="situation not-fresh" data-sit data-ref="sit">
+            <div data-ref="sit.now"><span class="t-micro">Now</span><span class="v obs" data-sit-now>Paused: asking to run gh pr create</span></div>
+            <div data-ref="sit.next"><span class="t-micro">Next</span><span class="v"><span class="int" data-sit-next>Open the pull request, then post the result on #475</span></span></div>
+            <div data-ref="sit.waiting"><span class="t-micro">Waiting for</span><span class="v obs" data-sit-wait>You: a permission</span></div>
+            <div data-ref="sit.decision"><span class="t-micro">Decision</span><span class="v" data-sit-dec><button class="dec-btn" data-act="goto-req">Needs you · Answer</button></span></div>
+            <div class="asof"><span class="t-micro">As of</span><span class="v" data-asof data-ref="sit.fresh">8 s ago</span><span class="v est" data-est data-ref="sit.est" hidden></span></div>
+          </div>
+          <div class="queue not-fresh" data-queue>
+            <button class="queue-h" data-act="queue" aria-expanded="false" data-ref="queue"><i data-i="chev" class="sm"></i><span class="t-micro">Queue</span><span class="count" data-qcount>2</span><span class="hint">One at a time, after this turn</span></button>
+            <div class="queue-list" data-qlist>
+              <div class="q-item"><span class="n">1</span><div class="q-body"><div class="txt"><span class="t-mono">/review</span> focus on the workflow condition</div><div class="meta"><button class="pick" data-ref="queue.model">Claude Code · Opus 5 · High</button><span class="life" data-ref="life" data-life="Queued"><i class="d"></i><b class="d"></b><i class="now"></i><b></b><i></i><b></b><i></i><span class="lbl"><b>Queued</b> · next</span></span></div></div><button class="ib" data-act="q-remove" aria-label="Remove from queue" data-ref="queue.remove"><i data-i="cross" class="sm"></i></button></div>
+              <div class="q-item"><span class="n">2</span><div class="q-body"><div class="txt">Update docs/Testing.md with the new PR-run limit</div><div class="meta"><button class="pick" data-ref="queue.model">Muse · spark 1.3 · max</button><span class="life" data-ref="life" data-life="Queued"><i class="d"></i><b class="d"></b><i class="now"></i><b></b><i></i><b></b><i></i><span class="lbl"><b>Queued</b> · 2nd</span></span></div></div><button class="ib" data-act="q-remove" aria-label="Remove from queue" data-ref="queue.remove"><i data-i="cross" class="sm"></i></button></div>
+            </div>
+          </div>
+          <form class="composer" data-composer>
+            <textarea rows="1" aria-label="Message" data-ref="composer" placeholder="Write to the agent; it reads this after your answer above (Enter)"></textarea>
+            <div class="ctl">
+              <button type="button" class="ib" aria-label="Attach file" data-ref="composer.attach"><i data-i="attach"></i></button>
+              <span class="steer-hint">Steering the active turn</span>
+              <span class="q-hint not-fresh">⌥Enter adds to the queue</span>
+              <span class="spacer"></span>
+              <button type="button" class="btn-ghost" data-act="resume" data-ref="queue.resume" hidden>Resume queue</button>
+              <button type="button" class="btn-ghost is-primary" data-act="chat-resume" data-ref="composer.resume" hidden>Resume</button>
+              <button type="button" class="send" data-act="send" aria-label="Send" data-ref="composer.send"><i data-i="send"></i></button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </main>
+
+    <!-- Pane on demand: Memories -->
+    <aside class="side" aria-label="Side pane">
+      <div class="pane-scroll">
+        <section data-panel="memories">
+        <div class="pane-h"><h3 data-ref="mem">Memories</h3><button class="ib" data-act="memories" aria-label="Close memories" data-ref="pane.close"><i data-i="cross"></i></button></div>
+        <p class="pane-d">Included last in every message, across chats and agents. Closing this pane keeps them active.</p>
+        <textarea class="mem-text" aria-label="Memories text" data-mem data-ref="mem">Prefer small pull requests, one concern each.
+Never merge without green checks.
+Ask before touching deploy/ or anything with credentials.
+Write commit messages in the imperative.</textarea>
+        <div class="saved" data-saved>Saved automatically</div>
+        </section>
+        <section data-panel="timers" hidden>
+        <div class="pane-h"><h3 tabindex="-1" data-ref="timers">Timers</h3><button class="ib" data-act="timers" aria-label="Close timers" data-ref="pane.close"><i data-i="cross"></i></button></div>
+        <p class="pane-d" data-timers-d></p>
+        <p class="tdown" data-timers-down hidden></p>
+        <span class="cline"><button class="sbtn" data-act="timer-holdchat" aria-pressed="false" data-ref="timer.holdchat"><span class="switch"></span>Hold this chat</button><button class="sbtn" data-act="timer-hold" aria-pressed="false" data-ref="timer.hold"><span class="switch"></span>Hold all timers</button></span>
+        <ul class="timers" data-timers></ul>
+        <form class="tadd" data-timer-add data-ref="timer.add">
+          <p class="t-micro">A new timer</p>
+          <input class="sinput" data-t="label" placeholder="Label" aria-label="Timer label" autocomplete="off">
+          <textarea class="sarea" data-t="message" rows="2" placeholder="The message it sends this chat" aria-label="Message it sends"></textarea>
+          <span class="cline"><span class="seg" role="group" aria-label="Schedule"><button type="button" aria-pressed="true" data-act="timer-kind" data-v="once">Once in</button><button type="button" aria-pressed="false" data-act="timer-kind" data-v="every">Every</button></span><input class="sinput is-short" data-t="minutes" value="30" inputmode="numeric" aria-label="Minutes"><span class="t-gloss">min</span><button type="button" class="btn-ghost" data-act="timer-add">Add timer</button></span>
+          <p class="t-gloss" data-timer-held hidden>On hold: new timers start when you resume.</p>
+        </form>
+        </section>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- Settings: one home for every configuration -->
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=chat" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=chat#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="menu order-menu" id="order-menu" hidden role="menu" aria-label="Order">
+  <button class="menu-row" role="menuitemradio" data-order="attention" aria-checked="true" data-ref="list.order"><b>Attention</b><span>Needs you, Blocked, Failed, Running, Waiting, then the rest</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="recent" aria-checked="false" data-ref="list.order"><b>Recent activity</b><span>Most recently active first</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="project" aria-checked="false" data-ref="list.order"><b>Project</b><span>By repository, then by attention</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="manual" aria-checked="false" data-ref="list.order"><b>Manual</b><span>Your own order; drag rows to arrange</span></button>
+</div>
+
+<div class="menu" id="handoff-menu" hidden role="menu" aria-label="Hand off to">
+  <div class="grp t-micro">Hand off to</div>
+  <button class="menu-row" role="menuitem" data-handoff="Claude Code · Opus 5 · High" data-ref="hdr.handoff">Claude Code · Opus 5 · High</button>
+  <button class="menu-row" role="menuitem" data-handoff="Codex · GPT-5 Codex · High" data-ref="hdr.handoff">Codex · GPT-5 Codex · High</button>
+  <button class="menu-row" role="menuitem" data-handoff="Grok Build · Grok 5" data-ref="hdr.handoff">Grok Build · Grok 5</button>
+</div>
+
+<div class="menu slash" id="slash-menu" hidden role="listbox" aria-label="Commands">
+  <button class="menu-row" data-cmd="/create"><code>/create</code><span>Save a reusable switch · /name instructions</span></button>
+  <button class="menu-row" data-cmd="/model"><code>/model</code><span>Choose model and effort</span></button>
+  <button class="menu-row" data-cmd="/compact"><code>/compact</code><span>Compact model context; keep chat history</span></button>
+  <button class="menu-row" data-cmd="/reset"><code>/reset</code><span>Clear chat history and start fresh</span></button>
+  <button class="menu-row" data-cmd="/review"><code>/review</code><span>Critically review the latest reply · [focus]</span></button>
+  <button class="menu-row" data-cmd="/content"><code>/content</code><span>Author an article from a topic · &lt;topic&gt;</span></button>
+  <button class="menu-row" data-cmd="/consensus"><code>/consensus</code><span>Debate a topic across models · &lt;topic&gt;</span></button>
+  <button class="menu-row" data-cmd="/mode"><code>/mode</code><span>Switch mode · &lt;mode&gt;</span></button>
+  <button class="menu-row" data-cmd="/fork"><code>/fork</code><span>Fork this chat</span></button>
+  <button class="menu-row" data-cmd="/queue"><code>/queue</code><span>Queue a message after the current or next task · &lt;message&gt;</span></button>
+  <button class="menu-row" data-cmd="/poise"><code>/poise</code><span>Implement and release a Poise change · &lt;request&gt;</span></button>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="chat.js"></script>
+<script src="jev.js"></script>
+<script src="bell.js"></script>
+</body>
+</html>

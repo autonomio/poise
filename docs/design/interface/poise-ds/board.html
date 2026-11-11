@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="current.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="cur-page" data-view="current">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a class="on" href="board.html" aria-current="page" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open. Opens Answer here in Overview." data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <main class="cur">
+    <div class="cur-head">
+      <div class="cur-filters">
+        <a class="back" href="#" data-back hidden data-ref="back"></a>
+        <div class="fgrp"><span class="t-micro">Scope</span><button class="pick" data-menu="org-menu" aria-haspopup="menu" aria-expanded="false" data-ref="cur.scope"><span data-org-label>All orgs</span></button></div>
+        <div class="fgrp"><span class="t-micro">Shows</span>
+          <div class="seg" role="group" aria-label="Status" data-filter="status" data-ref="cur.status"><button aria-pressed="true" data-v="any">Any</button><button aria-pressed="false" data-v="open">Open</button></div>
+          <div class="seg" role="group" aria-label="When" data-filter="time" data-ref="cur.time"><button aria-pressed="true" data-v="all">Any time</button><button aria-pressed="false" data-v="today">Today</button><button aria-pressed="false" data-v="yesterday">Yesterday</button><button aria-pressed="false" data-v="week">This week</button></div>
+          <div class="seg" role="group" aria-label="Time means" data-filter="by" data-ref="cur.by"><button aria-pressed="true" data-v="updated">Updated</button><button aria-pressed="false" data-v="opened">Opened</button></div>
+          <input class="search" type="search" placeholder="Filter…" aria-label="Filter cards" data-search data-ref="cur.search">
+        </div>
+        <div class="fgrp"><span class="t-micro">Who</span><div class="seg" role="group" aria-label="Who has it" data-filter="who" data-ref="cur.who"><button aria-pressed="true" data-v="any">Anyone</button><button aria-pressed="false" data-v="poise">Poise</button><button aria-pressed="false" data-v="other">Not Poise</button></div></div>
+        <div class="fgrp push"><span class="t-micro">Order</span><button class="order-btn" data-menu="order-menu" aria-haspopup="menu" aria-expanded="false" data-ref="cur.order"><span data-order-label>Attention</span><i data-i="down" class="sm"></i></button><span class="held" role="status" data-ref="cur.held" hidden></span></div>
+      </div>
+      <div class="cur-sumrow">
+        <div class="cur-sum" role="group" aria-label="In motion" data-sum><span class="t-micro" data-ref="cur.summary">In motion</span></div>
+        <div class="fgrp"><span class="t-micro">View</span><div class="seg" role="group" aria-label="View" data-filter="layout" data-ref="cur.view"><button aria-pressed="true" data-v="lanes">Lanes</button><button aria-pressed="false" data-v="list">List</button></div></div>
+      </div>
+    </div>
+    <div class="lanes" data-lanes></div>
+    <aside class="bside" data-bside hidden aria-label="Beside the board"></aside>
+  </main>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=board" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=board#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="menu" id="org-menu" hidden role="menu" aria-label="Organization">
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="true" data-org="" data-ref="cur.scope">All orgs</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="autonomio" data-ref="cur.scope">autonomio</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="Acme" data-ref="cur.scope">Acme</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="mikkokotila" data-ref="cur.scope">mikkokotila</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="harbor-research" data-ref="cur.scope">harbor-research</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="northwind" data-ref="cur.scope">northwind</button>
+</div>
+
+<div class="menu order-menu" id="order-menu" hidden role="menu" aria-label="Order">
+  <button class="menu-row" role="menuitemradio" data-order="attention" aria-checked="true" data-ref="cur.order"><b>Attention</b><span>Needs you, Blocked, Failed, Running, Waiting, Idle; Done at the end</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="recent" aria-checked="false" data-ref="cur.order"><b>Recent activity</b><span>Most recently updated first</span></button>
+  <button class="menu-row" role="menuitemradio" data-order="repo" aria-checked="false" data-ref="cur.order"><b>Repository</b><span>By repository, then by attention</span></button>
+</div>
+
+<div class="menu confirm" id="chat-confirm" hidden role="dialog" aria-label="Open in Chat" data-confirm></div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-current.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="tasks-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="observe-data.js"></script>
+<script src="current.js"></script>
+<script src="bell.js"></script>
+</body>
+</html>

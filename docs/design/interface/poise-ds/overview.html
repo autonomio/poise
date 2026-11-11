@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="ov-shared.css">
+<link rel="stylesheet" href="overview-a.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="ov-page ova-page" data-view="overview">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a class="on" href="overview.html" aria-current="page" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a href="observe.html" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open" data-ref="bell" data-act="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <main class="ova">
+    <aside class="ova-answer" aria-label="Answer here" data-answers>
+      <div class="ova-ah">
+        <h1 data-ref="ov.answer">Answer here <span class="ocount" data-ncount data-ref="ov.count-open">0</span></h1>
+        <p class="t-gloss">Everything that wants you, with the answer on it.</p>
+        <div class="ova-level"><span class="t-micro">Show</span><div data-levelbox></div></div>
+        <p class="oheld" data-held data-ref="ov.held" hidden></p>
+      </div>
+      <div class="ova-list" data-nlist></div>
+    </aside>
+
+    <div class="ova-main" data-scroll>
+      <header class="ova-head">
+        <div class="ova-title"><h2 data-ref="nav.overview">Overview</h2><span class="t-gloss" data-when>Friday 23 October</span></div>
+        <a class="back" href="#" data-back hidden data-ref="back"></a>
+        <div class="ova-ctl" data-dayctl></div>
+      </header>
+
+      <section class="ova-row" aria-label="Now">
+        <div class="ocard ova-motion" data-ref="ov.motion">
+          <h3 class="ocard-h"><span class="t-micro">In motion</span><span class="t-gloss">Choose a state to list it</span></h3>
+          <div class="ova-counts"><span class="t-gloss">Chats and workers</span><div data-counts="people"></div><span class="t-gloss">Issues and pull requests</span><div data-counts="items"></div><span class="t-gloss">Tasks, by phase</span><div data-phases></div></div>
+          <ul class="owork" data-worklist></ul>
+        </div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-health">
+        <h3 class="ova-sh" id="h-health"><span class="t-micro">System health</span><span class="t-gloss">live · the last 24 hours of v2 chain work · each card opens its evidence</span><span class="chip is-outline" data-ref="ov.planned-health">Planned · #1101</span></h3>
+        <div data-health></div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-day">
+        <h3 class="ova-sh" id="h-day"><span class="t-micro">The day</span><span class="t-gloss" data-dayline></span><span class="t-gloss ova-hint">Drag a tile, or press Alt with an arrow key, to reorder</span></h3>
+        <div class="ova-tiles" data-tiles data-ref="ov.tiles"></div>
+        <div class="ova-detail" data-detail hidden></div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-out">
+        <h3 class="ova-sh" id="h-out"><span class="t-micro" data-ref="ov.outcomes">Pull request outcomes</span><span class="t-gloss">the past five days · each point the mean of the last 24 hours, in PRs per two hours · UTC</span><span class="chip is-outline" data-ref="ov.planned">Planned · #819</span></h3>
+        <div class="ocard ova-out" data-outcomes></div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-pr">
+        <h3 class="ova-sh" id="h-pr"><span class="t-micro">Per merged pull request</span><span class="t-gloss">medians against the 7-day median</span></h3>
+        <div class="ova-small" data-perpr></div>
+      </section>
+
+      <section class="ova-sec ova-three" aria-label="Work, review and the Manager">
+        <div class="ocard" data-worktype></div>
+        <div class="ocard" data-friction></div>
+        <div class="ocard ova-mgr" data-mgr>
+          <h3 class="ocard-h"><span class="t-micro" data-ref="mgr">The Manager</span><span class="t-gloss">same settings as its pane</span></h3>
+          <div data-mgrbox></div>
+        </div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-beh">
+        <h3 class="ova-sh" id="h-beh"><span class="t-micro">Behaviors</span><span class="t-gloss">what Poise did on its own</span></h3>
+        <div data-behaviors></div>
+      </section>
+
+      <section class="ova-sec" aria-labelledby="h-api">
+        <h3 class="ova-sh" id="h-api"><span class="t-micro">GitHub API</span><span class="t-gloss">live, every 15 seconds, whatever the day</span></h3>
+        <div data-quota></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=overview" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=overview#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-overview.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="tasks-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="overview-ui.js"></script>
+<script src="overview-a.js"></script>
+</body>
+</html>

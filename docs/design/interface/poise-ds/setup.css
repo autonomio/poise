@@ -1,0 +1,61 @@
+/* First-run setup: one dialog over a dimmed Poise. A path, not a popup. */
+.ob-page { height: 100vh; overflow: hidden; }
+.ob-page .frame { height: 100vh; }
+.ob-behind { background: var(--c-canvas); }
+.ob-scrim { position: fixed; inset: 0; z-index: var(--z-dialog); display: grid; place-items: center; padding: var(--sp-6); background: var(--c-scrim); }
+.ob { width: min(calc(var(--w-read) * 0.9), 100%); max-height: 100%; display: flex; flex-direction: column; border-radius: var(--r-panel); border: var(--line-hair) solid var(--c-edge); background: var(--c-surface); box-shadow: var(--shadow-dialog); overflow: hidden; }
+.ob-head { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-5) var(--sp-6) var(--sp-4); border-bottom: var(--line-hair) solid var(--c-line); }
+.ob-rail { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--sp-1); }
+.ob-rail span { height: var(--sp-1); border-radius: var(--r-pill); background: var(--c-line); }
+.ob-rail span.is-done { background: var(--c-text-soft); }
+.ob-rail span.is-now { background: var(--c-text); }
+.ob-meta { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-micro); color: var(--c-text-muted); }
+.ob-meta .lnk { margin-left: auto; font-size: var(--fs-micro); }
+.ob-meta .lnk[hidden] { display: none; }
+.ob-title { font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-h3); line-height: var(--lh-tight); color: var(--c-text); outline: none; }
+.ob-intro { max-width: var(--w-read); font-size: var(--fs-row); line-height: var(--lh-body); color: var(--c-text-soft); }
+.ob-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-5) var(--sp-6); }
+.ob-foot { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-6); border-top: var(--line-hair) solid var(--c-line); }
+.ob-foot [hidden] { display: none; }
+.ob-foot .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.ob-status { flex: 1; min-width: 0; font-size: var(--fs-micro); color: var(--c-text-muted); }
+.ob-status[data-tone="ok"] { color: var(--c-done-on); }
+.ob-status[data-tone="error"] { color: var(--c-failed-on); }
+
+/* A step's content */
+.ob-card { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); }
+.ob-card .btn { align-self: flex-start; }
+.ob-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-5); align-items: start; }
+.ob-who { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-row); color: var(--c-text); }
+.ob-who .av { display: inline-grid; place-items: center; width: var(--size-avatar); height: var(--size-avatar); border-radius: 50%; border: var(--line-hair) solid var(--c-edge); font-size: var(--fs-tiny); text-transform: uppercase; color: var(--c-text-soft); }
+.ob-line { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-row); line-height: var(--lh-body); color: var(--c-text-soft); }
+.ob-line .sc, .ob-line .spin { flex: none; }
+.ob-note { font-size: var(--fs-micro); line-height: var(--lh-body); color: var(--c-text-muted); }
+.ob-code { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-card); border: var(--line-hair) dashed var(--c-edge-strong); }
+.ob-code .t-mono { font-size: var(--fs-lead); letter-spacing: var(--ls-micro); color: var(--c-text); }
+.ob-field { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-micro); color: var(--c-text-muted); }
+.ob-field .search { width: calc(var(--sp-unit) * 72); height: var(--size-control); font-size: var(--fs-row); }
+.ob-field select.search { appearance: none; }
+.ob-list { list-style: none; width: 100%; display: flex; flex-direction: column; }
+.ob-list li { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--size-row); border-bottom: var(--line-hair) solid var(--c-line); font-size: var(--fs-row); }
+.ob-list li b { font-weight: var(--fw-strong); color: var(--c-text); }
+.ob-list .t-gloss { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-acts { margin-left: auto; display: inline-flex; gap: var(--sp-2); }
+.ob-list li.ob-term { display: block; padding: var(--sp-2) 0 var(--sp-3); }
+.ob-term pre { min-height: calc(var(--sp-unit) * 20); padding: var(--sp-3); border-radius: var(--r-card); background: var(--c-canvas); border: var(--line-hair) solid var(--c-line); font-size: var(--fs-micro); line-height: var(--lh-body); color: var(--c-text-soft); white-space: pre-wrap; }
+.ob-add { display: flex; gap: var(--sp-2); }
+.ob-add .search { width: calc(var(--sp-unit) * 80); height: var(--size-control); font-size: var(--fs-row); }
+.ob-steps { padding-left: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-row); line-height: var(--lh-body); color: var(--c-text-soft); }
+.ob-pair { color: var(--c-text); }
+.ob-models { width: 100%; border-collapse: collapse; font-size: var(--fs-row); }
+.ob-models th, .ob-models td { padding: var(--sp-1) var(--sp-2) var(--sp-1) 0; text-align: left; }
+.ob-models thead th { font-size: var(--fs-tiny); font-weight: var(--fw-strong); letter-spacing: var(--ls-micro); text-transform: uppercase; color: var(--c-text-muted); }
+.ob-models tbody th { font-weight: var(--fw-regular); color: var(--c-text); white-space: nowrap; }
+.ob-models .search { width: 100%; height: var(--size-control-sm); appearance: none; }
+
+/* How Poise looks: two small pictures of it */
+.ob-tp { display: flex; flex-direction: column; gap: var(--sp-1); height: calc(var(--sp-unit) * 22); padding: var(--sp-2); border-radius: var(--r-card); background: var(--c-canvas); }
+.ob-tp-bar { height: var(--sp-2); border-radius: var(--r-pill); background: var(--c-line); }
+.ob-tp-card { height: var(--sp-4); border-radius: var(--r-card); background: var(--c-surface); }
+.ob-tp-card.is-short { width: 60%; }
+.ob-tn { font-size: var(--fs-row); font-weight: var(--fw-strong); color: var(--c-text); }

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — style guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="guide.css">
+<script src="style.js"></script>
+</head>
+<body>
+<div class="frame">
+  <header class="topbar">
+    <span class="t-micro">Poise · style guide</span>
+    <nav class="rooms" aria-label="Rooms">
+      <a class="room" href="board.html">Board</a><a class="room" href="observe.html">Swarm</a><a class="room" href="chat.html">Chat</a>
+      <button class="btn btn-line" data-style-open aria-pressed="false"><i data-i="palette" class="sm"></i>Style</button>
+    </nav>
+  </header>
+
+  <div class="guide">
+    <nav class="toc" aria-label="Contents">
+      <span class="t-micro">Guide</span>
+      <a href="#contract">The contract</a>
+      <a href="#rules">Rules</a>
+      <a href="#components">Components</a>
+      <span class="t-micro">Tokens</span>
+      <div id="toc-tokens"></div>
+    </nav>
+
+    <main class="doc">
+      <h1 class="t-display" id="contract">Poise style guide</h1>
+      <p class="lede">Bound to the code, not written beside it. This page reads <span class="t-mono">tokens.css</span> and the lint report when it loads and measures every token in your browser. Change anything in Style and the values below change with it, exactly as every view does.</p>
+      <div class="lint" id="lint"><span class="cap lg is-idle"></span><b>Lint report not loaded</b><span>Run tools/lint_tokens.py --json lint-report.json</span></div>
+
+      <h2 id="rules">Rules</h2>
+      <span class="t-gloss">Binding. The lint enforces the ones a machine can check; review holds the rest.</span>
+      <ol class="rules">
+        <li><div><b>Only tokens.css holds raw values</b><span>No hex, rgb, px, ms, weights or line heights anywhere else. Enforced.</span></div></li>
+        <li><div><b>Components read semantic tokens only</b><span>Never a control (--ctl-*) or a primitive (--p-*). Enforced.</span></div></li>
+        <li><div><b>Colour is a meaning</b><span>Needs you, running, done, failed, agent, special, route. Nothing is coloured for decoration.</span></div></li>
+        <li><div><b>Nothing gets brighter</b><span>Surfaces come from the dark stack; the primary action is the soft neutral, never white.</span></div></li>
+        <li><div><b>Two weights</b><span>Regular and strong for the interface; the display weight belongs to the display face only.</span></div></li>
+        <li><div><b>Mono means machine</b><span>IDs, times, hashes, commands and counts. Never texture.</span></div></li>
+        <li><div><b>Borders at rest, shadows in motion</b><span>Hover, drag, menus and dialogs lift. Resting things never cast a shadow.</span></div></li>
+        <li><div><b>Every term has a plain twin</b><span>Uppercase label for the proper name, a lowercase gloss for everyone else.</span></div></li>
+        <li><div><b>The route language</b><span>Work travels a line; stations are capsules in the route colour; filled means done.</span></div></li>
+        <li><div><b>Motion is a setting</b><span>One Tactile spring. Reduced motion, or the Style switch, sets every duration to zero.</span></div></li>
+      </ol>
+
+      <h2 id="components">Components</h2>
+      <span class="t-gloss">Live specimens. Open Style and turn a knob; they follow.</span>
+      <div class="specimens">
+        <div class="spec"><span class="t-micro">Meaning chips</span>
+          <div class="row"><span class="chip is-attention dot">Needs you</span><span class="chip is-running dot">Running</span><span class="chip is-done dot">Ready</span><span class="chip is-failed dot">Failed</span></div>
+          <div class="row"><span class="chip is-agent">Claude</span><span class="chip is-special">Poise change</span><span class="chip is-outline">Waiting for green</span><span class="chip">Held</span></div>
+        </div>
+        <div class="spec"><span class="t-micro">Actions</span>
+          <div class="row"><button class="btn btn-primary">Sign in with GitHub</button><button class="btn btn-line">Run your own</button><button class="btn-ghost">Replay</button><button class="btn-ghost is-armed">Sure?</button></div>
+          <div class="row"><div class="seg"><button aria-pressed="true">Any time</button><button aria-pressed="false">Today</button><button aria-pressed="false">This week</button></div><button class="ib" aria-pressed="true" aria-label="Switch"><span class="switch"></span></button><span class="select">All orgs</span></div>
+        </div>
+        <div class="spec"><span class="t-micro">Stations and routes</span>
+          <div class="row"><span class="cap"></span><span class="cap is-running"></span><span class="cap is-done"></span><span class="cap is-attention"></span><span class="cap is-failed"></span><span class="cap lg is-filled"></span></div>
+          <div class="row"><span class="stage"><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><em>Receiving</em><b></b><i></i></span><span class="stage is-attention"><i class="d"></i><b class="d"></b><em>Waiting</em><b></b><i></i></span><span class="stage is-done"><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><em>Posted</em></span></div>
+        </div>
+        <div class="spec"><span class="t-micro">Motion</span>
+          <div class="track"><span class="cap lg"></span></div>
+          <button class="btn btn-line play" data-play>Play the Tactile spring</button>
+        </div>
+        <div class="spec"><span class="t-micro">Glossed table header</span>
+          <table class="table"><thead><tr><th><span class="t-micro">Status</span><span class="t-gloss">how it’s going</span></th><th><span class="t-micro">Elapsed</span><span class="t-gloss">so far</span></th></tr></thead>
+            <tbody><tr><td><span class="chip is-running dot">Running</span></td><td class="num">4:12</td></tr><tr class="is-attention"><td><span class="chip is-attention dot">Needs you</span></td><td class="num">18:40</td></tr></tbody></table>
+        </div>
+        <div class="spec"><span class="t-micro">Notice</span>
+          <p class="notice"><span class="cap is-attention"></span><span><b>#1477 is running about 25 minutes late.</b> Two tests are failing; Agent 1 is on it.</span></p>
+        </div>
+      </div>
+
+      <div id="tokens-host"></div>
+    </main>
+  </div>
+</div>
+<script src="refdefs.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

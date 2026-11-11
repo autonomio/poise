@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — every view, on one vocabulary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="overview.css">
+<script src="style.js"></script>
+</head>
+<body>
+<div class="ov">
+  <header class="ov-head">
+    <div>
+      <div class="kick"><span class="chip is-outline">Rounds 5–13</span><span class="t-micro">The interaction brief, view by view</span></div>
+      <h1 class="t-display">Overview, Board, Chat, Editor, Observe and Settings, on one vocabulary.</h1>
+    </div>
+    <p>Platform, redone against the brief. <b>Every element explains itself</b>: a tooltip after half a second, a full reference that dims the page and never covers or presses the element. One registry names every state and control; seven states, one colour each, on chats, runs, issues and pull requests alike. Views are grouped by purpose, nothing moves while you use it, and the Manager has three independent controls you can read as one sentence.</p>
+    <p><b>Round 13, 3 November.</b> Brought up to date with <code>main</code> at <code>e7b8fea</code> and the owner’s open UX PRD, #683: the Manager in three panes, the issue-to-merge chain as tasks, slots and Random, wake-ups, Extensions, SSH keys, Timers, and the seven fixes from #683. What changed and how each place follows: <a href="CHANGES-2026-11-03.md">CHANGES-2026-11-03.md</a>. What was checked, at each level, and what <code>main</code>’s code settled: <a href="READINESS.md">READINESS.md</a>.</p>
+    <p><b>4 November: v2 is published.</b> Up to date with <code>main</code> at <code>741d2c4</code>: the chain’s seed scope on Review New Issues, what can hold a chain, memory and disk ceilings, Storage’s categories, and #790’s merged code. A sweep of every string in <code>main</code>’s interface then found nineteen more gaps, among them JEV’s whole builder (<a href="chat.html?jev=1">open it</a>), narrow windows, the slash menu, Claude’s subscription, the new-build notice and Notifications off. <a href="CHANGES-2026-11-04.md">CHANGES-2026-11-04.md</a>.</p>
+  </header>
+
+  <h2>Overview, the command center</h2>
+  <span class="t-gloss">Round 11, Cockpit, chosen on 23 October. Answer what needs you without leaving, and see how the work and the day are going: Analytics, the behaviors’ numbers and the notifications all move in.</span>
+  <a class="feature-card" href="overview.html"><span><b>Open Overview</b>Answer here runs the full height on the left: every question, permission, review, sign-in, merge and fault, with its answers on it, and a level control that sets how much of it you see; the bell counts the same. On the right, the work in motion in the seven states, the day’s numbers as tiles with their pace and year, per pull request, work type and review, the Manager, the behaviors, and the API quota.<em>Try: answer #475 with Allow once, then Undo; Show only you; wait for W3’s question with your pointer in the list; open a tile’s year and read it with the arrow keys; drag a tile; step to Yesterday; pause the behavior that spends the quota.</em></span></a>
+
+  <h2>Board</h2>
+  <span class="t-gloss">Round 6, called Current until round 11. All 25 of today’s behaviours, with the board speaking the same seven states as Chat.</span>
+  <a class="feature-card" href="board.html"><span><b>Open Board</b>Your cards on the left, live issues and pull requests on the right, each saying where it stands and who is on it: a worker, a chat you run, or a run. Ready to merge is now Needs you, in amber, because green means Done everywhere. In motion counts the board and filters by state; the live lanes hold still while you are on them, and merged work folds away. View switches to a List, one row each, with its phase, what is happening, for how long and who has it, and it waits as you left it.<em>Try: choose List, then Today and Opened; assign #489 to Poise; rest on a card’s state, hand #489 to the Manager, review #484, drag a Plan card onto Issue, Alt with an arrow key on a card, or choose W3 and come back.</em></span></a>
+
+  <h2>Two views of Chat</h2>
+  <span class="t-gloss">The same features as the live Chat, plus the Manager’s use cases. Both on these tokens, both answer to the Style panel.</span>
+  <div class="views">
+    <article class="shotcard">
+      <a href="chat.html"></a>
+      <div class="body">
+        <h3>Chat <span class="t-gloss">a chat you run</span></h3>
+        <p>#475 is paused for your permission. The situation line says what was observed, what is intended and what it waits for. Every instruction shows accepted, queued, executing, completed.</p>
+        <p class="try">Try: rest on anything for half a second, then Full reference or ?. Write a steer while it waits (it queues until you answer), press 1 to allow, watch the PR open and the queue start. Stop with ⌘.; hover the list while a worker changes state.</p>
+        <a class="btn btn-primary" href="chat.html">Open Chat</a>
+      </div>
+    </article>
+    <article class="shotcard">
+      <a href="manager.html"></a>
+      <div class="body">
+        <h3>Manager <span class="t-gloss">its chat, the work table and the Switchboard</span></h3>
+        <p>Three panes, as the owner set in #563: the Manager’s chat, a work table with one row per task, whether a worker or the chain drives it, and the Switchboard with what needs you. It wakes every 60 minutes unless you choose otherwise in its header; its controls open over the work table.</p>
+        <p class="try">Try: set Wake every to 15 min and read its cost; open #502 in the work table and Resume it; answer W4 in the Switchboard, or with your own words; Explain or Dismiss an update; Hide the Switchboard and see its count; open Controls and raise Rhythm. Then see it <a href="manager.html?manager=none">with no Manager yet</a>, and the Switchboard <a href="manager.html?sb=stopped">stopped</a> or <a href="manager.html?sb=off">off</a>.</p>
+        <a class="btn btn-primary" href="manager.html">Open the Manager</a>
+      </div>
+    </article>
+  </div>
+
+  <h2>Editor</h2>
+  <span class="t-gloss">Round 7. All 23 of today’s behaviours: a page to write on, and one pane for what surrounds it.</span>
+  <a class="feature-card" href="editor.html"><span><b>Open Editor</b>HELIOS, open as it is in the live Editor. Markdown is drawn as you type, its markers showing only on the line you are on. Comments, Reviews, Publish and Chat share one side pane. Chat beside says which agent answers and what it reads, the whole document or only your selection, and its replies carry edits you apply. A status line under the page says whether the document is saved, how long it is, what needs you, and where it is published, in the seven state words.<em>Try: Chat beside → Tighten the opening and Apply, select a phrase and choose Ask an agent, apply the suggested edit on “visceral” then ⌘Z, publish to a second site, review Google’s changes after a few seconds, or Writer mode and Esc.</em></span></a>
+
+  <h2>Settings</h2>
+  <span class="t-gloss">Rounds 8 to 13. All 117 behaviours of the live Settings and Extensions, in ten sections on one pattern: General, Accounts, Models, Extensions, Publishing, Behaviors, Snippets, Admin, then Style and the Manager, which until round 10 lived only beside the work. Navigation is gone: three views in a fixed order need no arranging. Publishing has Google Docs, as the live app does.</span>
+  <a class="feature-card" href="settings.html#general"><span><b>Open Settings</b>A place under the top bar instead of a panel over your work, with Find and an address for every section. Each setting is one row: what it does, always visible; its control; and one line that says whether it is the default and what happened to your last change. There is no Save button. Each setting saves itself, says when the change applies, and offers Undo.<em>Try: under Style, drag Base size and let go, start from Compact and Undo, or set Heading size and open Editor; under Manager, raise Rhythm and open the Manager; set Refresh rate to 5 min and Undo; Connect Grok Build under Accounts; Use “Deep reviews” under Models, then Undo; add a site without publish.yaml and Describe it; reconnect research@ for Google Docs under Publishing; Choose skips for a behavior; save a selection in Editor as a snippet; or press / and type “gemini”.</em></span></a>
+
+  <h2>Observe</h2>
+  <span class="t-gloss">Rounds 12 and 13. Tasks, then Behaviors, GitHub and Logging, which were Swarm, Archive and Logging, in one place: all 47 of their behaviours, in the seven state words, and the chain’s tasks from issue to merge.</span>
+  <a class="feature-card" href="observe.html"><span><b>Open Observe</b>Every agent run in Behaviors, with what it concluded or what it is doing now. Pull requests, issues and CI in GitHub. Poise’s own diagnostics in Logging, with their evidence. Each part holds still while you use it, and every link from Overview, Settings or a diagnostic opens exactly what it names, with a route back.<em>Try: stop #487’s review (Sure?, then Stopped); replay #486 with your pointer in the table and watch the new run wait; in GitHub, run a consensus review on #487; in Logging, filter Severity from its header, open an event and Show incident, then Open the run in Behaviors from the Grok Build error.</em></span></a>
+  <div class="views">
+    <article class="shotcard">
+      <a href="observe.html?tab=github"></a>
+      <div class="body"><h3>GitHub <span class="t-gloss">pull requests, issues and CI</span></h3><p>CI first, failing runs by default, then issues and pull requests in any mix. Older history loads as you scroll; a source that fails says so in one amber line.</p><a class="btn btn-primary" href="observe.html?tab=github">Open GitHub</a></div>
+    </article>
+    <article class="shotcard">
+      <a href="observe.html?tab=logging&amp;event=grey"></a>
+      <div class="body"><h3>Logging <span class="t-gloss">Poise’s own evidence</span></h3><p>Each column filters from its header. A diagnostic opens to its facts, message, cause chain and context, its related incident, and where to go next. This link is the one Overview’s held-behavior notice follows.</p><a class="btn btn-primary" href="observe.html?tab=logging&amp;event=grey">Open the linked diagnostic</a></div>
+    </article>
+  </div>
+
+  <h2>Setup, and the states every page can be in</h2>
+  <span class="t-gloss">Rounds 12 and 13. First-run setup’s steps, from GitHub to this computer, the gateway’s own pages, and what a page shows while Poise updates or when a sign-in ends.</span>
+  <div class="views">
+    <article class="shotcard">
+      <a href="setup.html"></a>
+      <div class="body"><h3>First-run setup <span class="t-gloss">a path, not a popup</span></h3><p>GitHub, the agent account, organizations, time, AI accounts, models and this computer, each checked before the next opens. It resumes where you left it; Settings → General → Run setup again opens it with today’s choices filled in.</p><p class="try">Try: connect GitHub with its one-time code; add an organization and watch it activate; sign in to Grok Build in its terminal; skip the agent account.</p><a class="btn btn-primary" href="setup.html">Open setup</a></div>
+    </article>
+    <article class="shotcard">
+      <a href="board.html?state=updating"></a>
+      <div class="body"><h3>Updating, and a sign-in that ended <span class="t-gloss">on every view</span></h3><p>Add <code>?state=updating</code> or <code>?state=signedout</code> to any page; at its foot, <code>?state=claude-reauth</code> (or <code>-signing</code>, <code>-quota</code>, <code>-unavailable</code>, <code>-local</code>, <code>-failed</code>) and <code>?state=build</code> or <code>build-wait</code>. The gateway’s own pages, from Sign in to Starting your workspace, are side by side on one page.</p><a class="btn btn-primary" href="board.html?state=signedout">A sign-in that ended</a> <a class="btn btn-ghost-hub" href="gateway.html?state=signin">The gateway’s pages</a></div>
+    </article>
+  </div>
+
+  <h2>Everything, view by view</h2>
+  <span class="t-gloss">Every view, panel and state of the live app as of 21 October, and Extensions as of 1 November, where each is now, and the behaviours the review accounts for. What main has added since is in the second table.</span>
+  <table class="cover">
+    <thead><tr><th>Live today</th><th>Now</th><th>Behaviours</th><th>Round</th></tr></thead>
+    <tbody>
+      <tr><td>Analytics (menu)</td><td><a href="overview.html">Overview</a></td><td>O1–O15</td><td>11</td></tr>
+      <tr><td>Notification rail and bell</td><td><a href="overview.html">Overview → Answer here</a>, and the bell on every view</td><td>O18–O20</td><td>11–12</td></tr>
+      <tr><td>Current</td><td><a href="board.html">Board</a></td><td>C1–C25</td><td>6, renamed in 11</td></tr>
+      <tr><td>Chat</td><td><a href="chat.html">Chat</a> and <a href="manager.html">the Manager</a></td><td>1–50</td><td>5</td></tr>
+      <tr><td>Editor</td><td><a href="editor.html">Editor</a></td><td>E1–E23</td><td>7</td></tr>
+      <tr><td>Swarm</td><td><a href="observe.html?tab=behaviors">Observe → Behaviors</a></td><td>W1–W18</td><td>12</td></tr>
+      <tr><td>Archive</td><td><a href="observe.html?tab=github">Observe → GitHub</a></td><td>R1–R12</td><td>12</td></tr>
+      <tr><td>Logging (menu)</td><td><a href="observe.html?tab=logging">Observe → Logging</a></td><td>L1–L17</td><td>12</td></tr>
+      <tr><td>Behaviors</td><td><a href="settings.html#behaviors">Settings → Behaviors</a>, with their numbers in Overview</td><td>B1–B9, O16–O17</td><td>9, 11</td></tr>
+      <tr><td>Snippets</td><td><a href="settings.html#snippets">Settings → Snippets</a></td><td>S1–S8</td><td>9</td></tr>
+      <tr><td>Settings: General, Accounts, Models, Publishing, Admin</td><td><a href="settings.html#general">Settings</a></td><td>G1–G17, A1–A11, M1–M7, P1–P7, D1–D7</td><td>8–9</td></tr>
+      <tr><td>Settings: Navigation</td><td>Removed: a fixed top bar needs no arranging</td><td>N1–N6</td><td>11</td></tr>
+      <tr><td>Typography panel</td><td><a href="settings.html#style">Settings → Style</a>, and the Style panel</td><td>T1–T17</td><td>10</td></tr>
+      <tr><td>Extensions (menu)</td><td><a href="settings.html#extensions">Settings → Extensions</a></td><td>X1–X28</td><td>13</td></tr>
+      <tr><td>The Manager’s controls</td><td><a href="settings.html#manager">Settings → Manager</a>, and over the Manager’s work table</td><td>new</td><td>10</td></tr>
+      <tr><td>First-run setup</td><td><a href="setup.html">Setup</a></td><td>F1–F12</td><td>12</td></tr>
+      <tr><td>Updating, sign-in ended</td><td>Every view, with <code>?state=</code></td><td>U1–U2</td><td>12</td></tr>
+      <tr><td>The gateway’s pages</td><td><a href="gateway.html">Gateway</a></td><td>Y1–Y6</td><td>12</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Added on main since 21 October</h2>
+  <span class="t-gloss">Read from main on 23 and 28 October and on 3 November, with the owner’s open UX PRD #683. Everything is in these mocks now.</span>
+  <table class="cover">
+    <thead><tr><th>Live today, or decided</th><th>In these mocks</th></tr></thead>
+    <tbody>
+      <tr><td>Update turn bound (#473)</td><td><a href="settings.html#general">Settings → General → Update wait</a></td></tr>
+      <tr><td>Tools display toggle (#478)</td><td><a href="chat.html">Chat → Show → Tools</a></td></tr>
+      <tr><td>Muse’s credential, Use an API key (#468)</td><td><a href="settings.html#accounts">Settings → Accounts</a></td></tr>
+      <tr><td>The <code>/manager</code> and <code>/worker</code> snippets (#397, #452, #563)</td><td><a href="settings.html?open=worker#snippets">Settings → Snippets</a>, both built in, with the shipped text</td></tr>
+      <tr><td>Extensions, with Remote Desktop Commander built in (#347, #706, #791)</td><td><a href="settings.html#extensions">Settings → Extensions</a>, all of it, and the line in <a href="chat.html">#475</a> for a server it does not get</td></tr>
+      <tr><td>The Switchboard, in the three-pane view (#358, #563), with Dismiss (#683)</td><td><a href="manager.html">The Manager</a>: chat, work table, Switchboard, with its stopped, off and waiting states, and <a href="manager.html?manager=none">a workspace with no Manager</a></td></tr>
+      <tr><td>Wake the Manager every 60, 30, 15, 10 or 5 minutes (#783)</td><td><a href="manager.html">The Manager’s header</a>, and <a href="settings.html#manager">Settings → Manager</a></td></tr>
+      <tr><td>Timers (#450), with the wake-up shown and not cancellable (#783)</td><td><a href="chat.html">Chat → This chat → Timers</a></td></tr>
+      <tr><td>Chat, Worker or Manager (#563); type at once while a chat starts (#683)</td><td><a href="chat.html">Chat → New chat</a></td></tr>
+      <tr><td>Delete at once, and several at once (#614, #700, #683)</td><td><a href="chat.html">Chat’s list</a>: Shift-click, ⌘-click, then Delete</td></tr>
+      <tr><td>Stalled workers, queued steps, loops ended by Poise (#587, #612, #665)</td><td><a href="chat.html">Chat’s list</a>, and the <a href="manager.html">work table</a></td></tr>
+      <tr><td>Dots that pulse while an agent works (#683)</td><td><a href="chat.html">Chat</a>: only while work is in flight</td></tr>
+      <tr><td>A card’s chat beside the board (#418)</td><td><a href="board.html">Board → Chat about this</a>, in the side pane</td></tr>
+      <tr><td>Add from the top, repository labels, editing an issue (#683)</td><td><a href="board.html">Board → Issue → Add issue, and Edit on a card</a></td></tr>
+      <tr><td>The issue-to-merge chain and Switch to v2 (#728, #737)</td><td><a href="settings.html#behaviors">Settings → Behaviors</a>, <a href="observe.html?tab=tasks">Observe → Tasks</a>, task cards on <a href="board.html">Board</a>, holds and phases in <a href="overview.html">Overview</a></td></tr>
+      <tr><td>Each open PR’s age and current blocker (#747, #800)</td><td><a href="board.html">Board</a>: the blocker, and how long it has stood</td></tr>
+      <tr><td>One list of the work, and assigning to Poise (decided on 4 November)</td><td><a href="board.html?layout=list&amp;time=today&amp;by=opened">Board → View → List</a>, which waits as you left it; <a href="board.html?layout=list&amp;assign=refused">a refusal</a>, <a href="board.html?layout=list&amp;engine=v1">the chain off</a>, <a href="board.html?layout=list&amp;seed=all">every issue entering</a>, <a href="board.html?layout=list&amp;intake=failed">an intake read that failed</a></td></tr>
+      <tr><td>The chain's evidence and work needing attention (#955, #1095); work impact (#1106, #1120)</td><td><a href="observe.html?tab=tasks&amp;which=attention">Observe → Tasks, Needs attention</a>, <a href="observe.html?tab=tasks&amp;task=t493&amp;after=2">a timeline from a step</a>, <a href="observe.html?tab=tasks&amp;chains=failed">a failed read</a>; <a href="observe.html?tab=logging">Logging's Work impact</a>; the notice in <a href="overview.html">Answer here</a></td></tr>
+      <tr><td>Analytics' 30 days in five bins (#995); System health (#1101, planned); partial Behaviors counts (#1133)</td><td><a href="overview.html?ref=ov.dist">Overview, any number</a>, <a href="overview.html?ref=ov.health">System health</a>, <a href="overview.html?behaviors=partial">partial counts</a></td></tr>
+      <tr><td>Models as three slots, and Random (#670, #751)</td><td><a href="settings.html#models">Settings → Models</a>, and <a href="setup.html">setup</a></td></tr>
+      <tr><td>Review cap, legacy only (#626, #737)</td><td><a href="settings.html#behaviors">Settings → Behaviors → Approve Pull Requests</a></td></tr>
+      <tr><td>SSH keys (#793); the agent added to every repository (#748)</td><td><a href="settings.html#accounts">Settings → Accounts</a>, <a href="settings.html#general">General</a> and setup</td></tr>
+      <tr><td>Storage’s partial, stale and failed readings (#631)</td><td><a href="settings.html?storage=partial#general">Settings → General → Storage</a></td></tr>
+      <tr><td>Idle worker slots; a held repository’s fix; two ledger faults (#750, #782)</td><td><a href="overview.html">Overview → Answer here</a>; idle slots only while they really sit idle, as <a href="overview.html?ref=ov.idle">here</a></td></tr>
+      <tr><td>Behaviors history 200 a page; durations; revision-bound issue replays (#575, #726, #749)</td><td><a href="observe.html?tab=behaviors">Observe → Behaviors</a></td></tr>
+      <tr><td>Import in the Editor (#785); inline threads (#443)</td><td><a href="editor.html">Editor</a>: Import, and a passage’s mark</td></tr>
+      <tr><td>Merged, failed and recovered PR trends (PRD #819, not built yet)</td><td><a href="overview.html">Overview → Pull request outcomes</a>, marked Planned</td></tr>
+      <tr><td>Which chat created, messaged, steered, answered or stopped a chat (#416)</td><td><a href="chat.html">Chat’s list</a>: <i>from chat “…”</i>, or <i>from a deleted chat</i>; in #475, a message’s source and <i>Answered by the Manager</i>, which opens it; a steer or a stop from another chat is labelled the same way</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Into the live app</h2>
+  <span class="t-gloss">How this design replaces Poise’s interface: a second page beside the old one, then one flip, with one small addition to the service, for Assign to Poise. The PRD is <a href="https://github.com/autonomio/poise/issues/556">autonomio/poise#556</a>; its copy is <a href="PRD-INTERFACE.md">PRD-INTERFACE.md</a>. The server work it leaves out is <a href="https://github.com/autonomio/poise/issues/562">autonomio/poise#562</a>; its copy is <a href="PRD-SERVER.md">PRD-SERVER.md</a>. That server work merged on 24 October (#599). What changed in Poise since, and what these mocks need: <a href="CHANGES-2026-10-28.md">CHANGES-2026-10-28.md</a>, then <a href="CHANGES-2026-11-03.md">CHANGES-2026-11-03.md</a>, which the mocks now follow. How the behavior chain gives every task one spine: <a href="CHAINS.md">CHAINS.md</a>. Since 31 October #556 is on hold: no production work without explicit authorization naming it.</span>
+
+  <h2>Universal reference</h2>
+  <span class="t-gloss">Every control and display carries a key into one registry. The tooltip and the full reference read the same entry.</span>
+  <div class="ref-fig">
+    
+    <div class="ref-notes">
+      <p><b>Tooltip after 0.5 s</b> on pointer rest, keyboard focus or a long press. It names the element, says what it is, and links to the full reference; you can move onto it.</p>
+      <p><b>Full reference</b> dims everything but the element, keeps it lit and wired to a card that answers: what it is, what it does, what the current value means, other values, what it affects, when a change applies, what stays unchanged, how the result shows, where the information comes from, and why it is unavailable.</p>
+      <p><b>Never in the way.</b> The card moves aside rather than cover the element, opening it presses nothing, and Esc returns focus and scroll to where you were.</p>
+      <div class="files"><a class="chip is-outline" href="refdefs.js">refdefs.js</a><a class="chip is-outline" href="refdefs-manager.js">refdefs-manager.js</a><a class="chip is-outline" href="reference.js">reference.js</a><a class="chip is-outline" href="BRIEF-MAP.md">BRIEF-MAP.md</a></div>
+    </div>
+  </div>
+
+  <h2>Every element, reviewed</h2>
+  <span class="t-gloss">What each element was, what it is now, the purpose it serves and the decision. Read from the same registry.</span>
+  <a class="review-card" href="review.html"><span><b>Open the review</b>Keep, move, merge, remove or new, for all 50 of Chat’s, 25 of Board’s, 23 of Editor’s, 117 of Settings’ and Extensions’, 20 of Overview’s and 47 of Observe’s behaviours, setup’s 12 and the 8 page states, and everything the brief and main added since: 454 rows. Each row opens the element in place with its reference.</span></a>
+
+  <h2 class="earlier">Not chosen: Overview as a briefing</h2>
+  <span class="t-gloss">Round 11’s second direction, kept for reference: one column in order of what matters, sentences first, the first notice open and the rest one line each, next steps beside what failed.</span>
+  <a class="feature-card" href="overview-b.html"><span><b>Open Briefing</b>Cockpit was chosen. Briefing stays reachable here only, so its ideas can be borrowed.</span></a>
+
+  <h2 class="earlier">Earlier: Current and Swarm, on strict tokens</h2>
+  <span class="t-gloss">Round 4. The same tokens now carry Board, as Current is now called, and every other view; Swarm keeps this round’s top bar for now.</span>
+  <div class="views">
+    <article class="shotcard">
+      
+      <div class="body">
+        <h3>Current <span class="t-gloss">round 4, replaced above</span></h3>
+        <p>The five lanes as stations on one line, with edges whose legend had to be spelled out: ready to merge, waiting, newly opened, an agent on it. Round 6 replaces the edges with the seven states, in words.</p>
+      </div>
+    </article>
+    <article class="shotcard">
+      <a href="swarm-r4.html"></a>
+      <div class="body">
+        <h3>Swarm <span class="t-gloss">agents at work</span></h3>
+        <p>Every run with a glossed header. Running rows show their stage as a route and walk through real phases; open one for heartbeat, provider events, the deadline and reasoning.</p>
+        <p class="try">Try: Stop asks “Sure?”, Replay starts a new run, the failed row explains why its replay is refused, chevrons open each run.</p>
+        <a class="btn btn-primary" href="swarm-r4.html">Open round 4’s Swarm</a>
+      </div>
+    </article>
+  </div>
+
+  <h2>Full control, conveniently</h2>
+  <span class="t-gloss">The same board, then called Current, under three people’s settings. Settings → Style, where Typography is today.</span>
+  <div class="variants">
+    <figure class="variant"><figcaption><b>Poise default</b>Calm density, Engineer type, 15px.</figcaption></figure>
+    <figure class="variant"><figcaption><b>Compact</b>Density 0.8, 14px: more on screen.</figcaption></figure>
+    <figure class="variant"><figcaption><b>Large type, Editor, round</b>17px, Lato with Playfair, corners at 2×.</figcaption></figure>
+  </div>
+
+  <h2>How it is bound</h2>
+  <span class="t-gloss">Each layer reads only from the one before it.</span>
+  <div class="layers">
+    <div class="layer"><span class="cap lg">9</span><h4>Controls</h4><p><code>--ctl-*</code> Base size, density, corners, route lines, motion, tint, three families. What the Style panel turns.</p></div>
+    <div class="layer"><span class="cap lg">21</span><h4>Primitives</h4><p><code>--p-*</code> The dark stack, the eight accents, fallbacks and the Tactile spring. Never read by components.</p></div>
+    <div class="layer"><span class="cap lg">145</span><h4>Semantic</h4><p><code>--c-* --fs-* --sp-* --r-*</code> Meanings, type, space, shape, depth, motion. The only names components use.</p></div>
+    <div class="layer is-end"><span class="cap lg">0</span><h4>Violations</h4><p><code>tools/lint_tokens.py</code> No raw colours, lengths, durations, weights or line heights outside tokens.css; no style blocks.</p></div>
+  </div>
+  <div class="files">
+    <a class="chip is-outline" href="tokens.css">tokens.css</a><a class="chip is-outline" href="components.css">components.css</a><a class="chip is-outline" href="style.js">style.js</a><a class="chip is-outline" href="tools/lint_tokens.py">tools/lint_tokens.py</a><a class="chip is-outline" href="lint-report.json">lint-report.json</a><a class="chip is-special" href="guide.html">Style guide</a>
+  </div>
+  <p class="next">Chat and the Manager now live on these tokens too. <b>Every room answers to the same Style panel</b>, and every element to the same registry.</p>
+</div>
+<script src="refdefs.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+</body>
+</html>

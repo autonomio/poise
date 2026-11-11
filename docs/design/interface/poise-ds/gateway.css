@@ -1,0 +1,18 @@
+/* The gateway's pages: one card on the canvas, nothing else to look at. */
+.gw-page { min-height: 100vh; background: var(--c-canvas); }
+.gw { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-5); padding: var(--sp-8) var(--sp-4); }
+.gw-brand { font-family: var(--font-display); font-weight: var(--fw-display); font-size: var(--fs-h3); color: var(--c-text-soft); }
+.gw-card { width: min(calc(var(--w-read) * 0.62), 100%); display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-6); border-radius: var(--r-panel); border: var(--line-hair) solid var(--c-edge); background: var(--c-surface); }
+.gw-card h1 { font-size: var(--fs-lead); font-weight: var(--fw-strong); line-height: var(--lh-tight); color: var(--c-text); }
+.gw-card p { font-size: var(--fs-row); line-height: var(--lh-body); color: var(--c-text-soft); }
+.gw-card code { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--c-text); }
+.gw-label { font-size: var(--fs-tiny); font-weight: var(--fw-strong); letter-spacing: var(--ls-micro); text-transform: uppercase; color: var(--c-text-muted); }
+.gw-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2); }
+.gw-note { font-size: var(--fs-micro); color: var(--c-text-muted); }
+.gw-error { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-card); border: var(--line-hair) solid var(--c-failed-edge); background: var(--c-failed-tint); color: var(--c-failed-on); }
+/* A reviewing aid: the gateway's pages, side by side. Not part of the design. */
+.gw-states { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); font-size: var(--fs-micro); color: var(--c-text-muted); }
+.gw-states .t-micro { font-size: var(--fs-tiny); }
+.gw-states a { color: var(--c-text-muted); }
+.gw-states a:hover { color: var(--c-text); }
+.gw-states a[aria-current="page"] { color: var(--c-text); text-decoration: underline; text-decoration-color: var(--c-edge-strong); }

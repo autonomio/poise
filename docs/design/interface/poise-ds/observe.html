@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poise — Observe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Zen+Maru+Gothic:wght@700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="observe.css">
+<link rel="stylesheet" href="narrow.css">
+<script src="style.js"></script>
+</head>
+<body class="obv-page" data-view="observe">
+<div class="frame">
+  <header class="topbar">
+    <nav class="ia" aria-label="Poise">
+      <a href="overview.html" data-ref="nav.overview">Overview</a>
+      <a href="board.html" data-ref="nav.current">Board</a>
+      <a href="chat.html" data-ref="nav.chat">Chat</a>
+      <a href="editor.html" data-ref="nav.editor">Editor</a>
+      <a class="on" href="observe.html" aria-current="page" data-ref="nav.observe">Observe</a>
+      <button class="nav" data-menu-open aria-haspopup="menu" aria-expanded="false" data-ref="nav.settings">Settings<i data-i="down" class="sm"></i></button>
+    </nav>
+    <div class="right">
+      <span class="live" role="status" data-ref="conn">Live</span>
+      <button class="icon-btn" aria-label="Notifications, 18 open. Opens Answer here in Overview." data-ref="bell"><i data-i="bell"></i><span class="badge" data-bell>18</span></button>
+    </div>
+  </header>
+
+  <main class="obv">
+    <header class="obv-head">
+      <div class="obv-tabs" role="tablist" aria-label="Observe" data-ref="obs.tabs">
+        <button role="tab" id="tab-tasks" aria-controls="panel-tasks" data-tab="tasks" data-ref="obs.tasks">Tasks<span class="n" data-tabn="tasks"></span></button>
+        <button role="tab" id="tab-behaviors" aria-controls="panel-behaviors" data-tab="behaviors" data-ref="obs.behaviors">Behaviors<span class="n" data-tabn="behaviors"></span></button>
+        <button role="tab" id="tab-github" aria-controls="panel-github" data-tab="github" data-ref="obs.github">GitHub<span class="n" data-tabn="github"></span></button>
+        <button role="tab" id="tab-logging" aria-controls="panel-logging" data-tab="logging" data-ref="obs.logging">Logging<span class="n" data-tabn="logging"></span></button>
+      </div>
+      <p class="t-gloss obv-gloss" data-gloss></p>
+      <a class="back" href="#" data-back hidden data-ref="back"></a>
+      <div class="obv-scope" data-scope><span class="t-micro">Scope</span><button class="pick" data-menu="org-menu" aria-haspopup="menu" aria-expanded="false" data-ref="obs.org"><span data-org-label>All orgs</span></button></div>
+    </header>
+
+    <!-- Tasks: every chain, issue to merge -->
+    <section class="obv-panel" role="tabpanel" id="panel-tasks" aria-labelledby="tab-tasks" data-panel="tasks" hidden>
+      <div class="obv-bar">
+        <input class="search" type="search" placeholder="Filter…" aria-label="Filter tasks" data-tk-search data-ref="tk.search">
+        <div class="seg" role="group" aria-label="Which tasks" data-tk-which data-ref="tk.which"><button aria-pressed="true" data-v="active">Active</button><button aria-pressed="false" data-v="attention" data-ref="tk.attention">Needs attention</button><button aria-pressed="false" data-v="merged">Merged</button><button aria-pressed="false" data-v="all">All</button></div>
+        <span class="obv-count" data-tk-count></span>
+        <p class="obv-note" data-tk-note data-ref="tk.note"></p>
+      </div>
+      <div class="tk-split">
+        <div class="obv-scroll"><ul class="tk-list" data-tk-list></ul></div>
+        <div class="tk-detail" data-tk-detail aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- Behaviors: every agent run -->
+    <section class="obv-panel" role="tabpanel" id="panel-behaviors" aria-labelledby="tab-behaviors" data-panel="behaviors" hidden>
+      <div class="obv-bar">
+        <input class="search" type="search" placeholder="Filter…" aria-label="Filter runs" data-sw-search data-ref="bh.search">
+        <span class="obv-count" data-sw-count data-ref="bh.count"></span>
+        <p class="obv-note" data-sw-history data-ref="bh.history"></p>
+        <p class="oheld" data-sw-held data-ref="bh.held" hidden></p>
+      </div>
+      <div class="obv-scroll" data-sw-scroll>
+        <table class="table obv-table sw-table">
+          <thead><tr>
+            <th class="c-group"><span class="sr">Identical runs</span></th>
+            <th class="c-model"><span class="t-micro">Model</span></th>
+            <th class="c-behavior"><span class="t-micro">Behavior</span></th>
+            <th class="c-org"><span class="t-micro">Org</span></th>
+            <th class="c-repo"><span class="t-micro">Repo</span></th>
+            <th class="c-status"><span class="t-micro">Status</span></th>
+            <th class="c-started"><span class="t-micro">Started</span></th>
+            <th class="c-elapsed"><span class="t-micro">Elapsed</span></th>
+            <th class="c-act"><span class="t-micro">Replay</span></th>
+            <th class="c-act"><span class="t-micro">Stop</span></th>
+            <th class="c-more"><span class="sr">Detail</span></th>
+          </tr></thead>
+          <tbody data-sw-rows></tbody>
+        </table>
+        <p class="obv-empty" data-sw-empty hidden>No run matches the filter.</p>
+        <div class="obv-quarantine" data-sw-quarantine data-ref="bh.quarantine"></div>
+      </div>
+    </section>
+
+    <!-- GitHub: pull requests, issues and CI -->
+    <section class="obv-panel" role="tabpanel" id="panel-github" aria-labelledby="tab-github" data-panel="github" hidden>
+      <div class="obv-bar">
+        <div class="seg" role="group" aria-label="Shows" data-ar-type data-ref="gh.type"><button aria-pressed="true" data-v="action">CI</button><button aria-pressed="false" data-v="issue">Issues</button><button aria-pressed="false" data-v="pr">Pull requests</button></div>
+        <div class="seg" role="group" aria-label="CI outcome" data-ar-ci data-ref="gh.cistatus"><button aria-pressed="true" data-v="failed">Failed</button><button aria-pressed="false" data-v="all">Any</button></div>
+        <div class="seg" role="group" aria-label="Status" data-ar-status data-ref="gh.status" hidden><button aria-pressed="true" data-v="all">Any</button><button aria-pressed="false" data-v="open">Open</button></div>
+        <div class="seg" role="group" aria-label="Updated" data-ar-time data-ref="gh.time"><button aria-pressed="true" data-v="all">Any time</button><button aria-pressed="false" data-v="today">Today</button><button aria-pressed="false" data-v="yesterday">Yesterday</button><button aria-pressed="false" data-v="week">This week</button></div>
+        <input class="search" type="search" placeholder="Filter…" aria-label="Filter the history" data-ar-search data-ref="gh.search">
+        <span class="obv-count" data-ar-count data-ref="gh.count"></span>
+      </div>
+      <p class="obv-warn" data-ar-error data-ref="gh.error" hidden></p>
+      <div class="obv-scroll" data-ar-scroll>
+        <table class="table obv-table ar-table">
+          <thead><tr>
+            <th class="c-kind"><span class="sr">Kind</span></th>
+            <th class="c-title"><span class="t-micro">Title</span></th>
+            <th class="c-author"><span class="t-micro">Author</span></th>
+            <th class="c-org"><span class="t-micro">Org</span></th>
+            <th class="c-repo"><span class="t-micro">Repo</span></th>
+            <th class="c-owner"><span class="t-micro" data-ar-ownerh>Branch</span></th>
+            <th class="c-state"><span class="t-micro">Status</span></th>
+            <th class="c-updated"><span class="t-micro">Updated</span></th>
+            <th class="c-act"><span class="sr">Review</span></th>
+          </tr></thead>
+          <tbody data-ar-rows></tbody>
+        </table>
+        <p class="obv-empty" data-ar-empty hidden>Nothing matches these filters.</p>
+        <p class="obv-more" data-ar-more data-ref="gh.more"></p>
+      </div>
+    </section>
+
+    <!-- Logging: Poise's own diagnostics -->
+    <section class="obv-panel" role="tabpanel" id="panel-logging" aria-labelledby="tab-logging" data-panel="logging" hidden>
+      <div class="obv-bar">
+        <input class="search lg-search" type="search" placeholder="Search diagnostics…" aria-label="Search diagnostics" maxlength="256" data-lg-search data-ref="lg.search">
+        <span class="obv-count" data-lg-count data-ref="lg.count"></span>
+        <button class="btn-ghost" data-act="lg-refresh" data-ref="lg.refresh">Refresh</button>
+        <button class="btn-ghost" data-act="lg-export" data-ref="lg.export">Export</button>
+        <span class="obv-gap"></span>
+        <button class="btn-ghost" data-pop="lg-columns" aria-expanded="false" data-ref="lg.columns"><i data-i="sliders" class="sm"></i>Columns</button>
+        <button class="btn-ghost" data-pop="lg-data" aria-expanded="false" data-ref="lg.data" data-lg-databtn><span class="sdot" data-lg-dot></span>Data and collection</button>
+      </div>
+      <p class="obv-note lg-status" role="status" aria-live="polite" data-lg-status></p>
+      <div data-lg-linked></div>
+      <p class="lg-new" data-lg-new hidden><button class="btn-ghost" data-act="lg-new" data-ref="lg.new"></button></p>
+      <div class="obv-scroll" data-lg-scroll>
+        <table class="table obv-table lg-table"><thead data-lg-head></thead><tbody data-lg-rows></tbody></table>
+        <p class="obv-empty" data-lg-empty hidden>No matching events.</p>
+        <div class="lg-pages" data-ref="lg.pages"><div class="seg" role="group" aria-label="Pages"><button data-act="lg-prev">Previous</button><button data-act="lg-next">Next</button></div><span class="obv-count" data-lg-page></span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="obv-pop" id="lg-columns" role="group" aria-label="Columns" hidden></div>
+<div class="obv-pop lg-datapop" id="lg-data" role="region" aria-label="Data and collection" hidden></div>
+<div class="obv-pop" id="lg-filter" role="group" hidden></div>
+
+<div class="menu" id="org-menu" hidden role="menu" aria-label="Organization">
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="true" data-org="" data-ref="obs.org">All orgs</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="autonomio" data-ref="obs.org">autonomio</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="Acme" data-ref="obs.org">Acme</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="mikkokotila" data-ref="obs.org">mikkokotila</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="harbor-research" data-ref="obs.org">harbor-research</button>
+  <button class="menu-row org-row" role="menuitemradio" aria-checked="false" data-org="northwind" data-ref="obs.org">northwind</button>
+</div>
+
+<div class="menu" id="main-menu" hidden role="menu" aria-label="Settings">
+  <div class="grp t-micro">Settings</div>
+  <button class="menu-row" role="menuitem" data-style-open data-ref="set.style"><i data-i="palette" class="sm"></i>Style panel</button>
+  <a class="menu-row" role="menuitem" href="manager.html?pane=controls&amp;back=observe" data-ref="set.manager"><i data-i="sliders" class="sm"></i>Manager’s controls<span class="t-gloss">Rhythm · Stability · Autonomy</span></a>
+  <div class="sep"></div>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#general" data-ref="set.go"><span class="t">General</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#accounts" data-ref="set.go"><span class="t">Accounts</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#models" data-ref="set.go"><span class="t">Models</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#extensions" data-ref="set.go"><span class="t">Extensions</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#publishing" data-ref="set.go"><span class="t">Publishing</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#behaviors" data-ref="set.go"><span class="t">Behaviors</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#snippets" data-ref="set.go"><span class="t">Snippets</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#admin" data-ref="set.go"><span class="t">Admin</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#style" data-ref="set.go"><span class="t">Style</span></a>
+  <a class="menu-row" role="menuitem" href="settings.html?back=observe#manager" data-ref="set.go"><span class="t">Manager</span></a>
+</div>
+
+<div class="toast" role="status" aria-live="polite" data-toast hidden></div>
+
+<script src="refdefs.js"></script>
+<script src="refdefs-manager.js"></script>
+<script src="refdefs-overview.js"></script>
+<script src="refdefs-observe.js"></script>
+<script src="reference.js"></script>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+<script src="workspace-data.js"></script>
+<script src="observe-data.js"></script>
+<script src="tasks-data.js"></script>
+<script src="overview-data.js"></script>
+<script src="observe.js"></script>
+<script src="observe-tasks.js"></script>
+<script src="bell.js"></script>
+</body>
+</html>
