@@ -2352,6 +2352,7 @@ test('shows five live health cards with evidence, stale retained reads, historic
   await expect(strip).toContainText('Instance-wide coverage history')
   for (const width of [736, 360]) {
     await page.setViewportSize({ width, height: 1000 })
+    await settled(page)
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
   }
   const reads = healthReads
