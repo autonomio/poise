@@ -8,6 +8,9 @@ import { behaviorCutoverBlockers } from './behavior-cutover'
 import type { BehaviorChain, ChainEvent } from './behavior-chain-store'
 import { behaviorChainAttention, behaviorChainSummary, behaviorChainWorkImpact } from './behavior-chain-summary'
 import { nativeCleanupSupport, requireNativeCleanup } from './native-cleanup-support'
+import { parseHandoffCandidates } from '../gateway/src/diagnostics/query-handoff'
+import { verifiedLoggingHandoffs } from './logging-handoff'
+import { db } from './db'
 
 function reply(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status; res.setHeader('Content-Type', 'application/json'); endJson(res, JSON.stringify(value))
@@ -30,6 +33,11 @@ export async function handleBehaviorChains(req: IncomingMessage, res: ServerResp
     const cutover = () => ({ ...journal.cutover(), support: nativeCleanupSupport(),
       blockers: journal.cutover().mode === 'draining' ? behaviorCutoverBlockers() : [] })
     if (req.method === 'GET') {
+      if (params.has('handoffs')) {
+        if (params.size !== 1 || (params.get('handoffs')?.length ?? 0) > 6000) throw new HttpError(400, 'Invalid bounded review handoff selectors')
+        const candidates = parseHandoffCandidates(JSON.parse(params.get('handoffs')!))
+        return reply(res, 200, { warnings: verifiedLoggingHandoffs(candidates, journal, db) })
+      }
       if (params.has('batch') || params.has('callId') || params.has('correlationId')) {
         const batch = params.get('batch') === '1'
         const calls = batch ? params.getAll('callId').map(value => value || null) : [params.get('callId')]

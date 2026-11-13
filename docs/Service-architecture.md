@@ -229,6 +229,12 @@ the workspace.
 - `GET /_poise/api/logging`, `/logging/events/ID`, `/logging/health` and
   `/logging/export` read retained central diagnostics through a bounded worker.
   They require the owner's browser session and exact Origin when one is sent.
+  Before severity filtering and pagination, typed review handoffs use bounded
+  reads of that owner's `/api/behavior-chains?handoffs=…`, with the existing
+  browser assertion and workspace Host. Each read accepts at most ten retained
+  handoff selectors and returns confirmed event IDs within 64 KiB. There is no
+  read of another workspace. Unavailable evidence retains source severity;
+  continuations reject a changed classification snapshot and require Refresh.
   Explicit `scope=instance` requires current admin access; another workspace's
   private application/Caller records remain excluded. No assertion scope or
   workspace fan-out is added. [Logging](Logging.md) defines filters, budgets,
@@ -1522,7 +1528,10 @@ pairs; Refresh replaces its results without a new polling loop or per-row reads.
 This uses the existing owner workspace boundary and canonical journal, including
 completed chains. Ambiguous or missing matches remain unknown, as does a failed
 workspace read; central Logging queries and retained evidence remain independent.
-No gateway read, scope, ingestion or execution authority is added.
+Logging severity queries may separately supply retained typed handoff selectors
+to that same owner route, before filtering, counts or page/export selection.
+This read verifies native `--expected-head` admissions and retained legacy
+same-target/context receipts. It changes no scope, ingestion or execution authority.
 Initial remediation report bodies retain a dated snapshot of this projection;
 later recovery does not rewrite it. Optional annotation failure leaves impact
 unknown and does not consume the report's creation attempt.

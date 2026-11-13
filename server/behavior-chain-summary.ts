@@ -3,8 +3,9 @@ import { parseResolutionProgress } from './agent-log-parse'
 import { resourceReleaseContradicted } from './behavior-resource-receipt'
 import { CHAIN_OBSERVATION_MAX_AGE_MS, chainReviewResponse, closedChainTarget, lastChainQueueInvocation, type ChainObservation } from './behavior-chain-decision'
 import { nativeBehavior } from './behavior-chain-runtime'
-import { chainBasis, reduceChain, type BehaviorChain, type BehaviorChainJournal, type ChainEvent } from './behavior-chain-store'
+import { chainBasis, reduceChain, type BehaviorChain, type BehaviorChainJournal, type ChainEvent, type ChainInvocation } from './behavior-chain-store'
 import type { LoggingWorkImpact } from '../src/logging'
+import type { ProcessDiagnostic } from './process-diagnostic'
 
 export const CHAIN_ATTENTION_DELAY_MS = 24 * 60 * 60_000
 
@@ -236,18 +237,62 @@ function foldProgress(fold: ProgressFold, rows: Iterable<ProgressRow>, id: strin
   Object.assign(fold, { last, chain, at, sequence, previous, failureSequence, waitingSequence, waitingHead })
 }
 
+/** Native review admissions pin the head in argv, not request.context. */
+export function reviewAdmissionHead(invocation: ChainInvocation): string | null {
+  const argv = invocation.request.argv
+  if (argv.filter(arg => arg === '--expected-head').length !== 1) return null
+  const head = argv[argv.indexOf('--expected-head') + 1]
+  if (!head || !/^[a-f0-9]{40}$/i.test(head) || invocation.request.context?.head && invocation.request.context.head !== head
+    || invocation.evidence?.expected_head != null && invocation.evidence.expected_head !== head
+    || invocation.evidence?.head_sha != null && invocation.evidence.head_sha !== head) return null
+  return head
+}
+
+export function reviewHandoffSuccessor(chain: BehaviorChain, invocation: ChainInvocation) {
+  const diagnostic = invocation.evidence?.diagnostic as ProcessDiagnostic | null | undefined
+  const head = reviewAdmissionHead(invocation)
+  const completedAt = invocation.evidence?.completedAt
+  const command = invocation.behavior === 'review-pr' ? '--pr-review' : '--pr-approve'
+  if (!['review-pr', 'approve-pr'].includes(invocation.behavior) || invocation.request.command !== 'agent-interface'
+    || invocation.request.argv[0] !== command || !invocation.request.argv[1] || !head
+    || invocation.state !== 'settled' || invocation.evidence?.status !== 'failed'
+    || invocation.evidence.error_code !== 'review_budget_exhausted' || invocation.evidence.review_id != null
+    || invocation.evidence.head_sha != null || invocation.evidence.review_comments != null || invocation.evidence.receipts != null
+    || invocation.evidence.action != null && invocation.evidence.action !== 'not_started'
+    || invocation.evidence.outcome != null && invocation.evidence.outcome !== 'preflight_failed'
+    || diagnostic?.version !== 1 || diagnostic.source !== 'caller' || diagnostic.operation !== 'provider.review'
+    || diagnostic.phase !== 'analysis' || diagnostic.outcome !== 'handoff' || diagnostic.context.submission !== 'none'
+    || diagnostic.context.call_id !== invocation.callId || diagnostic.context.correlation_id !== invocation.id
+    || diagnostic.context.expected_head !== head || typeof completedAt !== 'number' || !Number.isFinite(completedAt)) return undefined
+  // The reducer admits another invocation only after the original settles.
+  return chain.invocations.filter(item => item.admissionSequence > invocation.admissionSequence && item.admittedAt >= completedAt
+    && item.behavior === invocation.behavior && item.basis === invocation.basis && item.slot === invocation.slot
+    && item.actor === invocation.actor && item.request.command === invocation.request.command
+    && item.request.argv[0] === command && item.request.argv[1] === invocation.request.argv[1]
+    && reviewAdmissionHead(item) === head).at(-1)
+}
+
 /** Read-only incident annotation, independent of attention's age/active filters. */
 export function behaviorChainWorkImpact(journal: BehaviorChainJournal, callId: string | null, correlationId: string | null): LoggingWorkImpact | null {
   const match = journal.forInvocation(callId, correlationId)
   if (!match) return null
   const { chain, invocation } = match
   const progress = chainProgress(journal, chain.id, invocation.id)
-  const recovered = progress.failureSequence !== null && progress.sequence > progress.failureSequence
+  let recovered = progress.failureSequence !== null && progress.sequence > progress.failureSequence
   const active = chain.invocations.find(item => item.state !== 'settled')
   const last = chain.invocations.at(-1)
   const waiting = progress.waitingSequence > progress.sequence ? chain.waiting : null
   const contradicted = chain.invocations.some(item => !!item.evidence && resourceReleaseContradicted(item.evidence))
   const blocked = !!chain.held || chain.reviewPending === true || active?.state === 'uncertain' || contradicted
+  const diagnostic = invocation.evidence?.diagnostic as ProcessDiagnostic | null | undefined
+  const handoff = ['review-pr', 'approve-pr'].includes(invocation.behavior)
+    && diagnostic?.operation === 'provider.review' && diagnostic.phase === 'analysis' && diagnostic.outcome === 'handoff'
+  const successor = handoff ? reviewHandoffSuccessor(chain, invocation) : undefined
+  if (handoff) {
+    const observation = chain.observation as ChainObservation | null
+    recovered = !!successor && successor.state === 'settled' && successor.evidence?.status === 'completed'
+      && !!observation && !!chainReviewResponse(chain, successor, observation, observation.checkedAt)
+  }
   let retryAt: number | null = null
   // A backoff outlives observation-only progress past its wait note (CI
   // turning green mid-backoff) but not a new head: match the preserved note
@@ -261,8 +306,9 @@ export function behaviorChainWorkImpact(journal: BehaviorChainJournal, callId: s
     if (attempts.length > 0 && attempts.length < 3 && (last.evidence?.action === 'not_started' || last.evidence?.outcome === 'superseded')
       && Number.isFinite(last.evidence?.completedAt)) retryAt = Number(last.evidence!.completedAt) + 60_000 * 2 ** (attempts.length - 1)
   }
-  const impact: 'blocked' | 'recovered' | 'retrying' | 'unknown' = blocked ? 'blocked' : recovered ? 'recovered'
-    : active && active.admissionSequence > invocation.admissionSequence || retryAt !== null ? 'retrying' : 'unknown'
+  const retrying = handoff ? successor?.state === 'admitted' || successor?.state === 'started'
+    : active && active.admissionSequence > invocation.admissionSequence || retryAt !== null
+  const impact: 'blocked' | 'recovered' | 'retrying' | 'unknown' = blocked ? 'blocked' : recovered ? 'recovered' : retrying ? 'retrying' : 'unknown'
   const publication = chain.observation?.publication as { pull_number?: number | null } | undefined
   return { impact, recovered, invocationId: invocation.id, repository: chain.repository, behavior: invocation.behavior,
     callerBehavior: nativeBehavior(invocation.behavior),

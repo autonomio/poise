@@ -85,6 +85,23 @@ unreadable associations show unknown. A failed workspace read leaves retained
 Logging evidence usable, including in service mode. Source severity and Count
 (retained event/occurrence count) keep their separate meanings. This annotation
 neither starts work nor changes execution or holds.
+
+Logging classifies typed review-model handoffs before severity filtering, totals,
+page selection and filtered export. Positive no-submission evidence and a later
+same-PR/head review obligation admission, or its attributed substantive verdict,
+make the event Warning. Native review and approval heads come from the original
+`--expected-head` arguments; conflicting head evidence cannot confirm a handoff.
+Legacy launches qualify only with retained original and successor receipts for
+the same review target/context; an approval fallback may use another slot and firing.
+Missing successors, exhausted recovery, current holds, contradictory evidence and
+uncertain publication retain Error. Historical untyped rows retain source severity.
+The returned severity is shared by the column, queries and exports; the stored
+payload and `sourceLevel` remain unchanged. Service queries use one bounded owner
+workspace evidence read per batch, under its existing browser authorization.
+Unavailable owner evidence retains source severity. Page, watermark and export
+continuations bind this classification snapshot as well as the ingestion boundary;
+changed classification rejects the continuation and requires Refresh.
+
 For a verified merge with a pending native review obligation, the next action is
 to reconcile original pre-merge review evidence, including when a durable hold
 is retained. Resume cannot start a new review after merge.
