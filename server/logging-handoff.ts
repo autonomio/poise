@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3'
 import type { HandoffCandidate } from '../gateway/src/diagnostics/query-handoff'
-import { reviewAdmissionHead, reviewHandoffSuccessor } from './behavior-chain-summary'
-import type { BehaviorChainJournal, ChainInvocation } from './behavior-chain-store'
+import { reviewAdmissionHead, reviewHandoffSuccessor, scopedSuccessorObservation } from './behavior-chain-summary'
+import type { BehaviorChainJournal } from './behavior-chain-store'
 import { chainReviewResponse, type ChainObservation } from './behavior-chain-decision'
 import { resourceReleaseContradicted } from './behavior-resource-receipt'
 import { cachedStatement } from './statements'
@@ -33,17 +33,6 @@ export function verifiedLoggingHandoffs(candidates: HandoffCandidate[], journal:
       .get(candidate.correlationId, candidate.callId, candidate.callId, candidate.callId)) return false
     return legacyHandoff(candidate, db)
   }).map(candidate => candidate.id)
-}
-
-// A settled successor's verdict is verified against the head and context it
-// reviewed, not the latest observation: later pushes must not reclassify a
-// recovered historical handoff as Error. Receipt, basis and time checks stay.
-function scopedSuccessorObservation(successor: ChainInvocation, observation: ChainObservation | null): ChainObservation | null {
-  if (!observation?.pull) return null
-  const retained = (successor.evidence?.artifact as Record<string, unknown> | null)?.review_response as {
-    head_sha?: unknown, context_sha?: unknown } | null
-  if (typeof retained?.head_sha !== 'string' || typeof retained?.context_sha !== 'string') return null
-  return { ...observation, pull: { ...observation.pull, head: retained.head_sha, reviewContext: retained.context_sha } }
 }
 
 function legacyHandoff(candidate: HandoffCandidate, db: Database): boolean {

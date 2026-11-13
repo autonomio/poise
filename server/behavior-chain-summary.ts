@@ -272,6 +272,17 @@ export function reviewHandoffSuccessor(chain: BehaviorChain, invocation: ChainIn
     && reviewAdmissionHead(item) === head).at(-1)
 }
 
+// A settled successor's verdict is verified against the head and context it
+// reviewed, not the latest observation: later pushes must not reclassify a
+// recovered historical handoff. Receipt, basis and time checks stay.
+export function scopedSuccessorObservation(successor: ChainInvocation, observation: ChainObservation | null): ChainObservation | null {
+  if (!observation?.pull) return null
+  const retained = (successor.evidence?.artifact as Record<string, unknown> | null)?.review_response as {
+    head_sha?: unknown, context_sha?: unknown } | null
+  if (typeof retained?.head_sha !== 'string' || typeof retained?.context_sha !== 'string') return null
+  return { ...observation, pull: { ...observation.pull, head: retained.head_sha, reviewContext: retained.context_sha } }
+}
+
 /** Read-only incident annotation, independent of attention's age/active filters. */
 export function behaviorChainWorkImpact(journal: BehaviorChainJournal, callId: string | null, correlationId: string | null): LoggingWorkImpact | null {
   const match = journal.forInvocation(callId, correlationId)
@@ -290,8 +301,10 @@ export function behaviorChainWorkImpact(journal: BehaviorChainJournal, callId: s
   const successor = handoff ? reviewHandoffSuccessor(chain, invocation) : undefined
   if (handoff) {
     const observation = chain.observation as ChainObservation | null
+    const scoped = successor && successor.state === 'settled' && successor.evidence?.status === 'completed'
+      ? scopedSuccessorObservation(successor, observation) : null
     recovered = !!successor && successor.state === 'settled' && successor.evidence?.status === 'completed'
-      && !!observation && !!chainReviewResponse(chain, successor, observation, observation.checkedAt)
+      && !!scoped && !!chainReviewResponse(chain, successor, scoped, observation!.checkedAt)
   }
   let retryAt: number | null = null
   // A backoff outlives observation-only progress past its wait note (CI
