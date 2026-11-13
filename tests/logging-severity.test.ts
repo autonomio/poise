@@ -230,6 +230,32 @@ it.each(['review-pr', 'approve-pr'] as const)('retains a verified %s recovery, w
   expect(verifiedLoggingHandoffs([uncertain.candidate], journal, db)).toEqual([])
 })
 
+it.each(['review-pr', 'approve-pr'] as const)('keeps a verified %s recovery after the PR head moves on', behavior => {
+  const fixture = reviewHandoffFixture(journal, behavior)
+  const { append, successor, observation, at } = fixture
+  append({ type: 'invocation.admitted', invocation: successor }, at + 6000)
+  const callId = fixture.successor.id.slice(0, 31) + 'f'
+  const response = { repository: 'acme/repo', pull_number: observation.pull!.number, head_sha: observation.pull!.head,
+    context_sha: observation.pull!.reviewContext, invocation_id: callId, reviewer: successor.actor,
+    model: successor.model, completed_at: at + 8000,
+    assessment: { verdict: 'The changed validation has no remaining blocking defects.',
+      reviewed_context: 'Inspected the immutable diff and affected callers.', limitations: 'No live provider calls.' } }
+  const action = behavior === 'approve-pr' ? 'approved' : 'reviewed_clean'
+  append({ type: 'invocation.settled', invocationId: successor.id, callId, outcome: action,
+    evidence: { status: 'completed', action, head_sha: response.head_sha, review_id: 91,
+      artifact: { review_response: response }, completedAt: at + 8000 } }, at + 8000)
+  const receipts = [{ id: 91, head: response.head_sha,
+    invocation: callId, state: behavior === 'approve-pr' ? 'APPROVED' : 'COMMENTED', response, submittedAt: at + 8000 }]
+  append({ type: 'chain.observed', observation: { ...observation, checkedAt: at + 9000,
+    pull: { ...observation.pull!, reviewIds: [91], reviewReceipts: receipts } } }, at + 9000)
+  expect(verifiedLoggingHandoffs([fixture.candidate], journal, db)).toEqual([fixture.event.id])
+  // The PR moves on: new head, new review context. The historical recovery stands.
+  append({ type: 'chain.observed', observation: { ...observation, checkedAt: at + 12000,
+    pull: { ...observation.pull!, head: 'c'.repeat(40), reviewContext: 'd'.repeat(64),
+      reviewIds: [91], reviewReceipts: receipts } } }, at + 12000)
+  expect(verifiedLoggingHandoffs([fixture.candidate], journal, db)).toEqual([fixture.event.id])
+})
+
 it.each(['submitting', 'no submission proof', 'contradictory identity', 'submitted action'] as const)('keeps %s at source Error', change => {
   const fixture = reviewHandoffFixture(journal)
   fixture.append({ type: 'invocation.admitted', invocation: fixture.successor }, fixture.at + 6000)

@@ -55,7 +55,13 @@ export async function serveLogging(req: IncomingMessage, res: ServerResponse, ur
     if (scope === 'instance') host.audit(scope, operation)
     const request: LoggingRead = { path, policy: host.policy, now: host.now, access, operation, filter, eventId }
     if (host.handoffs && operation !== 'health') {
-      timer = setTimeout(() => { answer(503, { error: 'logging_query_timeout', message: 'The diagnostic query exceeded its two-second response budget.' }); finish() }, LOGGING_QUERY_MS)
+      timer = setTimeout(() => {
+        // The budget can expire mid-stream: a stalled half-sent response is
+        // destroyed instead of only releasing the pool timeout that would do it.
+        if (res.headersSent && !res.writableFinished) res.destroy()
+        else answer(503, { error: 'logging_query_timeout', message: 'The diagnostic query exceeded its two-second response budget.' })
+        finish()
+      }, LOGGING_QUERY_MS)
       const candidates = await host.pool.read({ ...request, operation: 'handoffs' }, host.workspace, abort.signal, () => abort.abort())
       let snapshot: { high: number; candidates: HandoffCandidate[] }
       try { snapshot = JSON.parse(candidates.reply.body) as typeof snapshot } finally { candidates.release() }
