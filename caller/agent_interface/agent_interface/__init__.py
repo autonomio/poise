@@ -460,6 +460,54 @@ def fence_closed_behavior(model: str, actor: str, repository: str, number: int,
     return {"id": id_, "correlation_id": correlation_id, "outcome": "fenced", **identity}
 
 
+RETIRE_BEFORE_PUBLICATION_PHASES = {"preparing", "prepared", "executing"}
+
+
+def retire_closed_implementation(call_id: str) -> dict:
+    """Fence a running first implementation against publication, then signal it.
+
+    Only a running implement_issue before its publication boundary can retire:
+    preparing/prepared/executing with no plan, head, publication or result and
+    no recorded resource error. Anything else is refused without changing the
+    row, so an already-publishing Call keeps its existing reconciliation. The
+    fence shares work_publication's transaction: whichever commits first wins.
+    Signalling is cooperative SIGTERM only; the original cleanup path settles
+    the typed receipt and its own resource release."""
+    if not re.fullmatch(r"[0-9a-f]{32}", call_id):
+        raise ValueError("retirement requires the original native call id")
+    with db() as conn:
+        conn.execute("begin immediate")
+        row = conn.execute("select status,behavior,source,error_code,artifact,pid,process_identity "
+                           "from calls where id=?", (call_id,)).fetchone()
+        if row is None:
+            raise ValueError("unknown call id")
+        if row["status"] != "running" or row["behavior"] != "implement_issue" \
+                or row["source"] != "poise:behavior-chain":
+            return {"id": call_id, "outcome": "refused", "reason": "not a running first implementation"}
+        if (row["error_code"] or "") in {"stopping", "stopped"}:
+            return {"id": call_id, "outcome": "refused", "reason": "already stopping"}
+        artifact = json.loads(row["artifact"] or "{}")
+        if isinstance(artifact.get("retirement"), dict) and artifact["retirement"].get("cause") == "target_closed":
+            return {"id": call_id, "outcome": "retiring", "reason": "already requested"}
+        if artifact.get("phase") not in RETIRE_BEFORE_PUBLICATION_PHASES \
+                or artifact.get("plan_sha") or artifact.get("publication_head") \
+                or artifact.get("publication") or artifact.get("result") or artifact.get("resource_error"):
+            return {"id": call_id, "outcome": "refused", "reason": "already beyond the publication boundary"}
+        artifact["retirement"] = {"cause": "target_closed", "requested_at": time()}
+        if conn.execute("update calls set artifact=? where id=? and status='running'",
+                        (json.dumps(artifact), call_id)).rowcount != 1:
+            return {"id": call_id, "outcome": "refused", "reason": "no longer running"}
+        pid, identity = row["pid"], row["process_identity"]
+    if pid:
+        try:
+            with process_identity.pinned(identity, int(pid)) as process:
+                if process is not None:
+                    process.signal(signal.SIGTERM)
+        except Exception:
+            pass
+    return {"id": call_id, "outcome": "retiring"}
+
+
 # ── --record-turn ──────────────────────────────────────────────────────
 # A Chat turn runs in Poise's own runtime; Caller keeps the calls row so Swarm
 # lists it with its model, elapsed time and outcome. The row is marked with a
@@ -1853,11 +1901,18 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
                     failure = retain_native_failure(id_, error, diagnostic=failure)
                     raise
             outcome = result.get("outcome")
-            if outcome not in {"published", "no_changes", "superseded"}:
+            if outcome not in {"published", "no_changes", "superseded", "target_closed"}:
                 raise RuntimeError("atomic behavior returned no publication outcome")
-            status = "superseded" if outcome == "superseded" else "completed"
-            finish(id_, status, response=json.dumps(result), outcome=outcome, head_sha=result.get("head_sha"),
-                   action=None if outcome == "superseded" else outcome)
+            if outcome == "target_closed":
+                if pull is not None or behavior != "implement_issue":
+                    raise RuntimeError("target closure retirement requires the original first implementation")
+                record({**artifact, "retirement": {"cause": "target_closed", "detected_at": time()}})
+                finish(id_, "superseded", response=json.dumps(result), outcome="target_closed",
+                       head_sha=None, action="not_started", error_code="target_closed")
+            else:
+                status = "superseded" if outcome == "superseded" else "completed"
+                finish(id_, status, response=json.dumps(result), outcome=outcome, head_sha=result.get("head_sha"),
+                       action=None if outcome == "superseded" else outcome)
             print(json.dumps({"id": id_, "behavior": behavior, "actor": actor, "source": source,
                               "correlation_id": correlation_id, "model": spec.identity, "artifact": artifact, **result}))
     except BaseException as error:
@@ -1866,8 +1921,26 @@ def run_atomic_work(issue: str, actor: str, source: str, correlation_id: str, mo
                 resource_ownership.failure(DB, id_, "resources_unknown", run_dir)
             record({**artifact, "phase": "resources_unknown"})
         with db() as conn:
-            row = conn.execute("select error_code from calls where id=?", (id_,)).fetchone()
+            row = conn.execute("select error_code, artifact from calls where id=?", (id_,)).fetchone()
         stopped = row is not None and row["error_code"] in {"stopping", "stopped"}
+        stored = json.loads(row["artifact"] or "{}") if row and row["artifact"] else {}
+        retired = (
+            source == "poise:behavior-chain" and pull is None and behavior == "implement_issue"
+            and failure is None and not isinstance(error, Exception)
+            and not isinstance(error, atomic_work.checkout_lock.WorkerOrphaned)
+            and not stopped and stored.get("phase") in RETIRE_BEFORE_PUBLICATION_PHASES
+            and isinstance(stored.get("retirement"), dict) and stored["retirement"].get("cause") == "target_closed"
+            and not stored.get("plan_sha") and not stored.get("publication_head")
+            and not stored.get("publication") and not stored.get("result")
+            and not stored.get("resource_error") and stored.get("phase") != "resources_unknown"
+        )
+        if retired:
+            finish(id_, "superseded", outcome="target_closed", head_sha=None,
+                   action="not_started", error_code="target_closed")
+            print(json.dumps({"id": id_, "behavior": behavior, "actor": actor, "source": source,
+                              "correlation_id": correlation_id, "model": spec.identity,
+                              "outcome": "target_closed"}))
+            return
         no_publication = artifact.get("phase") in {"preparing", "prepared", "executing", "waiting_baseline"}
         finish(id_, "failed", error="Stopped by user" if stopped else failure_message or str(error)[:2000] or INTERRUPTED_ERROR,
                error_code="stopped" if stopped else "interrupted" if not isinstance(error, Exception) else getattr(error, "code", "atomic_work_failed"),
@@ -3222,6 +3295,12 @@ def _main():
         if not re.fullmatch(r"[0-9a-f]{32}", call_id):
             raise ValueError("stop requires a full call id")
         print(json.dumps(stop_call(call_id)))
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--retire-closed-implementation":
+        call_id = sys.argv[2]
+        if not re.fullmatch(r"[0-9a-f]{32}", call_id):
+            raise ValueError("retirement requires a full call id")
+        print(json.dumps(retire_closed_implementation(call_id)))
         return
     if len(sys.argv) == 3 and sys.argv[1] == "--read-reasoning":
         call_id = sys.argv[2]
