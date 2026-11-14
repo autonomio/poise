@@ -286,50 +286,122 @@ function isMixedReviewTimeouts(attempts: Array<{ evidence?: unknown }>): boolean
 
 /** The normal decision still has to request work on precisely this basis.
  * Ignore failed attempts only to ask what would be needed without exhaustion. */
-function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: ChainObservation, now: number) {
-  if (!chain.held || chain.mergeSha || !observation.issue.open || !observation.pull
-    || !Number.isFinite(observation.checkedAt) || observation.checkedAt > now
-    || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS
-    || chain.invocations.some(invocation => invocation.state !== 'settled')) return null
+function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: ChainObservation, now: number,
+  diagnostic?: { reason?: string, call?: string }) {
+  const originalCall = chain.invocations.at(-1)
+  const blockedCall = originalCall?.evidence?.error_code === IMPLEMENTATION_CAUSE ? originalCall.callId ?? undefined : undefined
+  const fail = (reason: string): null => {
+    if (diagnostic) {
+      diagnostic.reason = reason
+      if (blockedCall) diagnostic.call = blockedCall
+    }
+    return null
+  }
+  if (!chain.held) return fail('chain is not held')
+  if (chain.mergeSha) return fail('chain is merged')
+  if (!observation.issue.open) return fail('seed issue is closed')
+  if (!observation.pull) return fail('pull request is missing')
+  if (!Number.isFinite(observation.checkedAt)) return fail('observation time is missing')
+  if (observation.checkedAt > now) return fail('observation is in the future')
+  if (now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS) return fail('observations need refreshing')
+  if (chain.invocations.some(invocation => invocation.state !== 'settled')) return fail('an invocation has not settled')
   const decision = decideBehaviorChain({ ...chain, held: null,
     invocations: chain.invocations.filter(invocation => !['repair-pr', 'review-pr'].includes(invocation.behavior) || invocation.evidence?.status === 'completed'),
   }, observation, now)
-  if (decision.kind !== 'invoke' || decision.behavior !== 'repair-pr' && decision.behavior !== 'review-pr') return null
+  if (decision.kind !== 'invoke') return fail(`reconstructed decision is ${decision.kind}: ${decision.reason}`)
+  if (decision.behavior !== 'repair-pr' && decision.behavior !== 'review-pr') {
+    return fail(`reconstructed decision requests ${decision.behavior}, not the held repair`)
+  }
   const review = decision.behavior === 'review-pr'
-  if (review ? !/^[a-f0-9]{64}$/.test(observation.pull.reviewContext ?? '')
-    : !/^[a-f0-9]{64}$/.test(observation.pull.reviewRevision)
-      || observation.pull.reviewRevision === chainBasis(['datastore-not-yet-indexed', chain.repository, observation.pull.number])) return null
+  if (review) {
+    if (!/^[a-f0-9]{64}$/.test(observation.pull.reviewContext ?? '')) return fail('PR review context is not indexed')
+  } else {
+    if (!/^[a-f0-9]{64}$/.test(observation.pull.reviewRevision)) return fail('current repair review basis is not indexed')
+    if (observation.pull.reviewRevision === chainBasis(['datastore-not-yet-indexed', chain.repository, observation.pull.number])) {
+      return fail('repair review basis awaits datastore indexing')
+    }
+  }
   const attempts = chain.invocations.filter(invocation => invocation.behavior === decision.behavior
     && invocation.basis === decision.basis && invocation.slot === decision.reviewer?.slot
     && invocation.admissionSequence > chain.resumedAfterSequence && invocation.evidence?.status !== 'deferred')
   const original = chain.invocations.at(-1)
+  if (review && original?.evidence?.error_code === IMPLEMENTATION_CAUSE) {
+    return fail('reconstructed decision requests PR review, not the held repair')
+  }
   if (!review && original?.evidence?.error_code === IMPLEMENTATION_CAUSE) {
     const evidence = original.evidence
     const artifact = evidence.artifact as Record<string, unknown> | null | undefined
     const argv = original.request.argv
     const pull = observation.pull
-    if (chain.supersession || chain.ciHold || original !== attempts.at(-1) || original.actor !== decision.actor
-      || original.request.command !== 'agent-interface' || !/^[a-f0-9]{32}$/.test(original.callId ?? '')
-      || original.request.context?.head !== pull.head || original.request.context.reviewRevision !== pull.reviewRevision
-      || argv[argv.indexOf('--pull-number') + 1] !== String(pull.number)
-      || !argv.includes('--expected-head') || argv[argv.indexOf('--expected-head') + 1] !== pull.head
-      || !argv.includes('--expected-issue-revision') || argv[argv.indexOf('--expected-issue-revision') + 1] !== observation.issue.revision
-      || pull.state !== 'open' || pull.merged !== false || pull.mergeSha !== null || !/^[a-f0-9]{40}$/i.test(pull.head)
-      || observation.publication.pull_number !== pull.number || observation.publication.head_sha !== pull.head
-      || observation.publication.state !== 'open' || observation.publication.merged !== false || observation.publication.merge_sha !== null
-      || evidence.status !== 'failed' || evidence.action !== 'not_started' || evidence.outcome !== 'preflight_failed'
-      || evidence.error !== chain.held || artifact?.phase !== 'executing'
-      || [artifact.plan_sha, artifact.publication_head, artifact.replies_started, artifact.publication, artifact.result,
-        artifact.receipts, evidence.receipts, evidence.review_id, evidence.head_sha, evidence.publicationPlan,
-        evidence.publicationResume, evidence.publicationReceipt, evidence.nativeActionReceipt].some(value => value != null)
-      || typeof evidence.completedAt !== 'number' || !Number.isFinite(evidence.completedAt) || evidence.completedAt > now
-      || !resourceReleaseProven(evidence, true) || observation.checkedAt < evidence.completedAt
-      || observation.checkedAt < Date.parse(String(evidence.resources_settled_at))) return null
+    if (chain.supersession) return fail('source is superseded')
+    if (chain.ciHold) return fail('source has a typed CI hold')
+    if (original !== attempts.at(-1)) {
+      if (original.behavior !== decision.behavior) return fail(`held ${original.behavior} differs from the reconstructed ${decision.behavior}`)
+      if (original.basis !== decision.basis) {
+        if (original.request.context?.head !== pull.head) return fail('original repair head differs from the current head')
+        if (original.request.context?.reviewRevision !== pull.reviewRevision) {
+          return fail('original repair review basis differs from the current review basis')
+        }
+        const expected = argv.includes('--expected-issue-revision')
+          ? argv[argv.indexOf('--expected-issue-revision') + 1] : undefined
+        if (expected !== observation.issue.revision) return fail('original repair seed revision differs from the current seed')
+        return fail('original repair basis no longer matches the reconstructed repair basis')
+      }
+      if (original.slot !== decision.reviewer?.slot) return fail('original repair slot differs from the reconstructed repair slot')
+      if (original.admissionSequence <= chain.resumedAfterSequence) return fail('original repair predates the last Resume')
+      if (original.evidence?.status === 'deferred') return fail('original repair is deferred')
+      return fail('original repair is not the latest matching repair')
+    }
+    if (original.actor !== decision.actor) return fail('original repair actor differs from the reconstructed owner')
+    if (original.request.command !== 'agent-interface') return fail('original repair is not an agent-interface Call')
+    if (!/^[a-f0-9]{32}$/.test(original.callId ?? '')) return fail('original repair lacks its Caller receipt')
+    if (original.request.context?.head !== pull.head) return fail('original repair head differs from the current head')
+    if (original.request.context.reviewRevision !== pull.reviewRevision) {
+      return fail('original repair review basis differs from the current review basis')
+    }
+    if (!argv.includes('--pull-number')) return fail('original repair lacks its PR number')
+    if (argv[argv.indexOf('--pull-number') + 1] !== String(pull.number)) return fail('original repair PR number differs from the current PR')
+    if (!argv.includes('--expected-head')) return fail('original repair lacks its expected head')
+    if (argv[argv.indexOf('--expected-head') + 1] !== pull.head) return fail('original repair expected head differs from the current head')
+    if (!argv.includes('--expected-issue-revision')) return fail('original repair lacks its seed revision')
+    if (argv[argv.indexOf('--expected-issue-revision') + 1] !== observation.issue.revision) {
+      return fail('original repair seed revision differs from the current seed')
+    }
+    if (pull.state !== 'open') return fail('PR is no longer open')
+    if (pull.merged !== false) return fail('PR is merged')
+    if (pull.mergeSha !== null) return fail('PR has a merge SHA')
+    if (!/^[a-f0-9]{40}$/i.test(pull.head)) return fail('current head is not a commit SHA')
+    if (observation.publication.pull_number !== pull.number) return fail('published PR number differs from the current PR')
+    if (observation.publication.head_sha !== pull.head) return fail('published head differs from the current head')
+    if (observation.publication.state !== 'open') return fail('published PR is no longer open')
+    if (observation.publication.merged !== false) return fail('published PR is merged')
+    if (observation.publication.merge_sha !== null) return fail('published PR has a merge SHA')
+    if (evidence.status !== 'failed') return fail('original repair did not fail')
+    if (evidence.action !== 'not_started') return fail('original repair started publication')
+    if (evidence.outcome !== 'preflight_failed') return fail('original repair did not fail before publication')
+    if (evidence.error !== chain.held) return fail('source hold no longer matches the original repair error')
+    if (artifact?.phase !== 'executing') return fail('original repair phase is not executing')
+    if ([artifact.plan_sha, artifact.publication_head, artifact.replies_started, artifact.publication, artifact.result,
+      artifact.receipts, evidence.receipts, evidence.review_id, evidence.head_sha, evidence.publicationPlan,
+      evidence.publicationResume, evidence.publicationReceipt, evidence.nativeActionReceipt].some(value => value != null)) {
+      return fail('original repair recorded publication artifacts')
+    }
+    if (typeof evidence.completedAt !== 'number') return fail('original repair completion time is missing')
+    if (!Number.isFinite(evidence.completedAt)) return fail('original repair completion time is invalid')
+    if (evidence.completedAt > now) return fail('original repair completion is in the future')
+    if (!resourceReleaseProven(evidence, true)) return fail('original repair resource release is not proven')
+    if (observation.checkedAt < evidence.completedAt) return fail('observation predates the original repair completion')
+    if (observation.checkedAt < Date.parse(String(evidence.resources_settled_at))) {
+      return fail('observation predates the original resource settlement')
+    }
     const hold = db.prepare(`SELECT sequence, at, json_extract(payload, '$.reason') AS reason FROM behavior_chain_events
       WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.held' AND sequence > ? ORDER BY sequence DESC LIMIT 1`)
       .get(chain.id, chain.resumedAfterSequence) as { sequence: number, at: number, reason: string } | undefined
-    return hold && hold.sequence > original.admissionSequence && hold.reason === evidence.error && hold.at <= now
-      ? { decision, attempts: [original], cause: IMPLEMENTATION_CAUSE } : null
+    if (!hold) return fail('automatic hold event is missing')
+    if (hold.sequence <= original.admissionSequence) return fail('automatic hold predates the original repair')
+    if (hold.reason !== evidence.error) return fail('automatic hold reason differs from the original repair error')
+    if (hold.at > now) return fail('automatic hold is in the future')
+    return { decision, attempts: [original], cause: IMPLEMENTATION_CAUSE }
   }
   if (attempts.length < 3 || attempts.some(invocation => {
     const evidence = invocation.evidence
@@ -846,7 +918,8 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
   if (!enabled(db, chain.repository) || !allowed() || !chain.held && !pendingMerge && !pendingImplementation) return null
   const observation = chain.observation as ChainObservation | null
   if (!observation) return null
-  const qualifying = qualifyingAttempts(db, chain, observation, Date.now())
+  const diagnostic: { reason?: string, call?: string } = {}
+  const qualifying = qualifyingAttempts(db, chain, observation, Date.now(), diagnostic)
   const merge = qualifyingMergeSubmission(chain, observation, Date.now())
   const closed = qualifyingClosedPull(chain, observation, Date.now())
   const implementation = qualifyingImplementationHold(db, chain, observation, Date.now())
@@ -879,7 +952,15 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
   const intent = linked ? { cause: closed ? CLOSED_CAUSE : 'review_budget_exhausted', key: (JSON.parse(linked.value) as RepairReport).key,
     storageKey: linked.key, stored: linked }
     : intents.find(intent => intent.cause === (merge ? MERGE_CAUSE : closed ? CLOSED_CAUSE : implementation ? implementationCause : qualifying?.cause)) ?? intents.find(intent => intent.stored)
-  if (!intent) return pendingMerge || !observation.pull ? null : 'Repair exhaustion reporting: hold has no verified repair or PR review exhaustion on the current basis'
+  if (!intent) {
+    if (pendingMerge || !observation.pull) return null
+    const original = chain.invocations.at(-1)
+    if (original?.behavior === 'repair-pr' && original.evidence?.error_code === IMPLEMENTATION_CAUSE && diagnostic.reason) {
+      const call = diagnostic.call ? `original Call ${diagnostic.call}` : 'original Call is missing'
+      return `Repair exhaustion reporting: hold has no verified repair or PR review exhaustion on the current basis; ${diagnostic.reason}; ${call}`
+    }
+    return 'Repair exhaustion reporting: hold has no verified repair or PR review exhaustion on the current basis'
+  }
   const { cause, key, storageKey, stored } = intent
   const implementationReport = cause === IMPLEMENTATION_PUBLICATION_CAUSE
     || cause === IMPLEMENTATION_CAUSE && key === chainBasis([cause, chain.id])
