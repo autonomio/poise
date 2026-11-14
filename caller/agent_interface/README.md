@@ -304,6 +304,13 @@ after proving no reviewer action. On a nonzero Codex exit, the cause prefers the
 last usable `error` / `turn.failed` message, then a recognizable stderr failure;
 startup warnings alone report cause unavailable with the observed exit or signal.
 Malformed event lines cannot replace that process failure with invalid output.
+Poise verifies a fresh Connect with `agent-interface --verify-codex-login MODEL
+--pwd DIR`: one non-publishing request using the review's private Codex home and
+tool-free ChatGPT options. The caller owns the temporary directory, 30-second
+deadline and 64 KiB output limit, and validates the completed `OK` response.
+An isolated credential refresh that cannot seed the next worker fails verification;
+this command never copies credentials back to the canonical sign-in. Cross-Call
+credential persistence remains #1822's responsibility.
 Uncorrected invalid, missing, duplicate or contradictory
 verdicts, submission rejections (including `no_review` no-ops) and duplicate
 GitHub reviews are `review_contract_violation` and held. A repeat-only

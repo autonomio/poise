@@ -114,6 +114,19 @@ export function providerSignInVerified(id: AccountId): void {
   record(`the end of the ${id} runtime sign-in alert`, () => resolveAlert(`sign-in:${id}`))
 }
 
+export function providerSignInVerificationFailed(id: AccountId, callId: string, cause: string): void {
+  const failure = providerSignInFailure(id)
+  if (!failure || failure.callId !== callId || failure.verifiedAt !== null) return
+  const name = ACCOUNT_NAMES[id] ?? id
+  const dedupeKey = `sign-in:${id}`
+  const title = `${name} needs you to sign in again`
+  const body = `${name} reconnect could not be verified by Caller: ${clip(redact(cause, environmentSecrets()), 500)} Connect it again in Settings → Accounts.`
+  record(`the ${name} reconnect verification failure`, () => {
+    raiseAlert({ kind: 'sign_in_needed', dedupeKey, title, body, path: CONNECTED_ACCOUNTS_PATH, target: ACCOUNTS })
+    updateAlertDetails(dedupeKey, title, body)
+  })
+}
+
 /** The two GitHub accounts Settings → General names, each of which gh must
  *  hold signed in. */
 export interface GitHubIdentities {

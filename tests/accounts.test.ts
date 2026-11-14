@@ -5,19 +5,22 @@
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invalidateAccounts, listAccounts, AccountsCache, ACCOUNTS_CACHE_MS, ACCOUNTS_CHECK_MS, scheduleAccountsCheck } from '../server/accounts'
 import { probeAccount, probeAccounts, type RunCommand } from '../server/accounts/status'
 import type { ConnectedAccount } from '../server/accounts/types'
-import { accountLogins, markLogin, recordLogin, recordProviderRejection, providerSignInFailure } from '../server/accounts/logins'
+import { accountLogins, consumeProviderRecovery, markLogin, recordLogin, recordProviderRejection, providerRecoveryAvailable, providerSignInFailure } from '../server/accounts/logins'
 import * as processes from '../server/process'
 import * as models from '../server/models'
 import { CATALOG_STDOUT } from './model-catalog-fixture'
 import { providerEvidence } from '../server/accounts/participation'
-import { setMeta } from '../server/db'
+import { db, setMeta } from '../server/db'
+import { accountsChecked, providerSignInRejected } from '../server/alerts/producers'
+import { PtyProcess } from '../server/terminal/pty'
 import { runFile } from '../server/process'
 import { STATUS, fakeCalls, script, writeFakeClis } from './fixtures/accounts/fake-clis'
+import { fakePresetCommand } from './fixtures/accounts/fake-presets'
 
 let root = ''
 let bin = ''
@@ -26,6 +29,7 @@ let home = ''
 beforeEach(async () => {
   setMeta('account_logins', '{}')
   setMeta('account_runtime_rejection:codex', '')
+  db.prepare('DELETE FROM alerts').run()
   invalidateAccounts()
   root = await mkdtemp(join(tmpdir(), 'poise-accounts-'))
   bin = join(root, 'bin')
@@ -59,43 +63,132 @@ function byId(accounts: ConnectedAccount[]): Record<string, ConnectedAccount> {
   return Object.fromEntries(accounts.map((account) => [account.id, account]))
 }
 
+async function credentialFixture(mode: 'store' | 'file' | 'rotate', hold = false): Promise<void> {
+  await writeFakeClis(bin, home, { codex: script('codex', STATUS.codexChatGpt) })
+  vi.stubEnv('POISE_MODE', 'service')
+  vi.stubEnv('CODEX_HOME', join(home, '.codex'))
+  vi.stubEnv('CODEX_CLI', join(bin, 'codex'))
+  vi.stubEnv('OPENAI_API_KEY', 'fixture-unused-openai-key')
+  vi.stubEnv('CODEX_API_KEY', 'fixture-unused-codex-key')
+  vi.stubEnv('OPENAI_BASE_URL', 'https://unused-provider.test')
+  vi.stubEnv('CALLER_BIN_ROOT', bin)
+  vi.stubEnv('AGENT_INTERFACE_DATA_DIR', join(root, 'caller-data'))
+  models.invalidateCatalog()
+  await mkdir(join(home, '.codex', 'sessions'), { recursive: true })
+  await writeFile(join(home, '.codex', 'config.toml'), 'personal = true\n')
+  await writeFile(join(home, 'codex-control.json'), JSON.stringify({ mode, hold }))
+  await writeFile(join(bin, 'codex'), `#!/bin/sh\nexec node '${resolve('tests/fixtures/accounts/codex-recovery.mjs')}' "$@"\n`)
+  // Run the in-tree Caller entrypoint, without requiring an installed virtualenv.
+  await writeFile(join(bin, 'agent-interface'), `#!/usr/bin/env python3\nimport sys\nsys.path.insert(0, ${JSON.stringify(resolve('caller/agent_interface'))})\nfrom agent_interface import main\nmain()\n`, { mode: 0o755 })
+}
+
+async function connectCodex(): Promise<void> {
+  const pty = new PtyProcess(fakePresetCommand(bin)('codex'), { cols: 80, rows: 24 })
+  const code = await new Promise<number>((resolveExit, reject) => {
+    pty.on('error', reject)
+    pty.once('exit', resolveExit)
+  })
+  // The terminal's production exit hook records the Connect and drops status.
+  recordLogin('codex', code)
+  invalidateAccounts()
+  expect(code).toBe(0)
+}
+
+const codexAlert = () => db.prepare("SELECT body FROM alerts WHERE dedupe_key='sign-in:codex' AND resolved_at IS NULL").get() as { body: string } | undefined
+
+function rejectCodex(): number {
+  const rejectedAt = Date.now() - 10_000
+  providerSignInRejected('codex', { callId: 'a'.repeat(32), model: 'gpt-6-astra-ultra', rejectedAt,
+    phase: 'provider_execution', work: 'example/repo#7', cause: 'missing Authorization credentials' })
+  return rejectedAt
+}
+
+async function checkedCodex(): Promise<void> {
+  accountsChecked(await listAccounts('codex'), { me: '', agentAccount: '' })
+}
+
 describe('GET /api/accounts', () => {
-  it('verifies a rejected ChatGPT credential once per fresh reconnect, despite status still saying signed in', async () => {
-    await writeFakeClis(bin, home, { codex: script('codex', STATUS.codexChatGpt) })
-    vi.spyOn(models, 'loadCatalog').mockResolvedValue(JSON.parse(CATALOG_STDOUT))
-    const actualRun = processes.runFile
-    let succeeds = false
-    const native = vi.fn(async () => {
-      if (!succeeds) throw new Error('refresh token was already used')
-      return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}\n{"type":"turn.completed"}\n', stderr: '' }
-    })
-    vi.spyOn(processes, 'runFile').mockImplementation((command, args, options) => args[0] === 'exec'
-      ? native() : actualRun(command, args, options))
+  it('keeps canonical credential-store success blocked until a fresh Connect succeeds through Caller', async () => {
+    await credentialFixture('store')
+    const requests = vi.spyOn(processes, 'runFile')
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const rejectedAt = Date.now() - 10_000
-    recordProviderRejection('codex', 'a'.repeat(32), 'gpt-6-astra-ultra', rejectedAt)
+    const rejectedAt = rejectCodex()
     recordLogin('codex', 1)
     expect((await listAccounts('codex'))[0].signedIn).toBe(true)
-    expect(native).not.toHaveBeenCalled()
-    recordLogin('codex', 0)
-    await listAccounts('codex')
-    expect(native).toHaveBeenCalledTimes(1)
+    await connectCodex()
+    expect((await runFile('codex', ['exec', '--json', 'Reply with exactly OK. Do not use tools.'])).stdout).toContain('turn.completed')
+    await checkedCodex()
     expect(providerSignInFailure('codex')?.verifiedAt).toBeNull()
-    expect(errors).toHaveBeenCalledWith('[accounts] native Codex sign-in verification failed:', expect.stringContaining('already used'))
-    await listAccounts('codex')
-    expect(native).toHaveBeenCalledTimes(1)
+    expect(consumeProviderRecovery('codex')).toBe(false)
+    expect(codexAlert()?.body).toContain('HTTP 401: missing Authorization credentials')
+    expect(codexAlert()?.body).not.toContain('fixture-private-value')
+    expect(errors).toHaveBeenCalledWith('[accounts] native Codex sign-in verification failed:', expect.stringContaining('missing Authorization credentials'))
+    await checkedCodex()
+    const probes = () => requests.mock.calls.filter(([, args]) => args[0] === '--verify-codex-login')
+    expect(probes()).toHaveLength(1)
 
-    succeeds = true
-    recordLogin('codex', 0)
-    await listAccounts('codex')
-    expect(native).toHaveBeenCalledTimes(2)
+    await writeFile(join(home, 'codex-control.json'), JSON.stringify({ mode: 'file' }))
+    await connectCodex()
+    await checkedCodex()
+    expect(probes()).toHaveLength(2)
     expect(providerSignInFailure('codex')?.verifiedAt).toBeGreaterThan(rejectedAt)
-    const request = vi.mocked(processes.runFile).mock.calls.find(([, args]) => args[0] === 'exec')!
-    expect(request[1]).toEqual(expect.arrayContaining(['--ignore-user-config', '--ephemeral', 'forced_login_method="chatgpt"']))
+    expect(codexAlert()).toBeUndefined()
+    expect(providerRecoveryAvailable('codex')).toBe(true)
+    expect(consumeProviderRecovery('codex')).toBe(true)
+    expect(consumeProviderRecovery('codex')).toBe(false)
+    const request = probes()[0]
+    expect(request[0]).toBe('agent-interface')
     expect(request[2]).toMatchObject({ timeoutMs: 30_000, maxOutputBytes: 64 * 1024,
       env: { OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined, OPENAI_BASE_URL: undefined, CODEX_HOME: process.env.CODEX_HOME } })
-    await listAccounts('codex')
-    expect(native).toHaveBeenCalledTimes(2)
+    const seen = (await readFile(join(home, 'codex-requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(seen.map(row => row.usable)).toEqual([true, false, true])
+    for (const row of seen.slice(1)) {
+      expect(row.home).not.toBe(process.env.CODEX_HOME)
+      expect(existsSync(row.home)).toBe(false)
+      expect(row.args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ignore-rules', '--ephemeral', 'forced_login_method="chatgpt"', '--sandbox', 'read-only']))
+      expect(row).toMatchObject({ mode: 0o700, overrides: [], importedConfig: false, importedSessions: false })
+    }
+    expect(seen[2].authMode).toBe(0o600)
+    await checkedCodex()
+    expect(probes()).toHaveLength(2)
+  })
+
+  it('does not treat a refresh left only in the disposable verification home as recovery', async () => {
+    await credentialFixture('rotate')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    rejectCodex()
+    await connectCodex()
+    const auth = join(home, '.codex', 'auth.json')
+    const before = await readFile(auth, 'utf8')
+    await checkedCodex()
+    expect(providerSignInFailure('codex')?.verifiedAt).toBeNull()
+    expect(providerRecoveryAvailable('codex')).toBe(false)
+    expect(codexAlert()?.body).toContain('unavailable to the next Caller worker')
+    expect(await readFile(auth, 'utf8')).toBe(before)
+  })
+
+  it('keeps a second Connect completed during a failed worker probe eligible', async () => {
+    await credentialFixture('store', true)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    rejectCodex()
+    await connectCodex()
+    const firstAt = providerSignInFailure('codex')!.reconnectedAt!
+    const pending = checkedCodex()
+    try {
+      await vi.waitFor(() => expect(existsSync(join(home, 'codex-probe-started'))).toBe(true), { timeout: 5_000 })
+      await writeFile(join(home, 'codex-control.json'), JSON.stringify({ mode: 'file' }))
+      await connectCodex()
+      expect(providerSignInFailure('codex')!.reconnectedAt).toBe(firstAt)
+    } finally {
+      await writeFile(join(home, 'codex-probe-release'), '')
+      await pending
+    }
+    expect(providerSignInFailure('codex')).toMatchObject({ verifiedAt: null, reconnectedAt: Date.parse(accountLogins().codex!) })
+    expect(providerSignInFailure('codex')!.reconnectedAt).toBeGreaterThan(firstAt)
+    expect(codexAlert()).toBeDefined()
+    await checkedCodex()
+    expect(providerRecoveryAvailable('codex')).toBe(true)
+    expect(codexAlert()).toBeUndefined()
   })
 
   it('keeps a Connect that finished before reconciliation recorded the rejection', async () => {
@@ -279,7 +372,7 @@ describe('GET /api/accounts', () => {
       recordLogin('codex', 0)
       return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}\n{"type":"turn.completed"}\n', stderr: '' }
     })
-    vi.spyOn(processes, 'runFile').mockImplementation((command, args, options) => args[0] === 'exec'
+    vi.spyOn(processes, 'runFile').mockImplementation((command, args, options) => args[0] === '--verify-codex-login'
       ? native() : actualRun(command, args, options))
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const rejectedAt = Date.now() - 10_000

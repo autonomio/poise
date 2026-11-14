@@ -2,9 +2,12 @@
 // so opening Settings twice does not run six CLIs twice; a terminal exiting
 // drops them, since a login may have just changed one.
 
-import { homedir } from 'node:os'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { runFile } from '../process'
-import { loadCatalog } from '../models'
+import { agentInterfaceCwd, loadCatalog } from '../models'
+import { providerSignInVerificationFailed } from '../alerts/producers'
 import { environmentSecrets, redact } from '../../gateway/src/diagnostics/redaction.mjs'
 import { probeAccount } from './status'
 import { accountLogins, claimProviderVerification, recordObservedSignIn, recordProviderRecovery, releaseProviderVerification } from './logins'
@@ -82,32 +85,46 @@ async function verifyCodexRecovery(): Promise<void> {
   // The claim reserves this reconnect; a failed or timed-out verification
   // must release it so a later Connect can be recorded and verified anew.
   const login = failure.reconnectedAt?.toString() ?? null
+  let work: string | undefined
   try {
     const model = (await loadCatalog()).models.find(model => model.identity === failure.model && model.provider === 'codex')
     if (!model) throw new Error('The rejected Codex model is absent from the catalog')
-    // Match issue review's ChatGPT route, ignoring configuration and API-key
-    // overrides. A login status response is not a successful provider request.
-    const { stdout } = await runFile(process.env.CODEX_CLI || 'codex', ['exec', '--ignore-user-config', '--ignore-rules',
-      '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--model', model.selector,
-      '-c', 'approval_policy="never"', '-c', 'forced_login_method="chatgpt"', '-c', 'web_search="disabled"',
-      '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'multi_agent',
-      '--json', 'Reply with exactly OK. Do not use tools.'], {
-      cwd: homedir(), timeoutMs: 30_000, maxOutputBytes: 64 * 1024,
+    work = await mkdtemp(join(tmpdir(), 'poise-codex-verification-'))
+    // Caller owns the worker credential home and tool-free request options.
+    const { stdout } = await runFile('agent-interface', ['--verify-codex-login', model.identity, '--pwd', work], {
+      cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 64 * 1024,
       env: { CODEX_HOME: process.env.CODEX_HOME, OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined, OPENAI_BASE_URL: undefined },
     })
     const events = stdout.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
     if (events.some(event => ['error', 'turn.failed'].includes(String(event.type)))
-      || !events.some(event => event.type === 'turn.completed')
+      || events.filter(event => event.type === 'turn.completed').length !== 1
+      || events.some(event => event.item && (typeof event.item !== 'object' || !('type' in event.item)
+        || !['agent_message', 'reasoning', 'todo_list', 'error'].includes(String(event.item.type))))
       || !events.some(event => event.type === 'item.completed' && event.item && typeof event.item === 'object'
         && 'type' in event.item && event.item.type === 'agent_message' && 'text' in event.item && event.item.text === 'OK')) {
-      throw new Error('Codex did not complete the native sign-in verification')
+      throw Object.assign(new Error('Codex did not complete the native sign-in verification'), { stdout })
     }
     // Record completion, not request start: a second Connect during verification
     // must still read as older than the verification it did not cause.
     recordProviderRecovery('codex', failure.callId, Date.now())
   } catch (error) {
-    console.error('[accounts] native Codex sign-in verification failed:', redact(String(error), environmentSecrets()))
+    const output = error as { stdout?: string, stderr?: string }
+    let cause = output.stderr?.trim() || String(error)
+    // Codex can report the actual rejection only in its JSON event stream.
+    for (const line of output.stdout?.split('\n') ?? []) {
+      let event: { type?: string, message?: string, error?: { message?: string } | string }
+      try { event = JSON.parse(line) } catch { continue }
+      if (event && ['error', 'turn.failed'].includes(event.type ?? '')) {
+        const message = (typeof event.error === 'string' ? event.error : event.error?.message) || event.message
+        if (typeof message === 'string' && message.trim()) cause = message
+      }
+    }
+    cause = redact(cause, environmentSecrets()).replace(/\s+/g, ' ').slice(0, 500)
+    console.error('[accounts] native Codex sign-in verification failed:', cause)
+    providerSignInVerificationFailed('codex', failure.callId, cause)
     releaseProviderVerification('codex', login)
+  } finally {
+    if (work) await rm(work, { recursive: true, force: true })
   }
 }
 

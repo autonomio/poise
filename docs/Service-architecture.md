@@ -967,11 +967,17 @@ not use the gateway's discarded OAuth token.
     A native Codex credential rejection raises the same condition immediately,
     retaining the affected stage, issue and redacted cause. It survives a status
     poll that still reports signed in. After a fresh successful Connect,
-    Accounts attempts one native verification (30 seconds, 64 KiB), forcing the
-    review's ChatGPT login route and removing API-key/base-URL overrides.
+    Accounts attempts one native verification (30 seconds, 64 KiB) through
+    Caller's `--verify-codex-login`, using the review's private credential home
+    and tool-free ChatGPT request options, without API-key/base-URL overrides.
+    Canonical-home success alone cannot clear the block. A refresh retained
+    only in the disposable home also cannot prove the next worker can sign in;
+    verification never writes its credentials back to the canonical sign-in.
     A successful response after the latest rejection clears the condition and
     permits one early review probe through existing admission. Failed
-    verification requires another Connect; a failed review probe cannot reuse
+    verification keeps its bounded, redacted cause in the existing sign-in
+    alert and requires another Connect; one completed during a failed
+    verification remains eligible. A failed review probe cannot reuse
     old recovery evidence. Successful native reviews on that route also prove
     recovery. Quota backoff and uncertain publication retain their own gates.
   - Participation: a provider takes part in model maintenance when
