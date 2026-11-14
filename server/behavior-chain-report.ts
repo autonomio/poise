@@ -8,7 +8,7 @@ import { behaviorChainWorkImpact } from './behavior-chain-summary'
 import { behaviorErrorMessage } from './behavior-diagnostics'
 import { nativeResourcesPending, resourceReleaseProven } from './behavior-resource-receipt'
 import { runDatastoreHealth, validatedHealth } from './datastore-health'
-import { handleGhBody, reconcileRepairReport } from './gh'
+import { getHeadSha, handleGhBody, reconcileRepairReport } from './gh'
 import { HttpError } from './http'
 import { organizationArgs, organizationForRepository } from './organizations'
 import { runFile } from './process'
@@ -790,6 +790,9 @@ export async function implementationReportAdmission(db: Database, journal: Behav
     if (!legacyReviewAuthentic(db, journal, chain, review)) return { reason: `${reviewWait}: original source ownership changed` }
     try {
       if (!await verifiedReport(chain, review, observation.issue.revision)) return { reason: `${reviewWait}: reviewed report changed` }
+      if (await getHeadSha(chain.repository, review.pull!, { actor: chain.author }) !== review.head) {
+        return { reason: `${reviewWait}: source or reviewed report evidence changed` }
+      }
     } catch (error) {
       return { reason: `${reviewWait}: verification unavailable: ${behaviorErrorMessage(error instanceof Error ? error.message : String(error), 500)}` }
     }

@@ -73,6 +73,7 @@ let loseCreation: boolean
 let searchVisible: boolean
 let indexed: boolean
 let stale: boolean
+let prHead: string
 let fresh: ChainObservation
 
 function observation(pull = 21): ChainObservation {
@@ -101,11 +102,16 @@ beforeEach(() => {
   remote = []; seedBody = 'Original work'; dropLabels = false; denyLabels = false
   seedState = 'open'; seedLabels = [{ name: 'poise' }]; priorBody = 'Closes #7'
   sourceComments = []; priorComments = []
-  loseCreation = false; searchVisible = true; indexed = false; stale = false; fresh = observation()
+  loseCreation = false; searchVisible = true; indexed = false; stale = false; prHead = HEAD; fresh = observation()
   mocks.runFile.mockReset()
   mocks.runFile.mockImplementation(async (command: string, argv: string[]) => {
     const response = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: '' })
     if (command === 'github-interface') {
+      if (argv[0] === '--head-sha') {
+        const pull = Number(String(argv[1]).replace(/^#/, ''))
+        expect(argv.slice(2)).toEqual(['--token-user', 'author'])
+        return response({ action: 'head_sha', repository: 'acme/repo', pull_number: pull, head_sha: prHead })
+      }
       expect(argv.slice(2)).toEqual(['--repository', 'acme/repo', '--token-user', 'author'])
       const number = Number(argv[1])
       const result = { repository: 'acme/repo', issue_number: number }
@@ -1413,6 +1419,26 @@ it('keeps a legacy source-only review report fenced across ownership changes whi
   ordinaryObservation.issueReviewers = []
   const gate = await implementationReportAdmission(db, journal, ordinary, ordinaryObservation, async () => ordinaryObservation)
   expect(gate).toEqual({ reason: null })
+})
+
+it('blocks a legacy distinct-fix review disposition after its source PR changes head', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedReviewReport(db, journal, true)
+  let report = journal.read('acme/repo#99')!
+  await setImplementationReportDisposition(db, journal, report, report.sequence, reviewReportBinding(db, report), {
+    kind: 'distinct-fix', review: fixture.review, commentId: 700,
+    diagnosis: 'Verified independent defect in main; separately implementable.',
+    nextAction: 'Implement that distinct fix through ordinary gates.' })
+  // The source PR pushes a new head; the old disposition dies with it.
+  prHead = 'b'.repeat(40)
+  const ops = operations(db, journal, { ...fixture.overrides,
+    readInvocations: async () => ({ entries: [], quarantined: [] }) })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.request).not.toHaveBeenCalled()
+  expect(fixture.launch).not.toHaveBeenCalled()
+  report = journal.read('acme/repo#99')!
+  expect(report.invocations.some(item => item.behavior === 'implement-issue')).toBe(false)
+  expect(report.waiting).toContain('source or reviewed report evidence changed')
 })
 
 it.each([false, true])('retires an admitted review implementation without disposition and settles launched work (legacy=%s)', async legacy => {
