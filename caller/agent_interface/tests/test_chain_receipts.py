@@ -1297,7 +1297,7 @@ class AtomicWorkLimits(TestCase):
                                      [{"name": "Caller", "check": 41, "job": 42, "run": 40, "workflow": 1,
                                        "attempt": 1, "url": check["url"]}])
 
-    def test_failed_queue_blocker_drops_partial_shared_proof_but_keeps_integration_failures(self):
+    def test_failed_queue_blocker_keeps_integration_failures_when_baseline_proof_is_rejected_or_partial(self):
         integration, base = "d" * 40, "c" * 40
         ci = {"action": "list_failing_ci", "repository": "example/repo", "pull_number": 3, "head_sha": HEAD, "failing": []}
         queue = {"head_sha": HEAD, "queue_removals": [{"id": "removed", "reason": "failed_checks", "beforeCommit": {"oid": integration}}]}
@@ -1306,8 +1306,11 @@ class AtomicWorkLimits(TestCase):
                  "url": "https://github.com/example/repo/actions/runs/40/job/42"}
         run = {"id": 40, "workflow_id": 1, "run_attempt": 1, "event": "merge_group", "head_sha": integration}
         packet = {**ci, "ref": integration, "parents": [base, HEAD], "failing": [check], "runs": [run]}
-        for index, shared in enumerate((False, True)):
-            with self.subTest(shared=shared):
+        for index, mode in enumerate(("rejected", "partial", "shared")):
+            with self.subTest(mode=mode):
+                shared = mode == "shared"
+                modes = []
+                rejection = "CI dependency cause is absent from its actual job logs"
                 dependency = {"head": HEAD, "removal": "removed", "integration": integration, "base": base,
                               "remediation": "https://github.com/example/repo/issues/99", "allShared": shared,
                               "failures": [{"check": 41, "name": "Caller", "run": 40, "workflow": 1,
@@ -1315,6 +1318,7 @@ class AtomicWorkLimits(TestCase):
 
                 def interface(*args, **_kwargs):
                     if args[0] == "--issue-work":
+                        modes.append(args[args.index("--mode") + 1])
                         return {"outcome": "prepared", "checkout_head": HEAD}
                     if args[0] == "--list-failing-ci":
                         return packet if "--ref" in args else ci
@@ -1322,27 +1326,41 @@ class AtomicWorkLimits(TestCase):
 
                 def worker(_lease, _args, **kwargs):
                     (Path(kwargs["cwd"]).parent / "publication.json").write_text(json.dumps({
-                        "blocked": {"cause": "ci_only", "reason": "The supplied unit job failed"},
+                        "blocked": {"cause": "ci_only", "reason": "The merge-group Caller job failed"},
                         "ciDependency": {"head": HEAD}}))
                     return SimpleNamespace(returncode=0, stdout="", stderr="")
 
                 with patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
                         patch.object(issue_review, "interface", side_effect=interface), \
-                        patch.object(issue_review, "command", return_value=(["fixture"], "", {})), \
+                        patch.object(issue_review, "command", return_value=(["fixture"], "", {})) as command, \
                         patch.object(issue_review, "_terminal_failure", return_value=None), \
                         patch.object(issue_review, "stop_leftovers"), patch.object(issue_review, "_cwd_pids", return_value=[]), \
                         patch.object(api.atomic_work.checkout_lock, "Lease", return_value=MagicMock()), \
                         patch.object(api.atomic_work.checkout_lock, "run_gated", side_effect=worker), \
-                        patch.object(api.atomic_work, "_verify_ci_dependency", return_value=dependency), \
-                        self.assertRaisesRegex(ValueError, "The supplied unit job failed"):
+                        patch.object(api.atomic_work, "_verify_ci_dependency", return_value=dependency,
+                                     side_effect=api.atomic_work.AtomicWorkFailed(rejection) if mode == "rejected" else None), \
+                        self.assertRaisesRegex(api.atomic_work.AtomicWorkBlocked, "The merge-group Caller job failed"):
                     self.run_behavior(pull=3, expected_head=HEAD,
                                       correlation_id=f"00000000-0000-4000-8000-0000000000{index + 2:02d}"[-36:])
                 with sqlite3.connect(self.path) as conn:
-                    artifact = json.loads(conn.execute(
-                        "select artifact from calls order by rowid desc limit 1").fetchone()[0])
+                    status, code, action, error, artifact, plan = conn.execute(
+                        "select status,error_code,action,error,artifact,action_plan from calls order by rowid desc limit 1").fetchone()
+                self.assertEqual(modes, ["prepare"])
+                self.assertEqual((status, code, action), ("failed", "atomic_work_blocked", "not_started"))
+                self.assertIsNone(plan)
+                self.assertIn("The merge-group Caller job failed", error)
+                if mode == "rejected":
+                    self.assertIn(rejection, error)
+                instruction = command.call_args.args[1]
+                self.assertIn("verified merge-group-only failure", instruction)
+                self.assertIn("PR-head checks are green and optional baseline proof is unavailable", instruction)
+                self.assertIn("missing original failure evidence", instruction)
+                artifact = json.loads(artifact)
                 blocker = artifact["ci_blocker"]
-                self.assertIn("queue", blocker)
-                self.assertEqual(blocker["queue"]["failures"][0]["check"], 41)
+                self.assertEqual({key: blocker[key] for key in ci}, ci)
+                self.assertEqual(blocker["queue"], {"removal": "removed", "integration": integration, "base": base,
+                    "failures": [{"name": "Caller", "check": 41, "job": 42, "run": 40, "workflow": 1,
+                                  "attempt": 1, "url": check["url"]}]})
                 self.assertEqual("ci_dependency" in blocker, shared)
                 if shared:
                     self.assertNotIn("evidence", json.dumps(blocker["ci_dependency"]))

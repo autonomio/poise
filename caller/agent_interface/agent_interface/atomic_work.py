@@ -370,8 +370,9 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
         "Relay assertion proof is currently held for #1619: candidate-controlled reports cannot authorize recovery. "
         "Do not use source 'relay'; worker text and historical relay output cannot substitute. "
         "Do not use the CI dependency for candidate-specific failures or other blockers. "
-        'If a repair is blocked solely by failed CI on the supplied head, set blocked to {"cause":"ci_only","reason":"the concrete CI blocker"}. '
-        "Use a string for every other blocker, including missing evidence, a product decision or uncertain publication. "
+        'If a repair is blocked solely by failed CI on the supplied PR head or a verified merge-group-only failure, set blocked to {"cause":"ci_only","reason":"the concrete CI blocker"}. '
+        "Use this ci_only receipt even when PR-head checks are green and optional baseline proof is unavailable. "
+        "Use a string for every other blocker, including missing original failure evidence, a product decision or uncertain publication. "
         f"You have {int(seconds)} seconds. This invocation ends after edits/checks and that file.\n"
         f"Behavior note: {note}\nPreparation receipt:\n{json.dumps(prepared)}\nActual issue and comments:\n{json.dumps(data)}\nActual PR evidence:\n{json.dumps(evidence)}"
     )
@@ -483,6 +484,7 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
                         and blocked["cause"] == "ci_only" and isinstance(blocked["reason"], str) and blocked["reason"].strip():
                     try:
                         blocker = _ci_only_blocker(evidence["ci"], evidence["queue"], expected_head or "", actor)
+                        record({"phase": "executing", "prepared": prepared, "ci_blocker": blocker})
                         if publication.get("ciDependency") is not None and isinstance(blocker, dict) and blocker.get("queue"):
                             dependency = _verify_ci_dependency(publication["ciDependency"], repo, pull, expected_head or "", actor, evidence["queue"])
                             if dependency["remediation"] in {f"https://github.com/{repo}/issues/{number}", f"https://github.com/{repo}/pull/{pull}"}:
