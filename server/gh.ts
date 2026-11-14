@@ -118,6 +118,7 @@ export async function reconcileRepairReport(repository: string, marker: string, 
     }
     if (typeof issue.body !== 'string') {
       if (number !== null && linked) return null
+      if (number !== null) throw new Error(`Repair report marker not found in issue #${issue.number}`)
       throw new Error('Repair report issue identity differs from its durable intent')
     }
     if (!issue.body.includes(marker) && number !== null && linked) {

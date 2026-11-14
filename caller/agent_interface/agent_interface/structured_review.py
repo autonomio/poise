@@ -789,13 +789,7 @@ def codex_environment(root: Path) -> dict:
     return env
 
 
-def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, watch: ReviewWatch, timeout: float) -> str:
-    output = root / "verdict.json"
-    output.unlink(missing_ok=True)
-    prompt = f"{system}\n\n{text}"
-    state_path = root / "codex-session.json"
-    state = json.loads(state_path.read_text()) if state_path.exists() else None
-    same_prefix = (state is not None and state["prefix_digest"] == sha256(prompt[:state["prefix_length"]].encode()).hexdigest())
+def codex_command(model: Model) -> list[str]:
     args = [
         os.getenv("CODEX_CLI", "codex"), "exec",
         "--ignore-user-config", "--ignore-rules",
@@ -808,8 +802,6 @@ def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, wa
         "-c", 'web_search="disabled"',
         "-c", "project_doc_max_bytes=0",
         "-c", "skills.include_instructions=false",
-        "--output-schema", str(root / "verdict.schema.json"), "--output-last-message", str(output),
-        "--json",
     ]
     # No shell, connectors, extensions, or delegated agents. The empty
     # work directory also prevents loading PR checkout instructions.
@@ -817,6 +809,35 @@ def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, wa
                     "multi_agent", "browser_use", "computer_use", "image_generation",
                     "code_mode", "code_mode_host", "skill_search"):
         args.extend(["--disable", feature])
+    return args
+
+
+def verify_codex_login(root: Path, model: Model) -> int:
+    if model.provider != "codex":
+        raise ValueError("Codex sign-in verification requires a Codex model")
+    original = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json"
+    env = codex_environment(root)
+    done = subprocess.run([*codex_command(model), "--ephemeral", "--json", "Reply with exactly OK. Do not use tools."],
+                          cwd=root, env=env, timeout=30)
+    if done.returncode:
+        return done.returncode
+    # A refresh left only in this disposable home cannot seed the next Call.
+    # Persistence belongs to #1822; never copy worker-writable credentials back.
+    isolated = Path(env["CODEX_HOME"]) / "auth.json"
+    if not original.is_file() or not isolated.is_file() or original.read_bytes() != isolated.read_bytes():
+        raise RuntimeError("Codex verification credentials are unavailable to the next Caller worker. Connect again in Settings → Accounts.")
+    return 0
+
+
+def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, watch: ReviewWatch, timeout: float) -> str:
+    output = root / "verdict.json"
+    output.unlink(missing_ok=True)
+    prompt = f"{system}\n\n{text}"
+    state_path = root / "codex-session.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else None
+    same_prefix = (state is not None and state["prefix_digest"] == sha256(prompt[:state["prefix_length"]].encode()).hexdigest())
+    args = [*codex_command(model), "--output-schema", str(root / "verdict.schema.json"),
+            "--output-last-message", str(output), "--json"]
     env = codex_environment(root)
     # Each review owns one fresh native conversation. Resume that exact ID
     # with only newly supplied inspection evidence, retaining the provider's
