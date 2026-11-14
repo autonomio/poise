@@ -208,6 +208,9 @@ def packet(
         args.extend(["--p", _priority(p)])
     if since_head:
         args.extend(["--since-head", since_head])
+    from . import review_continuation
+    if review_continuation.enabled():
+        args.append("--manifest-only")
     try:
         done = subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=limit)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -292,7 +295,11 @@ def run_agent(
     review_scope: str = "",
 ) -> str:
     spec = CATALOG.review_model(behavior, model)
-    review_receipt.prepare_response(packet, spec.identity, review_scope)
+    from . import review_continuation
+    if review_continuation.enabled() and (spec.provider == "claude" or repository is None or capped):
+        raise AgentPreflightError("review continuation requires uncapped structured analysis with a pinned repository")
+    policy = system + "\n" + text.split("\n\nPinned review repository:", 1)[0].replace(packet, "<pinned packet>", 1)
+    review_receipt.prepare_response(packet, spec.identity, review_scope, policy=policy)
     if spec.provider == "claude":
         prompt_bytes = len(text.encode("utf-8"))
         if prompt_bytes > MAX_GOVERNED_PROMPT_BYTES:

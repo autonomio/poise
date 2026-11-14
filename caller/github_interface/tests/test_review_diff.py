@@ -15,6 +15,26 @@ def git(cwd, *args):
 
 
 class TestReviewDiff(IsolatedAsyncioTestCase):
+    async def test_continuation_manifest_defers_required_source_without_capacity_omissions(self):
+        base, head = 'a' * 40, 'b' * 40
+        raw = (f':000000 100644 {"0" * 40} {"c" * 40} A\0large.py\0'
+               f':000000 100644 {"0" * 40} {"d" * 40} A\0data.csv\0').encode()
+
+        def git_result(_cwd, _env, *args, limit):
+            self.assertNotIn('--no-ext-diff', args)
+            return raw if '--raw' in args else b''
+
+        client = AsyncMock(token='fixture-token')
+        client.get.return_value = {'merge_base_commit': {'sha': base}}
+        with patch.object(rd, '_git', side_effect=git_result), \
+                patch.object(rd, '_blob_sizes', AsyncMock(return_value={'c' * 40: 4_000_000, 'd' * 40: 100_000})):
+            packet = await rd.review_diff(client, 'o', 'r', {'base': {'sha': base}, 'head': {'sha': head}}, manifest_only=True)
+        self.assertEqual(packet['files'][0]['filename'], 'large.py')
+        self.assertEqual(packet['excluded_files'], [{'path': 'data.csv', 'reason': 'bulk data (100000 bytes across base and head)'}])
+        self.assertNotIn('omitted_files', packet)
+        self.assertTrue(packet['diff_deferred'])
+        self.assertEqual((packet['coverage'], packet['diff']), ('incomplete', ''))
+
     async def test_complete_pinned_diff_excludes_data_before_diff_and_keeps_contracts(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root)

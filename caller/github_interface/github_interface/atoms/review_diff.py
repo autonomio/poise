@@ -259,6 +259,7 @@ async def review_diff(
     client: GitHubClient, owner: str, repo: str, pull: dict[str, Any],
     context: dict[str, Any] | None = None,
     since: str | None = None,
+    *, manifest_only: bool = False,
 ) -> dict[str, Any]:
     head = pull["head"]["sha"]
     base = pull["base"]["sha"]
@@ -333,6 +334,18 @@ async def review_diff(
                 else:
                     retained.append(file["filename"])
             retained_paths = set(retained)
+            if manifest_only:
+                packet = {
+                    "diff": "", "diff_deferred": True, "coverage": "incomplete",
+                    "files": [{"filename": f["filename"], "status": FILE_STATUS[f["status"]],
+                               "old_mode": f["old_mode"], "new_mode": f["new_mode"]}
+                              for f in files if f["filename"] in retained_paths],
+                    "excluded_files": excluded, "merge_base_sha": merge_base, "since_head_sha": since,
+                    "review_scope": "Required diff is deferred to bounded pinned checkout pages; no source reviewed yet.",
+                }
+                if len(json.dumps({**(context or {}), **packet}, indent=2).encode()) > MAX_PACKET_BYTES:
+                    raise ReviewPacketTooLarge(f"{PACKET_LIMIT_CODE}: review manifest exceeds its packet budget")
+                return packet
             # Literal pathspecs cannot interpret a filename as an option, glob
             # or exclusion. Git supplies complete hunks, renames and modes.
             try:
