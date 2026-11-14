@@ -362,17 +362,27 @@ volume by running `/opt/poise/scripts/test-offload/install.sh` in a short-lived
 container of the image. With `POISE_TEST_RENDER_API_KEY` and
 `POISE_TEST_WORKSPACE` set, it passes `POISE_TEST_RELAY_URL`, which is
 `/api/link/test-relay` on the workspace's host or on `POISE_PROXY_LISTEN`, and
-`POISE_TEST_RELAY_KEY`, the workspace's handle signed by the gateway. That writes the hooks and `relay`, holding those
-two, to `~/.poise/test-offload`; without them it removes `relay`. Poise starts its
+`POISE_TEST_RELAY_KEY`, the workspace's handle signed by the gateway, and the
+validated `POISE_TEST_LIMIT_SECONDS`. That writes the hooks and `relay`, holding
+URL, key and limit on successive lines, to `~/.poise/test-offload`; without them it removes `relay`. Poise starts its
 children with the hooks while `relay` exists
 ([Agents' test suites](Operating.md#agents-test-suites)). The settings travel this
 way because only a new container would take an environment variable.
+The limit defaults to 540 seconds and accepts whole seconds from 1 to 3540.
+The runner reads it from this installed configuration for one command lifetime,
+including capture and retries. Workspace children get a shell default of that
+budget plus 60 seconds for reporting and cleanup, within the existing 3600000 ms
+shell maximum. Explicit shorter shell deadlines still cap the command. Older
+two-line relay files retain the 540-second default.
 
-The relay retains the last 1,024 retired run IDs and their workspace owners in
-memory, outside active admission slots. After the signed-key and current-access
+The relay retains the last 1,024 retired run IDs, their workspace owners and, for
+jobs, SHA-256 runner-token digests in memory, outside active admission slots.
+After the signed-key and current-access
 checks, the owner's exact `DELETE /runs/:id` returns 204 even while box termination
-is pending. Unknown, evicted and foreign IDs and other requests retain their
-failure warnings. Suite results and box-termination diagnostics remain independent.
+is pending. An exact `POST /runs/:id/output` with a constant-time digest match
+returns 410 without processing output or logging a redundant request warning.
+Unknown, evicted and foreign IDs, invalid tokens and other requests retain their
+failure warnings. Run-stop, missing-result and box-termination diagnostics remain independent.
 
 The relay's run admission advertises `dependencyCache: true`. The authenticated
 workspace can send `POST /runs/:id/dependency?sha256=…` between checkout parts
@@ -382,6 +392,21 @@ member, which the relay verifies against the SHA-256 of its uncompressed tar
 bytes before forwarding and retaining it. Earlier runners and relays still
 exchange the whole checkout through the existing tree upload. Jobs and
 sandboxes receive the same single tar stream from either route.
+
+New atomic Calls also pass a Caller-owned random capture binding through the
+test-offload hooks, outside the suite environment. The box independently hashes
+the captured archive and source files before running a direct Vitest command.
+Relay recovery is currently held for #1619: the suite UID owns the report files,
+so no assertion inventory is trusted and no evidence frame is emitted. The held
+design would post a complete bounded inventory from the private run credential to
+`POST /runs/:id/assertions`; workspace credentials cannot submit that result.
+Only a matching completed failure would emit an Ed25519-signed evidence frame
+before the relay deletes the run. The hook would retain the redacted receipt for
+Caller; `POST /evidence/verify` would authenticate it against the existing gateway
+key and workspace credential after run deletion or restart. There is no unsigned
+or partial-result fallback. Caller would retain the verified receipt in its
+original artifact before resource cleanup. This extends the existing relay
+interface, without a new identity scope, setting or runner-retention store.
 
 A workspace container created with another `POISE_DRAIN_TIMEOUT` than the
 gateway's, or with none, is recreated as one on an outdated image is: drained
@@ -416,7 +441,12 @@ networks the one it replaced had joined, so the gateway joins them itself:
 
 A workspace takes a new image without a new container when the image's
 system base is the one its container runs, so the agents in it are never cut
-off. Agent calls (behavior runs, manual reviews, replays) are processes Poise
+off. The container's inherited `poise.base` and `poise.release` labels retain
+that proof even when a cached rebuild changes an attestation/index digest and
+the original image can no longer be inspected. A healthy workspace already on
+the requested release keeps its container; missing base/release labels and
+changed container settings retain the drained replacement path.
+Agent calls (behavior runs, manual reviews, replays) are processes Poise
 starts detached; they keep running while Poise restarts, and the next Poise
 reconciles them as after any restart. Chat turns survive the same way: each
 session's agent runs under a per-session relay that owns its stdio and
@@ -506,7 +536,14 @@ its own instead of refusing with dirty_unowned.
 - **Switching.** The gateway then sends `POST /api/service/switch` with
   `{ release }` (`admin` scope or loopback; 202 `{ release, switching }`,
   409 for a release not installed for this base or a server started without
-  the supervisor). Poise writes `next` and restarts at the first moment no unheld Chat turn and no work of its own
+  the supervisor). While someone is using Poise in a browser (input on a
+  visible page, reported by `POST /api/service/activity` at most every 30
+  seconds), the switch is held, not queued: nothing is written, new Chat
+  turns keep starting, and health names the release with `switchWaitingOn:
+  "someone using Poise"`. It is queued after 90 quiet seconds, or five
+  minutes after it was first asked for, well inside the deploy's ten-minute
+  proof, so the restart and the minutes its caches take to warm land in a
+  quiet moment. Poise then writes `next` and restarts at the first moment no unheld Chat turn and no work of its own
   runs; it waits for no agent call and no turn a healthy relay holds, since
   the relay keeps the turn running and the next server adopts it. While the
   switch is pending, new Chat turns
@@ -1451,9 +1488,11 @@ reconnect/provider-verification evidence; these optional fields do not change
 reducer state or old event hashes. Ambiguous older events stay unknown. See
 [System health](Analytics.md#system-health).
 
-New implementation admission also consumes Caller's captured forward GitHub
+New implementation admission also consumes Caller's complete live forward GitHub
 prerequisites and verified delivery on the implementation base through the
-existing chain sweep. [Behavior chain](Behavior-chain.md#handoffs-and-outcomes) defines the
+existing chain sweep, including a final observation after awaited request
+preparation. The mirror health gate remains required.
+[Behavior chain](Behavior-chain.md#handoffs-and-outcomes) defines the
 dependency wait; no gateway route, journal event or poller is added.
 
 The workspace's existing `/api/behavior-chains` controls also expose an explicit
@@ -1531,11 +1570,15 @@ declaring a collector outage. No extra poller or gateway scope is
 introduced. [Bounded reconciliation](Behavior-chain.md#bounded-reconciliation)
 defines the cadence and timestamp units.
 The same reconciliation can release a CI-only hold after a proven clean base
-update, retaining the original Call, resource-release proof and remaining gates
+update, or admit the existing scoped repair when a fresh conflict on the retained
+failed head blocks that update, retaining the original Call, resource-release
+proof, repair retry bound and remaining gates
 as defined in [CI hold recovery](Behavior-chain.md#bounded-reconciliation).
 For a pre-PR implementation, the existing Caller artifact and seed read can
-instead verify an original CI assertion failure on its exact prepared base and
-the delivered main recovery with validation of the original failing tests.
+instead verify an original CI assertion failure on its exact prepared base, and
+the delivered main recovery with validation of every original failing test and
+case. Relay assertions remain held for #1619 until the runner establishes their
+inventory independently of candidate-controlled reports.
 The journal admits one fresh implementation for that automatic hold and recovery
 commit, independently of report publishing. Missing original evidence and later
 operator holds retain their authority; no gateway route or new poller is added.
@@ -1737,7 +1780,8 @@ configured-account issue publisher and datastore intake. An explicit per-reposit
 opt-in enables verified repair incomplete-reply, repair execution-budget
 or PR review timeout exhaustion, including retained legacy review/approval stops
 from their existing reconciliation independently of model readiness or v2 mode,
-verified automatic implementation holds before a PR,
+verified automatic implementation holds before a PR and terminal repair holds
+before publication,
 terminal uncertain implementation publication,
 open Poise seeds with a sole closed unmerged PR,
 and terminal uncertain merge submissions, including
@@ -1750,6 +1794,9 @@ entry after recovery, retaining the original invocation's uncertainty and owners
 Implementation reports require the current automatic hold's settled blocked receipt,
 positive resource release and fresh open-seed inspection proving no publication.
 They retain the hold and distinguish worker-reported blockers from Caller diagnostic facts.
+Terminal repair reports require the matching automatic hold, settled original Call,
+positive release and unchanged open PR head and repair basis, without possible
+publication effects. They preserve repair ownership and exclude CI-only recovery holds.
 Uncertain implementation reports instead require the original failed `publishing`
 Call, verified resource release and fresh open-source eligibility and publication
 reconciliation. They preserve its missing-push-evidence action and execution fence,

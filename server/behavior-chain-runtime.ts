@@ -95,10 +95,10 @@ function ciOnlyHold(invocation: ChainInvocation, call: LogEntry): BehaviorChain[
   return { invocationId: invocation.id, callId: call.id, head: ci.head_sha }
 }
 
-function ciRecovered(chain: BehaviorChain, observation: ChainObservation, now: number): boolean {
+function ciHoldCanResume(chain: BehaviorChain, observation: ChainObservation, now: number, operations: ChainRuntimeOperations): boolean {
   const hold = chain.ciHold, pull = observation.pull, original = chain.invocations.at(-1)
   const evidence = original?.evidence, artifact = evidence?.artifact as Record<string, unknown> | undefined
-  return !!chain.held && !!hold && !chain.mergeSha && original?.id === hold.invocationId && original.state === 'settled'
+  if (!(!!chain.held && !!hold && !chain.mergeSha && original?.id === hold.invocationId && original.state === 'settled'
     && original.callId === hold.callId && evidence?.status === 'failed' && evidence.error_code === 'atomic_work_blocked'
     && evidence.action === 'not_started' && artifact?.phase === 'executing' && !artifact.plan_sha && !evidence.publicationResume
     && evidence.receipts == null && evidence.review_id == null && evidence.head_sha == null
@@ -106,8 +106,21 @@ function ciRecovered(chain: BehaviorChain, observation: ChainObservation, now: n
     && Number.isFinite(observation.checkedAt) && observation.checkedAt >= evidence.completedAt
     && observation.checkedAt >= Date.parse(String(evidence.resources_settled_at))
     && observation.checkedAt <= now && now - observation.checkedAt <= CHAIN_OBSERVATION_MAX_AGE_MS
-    && !!pull && pull.state === 'open' && !pull.merged
-    && (pull.head === hold.head || observation.ciBaseUpdate?.from === hold.head && observation.ciBaseUpdate.head === pull.head
+    && !!pull && pull.state === 'open' && !pull.merged)) return false
+  if (pull.head === hold.head && pull.conflict) {
+    // Release only for the ordinary scoped repair, including its retry bound.
+    // The failed CI receipt remains evidence; admission does not resolve it.
+    // Otherwise fall through to the green-CI recovery below.
+    const resumed = { ...chain, held: null }
+    const decision = decideBehaviorChain(resumed, observation, now)
+    if (decision.kind === 'invoke' && decision.behavior === 'repair-pr'
+      && !closedChainTarget(chain, observation, decision.behavior) && operations.enabled()) {
+      const accounts = operations.accounts()
+      if (accounts.author.toLowerCase() === chain.author.toLowerCase()
+        && accounts.reviewer.toLowerCase() === chain.reviewer.toLowerCase() && operations.permitted(resumed, decision)) return true
+    }
+  }
+  return (pull.head === hold.head || observation.ciBaseUpdate?.from === hold.head && observation.ciBaseUpdate.head === pull.head
       && observation.publication.pull_number === pull.number && observation.publication.head_sha === pull.head)
     && pull.checksState === 'SUCCESS' && !pull.pending && pull.failing.length === 0
 }
@@ -462,7 +475,7 @@ export class BehaviorChainRuntime {
                 continue
               }
               phase = 'decision'
-              if (ciRecovered(chain, observation, Date.now())) {
+              if (ciHoldCanResume(chain, observation, Date.now(), this.operations)) {
                 chain = this.append(chain, { type: 'chain.resumed', ciRecovery: chain.ciHold })
               }
               const testRecovery = recoveredImplementation(chain, observation, Date.now())
@@ -596,14 +609,17 @@ export class BehaviorChainRuntime {
                 // Preparation can await provider/auth/configuration. Recheck admission
                 // at the last boundary, before committing authority for an effect.
                 if (!this.operations.enabled() || !this.operations.permitted(chain, decision)) continue
-                if (decision.behavior === 'implement-issue' && chain.testRecovery && !chain.testRecovery.admission) {
+                if (decision.behavior === 'implement-issue') {
                   const fresh = await this.operations.observe(chain)
                   chain = this.append(chain, { type: 'chain.observed', observation: fresh })
-                  if (!recoveredImplementation(chain, fresh, Date.now()) || fresh.prerequisites?.wait !== null) continue
-                  // The recovered decision is stale when a required review no
-                  // longer posts; re-decide on the fresh observation.
+                  if (chain.testRecovery && !chain.testRecovery.admission && !recoveredImplementation(chain, fresh, Date.now())) continue
+                  // Dependencies can change without an issue revision, including
+                  // while request preparation awaited. Retain their ordinary wait.
                   const redecided = decideBehaviorChain(chain, fresh, Date.now())
-                  if (redecided.kind !== 'invoke' || redecided.behavior !== decision.behavior || redecided.basis !== decision.basis) continue
+                  if (redecided.kind !== 'invoke' || redecided.behavior !== decision.behavior || redecided.basis !== decision.basis) {
+                    if (redecided.kind === 'wait' && chain.waiting !== redecided.reason) this.append(chain, { type: 'chain.waiting', reason: redecided.reason })
+                    continue
+                  }
                   if (!this.operations.enabled() || !this.operations.permitted(chain, decision)) continue
                 }
                 phase = 'invocation-admission'
@@ -737,7 +753,7 @@ export class BehaviorChainRuntime {
     const resourceStopped = ['resource_memory_exceeded', 'resource_disk_exceeded', 'resource_measurement_unavailable', 'resource_receipt_unavailable'].includes(call.error_code || '')
     const workBlocked = call.error_code === 'atomic_work_blocked'
     const ciHold = workBlocked ? ciOnlyHold(invocation, call) : undefined
-    const testHold = !chain.testRecovery && workBlocked && implementationTestDependency({ ...invocation, evidence: receipt(call) })
+    const testHold = !chain.testRecovery && workBlocked && implementationTestDependency({ ...invocation, callId: call.id, evidence: receipt(call) })
       ? { invocationId: invocation.id, callId: call.id } : undefined
     if ((resourceStopped || workBlocked) && !chain.held) chain = this.append(chain, { type: 'chain.held', reason: call.error,
       ...(ciHold ? { ciHold } : {}), ...(testHold ? { testHold } : {}) })

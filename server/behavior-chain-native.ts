@@ -178,9 +178,11 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
           state: typeof publication.state === 'string' ? publication.state : null, merged: publication.merged === true,
           merge_sha: publication.merge_sha === null ? null : sha(publication.merge_sha, 'publication') }, pull: null }
       if (seed.full_suite) observation.fullSuite = object(seed.full_suite, 'full-suite recovery')
+      if (seed.remediation) observation.remediation = object(seed.remediation, 'redundant remediation')
       if (testProof && originalTest) {
         const proof = object(seed.test_dependency, 'implementation test dependency')
-        if (proof.verified === true && ['base', 'run', 'runAttempt', 'baselineRun', 'baselineAttempt', 'remediation', 'failures']
+        if (proof.verified === true && ['base', 'run', 'runAttempt', 'baselineRun', 'baselineAttempt', 'remediation', 'failures',
+          ...(testProof.source === 'relay' ? ['source', 'capture', 'candidate', 'baselineCapture', 'relay', 'totals'] : [])]
           .some(key => chainBasis(proof[key]) !== chainBasis(testProof[key as keyof typeof testProof]))) throw new Error('original implementation test evidence changed')
         const recovery = proof.recovered === true ? object(proof.recovery, 'implementation test recovery') : null
         observation.testDependency = { invocationId: originalTest.id, verified: proof.verified === true, recovered: proof.recovered === true,
@@ -225,10 +227,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       let number = observation.publication.pull_number
       if (number === null && observation.issue.open && !observation.publication.head_sha) {
         await runDatastoreHealth(org, { timeoutMs: 30_000 }, ['implement-issue'])
-        const { stdout } = await runFile('github-datastore', organizationArgs(org,
-          ['view', 'issue-dependencies', '--repo', chain.repository, '--number', String(chain.issue), '--format', 'json']),
-        { timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024 })
-        const dependencies = object(JSON.parse(stdout), 'issue prerequisites')
+        const dependencies = object(publication.prerequisites ?? {}, 'live issue prerequisites')
         const base = typeof publication.base_sha === 'string' && /^[0-9a-f]{40}$/.test(publication.base_sha) ? publication.base_sha : null
         const prerequisites: NonNullable<ChainObservation['prerequisites']> = { wait: null, base, evidence: [dependencies] }
         observation.prerequisites = prerequisites
@@ -340,6 +339,16 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
         || (state.queue_entry_id !== null && (typeof state.queue_entry_id !== 'string' || !state.queue_entry_id))
         || (state.state === 'open' && !Array.isArray(state.queue_removals))) throw new Error('native PR observations changed head or are incomplete')
       const checks = ci.failing.map((item) => object(item, 'CI check'))
+      let queueEntryDetails: NonNullable<ChainObservation['pull']>['queueEntryDetails'] = null
+      if (state.queue_entry_id !== null) {
+        const entry = object(state.queue_entry, 'native queue entry')
+        if (entry.id !== state.queue_entry_id || !['QUEUED', 'AWAITING_CHECKS', 'LOCKED', 'MERGEABLE', 'UNMERGEABLE'].includes(String(entry.state))) {
+          throw new Error('native queue entry disposition is incomplete or mismatched')
+        }
+        queueEntryDetails = { id: String(entry.id), state: String(entry.state),
+          base: entry.base === null ? null : sha(entry.base, 'queue integration base'),
+          head: entry.head === null ? null : sha(entry.head, 'queue integration head') }
+      }
       const pending = checks.some((check) => ['queued', 'pending', 'in_progress', 'requested', 'waiting'].includes(String(check.state)) || (check.state === 'completed' && check.conclusion == null))
       const failures = checks.filter((check) => ['failure', 'error'].includes(String(check.state)) || (check.state === 'completed' && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'].includes(String(check.conclusion))))
       if (checks.some((check) => typeof check.name !== 'string' || !['completed', 'queued', 'pending', 'in_progress', 'requested', 'waiting', 'failure', 'error', 'success'].includes(String(check.state)))) throw new Error('native CI observation contains an unknown state')
@@ -361,6 +370,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       }
       observation.pull = { number, head, headSince, state: String(state.state), draft: readiness.draft, merged: false, mergeSha: null,
         queueEntry: typeof state.queue_entry_id === 'string' ? state.queue_entry_id : null,
+        queueEntryDetails,
         queueRemoval: removal ? { id: String(removal.id), reason: typeof removal.reason === 'string' ? removal.reason : null,
           at: Date.parse(String(removal.createdAt)), actor: removal.actor ? String(object(removal.actor, 'queue actor').login) : null } : null,
         changesRequested: latest?.state === 'CHANGES_REQUESTED' && latest.commit_id === head,
@@ -453,7 +463,7 @@ export function nativeChainOperations(org: Organization, hooks: NativeChainHooks
       const fixed = ['--expected-head', pull.head, '--token-user', decision.actor]
       if (decision.behavior === 'retire-pr') return { command: 'github-interface', cwd, nativeResources: 2,
         argv: ['--issue-work', String(chain.issue), '--mode', 'retire', '--branch', chain.branch, '--pull-number', String(pull.number),
-          '--coverage-json', JSON.stringify(observation.fullSuite), ...fixed] }
+          '--coverage-json', JSON.stringify(observation.fullSuite ?? observation.remediation), ...fixed] }
       if (decision.behavior === 'resolve-threads') return { command: 'github-interface', cwd, nativeResources: 2, argv: ['--resolve-nonblocking-conversations-if-ready', String(pull.number), '--username', chain.reviewer, ...fixed] }
       if (decision.behavior === 'rerun-grey-ci') {
         const run = pull.greyRuns[0]

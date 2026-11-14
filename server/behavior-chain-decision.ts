@@ -30,9 +30,11 @@ export interface ChainObservation extends Record<string, unknown> {
   prerequisites?: { wait: string | null, base: string | null, evidence: Record<string, unknown>[] }
   ciBaseUpdate?: { from: string, head: string, base: string, tree: string }
   fullSuite?: Record<string, unknown>
+  remediation?: Record<string, unknown>
   pull: null | {
     number: number, head: string, headSince: number, state: string, draft: boolean, merged: boolean, mergeSha: string | null,
     queueEntry: string | null, queueRemoval: null | { id: string, reason: string | null, at: number, actor: string | null },
+    queueEntryDetails?: { id: string, state: string, base: string | null, head: string | null } | null,
     changesRequested: boolean, unresolved: number, unresolvedOutdated?: number, approved: boolean, ready: boolean,
     reviewIds: number[], reviewRevision: string,
     reviewContext?: string, mergedAt?: number | null,
@@ -64,15 +66,26 @@ export function implementationTestDependency(invocation: ChainInvocation) {
   const evidence = invocation.evidence
   const artifact = evidence?.artifact as Record<string, unknown> | undefined
   const prepared = artifact?.prepared as Record<string, unknown> | undefined
-  const proof = artifact?.test_dependency as { verified: boolean, base: string, run: number, runAttempt: number,
-    baselineRun: number, baselineAttempt: number, remediation: string, failures: Array<{ file: string, test: string, cause: string }> } | undefined
+  const proof = artifact?.test_dependency as { verified: boolean, base: string, run: number | string, runAttempt: number,
+    baselineRun: number | string, baselineAttempt: number, remediation: string, source?: string,
+    capture?: { call: string, nonce: string, repository: string, base: string }, candidate?: string, baselineCapture?: string,
+    relay?: { original: { payload: string, signature: string }, baseline: { payload: string, signature: string } },
+    failures: Array<{ file: string, test: string, cause: string }> } | undefined
+  const relay = proof?.source === 'relay'
+  const validRuns = relay ? [proof.run, proof.baselineRun].every(id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id))
+    && proof.capture?.call === invocation.callId && chainBasis(proof.capture) === chainBasis(artifact?.test_capture)
+    && proof.capture?.base === proof.base && /^[a-f0-9]{64}$/.test(proof.capture.nonce)
+    && [proof.candidate, proof.baselineCapture].every(digest => typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest))
+    && proof.candidate !== proof.baselineCapture
+    && [proof.relay?.original, proof.relay?.baseline].every(receipt => typeof receipt?.payload === 'string' && typeof receipt.signature === 'string')
+    : proof && [proof.run, proof.baselineRun].every(id => Number.isSafeInteger(id) && Number(id) > 0)
   if (invocation.behavior !== 'implement-issue' || evidence?.status !== 'failed' || evidence.action !== 'not_started'
     || evidence.outcome !== 'preflight_failed' || evidence.error_code !== 'atomic_work_blocked' || artifact?.phase !== 'executing'
     || [artifact.plan_sha, artifact.publication_head, artifact.replies_started, artifact.publication, artifact.result,
       artifact.receipts, evidence.receipts, evidence.review_id, evidence.head_sha, evidence.publicationPlan,
       evidence.publicationResume, evidence.publicationReceipt, evidence.nativeActionReceipt].some(value => value != null)
     || !proof || proof.verified !== true || !/^[a-f0-9]{40}$/.test(proof.base) || prepared?.checkout_head !== proof.base
-    || ![proof.run, proof.runAttempt, proof.baselineRun, proof.baselineAttempt].every(id => Number.isSafeInteger(id) && id > 0)
+    || !validRuns || ![proof.runAttempt, proof.baselineAttempt].every(id => Number.isSafeInteger(id) && id > 0)
     || proof.run === proof.baselineRun || typeof proof.remediation !== 'string'
     || !Array.isArray(proof.failures) || !proof.failures.length || proof.failures.some(failure =>
       !failure || typeof failure.file !== 'string' || !failure.file || typeof failure.test !== 'string' || !failure.test
@@ -192,7 +205,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   mergeEvidence?: MergeReviewEvidence): ChainDecision {
   const pending = chain.invocations.find((invocation) => invocation.state !== 'settled')
   if (pending) return { kind: 'wait', reason: `${pending.behavior} is ${pending.state}; its native outcome must settle first` }
-  if (chain.supersession) return { kind: 'wait', reason: 'full-suite repair is verified superseded' }
+  if (chain.supersession) return { kind: 'wait', reason: 'repair is verified superseded' }
   const pull = observation.pull
   if (!Number.isFinite(observation.checkedAt) || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS || observation.checkedAt > now) return { kind: 'wait', reason: 'behavior observations need refreshing' }
   if (pull?.merged && pull.mergeSha && /^[0-9a-f]{40}$/i.test(pull.mergeSha)) {
@@ -225,10 +238,15 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   // An unconfirmed retirement falls through to fresh evidence below: the
   // duplicate head may have moved since the attempt. Re-invocation is
   // basis-guarded there so identical evidence holds instead of looping.
-  if (!observation.issue.open && observation.fullSuite) {
+  const remediation = observation.remediation
+  const remediationDuplicate = remediation?.duplicate as { number?: unknown, head?: unknown } | undefined
+  const coverage = !observation.issue.open && observation.fullSuite ? observation.fullSuite
+    : remediation?.verified === true && pull && !pull.merged && !observation.existingPulls.length
+      && remediationDuplicate?.number === pull.number && remediationDuplicate.head === pull.head
+      && observation.publication.head_sha === pull.head && observation.publication.pull_number === pull.number ? remediation : null
+  if (coverage) {
     if (chain.held && !automaticClosureHold(chain.held)) return { kind: 'wait', reason: chain.held }
     if (observation.existingPulls.length) return { kind: 'hold', reason: `full-suite recovery needs a decision for linked work: ${observation.existingPulls.join(', ')}` }
-    const coverage = observation.fullSuite
     const duplicate = coverage.duplicate as { number?: unknown, head?: unknown } | null
     if (coverage.verified !== true || !pull || pull.merged || duplicate?.number !== pull.number || duplicate.head !== pull.head
       || observation.publication.head_sha !== pull.head || observation.publication.pull_number !== pull.number) {
@@ -240,7 +258,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
       return { kind: 'hold', reason: `redundant PR retirement needs a decision: ${String(retiredProof?.result.reason || 'the original close response did not confirm retirement')}` }
     }
     return { kind: 'invoke', behavior: 'retire-pr', basis: chainBasis(['retire', coverage]), actor: chain.author,
-      reviewer: null, reason: 'close the verified redundant full-suite repair after original invocation settlement' }
+      reviewer: null, reason: 'close the verified redundant repair after original invocation settlement' }
   }
   if (chain.held) return { kind: 'wait', reason: chain.held }
   if (!observation.issue.open && !pull) return { kind: 'hold', reason: 'seed issue closed without a confirmed merged pull request' }
@@ -267,7 +285,11 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
     return propose(chain, 'implement-issue', issueBasis, chain.author, observation.implementer,
       'all required issue review invocations posted their comments', now)
   }
-  if (pull.queueEntry) return { kind: 'wait', reason: `native merge queue owns entry ${pull.queueEntry}` }
+  if (pull.queueEntry) {
+    const entry = pull.queueEntryDetails?.id === pull.queueEntry ? pull.queueEntryDetails : null
+    if (!entry) return { kind: 'wait', reason: `native merge queue owns entry ${pull.queueEntry}` }
+    return { kind: 'wait', reason: `native merge queue owns entry ${pull.queueEntry}; queue ${entry.state}${entry.state === 'UNMERGEABLE' ? '; cause unknown' : ''}` }
+  }
   const dismissed = pull.reviewReceipts.find((review) => review.head === pull.head && review.state === 'DISMISSED'
     && chain.invocations.some((invocation) => invocation.behavior === 'approve-pr' && invocation.callId === review.invocation))
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
