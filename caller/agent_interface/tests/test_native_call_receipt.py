@@ -778,7 +778,7 @@ def completed_pytest_then_no_result(directory, setup):
     # One failure line past the client's 64 KiB bound: its head must still
     # carry the folded-header state to the continuation line.
     pad = "P" * 70000
-    test = paths[0] + "/test_first.py::TestToken::test_credentials_are_redacted_before_cli_serialization[retained response]"
+    test = paths[0] + "/test_codex_credentials.py::TestToken::test_credentials_are_redacted_before_cli_serialization[retained response]"
     fixture = ("import pytest\n@pytest.fixture\ndef broken():\n"
                f"    raise RuntimeError('first setup cause {secret}\\nAuthorization: Bearer {pad}\\n  {folded}')\n"
                "class TestToken:\n"
@@ -788,7 +788,7 @@ def completed_pytest_then_no_result(directory, setup):
                    "    @pytest.mark.parametrize('body', ['retained response'])\n"
                    "    def test_credentials_are_redacted_before_cli_serialization(self, body):\n"
                    f"        assert 1 == 2, 'first assertion cause {secret}\\nAuthorization: Bearer {pad}\\n  {folded}'\n")
-    (work / paths[0] / "test_first.py").write_text(fixture + "\ndef test_later_failure():\n    assert False, 'later unrelated cause'\n")
+    (work / paths[0] / "test_codex_credentials.py").write_text(fixture + "\ndef test_later_failure():\n    assert False, 'later unrelated cause'\n")
     # Pytest emits this after its detailed reports and short test summary.
     (work / "conftest.py").write_text("def pytest_terminal_summary(terminalreporter):\n"
                                      "    terminalreporter.write_line('console noise ' * 40000)\n")
@@ -848,7 +848,7 @@ def completed_pytest_then_no_result(directory, setup):
         summary = visible[visible.index("[poise] completed Caller pytest failure:"):].strip()
         assert len(summary) < 2600 and secret not in summary and "[redacted]" in summary
         assert folded not in summary, "a folded header continuation is a credential even outside the environment secrets"
-        (work / paths[0] / "test_first.py").write_text("# a later candidate\n")
+        (work / paths[0] / "test_codex_credentials.py").write_text("# a later candidate\n")
         later = subprocess.run(command, cwd=work, env=environment, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, timeout=30)
         assert later.returncode == 124 and relay_reason in later.stdout
