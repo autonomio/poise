@@ -427,7 +427,23 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
                                             exit_code=done.returncode if done.returncode > 0 else None,
                                             signal=-done.returncode if done.returncode < 0 else None,
                                             submission="none"))
-                raise RuntimeError(raw)
+                from . import _retained_account_signal, _retained_rate_limit_signal
+                # Raw provider causes can include tool output. Keep only the
+                # existing fixed account/rate markers and observed process facts.
+                trip = _retained_account_signal(raw) or _retained_rate_limit_signal(raw)
+                disposition = f"signal {-done.returncode}" if done.returncode < 0 else f"exit {done.returncode}"
+                message = (f"Atomic behavior provider {'reported a failed terminal with' if terminal else 'failed with'} {disposition}; "
+                           "provider cause unavailable; no publication attempted")
+                if trip:
+                    message = f"{trip}: {message}"
+                raise issue_review.ProviderFailure(
+                    message, "atomic_work_failed",
+                    diagnostic_envelope(operation="provider.atomic_work", phase="provider_execution",
+                                        outcome="signal" if done.returncode < 0 else "exit",
+                                        executable=model.provider, message=message,
+                                        exit_code=done.returncode if done.returncode >= 0 else None,
+                                        signal=-done.returncode if done.returncode < 0 else None,
+                                        submission="none"))
             progress.stage("reading_publication", "Reading bounded publication metadata")
             if not output.is_file() or output.stat().st_size > 64 * 1024:
                 raise AtomicWorkFailed("atomic behavior returned no bounded publication metadata")
