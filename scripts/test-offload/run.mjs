@@ -243,17 +243,22 @@ function callerPytestFailure() {
       if (!streams.has(type)) streams.set(type, { decoder: new StringDecoder('utf8'), pending: '', oversized: false })
       const stream = streams.get(type)
       for (const part of stream.decoder.write(payload).split(/(?<=\n)/)) {
-        stream.pending += part
-        if (stream.pending.length > 64 * 1024) { stream.pending = ''; stream.oversized = true }
+        if (!stream.oversized) stream.pending += part
+        if (stream.pending.length > 64 * 1024) {
+          // Keep a bounded head: discarding a credential header would lose the
+          // folded-header state its continuation line needs.
+          stream.pending = stream.pending.slice(0, 64 * 1024)
+          stream.oversized = true
+        }
         if (part.endsWith('\n')) {
-          if (!stream.oversized) line(stream.pending.slice(0, -1))
+          line(stream.oversized ? stream.pending : stream.pending.slice(0, -1))
           stream.pending = ''
           stream.oversized = false
         }
       }
     },
     summary() {
-      for (const stream of streams.values()) if (!stream.oversized) line(stream.pending + stream.decoder.end())
+      for (const stream of streams.values()) line(stream.pending + stream.decoder.end())
       return short || test ? [short || test, detail || 'assertion details unavailable'].join('\n') : null
     },
   }

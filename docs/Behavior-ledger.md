@@ -6,6 +6,8 @@ has a permanent 64-character hexadecimal hash. The ledger observes work; its
 state never controls eligibility, claims, retries, locks, metrics or launches.
 Capture does not wait for storage and adds no Caller reads.
 Ledger states map to the shared contract in [Error-state handling contract](Error-State-Contract.md).
+Published partial change requests retain the native `incomplete` outcome;
+the [review contract](Behavior-Contract.md) defines coverage and clearance.
 
 A native `review_target_closed` outcome supersedes an obsolete review panel,
 including configured slots that never started. It does not claim publication
@@ -310,8 +312,9 @@ pending. Captures the store rejects as storage failures wait at the
 head of the queue and retry; observations the store rejects as invalid are shed
 with loss accounting. With no read waiting, the worker commits up to 32 queued
 captures in one transaction and acknowledges them only after commit. Retention
-still applies after each observation. A failed group rolls back and retries
-individually, so a rejected observation cannot discard its valid neighbors.
+still applies after each observation. A failed group rolls back. Storage failures
+remain eligible for batching after backoff; 4xx rejections retry individually,
+so a rejected observation cannot discard its valid neighbors.
 Loss diagnostics (`behavior-ledger.capture_loss`) identify queue saturation,
 oversized/invalid captures, store rejection, worker failure or shutdown timeout,
 with queue count, bytes, age and limits; rejection includes the worker's error

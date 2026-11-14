@@ -402,7 +402,8 @@ def test_original_publication_boundary_reconciles_without_repeating_work(databas
     client.graphql = AsyncMock(return_value={"repository": {
         "ref": {"target": {"oid": parent, "message": "fix: original parent"}} if repair else None,
         "defaultBranchRef": {"target": {"oid": parent}},
-        "issue": {"closedByPullRequestsReferences": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
+        "issue": {"blockedBy": {"nodes": [], "totalCount": 0, "pageInfo": {"hasNextPage": False}},
+                  "closedByPullRequestsReferences": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
     committed, pushes = False, []
 
     def git(command, *_secrets):
@@ -774,16 +775,19 @@ def completed_pytest_then_no_result(directory, setup):
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     secret = "completed-pytest-credential-sentinel"
     folded = "folded-opaque-value-outside-env"
+    # One failure line past the client's 64 KiB bound: its head must still
+    # carry the folded-header state to the continuation line.
+    pad = "P" * 70000
     test = paths[0] + "/test_first.py::TestToken::test_credentials_are_redacted_before_cli_serialization[retained response]"
     fixture = ("import pytest\n@pytest.fixture\ndef broken():\n"
-               f"    raise RuntimeError('first setup cause {secret}\\nAuthorization: Bearer\\n  {folded}')\n"
+               f"    raise RuntimeError('first setup cause {secret}\\nAuthorization: Bearer {pad}\\n  {folded}')\n"
                "class TestToken:\n"
                "    @pytest.mark.parametrize('body', ['retained response'])\n"
                "    def test_credentials_are_redacted_before_cli_serialization(self, broken, body):\n        pass\n") if setup else (
                    "import pytest\nclass TestToken:\n"
                    "    @pytest.mark.parametrize('body', ['retained response'])\n"
                    "    def test_credentials_are_redacted_before_cli_serialization(self, body):\n"
-                   f"        assert 1 == 2, 'first assertion cause {secret}\\nAuthorization: Bearer\\n  {folded}'\n")
+                   f"        assert 1 == 2, 'first assertion cause {secret}\\nAuthorization: Bearer {pad}\\n  {folded}'\n")
     (work / paths[0] / "test_first.py").write_text(fixture + "\ndef test_later_failure():\n    assert False, 'later unrelated cause'\n")
     # Pytest emits this after its detailed reports and short test summary.
     (work / "conftest.py").write_text("def pytest_terminal_summary(terminalreporter):\n"
@@ -793,6 +797,8 @@ def completed_pytest_then_no_result(directory, setup):
                            capture_output=True, text=True, timeout=30)
     assert suite.returncode == 1, suite.stdout + suite.stderr
     assert len(suite.stdout) > 400000 and test in suite.stdout
+    header = next(line for line in suite.stdout.splitlines() if line.startswith("E ") and "Authorization: Bearer" in line)
+    assert len(header) > 64 * 1024, "the fixture must drive the oversized-header path"
     for name in ("run.mjs", "redaction.mjs"):
         copyfile(repo / "scripts/test-offload" / name, hooks / name)
     original_run, later_run = "d" * 32, "e" * 32
@@ -857,11 +863,45 @@ def completed_pytest_then_no_result(directory, setup):
 
 
 @pytest.mark.parametrize("database", ["/dev/shm" if sys.platform == "linux" else None], indirect=True)
-@pytest.mark.parametrize("observed", ["assertion", "marker", "none", "completed_assertion", "completed_setup"])
+@pytest.mark.parametrize("observed", ["assertion", "timeout", "marker", "none", "completed_assertion", "completed_setup"])
 def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(database, monkeypatch, decode_failure, observed):
     candidate, run = "c" * 64, "d" * 32
     excerpt = "AssertionError: expected 1 to equal 2"
     test = "fixture.validation::test_first_failure"
+    if observed == "timeout":
+        repo = Path(__file__).resolve().parents[3]
+        (repo / "test-results").mkdir(exist_ok=True)
+        with TemporaryDirectory(prefix="vitest-timeout-", dir=repo / "test-results") as work:
+            fixture = Path(work)
+            (fixture / "vitest.config.mjs").write_text(
+                f"import config from {json.dumps(str(repo / 'vitest.config.ts'))};\n"
+                "export default { ...config, test: { ...config.test, setupFiles: [], "
+                "include: ['timeout.test.mjs'], pool: 'threads' } };\n")
+            (fixture / "timeout.test.mjs").write_text(
+                "import { describe, it } from 'vitest';\n"
+                "describe('offload reporting', () => {\n"
+                "  it('first timed out expectation', async () => { await new Promise(() => {}); }, 200);\n"
+                "  it('keeps the suite open', async ({ annotate }) => {\n"
+                "    await annotate('completed cases delivered before holding the suite open');\n"
+                "    console.log('VITEST_HELD');\n"
+                "    await new Promise(() => {});\n"
+                "  }, 60000);\n"
+                "});\n")
+            with subprocess.Popen(["node", str(repo / "node_modules/vitest/vitest.mjs"), "run"], cwd=work,
+                                  env={"PATH": os.environ["PATH"], "HOME": work, "TMPDIR": work, "CI": "1"},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                try:
+                    with pytest.raises(subprocess.TimeoutExpired):
+                        child.communicate(timeout=10)
+                finally:
+                    child.kill()
+                    stdout, stderr = child.communicate()
+            assert "VITEST_HELD" in stdout and "Test Files" not in stdout, (stdout, stderr)
+            assert stderr.count("[poise] first test failure:") == 1, stderr
+            excerpt = " ".join(stderr[stderr.index("[poise] first test failure:"):].split())
+            test = "timeout.test.mjs > offload reporting > first timed out expectation"
+            assert test in excerpt and "Test timed out in 200ms" in excerpt, excerpt
+    failed = observed in {"assertion", "timeout"}
     secret = "opaque-credential-spanning-the-summary-cutoff"
     relay = ("[poise] no test result: the test offload exhausted its total time budget. "
              "This says nothing about your code. Skip local tests for this work: don't retry, "
@@ -873,7 +913,7 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
     reason += "\U0001F600" * 7000
     assert reason.index(secret) < 500 < reason.index(secret) + len(secret)
     assert reason.index(excerpt) > 500
-    blocked = reason if observed == "assertion" else (
+    blocked = reason if failed else (
         f"FAIL {test}; assertion details unavailable; captured candidate unavailable; producing run unavailable; {relay}"
         if observed == "marker" else None)
     if observed.startswith("completed_"):
@@ -956,15 +996,15 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
     evidence = stored["diagnostic"]
     assert stored["error"] == evidence["message"] and len(stored["error"]) <= len("atomic behavior blocked: ") + 501
     assert decoded["stderr"] == evidence["stderr"]
-    assert evidence["stderr_truncated"] == (observed == "assertion")
+    assert evidence["stderr_truncated"] == failed
     event, = api.diagnostics()["events"]
     assert event["diagnostic"] == evidence and "evidence_unavailable" not in event
     assert len(json.dumps(event).encode()) <= 64 * 1024
-    expected = (excerpt, test, candidate, run, relay) if observed != "marker" else (
+    expected = (excerpt, test, candidate, run, relay) if (failed or observed.startswith("completed_")) else (
         f"FAIL {test}", "assertion details unavailable", "captured candidate unavailable", "producing run unavailable", relay)
     for item in expected:
         assert item in evidence["stderr"]
-    if observed == "assertion":
+    if failed:
         assert excerpt not in stored["error"] and evidence["stderr"].index(excerpt) > 500
         assert evidence["stderr"].index(excerpt) < evidence["stderr"].index(relay)
     if observed.startswith("completed_"):

@@ -545,6 +545,41 @@ class AtomicWorkLimits(TestCase):
         self.assertEqual(json.loads(artifact)["resource_error"], "resources_unknown")
         self.assertIsNone(settled)
 
+    def test_provider_deadline_with_retained_lease_records_unknown_ownership(self):
+        modes = []
+
+        def interface(*args, **_kwargs):
+            self.assertEqual(args[0], "--issue-work")
+            mode = args[args.index("--mode") + 1]
+            modes.append(mode)
+            self.assertEqual(mode, "prepare", "unverified checkout reached publication")
+            Path(args[args.index("--path") + 1]).mkdir()
+            return {"outcome": "prepared", "checkout_head": HEAD}
+
+        with patch.dict(os.environ, {"POISE_LOCK_DIR": str(self.path.parent / "locks")}), \
+                patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
+                patch.object(issue_review, "interface", side_effect=interface), \
+                patch.object(issue_review, "command", return_value=(
+                    [sys.executable, "-c", "import time; time.sleep(60)"], "", {})), \
+                patch.object(issue_review, "_cwd_pids", return_value=[]), \
+                patch.object(review_budget, "timeout", return_value=1), \
+                patch.object(api.atomic_work.checkout_lock, "pgid_alive", return_value=True), \
+                self.assertRaises(api.atomic_work.checkout_lock.WorkerOrphaned) as failure:
+            self.run_behavior()
+        self.assertIsInstance(failure.exception.__context__, subprocess.TimeoutExpired)
+        call, = api.logs()
+        self.assertEqual(call["artifact"]["phase"], "resources_unknown")
+        self.assertTrue(any(error["cause"] == "resources_unknown" for error in call["resource_ownership"]["errors"]))
+        self.assertIsNone(call["resources_settled_at"])
+        self.assertFalse(resource_ownership.released(call["resource_ownership"]))
+        self.assertEqual((call["status"], call["error_code"], call["action"], call["outcome"]),
+                         ("failed", "atomic_work_failed", None, None))
+        self.assertEqual(call["diagnostic"]["outcome"], "timed_out")
+        self.assertEqual(modes, ["prepare"])
+        self.assertTrue(Path(call["artifact"]["resource_root"]).is_dir())
+        with api.db() as conn:
+            self.assertIsNone(conn.execute("select action_plan from calls where id=?", (call["id"],)).fetchone()[0])
+
     def test_provider_deadline_and_preflight_timeout_reach_chain_history_distinctly(self):
         repo = Path(__file__).resolve().parents[3]
         output = repo / "test-results"
@@ -958,7 +993,7 @@ class AtomicWorkLimits(TestCase):
             self.assertNotIn(private, message)
             self.assertNotIn(private, json.dumps(blocked.diagnostic))
 
-    def test_explicit_work_blocker_keeps_its_own_code_without_attempting_publication(self):
+    def test_work_blocker_and_provider_failures_keep_receipts_without_attempting_publication(self):
         reason = "Review requires a product decision before implementation can continue"
         secret = "opaque-environment-credential-crossing-cutoff"
         shaped = "ghp_" + "s" * 40
@@ -966,7 +1001,7 @@ class AtomicWorkLimits(TestCase):
         long_reason = "Decision needed " + "x" * 474 + secret + " tail" * 200
         self.assertLess(long_reason.index(secret), 500)
         self.assertGreater(long_reason.index(secret) + len(secret), 500)
-        cases = [
+        cases = [(pull, blocked, message, None) for pull, blocked, message in [
             (None, reason, prefix + reason),
             (3, reason, prefix + reason),
             (3, {"cause": "ci_only", "reason": reason}, prefix + reason),
@@ -977,8 +1012,28 @@ class AtomicWorkLimits(TestCase):
             (None, "", "AtomicWorkBlocked"),
             (None, " \n\t", "AtomicWorkBlocked"),
             (None, False, "AtomicWorkBlocked"),
-            (None, None, "atomic behavior failed during validating_provider_result: RuntimeError (agent_interface.atomic_work.run)"),
+        ]]
+        stdout = "private provider output stdout-canary-1844"
+        stderr = "private provider stderr stderr-canary-1844"
+        exit_message = "Atomic behavior provider failed with exit 1; provider cause unavailable; no publication attempted"
+        failures = [
+            (SimpleNamespace(returncode=1, stdout=stdout, stderr=stderr), exit_message),
+            # The gate can encode a child signal as 128 + signal. Do not infer
+            # a signal from that observed status; the negative result is separate.
+            (SimpleNamespace(returncode=137, stdout=stdout, stderr=stderr),
+             "Atomic behavior provider failed with exit 137; provider cause unavailable; no publication attempted"),
+            (SimpleNamespace(returncode=-9, stdout=stdout, stderr=stderr),
+             "Atomic behavior provider failed with signal 9; provider cause unavailable; no publication attempted"),
+            (SimpleNamespace(returncode=0, stdout=stdout + "\n" + json.dumps({
+                "type": "turn.failed", "error": {"message": "private terminal stdout-canary-1844"}}), stderr=stderr),
+             "Atomic behavior provider reported a failed terminal with exit 0; provider cause unavailable; no publication attempted"),
+            (SimpleNamespace(returncode=1, stdout=stdout, stderr="Status 429 " + stderr), "status 429: " + exit_message),
+            (SimpleNamespace(returncode=1, stdout=stdout, stderr="balance exhausted " + stderr), "balance exhausted: " + exit_message),
+            (SimpleNamespace(returncode=1, stdout=stdout, stderr="GitHub 429 " + stderr), exit_message),
+            (RuntimeError(stdout + stderr),
+             "atomic behavior failed during waiting_provider: RuntimeError (agent_interface.atomic_work.run)"),
         ]
+        cases.extend((pull, None, message, result) for pull in (None, 3) for result, message in failures)
         original_track = api.track
 
         def track(*args, **kwargs):
@@ -998,7 +1053,8 @@ class AtomicWorkLimits(TestCase):
                                     "--packages=external", "--format=esm", "--target=node22", f"--outfile={root / 'contract.mjs'}"],
                                    cwd=repo, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(build.returncode, 0, build.stderr)
-            for index, (pull, blocked, message) in enumerate(cases):
+            diagnostic_cursor = 0
+            for index, (pull, blocked, message, provider_result) in enumerate(cases):
                 with self.subTest(pull=pull, case=index):
                     modes = []
                     correlation = f"explicit-blocker-{index}"
@@ -1011,13 +1067,16 @@ class AtomicWorkLimits(TestCase):
 
                     def worker(_lease, _args, **kwargs):
                         (Path(kwargs["cwd"]).parent / "publication.json").write_text(json.dumps({"blocked": blocked}))
-                        return SimpleNamespace(returncode=int(blocked is None), stdout="private provider output", stderr="private provider stderr")
+                        if isinstance(provider_result, Exception):
+                            raise provider_result
+                        return provider_result or SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
 
-                    expected = RuntimeError if blocked is None else api.atomic_work.AtomicWorkBlocked
+                    expected = (RuntimeError if isinstance(provider_result, Exception) else issue_review.ProviderFailure) \
+                        if blocked is None else api.atomic_work.AtomicWorkBlocked
+                    captured_stdout, captured_stderr = StringIO(), StringIO()
                     with patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
                             patch.object(issue_review, "interface", side_effect=interface), \
                             patch.object(issue_review, "command", return_value=(["fixture", "private prompt"], "", {})), \
-                            patch.object(issue_review, "_terminal_failure", return_value=None), \
                             patch.object(issue_review, "stop_leftovers"), patch.object(issue_review, "_cwd_pids", return_value=[]), \
                             patch.object(api.atomic_work.checkout_lock, "Lease", return_value=MagicMock()), \
                             patch.object(api.atomic_work.checkout_lock, "run_gated", side_effect=worker), \
@@ -1026,6 +1085,7 @@ class AtomicWorkLimits(TestCase):
                             patch.object(sys, "argv", ["agent-interface", "--atomic-work", "example/repo#7", "--source",
                                                       "poise:behavior-chain", "--correlation-id", correlation]), \
                             patch.object(api, "_main", side_effect=lambda: self.run_behavior(pull, HEAD if pull else None, correlation)), \
+                            redirect_stdout(captured_stdout), redirect_stderr(captured_stderr), \
                             self.assertRaises(expected) as caught:
                         api.main()
                     call, = [row for row in api.logs() if row["correlation_id"] == correlation]
@@ -1042,16 +1102,32 @@ class AtomicWorkLimits(TestCase):
                         self.assertEqual(str(caught.exception), message)
                         self.assertEqual(call["diagnostic"]["submission"], "none")
                         self.assertLessEqual(len(message), len(prefix) + 501)
-                    for private in (secret, "opaque-environment-", shaped, "header-secret", "private provider", "private prompt", "unsupported reason"):
+                    elif not isinstance(provider_result, Exception):
+                        self.assertEqual(call["diagnostic"]["operation"], "provider.atomic_work")
+                        self.assertEqual(call["diagnostic"]["phase"], "provider_execution")
+                        self.assertEqual(call["diagnostic"]["executable"], "codex")
+                        self.assertEqual(call["diagnostic"]["outcome"], "signal" if provider_result.returncode < 0 else "exit")
+                        self.assertEqual(call["diagnostic"]["exit_code"], provider_result.returncode if provider_result.returncode >= 0 else None)
+                        self.assertEqual(call["diagnostic"]["signal"], -provider_result.returncode if provider_result.returncode < 0 else None)
+                        self.assertEqual(call["diagnostic"]["submission"], "none")
+                        self.assertEqual(call["diagnostic"]["stderr"], "")
+                        self.assertFalse(call["diagnostic"]["stderr_truncated"])
+                    else:
+                        self.assertEqual(call["diagnostic"]["outcome"], "exception")
+                    for private in (secret, "opaque-environment-", shaped, "header-secret", "private provider", "private prompt", "unsupported reason",
+                                    "private terminal", "stdout-canary-1844", "stderr-canary-1844"):
                         self.assertNotIn(private, json.dumps(call))
-                    diagnostic, = [event for event in api.diagnostics(limit=10)["events"] if event["id"] == call["id"]]
+                        self.assertNotIn(private, captured_stdout.getvalue() + captured_stderr.getvalue())
+                    page = api.diagnostics(after=diagnostic_cursor, limit=10)
+                    diagnostic_cursor = page["cursor"]
+                    diagnostic, = [event for event in page["events"] if event["id"] == call["id"]]
                     self.assertEqual((diagnostic["error"], diagnostic["diagnostic"]["message"]), (message, message))
-                    if blocked is not None:
-                        wire = root / "call.json"
-                        wire.write_text(json.dumps([call]))
-                        consumed = subprocess.run(["node", str(root / "contract.mjs"), str(wire), "atomic-work-blocked"],
-                                                  cwd=repo, env=env, capture_output=True, text=True, timeout=30)
-                        self.assertEqual(consumed.returncode, 0, consumed.stderr)
+                    wire = root / "call.json"
+                    wire.write_text(json.dumps([call]))
+                    mode = "atomic-work-blocked" if blocked is not None else "atomic-work-failed"
+                    consumed = subprocess.run(["node", str(root / "contract.mjs"), str(wire), mode],
+                                              cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(consumed.returncode, 0, consumed.stderr)
 
     def test_ci_only_blocker_retains_the_supplied_head_and_failed_job_attempt_without_publication(self):
         ci = {"action": "list_failing_ci", "repository": "example/repo", "pull_number": 3, "head_sha": HEAD,
@@ -1221,7 +1297,7 @@ class AtomicWorkLimits(TestCase):
                                      [{"name": "Caller", "check": 41, "job": 42, "run": 40, "workflow": 1,
                                        "attempt": 1, "url": check["url"]}])
 
-    def test_failed_queue_blocker_drops_partial_shared_proof_but_keeps_integration_failures(self):
+    def test_failed_queue_blocker_keeps_integration_failures_when_baseline_proof_is_rejected_or_partial(self):
         integration, base = "d" * 40, "c" * 40
         ci = {"action": "list_failing_ci", "repository": "example/repo", "pull_number": 3, "head_sha": HEAD, "failing": []}
         queue = {"head_sha": HEAD, "queue_removals": [{"id": "removed", "reason": "failed_checks", "beforeCommit": {"oid": integration}}]}
@@ -1230,8 +1306,11 @@ class AtomicWorkLimits(TestCase):
                  "url": "https://github.com/example/repo/actions/runs/40/job/42"}
         run = {"id": 40, "workflow_id": 1, "run_attempt": 1, "event": "merge_group", "head_sha": integration}
         packet = {**ci, "ref": integration, "parents": [base, HEAD], "failing": [check], "runs": [run]}
-        for index, shared in enumerate((False, True)):
-            with self.subTest(shared=shared):
+        for index, mode in enumerate(("rejected", "partial", "shared")):
+            with self.subTest(mode=mode):
+                shared = mode == "shared"
+                modes = []
+                rejection = "CI dependency cause is absent from its actual job logs"
                 dependency = {"head": HEAD, "removal": "removed", "integration": integration, "base": base,
                               "remediation": "https://github.com/example/repo/issues/99", "allShared": shared,
                               "failures": [{"check": 41, "name": "Caller", "run": 40, "workflow": 1,
@@ -1239,6 +1318,7 @@ class AtomicWorkLimits(TestCase):
 
                 def interface(*args, **_kwargs):
                     if args[0] == "--issue-work":
+                        modes.append(args[args.index("--mode") + 1])
                         return {"outcome": "prepared", "checkout_head": HEAD}
                     if args[0] == "--list-failing-ci":
                         return packet if "--ref" in args else ci
@@ -1246,27 +1326,41 @@ class AtomicWorkLimits(TestCase):
 
                 def worker(_lease, _args, **kwargs):
                     (Path(kwargs["cwd"]).parent / "publication.json").write_text(json.dumps({
-                        "blocked": {"cause": "ci_only", "reason": "The supplied unit job failed"},
+                        "blocked": {"cause": "ci_only", "reason": "The merge-group Caller job failed"},
                         "ciDependency": {"head": HEAD}}))
                     return SimpleNamespace(returncode=0, stdout="", stderr="")
 
                 with patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
                         patch.object(issue_review, "interface", side_effect=interface), \
-                        patch.object(issue_review, "command", return_value=(["fixture"], "", {})), \
+                        patch.object(issue_review, "command", return_value=(["fixture"], "", {})) as command, \
                         patch.object(issue_review, "_terminal_failure", return_value=None), \
                         patch.object(issue_review, "stop_leftovers"), patch.object(issue_review, "_cwd_pids", return_value=[]), \
                         patch.object(api.atomic_work.checkout_lock, "Lease", return_value=MagicMock()), \
                         patch.object(api.atomic_work.checkout_lock, "run_gated", side_effect=worker), \
-                        patch.object(api.atomic_work, "_verify_ci_dependency", return_value=dependency), \
-                        self.assertRaisesRegex(ValueError, "The supplied unit job failed"):
+                        patch.object(api.atomic_work, "_verify_ci_dependency", return_value=dependency,
+                                     side_effect=api.atomic_work.AtomicWorkFailed(rejection) if mode == "rejected" else None), \
+                        self.assertRaisesRegex(api.atomic_work.AtomicWorkBlocked, "The merge-group Caller job failed"):
                     self.run_behavior(pull=3, expected_head=HEAD,
                                       correlation_id=f"00000000-0000-4000-8000-0000000000{index + 2:02d}"[-36:])
                 with sqlite3.connect(self.path) as conn:
-                    artifact = json.loads(conn.execute(
-                        "select artifact from calls order by rowid desc limit 1").fetchone()[0])
+                    status, code, action, error, artifact, plan = conn.execute(
+                        "select status,error_code,action,error,artifact,action_plan from calls order by rowid desc limit 1").fetchone()
+                self.assertEqual(modes, ["prepare"])
+                self.assertEqual((status, code, action), ("failed", "atomic_work_blocked", "not_started"))
+                self.assertIsNone(plan)
+                self.assertIn("The merge-group Caller job failed", error)
+                if mode == "rejected":
+                    self.assertIn(rejection, error)
+                instruction = command.call_args.args[1]
+                self.assertIn("verified merge-group-only failure", instruction)
+                self.assertIn("PR-head checks are green and optional baseline proof is unavailable", instruction)
+                self.assertIn("missing original failure evidence", instruction)
+                artifact = json.loads(artifact)
                 blocker = artifact["ci_blocker"]
-                self.assertIn("queue", blocker)
-                self.assertEqual(blocker["queue"]["failures"][0]["check"], 41)
+                self.assertEqual({key: blocker[key] for key in ci}, ci)
+                self.assertEqual(blocker["queue"], {"removal": "removed", "integration": integration, "base": base,
+                    "failures": [{"name": "Caller", "check": 41, "job": 42, "run": 40, "workflow": 1,
+                                  "attempt": 1, "url": check["url"]}]})
                 self.assertEqual("ci_dependency" in blocker, shared)
                 if shared:
                     self.assertNotIn("evidence", json.dumps(blocker["ci_dependency"]))

@@ -659,7 +659,7 @@ computer.
   call it.
   The native command can also use the normal loopback Poise APIs under their
   existing policy. Creating-chat and worker relationships, the workspace Manager's role, inbox admission, supervision,
-  explicit issue/PR ownership, durable timers and their holds persist in the
+  explicit issue/PR ownership, pending owner escalations, durable timers and their holds persist in the
   workspace's SQLite store.
   Dispatch pauses while draining; running monitor reads join the existing
   background-work barrier. New observation passes, including queued follow-ups,
@@ -958,7 +958,8 @@ not use the gateway's discarded OAuth token.
   - Every read records sign-in alerts (`sign_in_needed`): one for an
     installed, configured CLI that says it is not signed in, and one each for
     the person's own account and the GitHub automation account while gh does
-    not hold it signed in. A provider with no configuration record raises no
+    not hold it signed in. A rejected saved GitHub account also raises one.
+    A provider with no configuration record raises no
     sign-in demand, and a stale demand clears once the provider reads as
     unconfigured. Status-based conditions clear once signed in again; Claude's alert stays its
     auth monitor's, gated on the same participation. In service mode Poise
@@ -1227,8 +1228,8 @@ alerts once, and again only after it has cleared:
   an initial low reading. Recovery to 6 GB clears and rearms the warning so
   fluctuations near a threshold do not repeat it. Measurements and
   warnings never pause, reject or stop work;
-- a Claude or other provider sign-in is needed, or the person's own GitHub
-  account or the agent account is not signed in to gh;
+- a configured agent, GitHub, Google or extension account needs to sign in
+  again ([Connected accounts](Connected-accounts.md#alerts));
 - a behavior failed and is held, with a fresh alert when its cause materially
   changes even if the previous alert was dismissed. Repeats of the same cause
   remain deduplicated ([Notifications](Notifications.md));
@@ -1237,13 +1238,13 @@ alerts once, and again only after it has cleared:
   exhausted (`github_quota_exhausted`), while notifications are on. These use
   the same alert event envelope; [Notifications](Notifications.md#github-api-quota)
   defines their reset, recovery and dismissal behavior;
-- a Chat agent is waiting for a permission or an answer;
+- a Chat agent is waiting for the owner's permission or answer;
 - a Chat turn that ran longer than two minutes has finished;
 - a pull request of the person's own has become ready to merge, while
   notifications are on ([Notifications](Notifications.md)).
 
-With the browser open, Overview's *Answer here* shows the unresolved alerts too,
-and the bell on every place counts them.
+With the browser open, Overview's *Answer here* and the bell apply the
+[selected notification level](Notifications.md#answer-here).
 
 **Poise Link** runs on macOS, Windows and Linux from one Tauri codebase.
 - **First run:** asks for the server address, runs device pairing, keeps the
@@ -1297,8 +1298,10 @@ The supporting reads behind those names:
 - `GET /api/behavior-estimates`: each running behavior run with its remaining
   time from similar runs (same behavior and model, last 30 days, at least
   five); an overrun reads `overrun`, never below zero.
-- `GET /api/chat/requests`: every open chat request with a revision, kept
-  current by the `chatRequests.updated` frame.
+- `GET /api/chat/requests`: up to 200 open chat requests with a revision,
+  kept current by the `chatRequests.updated` frame. `ownerAction` identifies
+  requests for the owner and sorts them first. `escalation` carries the
+  Manager's reason when it escalates a pending question.
 - `GET /api/notices/handled?since=<ISO>`: the append-only handling log, kept
   30 days from each entry's time. It answers from the stored log at once and
   starts the notices check without waiting for it, so what that check
@@ -1432,8 +1435,9 @@ The host deployment verifier also sends bounded observations through that
 private operator socket. The gateway retains rollout/workspace deadline and
 recovery diagnostics using the existing v1 envelope/store, without a public
 ingestion route or a release/replacement control change. Only deployment delivery
-retries the writer's exact busy refusal, replaying the same bounded observation
-within one 30-second deadline; other refusals retain a bounded, redacted cause.
+retries a complete response containing only the writer's exact busy refusal,
+replaying the same bounded observation within one 30-second deadline; other
+refusals retain a bounded, redacted cause.
 [Logging](Logging.md#collection-and-operation)
 defines the budget, deduplication and recovery contract.
 The edge also derives the fixed `/api/link/events` route label before removing
@@ -1808,6 +1812,15 @@ entry after recovery, retaining the original invocation's uncertainty and owners
 Implementation reports require the current automatic hold's settled blocked receipt,
 positive resource release and fresh open-seed inspection proving no publication.
 They retain the hold and distinguish worker-reported blockers from Caller diagnostic facts.
+Their own implementation additionally requires an explicit disposition through
+the existing guarded chain control, bound to the authenticated report, native
+issue review, reviewed revision and original source hold/Call. Source-only and
+missing or stale dispositions wait without starting report implementation;
+a verified distinct-fix disposition retains ordinary admission gates, including
+fresh source verification after preparation. Diagnosis and next action persist
+on the held source through the existing report metadata and journal waits.
+This adds no retry or checkout-retention authority; see
+[report triage](Behavior-chain.md#reporting-verified-repair-exhaustion).
 The existing linked remediation also exposes bounded private source evidence
 from the original failed validation capture, retained through normal checkout
 cleanup under the workspace's incident-artifact lifecycle. Only its availability

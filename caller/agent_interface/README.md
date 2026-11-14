@@ -187,6 +187,13 @@ validation step. Caller-authored validation reasons and JSON line/column details
 are retained in both the error and diagnostic message before cleanup; other
 exception text remains excluded. These failures keep `atomic_work_failed` and
 the existing result, resource-release and retry rules.
+Recognized atomic provider failures retain `provider.atomic_work` diagnostics
+with the safe `executable`, observed exit code (including zero for a failed
+terminal) or negative-result signal, and `submission: none`. Caller names a
+failed terminal explicitly and reports `provider cause unavailable` without
+retaining either raw stream. Existing fixed account/rate-limit markers remain.
+An observed exit 137 stays an exit; the lease gate does not distinguish a child
+signal from an explicit exit with that status.
 The outer detached Caller records an explicit unknown cause and observed exit
 status when its inner continuation leaves no cause. These SQLite records survive
 Poise restarts; they authorize neither publication nor resource release.
@@ -277,6 +284,13 @@ stale row whose holder is dead is recovered by the next writer only when the
 registered group is dead too. Each hold uses a fresh token; a released or lost
 lease never touches the row again.
 
+A provider deadline that retains the lease raises `WorkerOrphaned`, keeping the
+original timeout as exception context. Atomic work records `resources_unknown`
+in its artifact and resource ownership errors, leaving `resources_settled_at`
+unset. The checkout grants no capture, publication, retry or release authority
+while ownership is unverified. A deadline with proven release remains an
+ordinary timeout.
+
 # PR review models
 
 Provider supervision hands off after a minute of quota or reconnect diagnostics
@@ -290,7 +304,8 @@ Every attempt ends with one durable terminal state: a validated result with its
 authoritative `review_id` receipt, or a typed failure carrying provider, phase,
 bounded redacted cause and known (`none`, `rejected`, `noop`, `blocked`) or
 unknown submission state. Structured provider exits and signals are `review_provider_exit`,
-provider-reported error terminals are `review_provider_error`; both keep
+provider-reported error terminals are `review_provider_error`, except a Codex
+credential rejection, which is `authentication_failed`; all three keep
 `not_started` / `preflight_failed` with no receipt, so Poise can safely retry
 after proving no reviewer action. On a nonzero Codex exit, the cause prefers the
 last usable `error` / `turn.failed` message, then a recognizable stderr failure;
@@ -579,9 +594,19 @@ issue then approve. It must submit nothing when filing fails.
 
 A governed review admits up to 3,000,000 UTF-8 prompt bytes. Diff generation
 is capped at 2,850,000 bytes and the serialized packet at 2,950,000 bytes,
-leaving room for context and policy. Existing bulk-data compaction rules still
+leaving room for context and policy. JSON remains required regardless of its
+name or size, including during compaction, unless an existing exclusion identifies
+it as installed dependency content. Other bulk-data and archive exclusions still
 apply. These byte limits do not guarantee that an input fits a provider's token
 window. Claude receives the whole packet in one call.
+
+The packet builder records `coverage` as `complete` or `incomplete`, separately
+from declared `excluded_files`. Capacity omissions in `omitted_files` leave
+coverage incomplete even when every retained file group finishes. Caller pins
+this disposition in the native response; model assessments cannot change it.
+Incomplete reviews can submit genuine change requests and retain their receipts,
+but cannot submit clean reviews or approvals, including capped approvals.
+Their outcome remains `incomplete`, and they cannot qualify for automated merge.
 
 A structured review whose packet exceeds one provider call's reliable size
 runs in file-group stages targeting at most 8 files or 200,000 diff bytes each.
@@ -618,12 +643,12 @@ handing it to another model. Rejected writes remain distinct from possibly
 accepted writes; a lost issue or review POST response holds without replay or
 approval.
 A follow-up (`--pr-approve`) round reviews the diff since
-the reviewer's last submitted review instead of the whole PR again: new
+the reviewer's last proven complete review instead of the whole PR again: new
 findings on current lines stay on current-head lines, while a defect caused
 by a removal is commented on the removed line and validated against the full
-pull request diff before the single submission. An unfetchable last head, or
-a base that moved since the last review, widens the round to the full diff
-instead. Both full and follow-up reviews validate every inline location against
+pull request diff before the single submission. An unfetchable last head,
+a base that moved since the last review, or no proven complete baseline widens
+the round to the full diff instead. Both full and follow-up reviews validate every inline location against
 the retained PR diff before invoking the GitHub submission command. Any finding
 without a verified position fails the review before
 submission, including a capped round's follow-up issue and approval.

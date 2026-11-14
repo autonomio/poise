@@ -316,9 +316,10 @@ Workspace backfill reads three durable events per authenticated maintenance
 page and commits its checkpoint only with central persistence. Replacement or
 removal of the source does not delete central records. Query/collection outages
 never become empty successful reads.
-Caller ingestion yields between its existing 100-event persistence batches so
-queued maintenance requests can run within the collector's five-second complete
-response budget. Its completion checkpoint still waits for durable local ingestion.
+Caller ingestion waits for the runtime's scheduled 100-event persistence batches,
+leaving event-loop turns for queued maintenance requests within the collector's
+five-second complete response budget. Its completion checkpoint still waits for
+durable local ingestion.
 
 The gateway reads native host kernel and `docker.service` Warning-or-higher
 journal records using `journalctl`, with a durable native cursor. Compose mounts
@@ -363,15 +364,18 @@ completion proof; missing health, supersession and another rollout's completion
 cannot establish recovery. The rollout stays pending until its existing release
 and build/image verification gates pass. Diagnostic delivery failure is visible
 on stderr and does not change those gates.
-Only the private writer's exact busy refusal is retried for `deployment`: at most
-five connections, waiting 250, 500, 1,000 and 2,000 milliseconds between attempts.
+Only a complete response containing solely the private writer's exact busy
+refusal is retried for `deployment`: at most five connections, waiting 250,
+500, 1,000 and 2,000 milliseconds between attempts.
+The writer drains refused connections until client EOF or the existing 30-second
+connection deadline, preserving the reply when the client writes before reading it.
 The complete observation frame, including its original timestamp and health
 snapshot, is read once within 64 KiB and replayed unchanged. Input, attempts and
 waits share one 30-second delivery deadline; the verifier's proof clock is
 unchanged. Other refusals retain a bounded, redacted cause and fail immediately;
-an ambiguous disconnect is not retried. Exhausted contention leaves the verifier's
-warning visible. Manual ingress and the continuous reader keep single attempts
-and their existing input/handshake behavior.
+an ambiguous disconnect, bare write error or incomplete reply is not retried.
+Exhausted contention leaves the verifier's warning visible. Manual ingress and
+the continuous reader keep single attempts and their existing input/handshake behavior.
 
 External Caddy installations can instead run the bounded continuous
 [operator reader](../deploy/ingress/README.md). A dedicated forced-command SSH

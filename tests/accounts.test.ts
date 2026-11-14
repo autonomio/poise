@@ -372,7 +372,7 @@ describe('GET /api/accounts', () => {
       detail: 'gh cannot use octo-agent; reconnect that account.',
       accounts: [
         { login: 'octocat', active: true, signedIn: true, detail: null },
-        { login: 'octo-agent', active: false, signedIn: false, detail: 'HTTP 401: Bad credentials (https://api.github.com/)' },
+        { login: 'octo-agent', active: false, signedIn: false, detail: 'HTTP 401: Bad credentials (https://api.github.com/)', credentialRejected: true },
       ],
     })
   })

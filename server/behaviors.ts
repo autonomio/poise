@@ -10,7 +10,7 @@ import { readBehaviorResourceAdmission, type BehaviorResourceBudget, type Behavi
 import { advanceBehaviorCutover, behaviorAdmissionDraining, behaviorCutoverBlockers } from './behavior-cutover'
 import { BehaviorChainRuntime } from './behavior-chain-runtime'
 import { nativeChainOperations } from './behavior-chain-native'
-import { recoverReportedRepair, repairReportImplementationFence, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, repairReportRepositories } from './behavior-chain-report'
+import { implementationReportAdmission, recoverReportedRepair, repairReportImplementationFence, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, repairReportRepositories } from './behavior-chain-report'
 import { resourceReleaseProven } from './behavior-resource-receipt'
 import { invalidateNativeCleanup, nativeCleanupSupport, requireNativeCleanup } from './native-cleanup-support'
 import { callReviewResponse } from './review-response'
@@ -2008,6 +2008,14 @@ function restoreReadableFailedClaim(claim: BehaviorLaunchClaim, call: LogEntry |
   })()
 }
 
+// A published change request from a capacity-bounded packet: genuine
+// findings with required source still uncovered. Launch records settle it
+// as a change request; the ledger keeps the `incomplete` disposition.
+function partialReviewFindings(call: LogEntry): boolean {
+  return call.action === 'requested_changes' && call.outcome === 'incomplete'
+    && (call.artifact?.review_response as Record<string, unknown> | undefined)?.coverage === 'incomplete'
+}
+
 function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry, snapshot: AgentLogSnapshot): boolean {
   if (claim.launchQuarantine === 'invalid_result') return false
   const actions = claim.launchBehavior === 'issue_review'
@@ -2028,7 +2036,7 @@ function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry
     || !Number.isFinite(Date.parse(agentCallStartedAt(call)))
     || Date.parse(agentCallStartedAt(call)) < Date.parse(claim.launchRequestedAt)
     || call.status.toLowerCase() !== 'completed'
-    || actions.get(call.action || '') !== call.outcome
+    || actions.get(call.action || '') !== (partialReviewFindings(call) ? 'changes_requested' : call.outcome)
     || !Number.isFinite(Date.parse(call.completed_at || ''))
     || (claim.launchBehavior !== 'issue_review' && call.head_sha !== claim.launchExpectedHead)) {
     quarantineFailedClaim(claim, 'invalid_result',
@@ -2048,7 +2056,7 @@ function clearCompletedUnreadableHold(claim: BehaviorLaunchClaim, call: LogEntry
       launch_outcome = ?, launch_action = ?, launch_completed_at = ?, launch_head_sha = ?
     WHERE key = ? AND target = ? AND claim_id = '' AND launch_outcome IS NULL AND launch_error IS NOT NULL
       AND launch_call_id = ? AND launch_correlation_id = ? AND launch_requested_at = ?
-  `).run(call.outcome, call.action, call.completed_at, call.head_sha,
+  `).run(partialReviewFindings(call) ? 'changes_requested' : call.outcome, call.action, call.completed_at, call.head_sha,
     claim.key, claim.target, claim.launchCallId, claim.launchCorrelationId, claim.launchRequestedAt)
   if (settled.changes !== 1) return false
   captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
@@ -2159,7 +2167,7 @@ async function reconcileBehaviorLaunchClaims(
     }
     const completedAt = String(call?.completed_at || '')
     const action = String(call?.action || '')
-    const outcome = String(call?.outcome || '')
+    const outcome = call && partialReviewFindings(call) ? 'changes_requested' : String(call?.outcome || '')
     if (call?.status.toLowerCase() === 'completed'
       && !logQuarantine(snapshot, { id: call.id, correlationId: call.correlation_id }, true)
       && call.behavior === upstreamBehavior(behavior)
@@ -2429,7 +2437,8 @@ async function reconcileBehaviorLaunchClaims(
         ? new Map([['reviewed_clean', 'clean'], ['requested_changes', 'changes_requested']])
         : new Map([['approved', 'approved'], ['requested_changes', 'changes_requested']])
       const action = String(call.action || '')
-      const outcome = String(call.outcome || '')
+      const partialFindings = partialReviewFindings(call)
+      const outcome = partialFindings ? 'changes_requested' : String(call.outcome || '')
       const completedAt = String(call.completed_at || '')
       const headSha = String(call.head_sha || '').toLowerCase()
       if (expectedActions.get(action) !== outcome
@@ -2456,7 +2465,7 @@ async function reconcileBehaviorLaunchClaims(
       if (completed) {
         captureBehaviorOutcome({ nativeId: claim.launchCorrelationId, callId: call.id,
           state: 'completed', activity: 'settled', stateSource: 'native',
-          outcome: outcome as 'clean' | 'changes_requested' | 'approved', head: headSha, completedAt })
+          outcome: (partialFindings ? 'incomplete' : outcome) as 'clean' | 'changes_requested' | 'approved' | 'incomplete', head: headSha, completedAt })
         if (claim.launchQuarantine === 'unreadable') retireQuarantineIncident(claim)
         dropActiveClaim(claim.claimId)
         clearBehaviorFailure(behavior, claim.target, claim.launchActor)
@@ -3139,6 +3148,10 @@ function settleClaimAfterExit(
           const preflight503 = !call.error_code && /^(?:error: )?GitHub 503\b/.test(call.error)
             && call.action === 'not_started' && call.outcome === 'preflight_failed'
             && row.head_sha == null && row.review_id == null && row.review_comments == null && row.receipts == null
+          const authRejected = call.error_code === 'authentication_failed'
+            && call.action === 'not_started' && call.outcome === 'preflight_failed'
+            && call.diagnostic?.operation === 'provider.review' && call.diagnostic.context.submission === 'none'
+            && row.head_sha == null && row.review_id == null && row.review_comments == null && row.receipts == null
           let retryable503 = false
           if (preflight503) {
             // A single completion cannot prove remaining retry budget. Read
@@ -3161,7 +3174,7 @@ function settleClaimAfterExit(
               && !getMeta(repoHoldKey(claim.launchRepo, claim.launchActor))
               && !getMeta(`${REPO_ACCESS_HOLD_PREFIX}${claim.launchRepo.toLowerCase()}`)
           }
-          if (!timeout && !retryable503) { console.error(message); return }
+          if (!timeout && !retryable503 && !authRejected) { console.error(message); return }
           // Match periodic --diagnostics truncation and its 64 KiB envelope
           // fallback so delayed collection replays exactly.
           let error = typeof row.error === 'string' ? truncateCodePoints(row.error, 8192) : row.error
@@ -4527,7 +4540,7 @@ async function releaseFailedBehaviorIfNoAction(
       && Date.parse(row.completed_at!) >= Date.parse(agentCallStartedAt(row))
       && !!row.correlation_id && unambiguousAgentCall(snapshot, row)
       && Number.isSafeInteger(row.review_id) && (row.review_id || 0) > 0
-      && (row.action === 'requested_changes' && row.outcome === 'changes_requested'
+      && (row.action === 'requested_changes' && (row.outcome === 'changes_requested' || partialReviewFindings(row))
         || launchBehavior === 'pr_review' && row.action === 'reviewed_clean' && row.outcome === 'clean'
         || launchBehavior === 'pr_approve' && row.action === 'approved' && row.outcome === 'approved'))
       .sort((a, b) => Date.parse(b.completed_at!) - Date.parse(a.completed_at!))
@@ -4540,7 +4553,7 @@ async function releaseFailedBehaviorIfNoAction(
           headSha: failed.launchExpectedHead, callId: replay.id, correlationId: replay.correlation_id!,
           startedAt: agentCallStartedAt(replay), completedAt: replay.completed_at!,
           action: replay.action as 'reviewed_clean' | 'requested_changes' | 'approved',
-          outcome: replay.outcome as 'clean' | 'changes_requested' | 'approved' })) {
+          outcome: (partialReviewFindings(replay) ? 'changes_requested' : replay.outcome) as 'clean' | 'changes_requested' | 'approved' })) {
         captureBehaviorOutcome({ nativeId: failed.launchCorrelationId, callId: call.id,
           state: 'completed', activity: 'settled', stateSource: 'native', outcome: 'adopted',
           head: replay.head_sha, completedAt: replay.completed_at,
@@ -8546,6 +8559,10 @@ async function runBehaviorChains(): Promise<void> {
       wake() { checkSlotRetryPending = true; onCheckSlotReleased() },
     })
     runtime = new BehaviorChainRuntime(behaviorChainJournal(), { ...operations,
+      implementationAdmission: (chain, observation) => implementationReportAdmission(db, behaviorChainJournal(), chain, observation, async source => {
+        await requireFreshDatastore()
+        return operations.observe(source)
+      }),
       permitted: (chain, decision) => !repairReportImplementationFence(db, chain, decision.behavior) && operations.permitted(chain, decision),
       recoverReport: (chain, observation) => recoverReportedRepair(db, behaviorChainJournal(), chain, observation, async target => {
         await requireFreshDatastore()

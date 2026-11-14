@@ -21,7 +21,7 @@ from uuid import UUID
 from pathlib import Path
 from time import monotonic
 
-from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, ReviewVerdictError, actor, bounded_cause, expected_head, pr_ref, provider_blocked
+from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, ReviewVerdictError, actor, bounded_cause, credential_rejected, expected_head, pr_ref, provider_blocked
 from .atoms import packet as fetch_packet
 from .model_catalog import Model
 from .process_diagnostic import diagnostic_envelope
@@ -65,14 +65,18 @@ def provider_failure(message: str, *, provider: str = "provider", phase: str = "
         bounded = bounded_cause(cause or f"{provider} refused the review")
         raise AgentPreflightError(bounded, "review_provider_blocked",
                                   _diagnostic(provider, phase, exit_code=exit_code, signal=signal, cause=bounded))
+    # Classify the provider's own cause before credential redaction can
+    # hide natural-language words such as "token was".
+    code = "authentication_failed" if provider == "codex" and credential_rejected(cause) else "review_provider_exit"
     bounded = bounded_cause(cause or f"{provider} exited {exit_code}")
-    raise AgentPreflightError(f"{provider} review failed: {bounded}", "review_provider_exit",
+    raise AgentPreflightError(f"{provider} review failed: {bounded}", code,
                               _diagnostic(provider, phase, exit_code=exit_code, signal=signal, cause=bounded))
 
 
 def provider_error(provider: str, message: str, *, phase: str = "provider_execution") -> None:
+    code = "authentication_failed" if provider == "codex" and credential_rejected(message) else "review_provider_error"
     bounded = bounded_cause(message)
-    raise AgentPreflightError(f"{provider} review failed: {bounded}", "review_provider_error",
+    raise AgentPreflightError(f"{provider} review failed: {bounded}", code,
                               _diagnostic(provider, phase, cause=bounded))
 
 
@@ -634,7 +638,14 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
                 _validate_since_positions(pwd, pr, actor_name, head, packet, verdict)
                 review_receipt.retain_verdict(verdict, head)
                 raw = json.dumps(verdict, ensure_ascii=False)
-                if capped and behavior == "pr_approve" and verdict["action"] == "request_changes" \
+                coverage = review_receipt.coverage_disposition(json.loads(packet)) if packet else "incomplete"
+                if coverage != "complete" and verdict["action"] != "request_changes":
+                    review_receipt.complete_response(verdict["assessment"], head)
+                    raise review_budget.ReviewLimitError(
+                        "Review incomplete: required source coverage is not complete; no clearance submitted",
+                        "review_incomplete", diagnostic_envelope(operation="provider.review", phase="validating",
+                                                                outcome="incomplete", submission="none"))
+                if coverage == "complete" and capped and behavior == "pr_approve" and verdict["action"] == "request_changes" \
                         and all(re.match(r"\s*\[p[12]\]", comment["body"], re.IGNORECASE) for comment in verdict["comments"]):
                     # Only explicitly nonbreaking findings may be deferred.
                     if review_round is None or review_cap is None:
@@ -742,6 +753,17 @@ def run(pwd: str, system: str, text: str, model: Model, behavior: str,
 
 
 # ── Codex ─────────────────────────────────────────────────────────────
+# Verified against Codex CLI 0.169.0 (deploy/runtime installs
+# @openai/codex@latest unpinned): ChatGPT sign-in lives in
+# $CODEX_HOME/auth.json; a refresh rewrites that same file (atomic
+# temp-file + rename under $CODEX_HOME/auth.json.lock); `codex exec
+# --ephemeral` still resolves and persists auth there; auth and history
+# share CODEX_HOME, so no supported shared-auth mode preserves isolation.
+# Caller copies the sign-in in once per run and never writes back: the
+# isolated file is worker-writable (issue/atomic run danger-full-access),
+# and same-account forged JSON is indistinguishable from a genuine
+# rotation, so any copy-back could replace the sign-in. Cross-Call
+# persistence stays explicitly unresolved under #1797.
 def codex_environment(root: Path) -> dict:
     env = os.environ.copy()
     for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"):
@@ -756,8 +778,13 @@ def codex_environment(root: Path) -> dict:
     original = Path(env.get("CODEX_HOME") or Path.home() / ".codex")
     auth = original / "auth.json"
     if original.resolve() != home.resolve() and auth.is_file():
-        shutil.copyfile(auth, home / "auth.json")
-        (home / "auth.json").chmod(0o600)
+        target = home / "auth.json"
+        if not target.exists():
+            # Copy once: a later fragment, inspection round or file group
+            # keeps this run's rotated credential instead of re-copying the
+            # older original over it.
+            shutil.copyfile(auth, target)
+            target.chmod(0o600)
     env["CODEX_HOME"] = str(home)
     return env
 
@@ -861,7 +888,12 @@ def ask_codex(root: Path, model: Model, system: str, text: str, schema: dict, wa
         completed_turns = 0
         for event in events(done.stdout):
             if event.get("type") in {"error", "turn.failed"}:
-                provider_error("codex", event.get("message") or "Codex review did not complete successfully")
+                error = event.get("error")
+                messages = (error.get("message") if isinstance(error, dict) else error, event.get("message"))
+                cause = next((message.strip() for message in messages
+                              if isinstance(message, str) and message.strip()),
+                             "Codex review did not complete successfully")
+                provider_error("codex", cause)
             if event.get("type") == "turn.completed":
                 completed_turns += 1
                 if completed_turns > 1:

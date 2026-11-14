@@ -24,7 +24,7 @@ export interface LogEntry {
   time_elapsed: string
   status: string
   progress?: ModelProgress | null
-  outcome: 'clean' | 'changes_requested' | 'approved' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | 'target_closed' | 'native_action' | null
+  outcome: 'clean' | 'changes_requested' | 'approved' | 'incomplete' | 'superseded' | 'preflight_failed' | 'commented' | 'published' | 'no_changes' | 'prerequisite_wait' | 'target_closed' | 'native_action' | null
   head_sha: string | null
   expected_head: string | null
   source: string | null
@@ -292,6 +292,10 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
   const managedReview = behavior === 'pr_review' || behavior === 'pr_approve' || (source === 'poise:behavior-chain' && issueReview)
   if (artifact !== null && ((!atomicWork && !managedReview && !nativeAction) || typeof artifact !== 'object' || Array.isArray(artifact)
     || Buffer.byteLength(JSON.stringify(artifact)) > 128 * 1024)) throw new Error(`agent-interface log row ${index} has an invalid atomic artifact`)
+  const incompleteReview = (behavior === 'pr_review' || behavior === 'pr_approve') && headSha === expectedHead
+    && (status === 'failed' && action === null && errorCode === 'review_incomplete'
+      || status === 'completed' && action === 'requested_changes'
+        && ((artifact as Record<string, unknown> | null)?.review_response as Record<string, unknown> | undefined)?.coverage === 'incomplete')
   if (artifact !== null && typeof artifact === 'object' && 'failed_source' in artifact) {
     if (behavior !== 'implement_issue' || source !== 'poise:behavior-chain') throw new Error('failed source lacks its managed implementation')
     parseFailedSource(artifact.failed_source)
@@ -334,7 +338,8 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     || !Number.isFinite(Date.parse(startedAt))
     || (startedAtPrecise !== null && !Number.isFinite(Date.parse(startedAtPrecise)))
     || (completedAt !== null && !Number.isFinite(Date.parse(completedAt)))
-    || !['clean', 'changes_requested', 'approved', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', 'target_closed', 'native_action', null].includes(outcome)
+    || !['clean', 'changes_requested', 'approved', 'incomplete', 'superseded', 'preflight_failed', 'commented', 'published', 'no_changes', 'prerequisite_wait', 'target_closed', 'native_action', null].includes(outcome)
+    || (outcome === 'incomplete' && !incompleteReview)
     || (outcome === 'target_closed' && !closedFence)
     || (headSha !== null && !/^[0-9a-f]{40}$/.test(headSha))
     || (expectedHead !== null && !/^[0-9a-f]{40}$/.test(expectedHead))
@@ -342,8 +347,9 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
     || (action === 'native_action' || outcome === 'native_action') && (!nativeAction || action !== 'native_action'
       || outcome !== 'native_action' || status !== 'completed' || !(artifact as Record<string, unknown> | null)?.response_sha)
     || ((action === 'published' || action === 'no_changes' || outcome === 'published' || outcome === 'no_changes') && !atomicWork)
+    || (outcome === 'prerequisite_wait' && (behavior !== 'implement_issue' || action !== 'not_started' || status !== 'completed'))
     || ((action === 'commented' || outcome === 'commented') && !issueReview)
-    || ((action === 'not_started' || outcome === 'preflight_failed') && !preflightFailed && !closedFence)
+    || ((action === 'not_started' || outcome === 'preflight_failed') && !preflightFailed && !closedFence && outcome !== 'prerequisite_wait')
     || (source !== null && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(source))
     || (correlationId !== null && !LOG_CORRELATION_ID.test(correlationId))) {
     throw new Error(`agent-interface log row ${index} violates the schema`)
@@ -371,7 +377,7 @@ function validateLogEntry(value: unknown, index: number): LogEntry {
       || !repo || !/^[^/\s]+\/[^/\s]+$/.test(repo) || !prId) {
       throw new Error(`agent-interface log row ${index} has incomplete Poise provenance`)
     }
-    if (status === 'completed' && (!completedAt || !action || !outcome || (!headSha && !issueReview && !(atomicWork && outcome === 'no_changes')))) {
+    if (status === 'completed' && (!completedAt || !action || !outcome || (!headSha && !issueReview && !(atomicWork && (outcome === 'no_changes' || outcome === 'prerequisite_wait'))))) {
       throw new Error(`agent-interface log row ${index} has incomplete terminal outcome`)
     }
     if (status === 'failed' && !error) {

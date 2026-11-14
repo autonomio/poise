@@ -371,8 +371,9 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
         "Relay assertion proof is currently held for #1619: candidate-controlled reports cannot authorize recovery. "
         "Do not use source 'relay'; worker text and historical relay output cannot substitute. "
         "Do not use the CI dependency for candidate-specific failures or other blockers. "
-        'If a repair is blocked solely by failed CI on the supplied head, set blocked to {"cause":"ci_only","reason":"the concrete CI blocker"}. '
-        "Use a string for every other blocker, including missing evidence, a product decision or uncertain publication. "
+        'If a repair is blocked solely by failed CI on the supplied PR head or a verified merge-group-only failure, set blocked to {"cause":"ci_only","reason":"the concrete CI blocker"}. '
+        "Use this ci_only receipt even when PR-head checks are green and optional baseline proof is unavailable. "
+        "Use a string for every other blocker, including missing original failure evidence, a product decision or uncertain publication. "
         f"You have {int(seconds)} seconds. This invocation ends after edits/checks and that file.\n"
         f"Behavior note: {note}\nPreparation receipt:\n{json.dumps(prepared)}\nActual issue and comments:\n{json.dumps(data)}\nActual PR evidence:\n{json.dumps(evidence)}"
     )
@@ -415,7 +416,36 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
             progress.stage("validating_provider_result", "Checking the atomic provider result")
             terminal = issue_review._terminal_failure(model.provider, done.stdout)
             if done.returncode or terminal:
-                raise RuntimeError(terminal or issue_review.provider_error(done.stdout, done.stderr) or f"provider exited {done.returncode}")
+                raw = terminal or issue_review.provider_error(done.stdout, done.stderr) or f"provider exited {done.returncode}"
+                # Classify the provider's own cause before credential redaction can
+                # hide natural-language words such as "token was".
+                if model.provider == "codex" and atoms.credential_rejected(raw):
+                    error = atoms.bounded_cause(raw)
+                    raise issue_review.ProviderFailure(
+                        error, "authentication_failed",
+                        diagnostic_envelope(operation="provider.atomic_work", phase="provider_execution",
+                                            outcome="signal" if done.returncode < 0 else "exit",
+                                            stderr=error, provider=model.provider,
+                                            exit_code=done.returncode if done.returncode > 0 else None,
+                                            signal=-done.returncode if done.returncode < 0 else None,
+                                            submission="none"))
+                from . import _retained_account_signal, _retained_rate_limit_signal
+                # Raw provider causes can include tool output. Keep only the
+                # existing fixed account/rate markers and observed process facts.
+                trip = _retained_account_signal(raw) or _retained_rate_limit_signal(raw)
+                disposition = f"signal {-done.returncode}" if done.returncode < 0 else f"exit {done.returncode}"
+                message = (f"Atomic behavior provider {'reported a failed terminal with' if terminal else 'failed with'} {disposition}; "
+                           "provider cause unavailable; no publication attempted")
+                if trip:
+                    message = f"{trip}: {message}"
+                raise issue_review.ProviderFailure(
+                    message, "atomic_work_failed",
+                    diagnostic_envelope(operation="provider.atomic_work", phase="provider_execution",
+                                        outcome="signal" if done.returncode < 0 else "exit",
+                                        executable=model.provider, message=message,
+                                        exit_code=done.returncode if done.returncode >= 0 else None,
+                                        signal=-done.returncode if done.returncode < 0 else None,
+                                        submission="none"))
             progress.stage("reading_publication", "Reading bounded publication metadata")
             if not output.is_file() or output.stat().st_size > 64 * 1024:
                 raise AtomicWorkFailed("atomic behavior returned no bounded publication metadata")
@@ -455,6 +485,7 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
                         and blocked["cause"] == "ci_only" and isinstance(blocked["reason"], str) and blocked["reason"].strip():
                     try:
                         blocker = _ci_only_blocker(evidence["ci"], evidence["queue"], expected_head or "", actor)
+                        record({"phase": "executing", "prepared": prepared, "ci_blocker": blocker})
                         if publication.get("ciDependency") is not None and isinstance(blocker, dict) and blocker.get("queue"):
                             dependency = _verify_ci_dependency(publication["ciDependency"], repo, pull, expected_head or "", actor, evidence["queue"])
                             if dependency["remediation"] in {f"https://github.com/{repo}/issues/{number}", f"https://github.com/{repo}/pull/{pull}"}:
@@ -535,6 +566,15 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
             record(receipt)
             progress.stage("publishing", "Publishing the verified checkout through github-interface")
             published = issue_review.interface(*publication_args, "--mode", "publish", seconds=120)
+            if published.get("outcome") == "prerequisite_wait":
+                if pull is not None:
+                    raise AtomicWorkFailed("prerequisite wait is only available for first publication")
+                wait = published.get("prerequisite_wait")
+                if not isinstance(wait, dict) or wait.get("base") != str(prepared.get("checkout_head") or "").lower() \
+                        or not isinstance(wait.get("reason"), str) or not wait["reason"].strip():
+                    raise AtomicWorkFailed("prerequisite wait lacks its original candidate base and reason")
+                record({"phase": "prerequisite_wait", "prepared": prepared, "prerequisite_wait": wait})
+                return published
             record({**receipt, "phase": "published", "result": published})
             return published
         finally:
