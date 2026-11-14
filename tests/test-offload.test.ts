@@ -1315,22 +1315,25 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
     expect(stderr).toContain('cannot start /no/such/command')
   })
 
-  it.each(['none', 'assertion', 'oversized'])('retains real Vitest evidence before interruption (failure: %s)', async (failure) => {
+  it.each(['none', 'assertion', 'timeout', 'oversized'])('retains real Vitest evidence before interruption (failure: %s)', async (failure) => {
     let now = Date.now()
     await startAll({ limitSeconds: 2, now: () => now })
     const failed = failure !== 'none'
     const oversized = failure === 'oversized'
+    const timeout = failure === 'timeout'
     const fixture = vitestFixture(`describe('offload reporting', () => {
-      ${failed ? `it('first failed expectation ghp_fixturecredential', () => {
+      ${failed ? (timeout ? `it('first timed out expectation', async () => {
+        await new Promise(() => {})
+      }, 200)` : `it('first failed expectation ghp_fixturecredential', () => {
         const context = ${oversized ? "'expected received-value to equal expected-value\\nhttps://example.test/?token=' + 'boundarysecret'.repeat(3000) + '\\nafter-redaction\\n' + 'x'.repeat(12000) + '\\nafter-excerpt-limit'" : 'undefined'}
         expect('received-value', context).toBe('expected-value')
       })
-      // Flush Vitest's batched case events before the last test deliberately holds the file open.
-      it('second failed expectation', async () => {
-        await new Promise(done => setTimeout(done, 200))
+      it('second failed expectation', () => {
         expect(3).toBe(4)
-      })` : ''}
-      it('keeps the suite open', async () => {
+      })`) : ''}
+      it('keeps the suite open', async ({ annotate }) => {
+        // annotate awaits Vitest's pending case updates; a fixed delay can miss its throttle boundary.
+        await annotate('completed cases delivered before holding the suite open')
         console.log('VITEST_HELD ' + process.pid)
         await new Promise(() => {})
       }, 60000)
@@ -1345,11 +1348,17 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
         await until(() => evidence.includes('[poise] first test failure:'), 'the first Vitest assertion before interruption', 3_000)
           .catch((error: Error) => { throw new Error(`${error.message}\n${evidence}\n${output}`) })
         const excerpt = evidence.slice(evidence.indexOf('[poise] first test failure:'))
-        expect(excerpt).toContain('tests/fixture.test.mjs > offload reporting > first failed expectation [redacted]')
-        expect(excerpt).toContain('AssertionError:')
-        expect(excerpt).toContain('received-value')
-        expect(excerpt).toContain('expected-value')
-        expect(excerpt).not.toContain('ghp_fixturecredential')
+        if (timeout) {
+          expect(excerpt).toContain('tests/fixture.test.mjs > offload reporting > first timed out expectation')
+          expect(excerpt).toContain('Test timed out in 200ms')
+          expect(excerpt).toContain('STACK_TRACE_ERROR')
+        } else {
+          expect(excerpt).toContain('tests/fixture.test.mjs > offload reporting > first failed expectation [redacted]')
+          expect(excerpt).toContain('AssertionError:')
+          expect(excerpt).toContain('received-value')
+          expect(excerpt).toContain('expected-value')
+          expect(excerpt).not.toContain('ghp_fixturecredential')
+        }
         expect(excerpt).not.toContain('second failed expectation')
         expect(excerpt.length).toBeLessThanOrEqual(8193)
         if (oversized) {
@@ -1360,19 +1369,21 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
           expect(excerpt).not.toContain('after-excerpt-limit')
         }
       } else expect(evidence).not.toContain('[poise] first test failure:')
+      const admission = /\[poise\] candidate ([a-f0-9]{64}), suite .*, run ([a-f0-9]{32})/.exec(evidence)
+      expect(admission).not.toBeNull()
+      expect(evidence).toContain(`candidate ${admission![1]}, suite node vitest.mjs run, cwd ${fixture.repo}`)
+      expect(relay.runs.has(admission![2])).toBe(true)
       now += 3_000
       const { code, stderr } = await running.done
       expect(code).toBe(124)
       expect(stderr).toContain('no test result: this suite is too big for its test box: it passed the 2 s time limit')
       expect(stderr).toContain('says nothing about your code. Skip local tests for this work')
       expect(stderr).toContain('let CI run the tests')
-      const admission = /\[poise\] candidate ([a-f0-9]{64}), suite .*, run ([a-f0-9]{32})/.exec(stderr)
-      expect(admission).not.toBeNull()
       expect(warnings).toContainEqual(expect.objectContaining({ event: 'test_relay.run.failed', id: admission![2] }))
       if (failed) {
         expect(stderr.match(/\[poise\] first test failure:/g)).toHaveLength(1)
         expect(stderr.indexOf(admission![0])).toBeLessThan(stderr.indexOf('[poise] first test failure:'))
-        expect(stderr.indexOf('AssertionError')).toBeLessThan(stderr.indexOf('no test result:'))
+        expect(stderr.indexOf(timeout ? 'Test timed out' : 'AssertionError')).toBeLessThan(stderr.indexOf('no test result:'))
       } else expect(stderr).not.toContain('AssertionError')
       const box = runBox()
       await until(() => terminated.includes(box.id), 'the box to be terminated')

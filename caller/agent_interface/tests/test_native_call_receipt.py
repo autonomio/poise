@@ -398,7 +398,8 @@ def test_original_publication_boundary_reconciles_without_repeating_work(databas
     client.graphql = AsyncMock(return_value={"repository": {
         "ref": {"target": {"oid": parent, "message": "fix: original parent"}} if repair else None,
         "defaultBranchRef": {"target": {"oid": parent}},
-        "issue": {"closedByPullRequestsReferences": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
+        "issue": {"blockedBy": {"nodes": [], "totalCount": 0, "pageInfo": {"hasNextPage": False}},
+                  "closedByPullRequestsReferences": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
     committed, pushes = False, []
 
     def git(command, *_secrets):
@@ -759,11 +760,45 @@ def test_atomic_preflight_failure_survives_native_receipt_and_logging(database, 
 
 
 @pytest.mark.parametrize("database", ["/dev/shm" if sys.platform == "linux" else None], indirect=True)
-@pytest.mark.parametrize("observed", ["assertion", "marker", "none"])
+@pytest.mark.parametrize("observed", ["assertion", "timeout", "marker", "none"])
 def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(database, monkeypatch, decode_failure, observed):
     candidate, run = "c" * 64, "d" * 32
     excerpt = "AssertionError: expected 1 to equal 2"
     test = "fixture.validation::test_first_failure"
+    if observed == "timeout":
+        repo = Path(__file__).resolve().parents[3]
+        (repo / "test-results").mkdir(exist_ok=True)
+        with TemporaryDirectory(prefix="vitest-timeout-", dir=repo / "test-results") as work:
+            fixture = Path(work)
+            (fixture / "vitest.config.mjs").write_text(
+                f"import config from {json.dumps(str(repo / 'vitest.config.ts'))};\n"
+                "export default { ...config, test: { ...config.test, setupFiles: [], "
+                "include: ['timeout.test.mjs'], pool: 'threads' } };\n")
+            (fixture / "timeout.test.mjs").write_text(
+                "import { describe, it } from 'vitest';\n"
+                "describe('offload reporting', () => {\n"
+                "  it('first timed out expectation', async () => { await new Promise(() => {}); }, 200);\n"
+                "  it('keeps the suite open', async ({ annotate }) => {\n"
+                "    await annotate('completed cases delivered before holding the suite open');\n"
+                "    console.log('VITEST_HELD');\n"
+                "    await new Promise(() => {});\n"
+                "  }, 60000);\n"
+                "});\n")
+            with subprocess.Popen(["node", str(repo / "node_modules/vitest/vitest.mjs"), "run"], cwd=work,
+                                  env={"PATH": os.environ["PATH"], "HOME": work, "TMPDIR": work, "CI": "1"},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                try:
+                    with pytest.raises(subprocess.TimeoutExpired):
+                        child.communicate(timeout=10)
+                finally:
+                    child.kill()
+                    stdout, stderr = child.communicate()
+            assert "VITEST_HELD" in stdout and "Test Files" not in stdout, (stdout, stderr)
+            assert stderr.count("[poise] first test failure:") == 1, stderr
+            excerpt = " ".join(stderr[stderr.index("[poise] first test failure:"):].split())
+            test = "timeout.test.mjs > offload reporting > first timed out expectation"
+            assert test in excerpt and "Test timed out in 200ms" in excerpt, excerpt
+    failed = observed in {"assertion", "timeout"}
     secret = "opaque-credential-spanning-the-summary-cutoff"
     relay = ("[poise] no test result: the test offload exhausted its total time budget. "
              "This says nothing about your code. Skip local tests for this work: don't retry, "
@@ -775,7 +810,7 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
     reason += "\U0001F600" * 7000
     assert reason.index(secret) < 500 < reason.index(secret) + len(secret)
     assert reason.index(excerpt) > 500
-    blocked = reason if observed == "assertion" else (
+    blocked = reason if failed else (
         f"FAIL {test}; assertion details unavailable; captured candidate unavailable; producing run unavailable; {relay}"
         if observed == "marker" else None)
     publication = {"commitMessage": "fix: seed", "title": "fix: seed", "replies": [], "blocked": blocked,
@@ -853,15 +888,15 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
     evidence = stored["diagnostic"]
     assert stored["error"] == evidence["message"] and len(stored["error"]) <= len("atomic behavior blocked: ") + 501
     assert decoded["stderr"] == evidence["stderr"]
-    assert evidence["stderr_truncated"] == (observed == "assertion")
+    assert evidence["stderr_truncated"] == failed
     event, = api.diagnostics()["events"]
     assert event["diagnostic"] == evidence and "evidence_unavailable" not in event
     assert len(json.dumps(event).encode()) <= 64 * 1024
-    expected = (excerpt, test, candidate, run, relay) if observed == "assertion" else (
+    expected = (excerpt, test, candidate, run, relay) if failed else (
         f"FAIL {test}", "assertion details unavailable", "captured candidate unavailable", "producing run unavailable", relay)
     for item in expected:
         assert item in evidence["stderr"]
-    if observed == "assertion":
+    if failed:
         assert excerpt not in stored["error"] and evidence["stderr"].index(excerpt) > 500
         assert evidence["stderr"].index(excerpt) < evidence["stderr"].index(relay)
     for private in (secret, "opaque-credential-", "summary-cutoff", "private provider"):

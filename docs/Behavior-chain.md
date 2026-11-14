@@ -434,7 +434,7 @@ hold survives journal rebuild and server replacement; the person can resume
 through the existing control after resolving the blocker.
 
 1. Each configured issue-review slot must finish successfully and its native receipt must identify an actually posted comment on the current issue revision. Before a new implementation, the authenticated Caller seed read must expose complete live same-repository GitHub `blockedBy` evidence; the mirror health gate still applies. This bounded connection is read again after awaited request preparation, immediately before admission, because dependency changes need not change the issue timestamp. A verified empty connection permits the ordinary path; absent or truncated evidence waits visibly. Each recorded prerequisite waits by issue number until it is closed and a linked closing PR's merge commit is verified as an ancestor of the observed implementation base. Closing an issue, queueing a PR or merging only into another branch is insufficient. The ordinary chain sweep rechecks this dependency wait without admitting a worker, recording an execution failure or creating a remediation issue. Existing holds still require Resume. No elapsed review delay authorizes implementation.
-2. Implementation reads the actual issue and comments, makes real changes in a fresh checkout and runs the repository's checks. After the model ends, Caller's publication primitive commits, pushes and opens the linked PR. Commit trailers and the PR's chain marker preserve artifact identity across lost responses.
+2. Implementation reads the actual issue and comments, makes real changes in a fresh checkout and runs the repository's checks. After the model ends, Caller's publication primitive re-verifies those same live prerequisites on the prepared candidate base before the first push; a new unresolved dependency or incomplete evidence settles as a no-write `prerequisite_wait` deferral with the dependency recorded, so the ordinary wait above re-admits on a suitable base without Resume or failure-budget consumption. Otherwise it commits, pushes and opens the linked PR. Commit trailers and the PR's chain marker preserve artifact identity across lost responses. An already pushed branch still reconciles through the existing recovery.
 3. Fresh exact-head evidence of an actual branch conflict selects the existing scoped repair before PR review, after invocation, hold and queue guards. Clean or merely behind branches still receive the configured current-head reviews first. Repairs use a fresh model invocation and the actual review packet, CI evidence and branch state. They publish code and substantive model-written replies to original findings. A new head requires fresh reviews and approval. An unchanged-code repair still requires independent approval verification.
 4. Existing native primitives handle grey CI, approved nonblocking conversation resolution, strict readiness, merge and merge-queue admission. Conversation resolution also covers outdated threads, because GitHub's merge rule counts them, but only when readiness is blocked solely by `merge_state_not_clean` or `required_reviews_not_approved`, the blockers an open conversation can explain. A PR that readiness reports green goes to merge with its outdated threads left alone. Their repository policy leaves a merely behind branch to native queue integration; an actual conflict still requires repair. Completion requires the actual GitHub merge SHA. Queue admission, a finished turn, approval or CLOSED alone cannot complete a chain.
 5. A removed queue entry requires its actual GitHub removal event. Failed integration checks or conflicts lead to fresh repair; manual or unknown removal holds for a decision. A `merged` removal alongside an earlier open-PR read waits for confirmed merge evidence; that event alone neither completes nor holds the chain. An unchanged-head repair requires a new independent approval before another native queue attempt. Only that attempt's actual integration result can establish acceptance. Deliberate dismissal of a current-head managed approval is also held.
@@ -834,18 +834,29 @@ admissions by the reviewer account, pinned with `--expected-head`. Their basis
 includes `reviewContext` (base SHA, title and body), distinct from repair's
 `reviewRevision`. Each original receipt must retain the pre-submission `reviewing`
 phase and one of those timeout codes; differing raw messages do not change their
-typed causes. Each report lists the original code for every attempt and bounded
-diagnostic operation, phase and timeout in seconds where retained. Missing step
-evidence stays unknown; raw errors, paths and inspection arguments are excluded.
-Both codes reuse the existing review report intent and marker. `submitting_review`
-cannot prove no action even without a returned review ID.
+typed causes. An automatic three-attempt hold with exactly two of those timeout
+receipts and one `review_provider_exit` or `authentication_failed` receipt on the
+same head, basis and slot also qualifies, in any order, when the provider receipt
+retains the same `reviewing` phase, no-submission proof and a structured diagnostic
+with `submission=none`. The mixed report reuses the same review intent, marker and
+title, lists every original code with bounded operation, phase and timeout, names
+the last timeout's diagnostic phase and the terminal attempt separately, preserves
+the source hold and grants no retry or recovery authority. Each report lists the
+original code for every attempt and bounded diagnostic operation, phase and timeout
+in seconds where retained. Missing step evidence stays unknown; raw errors, paths
+and inspection arguments are excluded. All three codes reuse the existing review
+report intent and marker. `submitting_review` cannot prove no action even without
+a returned review ID.
 Before first reporting, the existing datastore freshness gate must pass and a
 new native observation must still require the same phase on that head and basis.
 Stale, unknown or changed findings, heads or PR review contexts leave reporting pending,
 including title, body or base changes on an unchanged head. Other causes remain
-visible in their ordinary holds without an issue report; mixed repair causes or
-review causes outside these two timeouts cannot qualify. Closed or merged targets
-remain ineligible for a new review exhaustion report.
+visible in their ordinary holds without an issue report; mixed repair causes,
+provider-only review episodes, other provider codes, or review causes outside
+these two timeouts and the mixed provider pair cannot qualify. Operator or
+ambiguous holds cannot qualify; only the automatic three-attempt hold on the same
+basis reports. Closed or merged targets remain ineligible for a new review
+exhaustion report.
 Revoking repository scope during verification prevents publication and leaves the
 creation intent unconsumed, so re-enabling can still report once.
 
@@ -907,6 +918,37 @@ The same report exposes [private validation-time source evidence](../caller/agen
 when retained, or explicit unavailability requiring a fresh reproduction. This
 inspection preserves the earlier failed capture independently of later untested
 edits and grants no publication, retry or approval authority.
+
+These pre-PR implementation-hold reports require explicit triage before their
+own implementation can prepare or start. A posted issue review alone cannot
+authorize implementation. Through the existing guarded `/api/behavior-chains`
+control, the workspace owner records `source-only` or `distinct-fix`, with a
+diagnosis and next action. Read `GET /api/behavior-chains?id=OWNER/REPO%23N` for
+the report chain's current sequence and `implementationReport` binding, then
+POST `{ id, sequence, operation: "report-disposition", binding, disposition }`.
+`binding` is that exact read value. `disposition` contains `kind`, `review`
+(the settled native issue-review invocation ID), `commentId` (its posted receipt),
+`diagnosis` and `nextAction`. Triage must identify an independently implementable,
+verified defect to select `distinct-fix`; source-candidate-only failures select
+`source-only`. The control verifies the publishing account and report marker,
+the reviewed title/body revision and native posted-review receipt, the source's
+exact original hold event and Call, and configured ownership. It persists the
+disposition inside the existing report intent and records the diagnosis and next
+action on both chains. Labels, comment wording and closure supply no disposition.
+
+At implementation admission, missing or stale dispositions wait visibly, even
+when new report publishing is disabled. `source-only` leaves the source held and
+starts no report implementation on main. Checkout availability remains explicitly
+unverified; disposition does not depend on retaining the unpublished checkout.
+Only a current `distinct-fix` can pass through the ordinary implementation gates.
+Admission freshly verifies the original source's open state, no-publication and
+resource-release evidence before and after awaited preparation, and guards the
+source journal revision atomically with admission. Resume, a replacement Hold
+(even with identical text), a different failed Call, changed report revision or
+new source publication invalidates the old binding. The report link and generated
+issue recursion guard remain retained. No disposition retries the source: later
+source work still requires existing verified recovery or explicit Resume, original
+no-publication/resource evidence and absence of competing work.
 
 Before a PR, `implementation_execution_budget_exhausted` separately qualifies three settled original
 `implement-issue` timeout receipts after the last Resume. Each must retain `status=failed`,
