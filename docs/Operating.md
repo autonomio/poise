@@ -903,6 +903,11 @@ as `test_relay.run.failed`, naming the workspace, the command and the reason; ev
 run is logged with its command, exit code and duration as `test_relay.run.finished`.
 The runner prints the captured-candidate digest and suite, then the existing run ID
 at each admission, so observed failures can name the attempt that produced them.
+For the full Caller pytest gate, a completed failure also ends with one bounded,
+redacted summary of the first failure or setup error, its test and the original
+candidate digest and run ID. Atomic workers put that summary first in `blocked`,
+so the original Call's retained `diagnostic.stderr` survives console truncation.
+Later runs keep their own identities and cannot replace that completed failure.
 An explicit gateway-restart failure is the one exception: the active command
 records an interrupted validation with its candidate digest, suite and run ID,
 with no test result. It waits at most 30 seconds for the existing authenticated

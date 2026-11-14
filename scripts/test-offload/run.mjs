@@ -10,10 +10,12 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { pipeline } from 'node:stream/promises'
+import { StringDecoder } from 'node:string_decoder'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createGzip, gzip } from 'node:zlib'
+import { cleanText, environmentSecrets, redact } from './redaction.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LEASE_MS = 10_000
@@ -195,10 +197,57 @@ function die(message, code = 125) {
   finish(code)
 }
 
+// Keep the first report, not a tail of pytest's potentially very long failure output.
+function callerPytestFailure() {
+  const secrets = environmentSecrets()
+  const streams = new Map()
+  let reports = false, firstReport = false, reportEnded = false, shortSummary = false
+  let test = '', detail = '', short = '', kind = ''
+  const bounded = (value, limit) => redact(value, secrets).slice(0, limit)
+  const line = (value) => {
+    value = cleanText(value).trimEnd()
+    if (/^=+ (?:ERRORS|FAILURES) =+$/.test(value)) reports = true
+    if (/^=+ short test summary info =+$/.test(value)) shortSummary = true
+    if (reports && /^_{3,} .* _{3,}$/.test(value)) {
+      if (firstReport) reportEnded = true
+      else {
+        firstReport = true
+        test = bounded(value.replace(/^_+\s+|\s+_+$/g, ''), 600)
+        kind = /^_+ ERROR\b/.test(value) ? 'ERROR' : 'FAILED'
+      }
+    }
+    if (firstReport && !reportEnded && /^E\s+/.test(value) && detail.length < 1200) {
+      detail += (detail ? '\n' : '') + bounded(value, 1200 - detail.length)
+    }
+    if (shortSummary && !short && /^(?:FAILED|ERROR) \S+/.test(value) && (!kind || value.startsWith(kind + ' '))) short = bounded(value, 1000)
+  }
+  return {
+    write(type, payload) {
+      if (!streams.has(type)) streams.set(type, { decoder: new StringDecoder('utf8'), pending: '', oversized: false })
+      const stream = streams.get(type)
+      for (const part of stream.decoder.write(payload).split(/(?<=\n)/)) {
+        stream.pending += part
+        if (stream.pending.length > 64 * 1024) { stream.pending = ''; stream.oversized = true }
+        if (part.endsWith('\n')) {
+          if (!stream.oversized) line(stream.pending.slice(0, -1))
+          stream.pending = ''
+          stream.oversized = false
+        }
+      }
+    },
+    summary() {
+      for (const stream of streams.values()) if (!stream.oversized) line(stream.pending + stream.decoder.end())
+      return short || test ? [short || test, detail || 'assertion details unavailable'].join('\n') : null
+    },
+  }
+}
+
 async function main(args) {
   const also = []
   while (args[0] === '--also') also.push(args.splice(0, 2)[1])
   const command = args.slice(1)
+  const callerPytest = command.some((word) => ['pytest', 'py.test'].includes(basename(word)))
+    && ['caller/agent_interface/tests', 'caller/github_interface/tests', 'caller/github_datastore/tests'].every((path) => command.includes(path))
   const [relay, key] = readFileSync(join(HERE, 'relay'), 'utf8').split('\n')
   const headers = { authorization: `Bearer ${key}` }
   const cwd = process.cwd()
@@ -388,7 +437,9 @@ async function main(args) {
       let failure = null
       let upload = null
       let uploadError = null
+      const pytestFailure = callerPytest ? callerPytestFailure() : null
       const read = frameReader((type, payload) => {
+        if (type === FRAME.stdout || type === FRAME.stderr) pytestFailure?.write(type, payload)
         if (type === FRAME.stdout) process.stdout.write(payload)
         else if (type === FRAME.stderr) process.stderr.write(payload)
         else if (type === FRAME.exit) exitCode = Number(payload.toString())
@@ -435,7 +486,11 @@ async function main(args) {
       }
       if (failure) die(failure.message, failure.code)
       else if (exitCode === null) die('the connection to the test relay ended before the suite did')
-      else finish(exitCode)
+      else {
+        const summary = exitCode !== 0 ? pytestFailure?.summary() : null
+        if (summary) say(`completed Caller pytest failure: captured candidate ${candidate}, producing run ${id}, exit ${exitCode}\n${summary}`)
+        finish(exitCode)
+      }
       return
     }
   } catch (error) {
