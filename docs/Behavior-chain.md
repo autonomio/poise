@@ -847,16 +847,21 @@ in seconds where retained. Missing step evidence stays unknown; raw errors, path
 and inspection arguments are excluded. All three codes reuse the existing review
 report intent and marker. `submitting_review` cannot prove no action even without
 a returned review ID.
+Native `approve-pr` deadlines use the same two timeout codes, reviewer account,
+`--expected-head` pin and `reviewing` phase, but their approval basis carries
+`reviewRevision` and their durable automatic hold must match the approval
+exhaustion. They file a distinct `approval_budget_exhausted` report intent and
+marker; an earlier review report never covers a current approval hold.
 Before first reporting, the existing datastore freshness gate must pass and a
 new native observation must still require the same phase on that head and basis.
-Stale, unknown or changed findings, heads or PR review contexts leave reporting pending,
-including title, body or base changes on an unchanged head. Other causes remain
-visible in their ordinary holds without an issue report; mixed repair causes,
-provider-only review episodes, other provider codes, or review causes outside
-these two timeouts and the mixed provider pair cannot qualify. Operator or
-ambiguous holds cannot qualify; only the automatic three-attempt hold on the same
-basis reports. Closed or merged targets remain ineligible for a new review
-exhaustion report.
+Stale, unknown or changed findings, heads, PR review contexts or approval bases
+leave reporting pending, including title, body or base changes on an unchanged
+head. Other causes remain visible in their ordinary holds without an issue report;
+mixed repair causes, provider-only review episodes, other provider codes, or
+review causes outside these two timeouts and the mixed provider pair cannot
+qualify. Operator or ambiguous holds cannot qualify; only the automatic
+three-attempt hold on the same basis reports. Closed or merged targets remain
+ineligible for a new review or approval exhaustion report.
 Revoking repository scope during verification prevents publication and leaves the
 creation intent unconsumed, so re-enabling can still report once.
 
@@ -998,6 +1003,19 @@ bounded, redacted **worker-reported** blocker. It preserves the source hold and
 repair ownership without admitting work or relaunching repair. Its identity is
 `atomic_work_blocked` + source chain + PR, separate from the pre-PR implementation
 identity; even a closed historical implementation report cannot cover this repair.
+
+These repair-hold reports use the same guarded `report-disposition` control with
+`existing-remedy` or `distinct-fix`. `existing-remedy` names the already-owned
+remedy issue in `remedy` and keeps it as the single implementation owner; the
+report stays fenced and the source stays held, showing the source PR/head and the
+remedy link. Only a current `distinct-fix` for a separately diagnosed,
+implementable defect with no existing owner can pass through ordinary
+implementation gates. The control binds the original report marker, settled
+no-write Call and release, reviewed report revision, current source PR head/basis
+and remedy identity, and re-verifies them before and after awaited preparation.
+Missing, stale or unauthenticated triage waits visibly; a comment alone, remedy
+closure, changed head or ambiguous publication cannot authorize implementation.
+The source still requires its own authorized recovery or explicit Resume.
 
 `implementation_publication_uncertain` qualifies an original `implement-issue`
 invocation that remains uncertain after recovery, including an unheld source.

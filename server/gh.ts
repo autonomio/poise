@@ -122,7 +122,9 @@ export async function reconcileRepairReport(repository: string, marker: string, 
     }
     if (!issue.body.includes(marker) && number !== null && linked) {
       if (!linked(issue.body, author.login)) return null
-    } else if (!issue.body.includes(marker) || author.login.toLowerCase() !== me.toLowerCase()) {
+    } else if (!issue.body.includes(marker)) {
+      throw new Error(`Repair report marker not found in issue #${issue.number}`)
+    } else if (author.login.toLowerCase() !== me.toLowerCase()) {
       throw new Error('Repair report issue identity differs from its durable intent')
     }
     let applied = labels(issue.labels)

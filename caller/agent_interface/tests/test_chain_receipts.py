@@ -545,6 +545,41 @@ class AtomicWorkLimits(TestCase):
         self.assertEqual(json.loads(artifact)["resource_error"], "resources_unknown")
         self.assertIsNone(settled)
 
+    def test_provider_deadline_with_retained_lease_records_unknown_ownership(self):
+        modes = []
+
+        def interface(*args, **_kwargs):
+            self.assertEqual(args[0], "--issue-work")
+            mode = args[args.index("--mode") + 1]
+            modes.append(mode)
+            self.assertEqual(mode, "prepare", "unverified checkout reached publication")
+            Path(args[args.index("--path") + 1]).mkdir()
+            return {"outcome": "prepared", "checkout_head": HEAD}
+
+        with patch.dict(os.environ, {"POISE_LOCK_DIR": str(self.path.parent / "locks")}), \
+                patch.object(issue_review, "packet", return_value={"issue": {"state": "open"}}), \
+                patch.object(issue_review, "interface", side_effect=interface), \
+                patch.object(issue_review, "command", return_value=(
+                    [sys.executable, "-c", "import time; time.sleep(60)"], "", {})), \
+                patch.object(issue_review, "_cwd_pids", return_value=[]), \
+                patch.object(review_budget, "timeout", return_value=1), \
+                patch.object(api.atomic_work.checkout_lock, "pgid_alive", return_value=True), \
+                self.assertRaises(api.atomic_work.checkout_lock.WorkerOrphaned) as failure:
+            self.run_behavior()
+        self.assertIsInstance(failure.exception.__context__, subprocess.TimeoutExpired)
+        call, = api.logs()
+        self.assertEqual(call["artifact"]["phase"], "resources_unknown")
+        self.assertTrue(any(error["cause"] == "resources_unknown" for error in call["resource_ownership"]["errors"]))
+        self.assertIsNone(call["resources_settled_at"])
+        self.assertFalse(resource_ownership.released(call["resource_ownership"]))
+        self.assertEqual((call["status"], call["error_code"], call["action"], call["outcome"]),
+                         ("failed", "atomic_work_failed", None, None))
+        self.assertEqual(call["diagnostic"]["outcome"], "timed_out")
+        self.assertEqual(modes, ["prepare"])
+        self.assertTrue(Path(call["artifact"]["resource_root"]).is_dir())
+        with api.db() as conn:
+            self.assertIsNone(conn.execute("select action_plan from calls where id=?", (call["id"],)).fetchone()[0])
+
     def test_provider_deadline_and_preflight_timeout_reach_chain_history_distinctly(self):
         repo = Path(__file__).resolve().parents[3]
         output = repo / "test-results"
