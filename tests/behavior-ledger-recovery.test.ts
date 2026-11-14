@@ -212,10 +212,12 @@ describe('ledger recovery boundaries', () => {
           if (request.operation === 'capture' && !held) {
             held = true;
             const release = new URL('./release', import.meta.url);
-            const watcher = watch(new URL('.', import.meta.url), () => {
+            const check = () => {
               if (!existsSync(release)) return;
               watcher.close(); reply();
-            });
+            };
+            const watcher = watch(new URL('.', import.meta.url), check);
+            check();
             return;
           }
           reply();
