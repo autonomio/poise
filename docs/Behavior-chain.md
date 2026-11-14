@@ -332,9 +332,12 @@ Unsettled original receipts and resources still require reconciliation first.
 
 When only merge-group CI failed, `ci_blocker.queue` instead retains the verified
 GitHub removal, admitted candidate, integration and first-parent base, and each
-failed check/job, workflow run and attempt. The existing hold and attention
-output name those checks and their links. Green PR-head CI alone cannot release
-this hold. The same bounded observation reads the original integration through
+failed check/job, workflow run and attempt. Caller persists this verified blocker
+before optional exact-base baseline proof. Rejected baseline proof retains its
+reason and the original queue evidence, without granting baseline recovery.
+The existing hold and attention output name those checks and their links.
+Green PR-head CI alone cannot release this hold. The same bounded observation
+reads the original integration through
 `--list-failing-ci --ref`: each original obligation needs a later successful
 check in its retained workflow, from a later attempt or run. A stale success,
 same-named check from another workflow, pending or unknown evidence stays held.
