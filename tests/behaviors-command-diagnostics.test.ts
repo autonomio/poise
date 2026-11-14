@@ -748,3 +748,68 @@ setInterval(() => {}, 1000)
   expect(behaviors.getBehaviorFailureState('review-new-prs', CHECK)).toBeNull()
   expect(events()).toHaveLength(2)
 })
+
+it('keeps the checkout failure when claim release throws', async () => {
+  arrangeCli(false)
+  mocks.spawnDetached.mockResolvedValue(undefined)
+  const { database, behaviors } = await loadModules()
+  database.setMeta('me', 'poise-user')
+  database.setMeta('behavior_review_new_prs_keyver', '3')
+  database.setMeta('behavior_review_new_prs_enabled', '1')
+  database.recordSeen('review-new-prs', '__snapshot_v3__')
+  behaviors.startBehaviorsRuntime()
+  vi.stubEnv('CALLER_BIN_ROOT', fixture.tempRoot)
+  writeFileSync(join(fixture.tempRoot, 'github-interface'), `#!${process.execPath}\nprocess.stdout.write('private-output')\nprocess.stderr.write('original checkout failure\\n')\nprocess.exitCode = 1\n`, { mode: 0o700 })
+  const original = mocks.runFile.getMockImplementation()!
+  let checkoutFailed = false
+  mocks.runFile.mockImplementation((command: string, args: string[], options: RunFileOptions) => {
+    if (command === 'agent-interface' && args[0] === '--diagnostics') return Promise.resolve({
+      stdout: JSON.stringify({ version: 1, streamId: 'a'.repeat(32), events: [], cursor: 0, hasMore: false, backfillPending: false }), stderr: '',
+    })
+    if (command === 'github-interface' && args[0] === '--local-checkout-path') {
+      const error = Object.assign(new Error('Command failed (1): github-interface'),
+        { code: 1, killed: false, signal: null, stdout: '',
+          stderr: `error: checkout not found under /fake/dev: ${args[1]}/${args[2]}\n` })
+      return Promise.reject(error)
+    }
+    if (command === 'github-interface' && args[0] === '--checkout-repo') {
+      checkoutFailed = true
+      return mocks.realRunFile!(command, args, options)
+    }
+    if (command === 'git') return Promise.resolve({
+      stdout: args[0] === 'remote' ? `https://github.com/${pr.repo}.git` : args[0] === 'rev-parse' ? HEAD_SHA : '', stderr: '',
+    })
+    return original(command, args, options)
+  })
+  const realReleaseSeen = database.releaseSeenOwned.bind(database)
+  const realReleaseOperation = database.releasePrOperationOwned.bind(database)
+  let claimThrown = false, operationThrown = false
+  vi.spyOn(database, 'releaseSeenOwned').mockImplementation(((...args: Parameters<typeof database.releaseSeenOwned>) => {
+    if (checkoutFailed && !claimThrown) { claimThrown = true; throw new Error('claim release failed') }
+    return realReleaseSeen(...args)
+  }) as typeof database.releaseSeenOwned)
+  vi.spyOn(database, 'releasePrOperationOwned').mockImplementation(((...args: Parameters<typeof database.releasePrOperationOwned>) => {
+    if (checkoutFailed && !operationThrown) { operationThrown = true; throw new Error('operation release failed') }
+    return realReleaseOperation(...args)
+  }) as typeof database.releasePrOperationOwned)
+  logging = await import('../server/logging')
+  vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+  logging.startLogging()
+  await behaviors.runEnabledBehaviorsOnce()
+  const recorded = events()
+  const checkout = recorded.filter((event) => event.operation === 'github-interface.checkout-repo')
+  expect(checkout).toEqual([expect.objectContaining({ behavior: 'review-new-prs',
+    phase: 'checkout', severity: 'error', repository: pr.repo, target: TARGET, exitCode: 1,
+    stderr: expect.stringContaining('original checkout failure'),
+    context: expect.objectContaining({ slot: 'primary', expectedHead: HEAD_SHA }) })])
+  expect(JSON.stringify(checkout)).not.toContain('private-output')
+  expect(recorded.some((event) => event.message === 'claim release failed')).toBe(true)
+  expect(recorded.some((event) => event.message === 'operation release failed')).toBe(true)
+  const retry = behaviors.getBehaviorFailureState('review-new-prs', CHECK)!
+  expect(retry).toMatchObject({ kind: 'operation', consecutiveFailures: 1, correlationId: checkout[0]!.correlationId })
+  expect(mocks.captureOutcome).toHaveBeenCalledWith(expect.objectContaining({
+    nativeId: retry.correlationId, outcome: 'preflight_failed', state: 'failed', activity: 'settled',
+  }))
+  expect(mocks.spawnDetached).not.toHaveBeenCalled()
+  expect(behaviors.getBehaviorCheckSlots().stats()).toMatchObject({ running: 0, behaviorRunning: 0 })
+})

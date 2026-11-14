@@ -3948,8 +3948,19 @@ async function tickReviewNewPrs(): Promise<void> {
       } catch (err) {
         // A superseded spawn releases its claim like any other launch
         // failure; the exit settler tolerates the missing claim.
-        releaseOwnedClaim('review-new-prs', target, claimId)
-        releasePrOperationOwned(bundle.operationId)
+        // Neither release may replace the failure below: child reporting
+        // is suppressed, so a throw here would erase the checkout cause
+        // the diagnostic attributes.
+        try {
+          releaseOwnedClaim('review-new-prs', target, claimId)
+        } catch (releaseError) {
+          console.error(`[behaviors] review-new-prs claim release failed for ${pr.repo}#${pr.number}:`, releaseError)
+        }
+        try {
+          releasePrOperationOwned(bundle.operationId)
+        } catch (releaseError) {
+          console.error(`[behaviors] review-new-prs operation release failed for ${pr.repo}#${pr.number}:`, releaseError)
+        }
         // A checkout failure leaves no worker behind its launch intent: the
         // claim above is released and the ledger records the preflight end.
         // One attributed Error and a next-tick retry on timeout; other
