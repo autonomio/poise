@@ -2993,6 +2993,7 @@ HELP = """usage: agent-interface BEHAVIOR ...
 behaviors:
   --models
   --refresh-models [--families claude,codex]
+  --verify-codex-login MODEL --pwd DIR
   --logs [--status running] [--limit 1..1000] [--cursor CURSOR] [--org OWNER] [--search TEXT]
   --logs --id CALL_ID
   --logs --select '{"latest":[{"behavior":"...","source":"...","owner":"..."}],"ids":["CALL_ID"]}'
@@ -3190,6 +3191,14 @@ def _main():
     if sys.argv[1:] == ["--models"]:
         print(json.dumps({**CATALOG.export(), "policy": review_budget.REVIEW_POLICY}, indent=2))
         return
+    if len(sys.argv) == 5 and sys.argv[1] == "--verify-codex-login" and sys.argv[3] == "--pwd":
+        from .structured_review import verify_codex_login
+        try:
+            code = verify_codex_login(Path(sys.argv[4]), CATALOG.resolve(sys.argv[2]))
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(atoms.bounded_cause(str(error)), file=sys.stderr)
+            code = 1
+        raise SystemExit(code)
     if len(sys.argv) >= 2 and sys.argv[1] == "--refresh-models":
         from . import catalog_refresh
         rest = sys.argv[2:]
