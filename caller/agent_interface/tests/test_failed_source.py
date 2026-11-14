@@ -507,3 +507,29 @@ def test_deadline_base_symlink_escape_never_applies(workspace, monkeypatch):
     successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
     assert "deadline_restored" not in successor["artifact"]
     assert "Restored" not in seen["instruction"]
+
+
+def test_deadline_parent_symlink_escape_never_captures(workspace, monkeypatch):
+    real_prepared = prepared_fixed
+
+    def with_secret_dir(checkout, when="2026-01-01T00:00:00+00:00"):
+        receipt = real_prepared(checkout, when)
+        (checkout / "d").mkdir(exist_ok=True)
+        (checkout / "d" / "secret.json").write_text('{"base": true}\n')
+        git(checkout, "add", "d/secret.json")
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        subprocess.run(["git", "-C", str(checkout), "-c", "user.name=fixture", "-c", "user.email=fixture@example.test",
+                        "commit", "-qm", "fixture secret dir"], check=True, capture_output=True, env=env)
+        receipt["checkout_head"] = git(checkout, "rev-parse", "HEAD")
+        return receipt
+
+    monkeypatch.setattr(sys.modules[__name__], "prepared_fixed", with_secret_dir)
+    provider = ("import time, pathlib, os, shutil; pathlib.Path('source.cjs').write_text('module.exports=1;\\n'); "
+                "pathlib.Path('../private').mkdir(exist_ok=True); "
+                "pathlib.Path('../private/secret.json').write_text('{\"pwned\": true}\\n'); "
+                "shutil.rmtree('d'); os.symlink('../private', 'd'); time.sleep(5)")
+    original, _ = _run_deadline_original(workspace, monkeypatch, provider)
+    assert original["artifact"]["deadline_source"]["status"] == "unavailable"
+    successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
+    assert "deadline_restored" not in successor["artifact"]
+    assert "Restored" not in seen["instruction"]

@@ -300,6 +300,10 @@ def _checkout_changes(checkout: Path, base: str) -> list[dict]:
         if name in seen:
             raise ValueError("duplicate captured source")
         seen.add(name)
+        parent_parts = path.parent.parts
+        for depth in range(1, len(parent_parts) + 1):
+            if not stat.S_ISDIR((checkout / "/".join(parent_parts[:depth])).lstat().st_mode):
+                raise ValueError("captured source is not a file or symlink")
         if stat.S_ISLNK(node.st_mode):
             data = os.readlink(full).encode()
             mode = "120000"
