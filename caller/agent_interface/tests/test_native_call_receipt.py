@@ -773,16 +773,17 @@ def completed_pytest_then_no_result(directory, setup):
         (work / name).mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     secret = "completed-pytest-credential-sentinel"
+    folded = "folded-opaque-value-outside-env"
     test = paths[0] + "/test_first.py::TestToken::test_credentials_are_redacted_before_cli_serialization[retained response]"
     fixture = ("import pytest\n@pytest.fixture\ndef broken():\n"
-               f"    raise RuntimeError('first setup cause {secret}')\n"
+               f"    raise RuntimeError('first setup cause {secret}\\nAuthorization: Bearer\\n  {folded}')\n"
                "class TestToken:\n"
                "    @pytest.mark.parametrize('body', ['retained response'])\n"
                "    def test_credentials_are_redacted_before_cli_serialization(self, broken, body):\n        pass\n") if setup else (
                    "import pytest\nclass TestToken:\n"
                    "    @pytest.mark.parametrize('body', ['retained response'])\n"
                    "    def test_credentials_are_redacted_before_cli_serialization(self, body):\n"
-                   f"        assert 1 == 2, 'first assertion cause {secret}'\n")
+                   f"        assert 1 == 2, 'first assertion cause {secret}\\nAuthorization: Bearer\\n  {folded}'\n")
     (work / paths[0] / "test_first.py").write_text(fixture + "\ndef test_later_failure():\n    assert False, 'later unrelated cause'\n")
     # Pytest emits this after its detailed reports and short test summary.
     (work / "conftest.py").write_text("def pytest_terminal_summary(terminalreporter):\n"
@@ -840,6 +841,7 @@ def completed_pytest_then_no_result(directory, setup):
         assert "checkout sent" not in visible and "suite python" not in visible
         summary = visible[visible.index("[poise] completed Caller pytest failure:"):].strip()
         assert len(summary) < 2600 and secret not in summary and "[redacted]" in summary
+        assert folded not in summary, "a folded header continuation is a credential even outside the environment secrets"
         (work / paths[0] / "test_first.py").write_text("# a later candidate\n")
         later = subprocess.run(command, cwd=work, env=environment, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, timeout=30)
@@ -847,7 +849,7 @@ def completed_pytest_then_no_result(directory, setup):
         assert later_run in later.stdout and "completed Caller pytest failure:" not in later.stdout
         later_candidate = re.search(r"candidate ([a-f0-9]{64}), suite .*, run", later.stdout)[1]
         assert later_candidate != identity[1]
-        return summary + "; Later attempt: " + later.stdout, identity[1], original_run, test, secret, relay_reason
+        return summary + "; Later attempt: " + later.stdout, identity[1], original_run, test, secret, relay_reason, folded
     finally:
         server.shutdown()
         server.server_close()
@@ -875,8 +877,10 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
         f"FAIL {test}; assertion details unavailable; captured candidate unavailable; producing run unavailable; {relay}"
         if observed == "marker" else None)
     if observed.startswith("completed_"):
-        blocked, candidate, run, test, secret, relay = completed_pytest_then_no_result(database, observed == "completed_setup")
+        blocked, candidate, run, test, secret, relay, folded = completed_pytest_then_no_result(database, observed == "completed_setup")
         excerpt = "RuntimeError: first setup cause" if observed == "completed_setup" else "first assertion cause"
+    else:
+        folded = "folded-opaque-value-outside-env"
     publication = {"commitMessage": "fix: seed", "title": "fix: seed", "replies": [], "blocked": blocked,
                    "body": f"fixture validation: {relay} Local verification is incomplete; required CI and review remain mandatory."}
     modes, instructions, checkouts = [], [], []
@@ -968,7 +972,7 @@ def test_atomic_failure_then_relay_timeout_survives_checkout_reclamation(databas
         assert evidence["stderr"].index(run) < evidence["stderr"].index("e" * 32)
         assert evidence["stderr"].index(excerpt) < evidence["stderr"].index(relay)
         assert len(evidence["stderr"]) <= 4096
-    for private in (secret, "opaque-credential-", "summary-cutoff", "private provider"):
+    for private in (secret, folded, "opaque-credential-", "summary-cutoff", "private provider"):
         assert private not in json.dumps(stored) + json.dumps(event)
 
 

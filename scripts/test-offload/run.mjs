@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createGzip, gzip } from 'node:zlib'
-import { cleanText, environmentSecrets, redact } from './redaction.mjs'
+import { cleanText, environmentSecrets, lineRedactor, redact } from './redaction.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LEASE_MS = 10_000
@@ -203,6 +203,14 @@ function callerPytestFailure() {
   let reports = false, firstReport = false, reportEnded = false, shortSummary = false
   let test = '', detail = '', short = '', kind = ''
   const bounded = (value, limit) => redact(value, secrets).slice(0, limit)
+  // Pytest prefixes every failure line with `E `, hiding a folded credential
+  // continuation from per-line redaction. Strip one prefix space so the shared
+  // line redactor still sees the continuation indent; other lines round-trip.
+  const detailRedactor = lineRedactor(secrets)
+  const detailLine = (value, limit) => {
+    const redacted = detailRedactor(value.replace(/^E\s/, ''))
+    return (redacted === '[redacted header continuation]' ? redacted : `E ${redacted}`).slice(0, limit)
+  }
   const line = (value) => {
     value = cleanText(value).trimEnd()
     if (/^=+ (?:ERRORS|FAILURES) =+$/.test(value)) reports = true
@@ -219,7 +227,7 @@ function callerPytestFailure() {
       }
     }
     if (firstReport && !reportEnded && /^E\s+/.test(value) && detail.length < 1200) {
-      detail += (detail ? '\n' : '') + bounded(value, 1200 - detail.length)
+      detail += (detail ? '\n' : '') + detailLine(value, 1200 - detail.length)
     }
     if (shortSummary && !short && (!kind || value.startsWith(kind + ' '))) {
       const summary = /^(FAILED|ERROR) (.+?)(?: - (.*))?$/.exec(value)
