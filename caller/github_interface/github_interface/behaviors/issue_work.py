@@ -370,6 +370,8 @@ async def _issue_work(client: GitHubClient, payload: dict) -> dict:
         return {**result, "outcome": "superseded", "head_sha": merged_head, "merged": True}
     issue = await client.get(f"/repos/{target}/issues/{issue_number}")
     if issue.get("state") != "open" or "pull_request" in issue:
+        if mode == "validate" and pull is None:
+            return {**result, "outcome": "target_closed"}
         raise ValueError("behavior chain seed is no longer an open issue")
     if pull is not None and (pull.get("state") != "open" or pull.get("merged_at") or pull.get("merged")):
         raise ValueError("behavior chain pull request is no longer open")
