@@ -2788,7 +2788,7 @@ it.each(['operator hold', 'changed basis', 'provider-only', 'submitting_review p
     expect(journal.read(chain.id)?.held).toBe(chain.held)
   })
 
-it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'attempt-list', 'preparation', 'admission', 'launch', 'unlaunched'] as const)(
+it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'attempt-list', 'preparation', 'admission', 'launch', 'unlaunched', 'account-switch'] as const)(
   'gates the actual approval deadline report through lost acknowledgement, review and restart (%s)', async kind => {
   const root = mkdtempSync(join(tmpdir(), 'approval-report-')); roots.push(root)
   const path = join(root, 'journal.sqlite')
@@ -2856,7 +2856,13 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
     // Use the production exhaustion fence; the earlier review report is outside this issue's scope.
     permitted: (chain: BehaviorChain, decision: { behavior: Parameters<typeof repairReportImplementationFence>[2] }) =>
       chain.issue !== 99 && !repairReportImplementationFence(initial.db, chain, decision.behavior),
-    reportHold: async () => null, readInvocations: async () => ({ entries, quarantined: [] }) }
+    reportHold: async () => null, readInvocations: async () => ({ entries, quarantined: [] }) } as
+    Parameters<typeof operations>[2] & { accounts?: () => { author: string, reviewer: string } }
+  if (kind === 'account-switch') {
+    // The configured author changes after GitHub accepts the report POST but before intake.
+    mocks.accounts = { me: 'new-author', agentAccount: 'reviewer' }
+    intakeOverrides.accounts = () => ({ author: 'new-author', reviewer: 'reviewer' })
+  }
   await new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, intakeOverrides)).run()
   let report = initial.journal.read('acme/repo#100')!
   const review = report.invocations.at(-1)!
@@ -2865,7 +2871,7 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
   entries = [{ id: 'b'.repeat(32), correlation_id: review.id, source: 'poise:behavior-chain', repo: 'acme/repo', pr_id: '100',
     actor: 'reviewer', model: 'fixture', behavior: 'issue_review', session_id: null, prompt: '', response: null,
     started_at: new Date(review.admittedAt).toISOString(), completed_at: new Date(NOW).toISOString(), time_elapsed: '1s',
-    status: 'completed', action: 'commented', outcome: 'commented', error: '', error_code: null, head_sha: null,
+    status: 'completed', action: 'commented', outcome: 'commented', error: '', error_code: null, head_sha: null, expected_head: null,
     resources_settled_at: new Date(NOW).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] },
     issue_revision: (await observe(report)).issue.revision,
     receipts: [{ issue: report.id, comment_id: 700, author: 'reviewer', url: 'https://github.com/acme/repo/issues/100#issuecomment-700' }] }]
@@ -2876,13 +2882,20 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
   expect(request).not.toHaveBeenCalled()
   expect(launch).not.toHaveBeenCalled()
   expect(report.waiting).toContain('Approval deadline report awaits a current explicit')
-  expect(implementationReportBinding(initial.db, report)).toMatchObject({ key: approvalKey, source: source.id, disposition: null })
-  expect(JSON.parse(reports(initial.db).find(row => JSON.parse(row.value).key === approvalKey)!.value).issueNumber).toBe(100)
+  if (kind === 'account-switch') {
+    expect(report.author).toBe('new-author')
+    expect(report.waiting).toContain('verification unavailable')
+    expect(implementationReportBinding(initial.db, report)).toBeNull()
+    expect(JSON.parse(reports(initial.db).find(row => JSON.parse(row.value).key === approvalKey)!.value).issueNumber).toBeNull()
+  } else {
+    expect(implementationReportBinding(initial.db, report)).toMatchObject({ key: approvalKey, source: source.id, disposition: null })
+    expect(JSON.parse(reports(initial.db).find(row => JSON.parse(row.value).key === approvalKey)!.value).issueNumber).toBe(100)
+  }
 
   const disposition = { kind: kind === 'source-only' ? 'source-only' : 'distinct-fix', review: review.id, commentId: 700,
     diagnosis: 'Inspect the original approval Calls; separately verified defect requires a distinct fix.',
     nextAction: 'Keep source approval held until an explicit Resume; retain approval and merge gates.' }
-  if (kind !== 'missing' && kind !== 'unlaunched') {
+  if (kind !== 'missing' && kind !== 'unlaunched' && kind !== 'account-switch') {
     await setImplementationReportDisposition(initial.db, initial.journal, report, report.sequence,
       implementationReportBinding(initial.db, report), disposition)
   }
@@ -2918,7 +2931,8 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
   expect(posts()).toHaveLength(2)
   const reconciled = reports(db).map(row => JSON.parse(row.value))
   expect(reconciled.find(report => report.key === reviewKey)).toMatchObject({ issueNumber: 99 })
-  expect(reconciled.find(report => report.key === approvalKey)).toMatchObject({ issueNumber: 100 })
+  expect(reconciled.find(report => report.key === approvalKey)).toMatchObject(
+    kind === 'account-switch' ? { issueNumber: null } : { issueNumber: 100 })
   expect(journal.read(source.id)).toMatchObject({ held: source.held, resumedAfterSequence: resumed.sequence, invocations: source.invocations })
   expect(decideBehaviorChain(journal.read(source.id)!, { ...fresh, checkedAt: Date.now() }, Date.now())).toMatchObject({ kind: 'wait', reason: source.held })
 
@@ -2941,7 +2955,7 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
   if (kind === 'launch') ops.launch = async (_invocation, _onExit, allowed) => {
     replaceHold(); expect(allowed()).toBe(false); return false
   }
-  if (kind === 'distinct-fix') remote.push({ ...issue(101, 'Plain issue'), labels: [{ name: 'poise' }] })
+  if (kind === 'distinct-fix' || kind === 'account-switch') remote.push({ ...issue(101, 'Plain issue'), labels: [{ name: 'poise' }] })
   await new BehaviorChainRuntime(journal, ops).run()
   const current = journal.read(report.id)!
   if (kind === 'distinct-fix') {
@@ -2949,6 +2963,14 @@ it.each(['missing', 'source-only', 'distinct-fix', 'approval-basis', 'hold', 'at
     expect(launch).toHaveBeenCalledTimes(2)
     expect(current.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started',
       request: { implementationSource: { id: source.id } } })
+    expect(journal.read('acme/repo#101')?.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started' })
+  } else if (kind === 'account-switch') {
+    expect(request.mock.calls.map(call => call[0].issue)).toEqual([101])
+    expect(launch).toHaveBeenCalledTimes(1)
+    expect(current.invocations.some(item => item.behavior === 'implement-issue')).toBe(false)
+    expect(current.waiting).toContain('Approval deadline report awaits a current explicit')
+    expect(current.waiting).toContain('verification unavailable')
+    expect(JSON.parse(reports(db).find(row => JSON.parse(row.value).key === approvalKey)!.value).issueNumber).toBeNull()
     expect(journal.read('acme/repo#101')?.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started' })
   } else {
     expect(launch).not.toHaveBeenCalled()

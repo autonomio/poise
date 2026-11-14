@@ -668,7 +668,7 @@ export async function implementationReportAdmission(db: Database, journal: Behav
         issue = await reconcileRepairReport(chain.repository, `<!-- poise-repair-exhaustion:${candidate.key} -->`, chain.issue)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        if (message.includes('identity differs')) continue
+        if (message.includes('marker not found')) continue
         return { reason: `${candidateWait}: verification unavailable: ${behaviorErrorMessage(message, 500)}` }
       }
       if (issue?.number === chain.issue) {
