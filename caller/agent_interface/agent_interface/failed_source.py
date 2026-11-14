@@ -305,15 +305,21 @@ def _checkout_changes(checkout: Path, base: str) -> list[dict]:
             mode = "120000"
             digest = hashlib.new(algorithm, b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         elif stat.S_ISREG(node.st_mode):
-            if node.st_size > MAX_BYTES:
-                raise ValueError("source evidence exceeds its byte limit")
-            data = full.read_bytes()
             mode = "100755" if node.st_mode & 0o100 else "100644"
-            digest = hashlib.new(algorithm, b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            hasher = hashlib.new(algorithm, b"blob " + str(node.st_size).encode() + b"\0")
+            parts = []
+            with full.open("rb") as source:
+                while chunk := source.read(64 * 1024):
+                    hasher.update(chunk)
+                    if node.st_size <= MAX_BYTES:
+                        parts.append(chunk)
+            data, digest = b"".join(parts), hasher.hexdigest()
         else:
             raise ValueError("captured source is not a file or symlink")
         if tracked.get(name) == (mode, digest):
             continue
+        if node.st_size > MAX_BYTES:
+            raise ValueError("source evidence exceeds its byte limit")
         size += len(data)
         if size > MAX_BYTES:
             raise ValueError("source evidence exceeds its byte limit")
@@ -454,6 +460,27 @@ def _restore_entries(changes: object) -> list[tuple[str, str | None, bytes | Non
             if not _confined_link(path, target):
                 raise ValueError("unsafe deadline capture")
         entries.append((path, mode, data))
+    # A target that passes through another captured file or symlink defeats the lexical
+    # confinement above: `d/up.cjs/../secret` is not `d/secret` when `d/up.cjs` is itself
+    # a link. Every traversed prefix must be a directory, never a captured entry.
+    captured = {path for path, mode, _ in entries if mode is not None}
+    for path, mode, data in entries:
+        if mode != "120000":
+            continue
+        assert data is not None
+        parts: list[str] = list(PurePosixPath(path).parent.parts)
+        for part in PurePosixPath(data.decode()).parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not parts or "/".join(parts) in captured:
+                    raise ValueError("unsafe deadline capture")
+                parts.pop()
+            else:
+                parts.append(part)
+        for depth in range(1, len(parts)):
+            if "/".join(parts[:depth]) in captured:
+                raise ValueError("unsafe deadline capture")
     return entries
 
 

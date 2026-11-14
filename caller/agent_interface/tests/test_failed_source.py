@@ -449,3 +449,37 @@ def test_deadline_unreleased_cleanup_refuses_restore(workspace, monkeypatch):
 
     successor, _, _ = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False, mutate=mutate)
     assert "deadline_restored" not in successor["artifact"]
+
+
+def test_deadline_large_unchanged_file_does_not_veto_capture(workspace, monkeypatch):
+    monkeypatch.setattr(failed_source, "MAX_BYTES", 500)
+    real_prepared = prepared_fixed
+
+    def with_large(checkout, when="2026-01-01T00:00:00+00:00"):
+        receipt = real_prepared(checkout, when)
+        (checkout / "large.cjs").write_text("module.exports='" + "x" * 1500 + "';\n")
+        git(checkout, "add", "large.cjs")
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        subprocess.run(["git", "-C", str(checkout), "-c", "user.name=fixture", "-c", "user.email=fixture@example.test",
+                        "commit", "-qm", "fixture large"], check=True, capture_output=True, env=env)
+        receipt["checkout_head"] = git(checkout, "rev-parse", "HEAD")
+        return receipt
+
+    monkeypatch.setattr(sys.modules[__name__], "prepared_fixed", with_large)
+    provider = "import time, pathlib; pathlib.Path('source.cjs').write_text('module.exports=1;\\n'); time.sleep(5)"
+    original, _ = _run_deadline_original(workspace, monkeypatch, provider)
+    assert original["artifact"]["deadline_source"]["status"] == "available"
+    successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", True)
+    assert successor["artifact"]["deadline_restored"]["predecessor"] == original["id"]
+    assert "source.cjs" in seen["instruction"]
+
+
+def test_deadline_chained_symlink_escape_never_applies(workspace, monkeypatch):
+    provider = ("import time, pathlib, os; pathlib.Path('source.cjs').write_text('module.exports=1;\\n'); "
+                "pathlib.Path('d').mkdir(exist_ok=True); os.symlink('..', 'd/up.cjs'); "
+                "os.symlink('d/up.cjs/../secret', 'escape.cjs'); time.sleep(5)")
+    original, _ = _run_deadline_original(workspace, monkeypatch, provider)
+    assert original["artifact"]["deadline_source"]["status"] == "available"
+    successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
+    assert "deadline_restored" not in successor["artifact"]
+    assert "Restored" not in seen["instruction"]
