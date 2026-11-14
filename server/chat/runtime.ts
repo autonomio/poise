@@ -1806,16 +1806,17 @@ export class ChatRuntime extends EventEmitter {
   private withLive(record: SessionRecord): SessionRecord {
     const live = this.live.get(record.id)
     if (live) {
-      const ownerRequests = record === live.record
+      const ownerRequests = live.pending.size && record === live.record
         ? storage.listPendingRequests(record.id).filter((request) => request.ownerAction).map((request) => request.requestId)
         : record.ownerRequests ?? []
-      record = { ...live.record, pendingRequests: [...live.pending.keys()],
-        ownerRequests: ownerRequests.filter((requestId) => live.pending.has(requestId)) }
+      live.record.pendingRequests = [...live.pending.keys()]
+      live.record.ownerRequests = ownerRequests.filter((requestId) => live.pending.has(requestId))
+      record = live.record
     }
     const queue = this.messageQueue(record.id)
     const timers = timerSummaries(this.instance, record.id)
-    // Live summaries are computed on a copy, never on `live.record`, and
-    // sessions without any read exactly as before.
+    // Queue and timer summaries are computed on a copy. The live record
+    // stays authoritative for callers that update it in place.
     if (!queue.revision && !timers.length) {
       if (record.timers === undefined) return record
       const clean = { ...record }

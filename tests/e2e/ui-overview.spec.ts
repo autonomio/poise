@@ -340,8 +340,8 @@ test('only one worker question asks the owner after the Manager escalates it', a
 })
 
 test('a level brings what it adds into view, or says there is none, and arrow keys keep moving it', async ({ page }) => {
-  const ready = Array.from({ length: 30 }, (_, i) => ({ id: `pr${i}`, kind: 'pr_ready', title: `acme/site#${i} is ready to merge`, body: 'Checks pass.', since: ago(20 + i), due: ago(5), silenceable: true, target: { pullRequest: `https://github.com/acme/site/pull/${i}` } }))
-  const notices = [...ready, { id: 'quota', kind: 'github_quota_warning', title: 'GitHub API quota is low', body: '900 of 5000 left.', since: ago(9), due: ago(9), silenceable: false, target: null }]
+  const requested = Array.from({ length: 30 }, (_, i) => ({ id: `pr${i}`, kind: 'review_requested', title: `acme/site#${i + 1} requested your review`, body: 'A pull request', since: ago(20 + i), due: ago(5), silenceable: true, target: { pullRequest: `https://github.com/acme/site/pull/${i + 1}` } }))
+  const notices = [...requested, { id: 'quota', kind: 'github_quota_warning', title: 'GitHub API quota is low', body: '900 of 5000 left.', since: ago(9), due: ago(9), silenceable: false, target: null }]
   await open(page, { notices, requests: [], decisions: [], revision: 1 })
   const level = (name: string) => answers(page).getByRole('radio', { name })
 
