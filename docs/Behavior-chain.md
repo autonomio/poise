@@ -927,6 +927,12 @@ when retained, or explicit unavailability requiring a fresh reproduction. This
 inspection preserves the earlier failed capture independently of later untested
 edits and grants no publication, retry or approval authority.
 
+While reporting remains unfinished for the current automatic pre-PR hold, the
+existing deferred scheduler rechecks at `checkedAt + 2 minutes`, regardless of
+implementation age. This covers verification before reservation and reconciliation
+of an unconfirmed creation intent without another POST. A verified report or terminal
+disposition returns to the ordinary quiescent cadence; operator holds retain it.
+
 These pre-PR implementation-hold reports require explicit triage before their
 own implementation can prepare or start. A posted issue review alone cannot
 authorize implementation. Through the existing guarded `/api/behavior-chains`
