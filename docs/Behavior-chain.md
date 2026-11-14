@@ -839,13 +839,18 @@ diagnostic operation, phase and timeout in seconds where retained. Missing step
 evidence stays unknown; raw errors, paths and inspection arguments are excluded.
 Both codes reuse the existing review report intent and marker. `submitting_review`
 cannot prove no action even without a returned review ID.
+Native `approve-pr` deadlines use the same two timeout codes, reviewer account,
+`--expected-head` pin and `reviewing` phase, but their approval basis carries
+`reviewRevision` and their durable automatic hold must match the approval
+exhaustion. They file a distinct `approval_budget_exhausted` report intent and
+marker; an earlier review report never covers a current approval hold.
 Before first reporting, the existing datastore freshness gate must pass and a
 new native observation must still require the same phase on that head and basis.
-Stale, unknown or changed findings, heads or PR review contexts leave reporting pending,
-including title, body or base changes on an unchanged head. Other causes remain
-visible in their ordinary holds without an issue report; mixed repair causes or
-review causes outside these two timeouts cannot qualify. Closed or merged targets
-remain ineligible for a new review exhaustion report.
+Stale, unknown or changed findings, heads, PR review contexts or approval bases
+leave reporting pending, including title, body or base changes on an unchanged
+head. Other causes remain visible in their ordinary holds without an issue report;
+mixed repair causes or review causes outside these two timeouts cannot qualify.
+Closed or merged targets remain ineligible for a new review or approval exhaustion report.
 Revoking repository scope during verification prevents publication and leaves the
 creation intent unconsumed, so re-enabling can still report once.
 

@@ -22,7 +22,8 @@ const MERGE_CAUSE = 'merge_submission_uncertain'
 const CLOSED_CAUSE = 'pull_closed_unmerged'
 const IMPLEMENTATION_CAUSE = 'atomic_work_blocked'
 const IMPLEMENTATION_PUBLICATION_CAUSE = 'implementation_publication_uncertain'
-const CAUSES = ['repair_incomplete_replies', 'repair_execution_budget_exhausted', 'review_budget_exhausted', MERGE_CAUSE, CLOSED_CAUSE, IMPLEMENTATION_CAUSE, IMPLEMENTATION_PUBLICATION_CAUSE] as const
+const APPROVAL_CAUSE = 'approval_budget_exhausted'
+const CAUSES = ['repair_incomplete_replies', 'repair_execution_budget_exhausted', 'review_budget_exhausted', APPROVAL_CAUSE, MERGE_CAUSE, CLOSED_CAUSE, IMPLEMENTATION_CAUSE, IMPLEMENTATION_PUBLICATION_CAUSE] as const
 const PREFIX = 'behavior_chain_repair_report:'
 const REPOSITORIES_KEY = 'service_repair_exhaustion_repositories'
 // Caller retains validation reasons wrapped as `atomic behavior failed during
@@ -267,10 +268,11 @@ function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: Cha
     || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS
     || chain.invocations.some(invocation => invocation.state !== 'settled')) return null
   const decision = decideBehaviorChain({ ...chain, held: null,
-    invocations: chain.invocations.filter(invocation => !['repair-pr', 'review-pr'].includes(invocation.behavior) || invocation.evidence?.status === 'completed'),
+    invocations: chain.invocations.filter(invocation => !['repair-pr', 'review-pr', 'approve-pr'].includes(invocation.behavior) || invocation.evidence?.status === 'completed'),
   }, observation, now)
-  if (decision.kind !== 'invoke' || decision.behavior !== 'repair-pr' && decision.behavior !== 'review-pr') return null
+  if (decision.kind !== 'invoke' || decision.behavior !== 'repair-pr' && decision.behavior !== 'review-pr' && decision.behavior !== 'approve-pr') return null
   const review = decision.behavior === 'review-pr'
+  const approval = decision.behavior === 'approve-pr'
   if (review ? !/^[a-f0-9]{64}$/.test(observation.pull.reviewContext ?? '')
     : !/^[a-f0-9]{64}$/.test(observation.pull.reviewRevision)
       || observation.pull.reviewRevision === chainBasis(['datastore-not-yet-indexed', chain.repository, observation.pull.number])) return null
@@ -278,7 +280,7 @@ function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: Cha
     && invocation.basis === decision.basis && invocation.slot === decision.reviewer?.slot
     && invocation.admissionSequence > chain.resumedAfterSequence && invocation.evidence?.status !== 'deferred')
   const original = chain.invocations.at(-1)
-  if (!review && original?.evidence?.error_code === IMPLEMENTATION_CAUSE) {
+  if (decision.behavior === 'repair-pr' && original?.evidence?.error_code === IMPLEMENTATION_CAUSE) {
     const evidence = original.evidence
     const artifact = evidence.artifact as Record<string, unknown> | null | undefined
     const argv = original.request.argv
@@ -311,20 +313,31 @@ function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: Cha
     const artifact = evidence?.artifact as Record<string, unknown> | null | undefined
     const argv = invocation.request.argv
     return !invocation.callId || invocation.state !== 'settled' || invocation.actor !== decision.actor
-      || (review ? !argv.includes('--expected-head') || argv[argv.indexOf('--expected-head') + 1] !== observation.pull!.head
+      || (review || approval ? !argv.includes('--expected-head') || argv[argv.indexOf('--expected-head') + 1] !== observation.pull!.head
         : invocation.request.context?.head !== observation.pull!.head
           || invocation.request.context.reviewRevision !== observation.pull!.reviewRevision
           || !argv.includes('--expected-issue-revision') || argv[argv.indexOf('--expected-issue-revision') + 1] !== observation.issue.revision)
       || evidence?.status !== 'failed' || evidence.action !== 'not_started' || evidence.outcome !== 'preflight_failed'
-      || (review ? artifact?.phase !== 'reviewing' : artifact != null && !['preparing', 'prepared', 'executing'].includes(String(artifact.phase)))
+      || (review || approval ? artifact?.phase !== 'reviewing' : artifact != null && !['preparing', 'prepared', 'executing'].includes(String(artifact.phase)))
       || artifact != null && (artifact.plan_sha != null || artifact.publication_head != null || artifact.replies_started != null)
       || evidence.receipts != null || evidence.review_id != null || evidence.head_sha != null
       || typeof evidence.completedAt !== 'number' || !Number.isFinite(evidence.completedAt) || evidence.completedAt > now
       || !resourceReleaseProven(evidence, true)
   })) return null
+  if (approval) {
+    const last = attempts.at(-1)!
+    const expected = `approve-pr failed before publication three times: ${String(last.evidence?.error || 'native failure')}`
+    if (chain.held !== expected) return null
+    const hold = db.prepare(`SELECT sequence, at, json_extract(payload, '$.reason') AS reason FROM behavior_chain_events
+      WHERE chain_id = ? AND json_extract(payload, '$.type') = 'chain.held' AND sequence > ? ORDER BY sequence DESC LIMIT 1`)
+      .get(chain.id, chain.resumedAfterSequence) as { sequence: number, at: number, reason: string } | undefined
+    if (!hold || hold.sequence <= last.admissionSequence || hold.reason !== expected || hold.at > now) return null
+  }
   // Keep the existing review report identity across both pre-submission timeouts.
-  const cause = review ? attempts.every(invocation => invocation.evidence?.error_code === 'review_budget_exhausted'
-    || invocation.evidence?.error_code === 'review_inspection_timeout') ? 'review_budget_exhausted' : null
+  const timeouts = (invocation: (typeof attempts)[number]) => invocation.evidence?.error_code === 'review_budget_exhausted'
+    || invocation.evidence?.error_code === 'review_inspection_timeout'
+  const cause = review ? attempts.every(timeouts) ? 'review_budget_exhausted' : null
+    : approval ? attempts.every(timeouts) ? APPROVAL_CAUSE : null
     : attempts.every(invocation => invocation.evidence?.error_code === 'atomic_work_execution_budget_exhausted')
     ? 'repair_execution_budget_exhausted'
     : attempts.every(invocation => invocation.evidence?.error_code === 'atomic_work_failed'
@@ -688,10 +701,22 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
     .get(PREFIX + '*', observation.pull!.number, chain.id,
       `${chain.repository.toLowerCase()}#${observation.pull!.number}`) as { key: string, value: string } | undefined
     : qualifying?.cause === 'review_budget_exhausted' ? existingReviewReport(db, chain.repository, observation.pull!.number) : undefined
+  const heldApproval = chain.held?.startsWith('approve-pr failed before publication three times:')
+  const matchingCause = merge ? MERGE_CAUSE : closed ? CLOSED_CAUSE : implementation ? implementationCause : qualifying?.cause
+  // An earlier review report must never stand in for a current approval hold.
+  // Only a verified approval obligation or its own historical report covers it.
+  const fallback = heldApproval && !closed && !merge && !implementation && !qualifying
+    ? intents.find(intent => intent.cause === APPROVAL_CAUSE && intent.stored)
+    : intents.find(intent => intent.stored)
   const intent = linked ? { cause: closed ? CLOSED_CAUSE : 'review_budget_exhausted', key: (JSON.parse(linked.value) as RepairReport).key,
     storageKey: linked.key, stored: linked }
-    : intents.find(intent => intent.cause === (merge ? MERGE_CAUSE : closed ? CLOSED_CAUSE : implementation ? implementationCause : qualifying?.cause)) ?? intents.find(intent => intent.stored)
-  if (!intent) return pendingMerge || !observation.pull ? null : 'Repair exhaustion reporting: hold has no verified repair or PR review exhaustion on the current basis'
+    : intents.find(intent => intent.cause === matchingCause) ?? fallback
+  if (!intent) {
+    if (heldApproval && !closed && !merge && !implementation && !qualifying && observation.pull) {
+      return 'Repair exhaustion reporting: hold has no verified approval exhaustion on the current basis'
+    }
+    return pendingMerge || !observation.pull ? null : 'Repair exhaustion reporting: hold has no verified repair or PR review exhaustion on the current basis'
+  }
   const { cause, key, storageKey, stored } = intent
   const implementationReport = cause === IMPLEMENTATION_PUBLICATION_CAUSE
     || cause === IMPLEMENTATION_CAUSE && key === chainBasis([cause, chain.id])
@@ -849,7 +874,8 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
       if (!enabled(db, chain.repository)) return null
       if (!allowed()) return `${label} report creation is unconfirmed; admissions are paused`
       const review = cause === 'review_budget_exhausted'
-      const reviewCauses = review ? [...new Set(verified!.attempts.map(invocation => invocation.evidence!.error_code))].join(' or ') : null
+      const approval = cause === APPROVAL_CAUSE
+      const timeoutCauses = review || approval ? [...new Set(verified!.attempts.map(invocation => invocation.evidence!.error_code))].join(' or ') : null
       const budget = cause === 'repair_execution_budget_exhausted'
       const age = hold ? Math.max(0, Math.floor((Date.now() - hold.at) / 60_000)) : null
       const evidence = verifiedImplementation?.invocation.evidence ?? verifiedMerge?.invocation.evidence
@@ -897,14 +923,14 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
           : 'Process diagnostic: not recorded in this historical Call receipt; the underlying process cause is unavailable.',
       ] : [
         `Poise is holding https://github.com/${chain.repository}/pull/${report.pull}.`, '',
-        `Stage: ${verified!.decision.behavior}. Cause: ${reviewCauses ?? cause}. Held since ${new Date(hold!.at).toISOString()} (${age} minutes at reporting).`,
+        `Stage: ${verified!.decision.behavior}. Cause: ${timeoutCauses ?? cause}. Held since ${new Date(hold!.at).toISOString()} (${age} minutes at reporting).`,
         `Source: ${chain.id}; hold event ${hold!.sequence}; head ${report.head}; basis ${report.basis}; slot ${report.slot}.`, '',
-        `Verified receipts: three or more settled Caller ${review ? 'PR reviews' : 'repairs'} on this basis after the last Resume. Each failed before ${review ? 'review submission' : 'publication'} with ${review ? `${reviewCauses}, action=not_started, outcome=preflight_failed` : budget ? 'atomic_work_execution_budget_exhausted, action=not_started, outcome=preflight_failed' : 'atomic_work_failed, action=not_started, outcome=preflight_failed and the incomplete-reply validation cause'}; resources were released.`,
+        `Verified receipts: three or more settled Caller ${review ? 'PR reviews' : approval ? 'PR approvals' : 'repairs'} on this basis after the last Resume. Each failed before ${review ? 'review submission' : approval ? 'approval submission' : 'publication'} with ${review || approval ? `${timeoutCauses}, action=not_started, outcome=preflight_failed` : budget ? 'atomic_work_execution_budget_exhausted, action=not_started, outcome=preflight_failed' : 'atomic_work_failed, action=not_started, outcome=preflight_failed and the incomplete-reply validation cause'}; resources were released.`,
       ]
       const body = [marker, '', ...details,
         ...report.attempts.map((attempt, index) => {
           const line = `- Invocation ${attempt.invocation}; Caller ${attempt.call}; completed ${new Date(attempt.completedAt).toISOString()}`
-          if (!review) return `${line}.`
+          if (!review && !approval) return `${line}.`
           const evidence = verified!.attempts[index].evidence!
           return reviewAttemptLine(attempt.invocation, attempt.call, attempt.completedAt, evidence.error_code, evidence.diagnostic as ProcessDiagnostic | undefined)
         }), '',
@@ -917,7 +943,7 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
           ? `Next action: inspect the original Call and worker-reported blocker, address the cause, then explicitly Resume the source chain for a fresh ${implementationReport ? 'implementation' : 'repair'} when appropriate. This report preserves its hold and ownership; it never relaunches ${implementationReport ? 'implementation' : 'repair'} or relaxes review, resource, admission or merge gates.`
           : cause === MERGE_CAUSE
           ? `Next action: inspect the original Call diagnostics and reconcile the PR and merge queue at the pinned head before deciding whether to repair or replace the candidate. The external effect remains unconfirmed. This report retains the original invocation's uncertainty and chain ownership; it never retries the merge or relaxes any review, resource, admission or merge gate.`
-          : `Next action: inspect the ${review ? 'PR review timeouts' : budget ? 'repair execution budget' : 'repair reply validation'} and source receipts, address the cause, then explicitly Resume the source chain when appropriate. This report preserves its hold and does not recover ${review ? 'review' : 'repair'} or relax any review, admission or merge gate.`,
+          : `Next action: inspect the ${review ? 'PR review timeouts' : approval ? 'PR approval timeouts' : budget ? 'repair execution budget' : 'repair reply validation'} and source receipts, address the cause, then explicitly Resume the source chain when appropriate. This report preserves its hold and does not recover ${review ? 'review' : approval ? 'approval' : 'repair'} or relax any review, admission or merge gate.`,
         '', REMEDIATION_SCOPE, '', 'Include this exact paragraph in the linked PR review.',
       ].join('\n')
       await createReport(db, chain.repository, report,
@@ -925,7 +951,7 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
           : cause === IMPLEMENTATION_PUBLICATION_CAUSE ? `fix: uncertain implementation publication for #${chain.issue}`
           : cause === IMPLEMENTATION_CAUSE ? `fix: blocked ${implementationReport ? 'implementation' : 'repair'} for #${implementationReport ? chain.issue : report.pull}`
           : cause === MERGE_CAUSE ? `fix: uncertain merge submission for #${report.pull}`
-          : `fix: ${review ? 'PR review exhausted its time limits' : budget ? 'repair exhausted execution budget' : 'repair exhausted incomplete review replies'} for #${report.pull}`, body)
+          : `fix: ${review ? 'PR review exhausted its time limits' : approval ? 'PR approval exhausted its time limits' : budget ? 'repair exhausted execution budget' : 'repair exhausted incomplete review replies'} for #${report.pull}`, body)
     }
   }
   const last = chain.invocations.at(-1)?.behavior
