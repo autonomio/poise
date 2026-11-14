@@ -975,7 +975,7 @@ not use the gateway's discarded OAuth token.
     verification never writes its credentials back to the canonical sign-in.
     A successful response after the latest rejection clears the condition and
     permits one early review probe through existing admission. Failed
-    verification keeps its bounded, redacted cause in the existing sign-in
+    verification keeps its fixed typed reason in the existing sign-in
     alert and requires another Connect; one completed during a failed
     verification remains eligible. A failed review probe cannot reuse
     old recovery evidence. Successful native reviews on that route also prove

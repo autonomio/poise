@@ -27,7 +27,19 @@ if (args[0] === '--version') {
     importedConfig: fs.existsSync(path.join(home, 'config.toml')),
     importedSessions: fs.existsSync(path.join(home, 'sessions')),
   }) + '\n')
+  const canary = typeof control.canary === 'string' ? control.canary : ''
   const finish = () => {
+    if (!usable && canary && control.leak === 'message' && home !== canonical) {
+      event({ type: 'turn.failed', error: { message: 'Provider rejected login value ' + canary } })
+      process.exitCode = 1
+      return
+    }
+    if (!usable && canary && control.leak === 'stderr' && home !== canonical) {
+      process.stderr.write('Provider rejected login value ' + canary + '\n')
+      event({ type: 'turn.failed', error: { message: 'HTTP 401: missing Authorization credentials.' } })
+      process.exitCode = 1
+      return
+    }
     if (!usable) {
       event({ type: 'turn.failed', error: { message: 'HTTP 401: missing Authorization credentials.\nAuthorization: Bearer fixture-private-value' } })
       process.exitCode = 1

@@ -7,8 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runFile } from '../process'
 import { agentInterfaceCwd, loadCatalog } from '../models'
-import { providerSignInVerificationFailed } from '../alerts/producers'
-import { environmentSecrets, redact } from '../../gateway/src/diagnostics/redaction.mjs'
+import { codexVerificationDetail, providerSignInVerificationFailed, type CodexVerificationReason } from '../alerts/producers'
 import { probeAccount } from './status'
 import { accountLogins, claimProviderVerification, recordObservedSignIn, recordProviderRecovery, releaseProviderVerification } from './logins'
 import { ACCOUNT_IDS, hasRecordedSignIn, type AccountId, type ConnectedAccount } from './types'
@@ -79,6 +78,18 @@ export async function listAccounts(id?: AccountId): Promise<ConnectedAccount[]> 
   })
 }
 
+function classifyCodexVerificationFailure(error: unknown): CodexVerificationReason {
+  const output = error as { stdout?: string, stderr?: string, message?: string }
+  const haystack = [output.stderr, output.stdout,
+    typeof output.message === 'string' ? output.message : (error instanceof Error ? error.message : String(error)),
+  ].filter((part): part is string => typeof part === 'string').join('\n')
+  if (haystack.includes('unavailable to the next Caller worker')) return 'credentials_unavailable'
+  if (/401|unauthorized|missing Authorization|not signed in|not logged in|invalid_grant|refresh_token|authentication[_ ](?:failed|error)|already used|rejected.*(login|credential|auth)|(login|credential).*rejected/i.test(haystack)) {
+    return 'authentication_failed'
+  }
+  return 'verification_incomplete'
+}
+
 async function verifyCodexRecovery(): Promise<void> {
   const failure = claimProviderVerification('codex')
   if (!failure) return
@@ -91,8 +102,9 @@ async function verifyCodexRecovery(): Promise<void> {
     if (!model) throw new Error('The rejected Codex model is absent from the catalog')
     work = await mkdtemp(join(tmpdir(), 'poise-codex-verification-'))
     // Caller owns the worker credential home and tool-free request options.
+    // The probe owns its diagnostics: provider output never reaches Logging.
     const { stdout } = await runFile('agent-interface', ['--verify-codex-login', model.identity, '--pwd', work], {
-      cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 64 * 1024,
+      cwd: agentInterfaceCwd(), timeoutMs: 30_000, maxOutputBytes: 64 * 1024, reportFailure: false,
       env: { CODEX_HOME: process.env.CODEX_HOME, OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined, OPENAI_BASE_URL: undefined },
     })
     const events = stdout.trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
@@ -108,20 +120,10 @@ async function verifyCodexRecovery(): Promise<void> {
     // must still read as older than the verification it did not cause.
     recordProviderRecovery('codex', failure.callId, Date.now())
   } catch (error) {
-    const output = error as { stdout?: string, stderr?: string }
-    let cause = output.stderr?.trim() || String(error)
-    // Codex can report the actual rejection only in its JSON event stream.
-    for (const line of output.stdout?.split('\n') ?? []) {
-      let event: { type?: string, message?: string, error?: { message?: string } | string }
-      try { event = JSON.parse(line) } catch { continue }
-      if (event && ['error', 'turn.failed'].includes(event.type ?? '')) {
-        const message = (typeof event.error === 'string' ? event.error : event.error?.message) || event.message
-        if (typeof message === 'string' && message.trim()) cause = message
-      }
-    }
-    cause = redact(cause, environmentSecrets()).replace(/\s+/g, ' ').slice(0, 500)
-    console.error('[accounts] native Codex sign-in verification failed:', cause)
-    providerSignInVerificationFailed('codex', failure.callId, cause)
+    // Never publish provider text: opaque auth.json values survive redaction.
+    const reason = classifyCodexVerificationFailure(error)
+    console.error('[accounts] native Codex sign-in verification failed:', codexVerificationDetail(reason))
+    providerSignInVerificationFailed('codex', failure.callId, reason)
     releaseProviderVerification('codex', login)
   } finally {
     if (work) await rm(work, { recursive: true, force: true })

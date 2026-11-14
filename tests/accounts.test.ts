@@ -21,6 +21,7 @@ import { PtyProcess } from '../server/terminal/pty'
 import { runFile } from '../server/process'
 import { STATUS, fakeCalls, script, writeFakeClis } from './fixtures/accounts/fake-clis'
 import { fakePresetCommand } from './fixtures/accounts/fake-presets'
+import { loggingRuntime, startLogging, stopLogging } from '../server/logging'
 
 let root = ''
 let bin = ''
@@ -120,9 +121,9 @@ describe('GET /api/accounts', () => {
     await checkedCodex()
     expect(providerSignInFailure('codex')?.verifiedAt).toBeNull()
     expect(consumeProviderRecovery('codex')).toBe(false)
-    expect(codexAlert()?.body).toContain('HTTP 401: missing Authorization credentials')
+    expect(codexAlert()?.body).toContain('Codex rejected the reconnect credentials.')
     expect(codexAlert()?.body).not.toContain('fixture-private-value')
-    expect(errors).toHaveBeenCalledWith('[accounts] native Codex sign-in verification failed:', expect.stringContaining('missing Authorization credentials'))
+    expect(errors).toHaveBeenCalledWith('[accounts] native Codex sign-in verification failed:', 'Codex rejected the reconnect credentials.')
     await checkedCodex()
     const probes = () => requests.mock.calls.filter(([, args]) => args[0] === '--verify-codex-login')
     expect(probes()).toHaveLength(1)
@@ -138,7 +139,7 @@ describe('GET /api/accounts', () => {
     expect(consumeProviderRecovery('codex')).toBe(false)
     const request = probes()[0]
     expect(request[0]).toBe('agent-interface')
-    expect(request[2]).toMatchObject({ timeoutMs: 30_000, maxOutputBytes: 64 * 1024,
+    expect(request[2]).toMatchObject({ timeoutMs: 30_000, maxOutputBytes: 64 * 1024, reportFailure: false,
       env: { OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined, OPENAI_BASE_URL: undefined, CODEX_HOME: process.env.CODEX_HOME } })
     const seen = (await readFile(join(home, 'codex-requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     expect(seen.map(row => row.usable)).toEqual([true, false, true])
@@ -165,6 +166,31 @@ describe('GET /api/accounts', () => {
     expect(providerRecoveryAvailable('codex')).toBe(false)
     expect(codexAlert()?.body).toContain('unavailable to the next Caller worker')
     expect(await readFile(auth, 'utf8')).toBe(before)
+  })
+
+  it.each(['message', 'stderr'] as const)('never publishes an opaque provider credential from the verification %s path', async (leak) => {
+    const canary = `opaque-7f3a9c2e-${leak}-canary-9d4b8f1a`
+    await credentialFixture('store')
+    await writeFile(join(home, 'codex-control.json'), JSON.stringify({ mode: 'store', leak, canary }))
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+    startLogging()
+    try {
+      rejectCodex()
+      await connectCodex()
+      await checkedCodex()
+      expect(providerSignInFailure('codex')?.verifiedAt).toBeNull()
+      const body = codexAlert()?.body ?? ''
+      expect(body).toContain('Codex rejected the reconnect credentials.')
+      expect(body).not.toContain(canary)
+      loggingRuntime()!.flush()
+      const events = loggingRuntime()!.query(store => store.query({ workspace: 'local', operator: false })).events
+      expect(JSON.stringify(events)).not.toContain(canary)
+      expect(events.filter(event => event.operation === 'agent-interface')).toEqual([])
+      expect(events.filter(event => event.operation === 'application.message').map(event => event.message).join('\n'))
+        .toContain('Codex rejected the reconnect credentials.')
+    } finally {
+      await stopLogging()
+    }
   })
 
   it('keeps a second Connect completed during a failed worker probe eligible', async () => {

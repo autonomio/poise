@@ -114,13 +114,25 @@ export function providerSignInVerified(id: AccountId): void {
   record(`the end of the ${id} runtime sign-in alert`, () => resolveAlert(`sign-in:${id}`))
 }
 
-export function providerSignInVerificationFailed(id: AccountId, callId: string, cause: string): void {
+export type CodexVerificationReason = 'authentication_failed' | 'credentials_unavailable' | 'verification_incomplete'
+
+const CODEX_VERIFICATION_DETAIL: Record<CodexVerificationReason, string> = {
+  authentication_failed: 'Codex rejected the reconnect credentials.',
+  credentials_unavailable: 'Codex verification credentials are unavailable to the next Caller worker.',
+  verification_incomplete: 'Codex did not complete the native sign-in verification.',
+}
+
+export function codexVerificationDetail(reason: CodexVerificationReason): string {
+  return CODEX_VERIFICATION_DETAIL[reason]
+}
+
+export function providerSignInVerificationFailed(id: AccountId, callId: string, reason: CodexVerificationReason): void {
   const failure = providerSignInFailure(id)
   if (!failure || failure.callId !== callId || failure.verifiedAt !== null) return
   const name = ACCOUNT_NAMES[id] ?? id
   const dedupeKey = `sign-in:${id}`
   const title = `${name} needs you to sign in again`
-  const body = `${name} reconnect could not be verified by Caller: ${clip(redact(cause, environmentSecrets()), 500)} Connect it again in Settings → Accounts.`
+  const body = `${name} reconnect could not be verified by Caller: ${CODEX_VERIFICATION_DETAIL[reason]} Connect it again in Settings → Accounts.`
   record(`the ${name} reconnect verification failure`, () => {
     raiseAlert({ kind: 'sign_in_needed', dedupeKey, title, body, path: CONNECTED_ACCOUNTS_PATH, target: ACCOUNTS })
     updateAlertDetails(dedupeKey, title, body)
