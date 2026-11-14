@@ -614,13 +614,16 @@ describe('a suite on a test box', () => {
         return
       }
       if (service && jobAction === 'cancel') {
+        if (pendingCancellations) {
+          pendingCancellations.push(res)
+          return
+        }
         const job = jobs.get(jobId)
         if (job) {
           job.status = 'canceled'
           job.child?.kill('SIGKILL')
         }
-        if (pendingCancellations) pendingCancellations.push(res)
-        else res.writeHead(job ? 200 : 404).end()
+        res.writeHead(job ? 200 : 404).end()
         return
       }
       const [, id, action, operation] = /^\/v1\/sandboxes\/([^/]+)\/?([^/]*)\/?(.*)$/.exec(path) ?? []
@@ -1496,17 +1499,28 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
     expect(failed ? warnings : events).toContainEqual(diagnostic)
   })
 
-  it.each([false, true])('discards authenticated late output while job cancellation is pending (cancellation failure: %s)', async (failed) => {
+  it.each(['success', 'failure', 'timeout'] as const)('keeps one cancellation in flight through an orphan sweep and discards authenticated late output (cancellation: %s)', async (outcome) => {
     runJobs = false
-    await startAll({ baseService: 'crn-test' })
+    // Run sweeps explicitly so each finishes while the cancellation response is still held.
+    await startAll({ baseService: 'crn-test', sweepMs: 60_000 })
     const created = await fetch(`${relayUrl}/runs`, { method: 'POST', body: '{"argv":["x"],"cwd":"/","env":{}}', headers: { authorization: `Bearer ${KEY}` } })
     const { id } = await created.json() as { id: string }
     const run = relay.runs.get(id)!
     const output = await fetch(`${relayUrl}/runs/${id}/output`, { headers: { authorization: `Bearer ${KEY}` } })
     await until(() => run.boxId !== null, 'the job to be created')
+    const job = jobs.get(run.boxId!)!
+    const foreign = { ...job, id: 'job-foreign', startCommand: job.startCommand.replace(relayUrl, `https://alice.elsewhere.example${TEST_RELAY_PATH}`) }
+    jobs.set(foreign.id, foreign)
+    const requests = vi.spyOn(globalThis, 'fetch')
+    const cancelUrl = `${renderOrigin}/v1/services/crn-test/jobs/${job.id}/cancel`
+    const deadline = new AbortController()
+    const timeout = outcome === 'timeout' ? vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(deadline.signal) : null
     pendingCancellations = []
     await output.body!.cancel()
     await until(() => relay.runs.size === 0 && pendingCancellations!.length > 0, 'retirement before cancellation answers', 3_000)
+    await relay['sweep'](Date.now(), true)
+    expect(job.status).toBe('running')
+    expect(requests.mock.calls.filter(([url]) => String(url).endsWith('/cancel')).map(([url]) => url)).toEqual([cancelUrl])
     expect(pendingCancellations).toHaveLength(1)
     expect(events).toContainEqual(expect.objectContaining({ event: 'test_relay.run.killed', id, error: 'the workspace went away' }))
     const write = vi.spyOn(run.output!, 'write')
@@ -1522,12 +1536,23 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
     expect(warnings.filter(({ event }) => event === 'test_relay.request.failed')).toEqual([])
     expect(events).not.toContainEqual(expect.objectContaining({ event: 'test_relay.job.cancel', jobId: run.boxId }))
     const [cancellation] = pendingCancellations
-    pendingCancellations = null
-    if (failed) cancellation.destroy()
+    if (outcome === 'timeout') {
+      expect(timeout).toHaveBeenCalledWith(10_000)
+      deadline.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    } else if (outcome === 'failure') cancellation.destroy()
     else cancellation.writeHead(200).end()
+    const failed = outcome !== 'success'
     await until(() => [...events, ...warnings].some(({ event, jobId }) => jobId === run.boxId && event === (failed ? 'test_relay.job.cancel.failed' : 'test_relay.job.cancel')), 'the cancellation diagnostic', 3_000)
-    if (failed) expect(warnings).toContainEqual({ event: 'test_relay.job.cancel.failed', jobId: run.boxId, error: 'fetch failed' })
-    else expect(events).toContainEqual({ event: 'test_relay.job.cancel', jobId: run.boxId, status: 200 })
+    if (failed) {
+      expect(warnings).toContainEqual({ event: 'test_relay.job.cancel.failed', jobId: run.boxId, error: outcome === 'timeout' ? 'The operation was aborted due to timeout' : 'fetch failed' })
+      expect(events).not.toContainEqual(expect.objectContaining({ event: 'test_relay.job.cancel', jobId: run.boxId }))
+    } else expect(events).toContainEqual({ event: 'test_relay.job.cancel', jobId: run.boxId, status: 200 })
+    expect(job.status).toBe('running')
+    pendingCancellations = null
+    await relay['sweep'](Date.now(), true)
+    await until(() => job.status === 'canceled', 'a later sweep to retry cancellation', 3_000)
+    expect(requests.mock.calls.filter(([url]) => String(url).endsWith('/cancel')).map(([url]) => url)).toEqual([cancelUrl, cancelUrl])
+    expect(foreign.status).toBe('running')
   })
 
   it('limits retirement evidence to owner cleanup and authenticated late output, and evicts it without occupying admission slots', async () => {
