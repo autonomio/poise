@@ -302,6 +302,39 @@ async function exhaustedReviews(journal: BehaviorChainJournal,
   if (decision.kind !== 'hold') throw new Error('Fixture must exhaust its PR review attempts')
   return record(journal, chain, { type: 'chain.held', reason: decision.reason })
 }
+async function exhaustedApprovals(journal: BehaviorChainJournal,
+  failures: Array<Pick<LogEntry, 'error' | 'error_code' | 'diagnostic'> & { callId?: string }> = REVIEW_ERRORS.map(error => ({ error, error_code: 'review_budget_exhausted' }))) {
+  fresh = { ...observation(), prReviewers: [] }
+  fresh.pull!.changesRequested = false
+  fresh.pull!.unresolved = 0
+  let chain = journal.read('acme/repo#7') ?? journal.append('acme/repo#7', 'seed:7', 0, { type: 'chain.admitted', repository: 'acme/repo', issue: 7,
+    branch: 'poise/issue-7', author: 'author', reviewer: 'reviewer' }, NOW - 600_000)
+  chain = record(journal, chain, { type: 'chain.observed', observation: { ...fresh, checkedAt: NOW - 600_000 } })
+  const native = nativeChainOperations({ login: 'acme' } as Organization, {
+    roster: async () => fresh, resolve: async () => reviewer, prepare: async () => ({}), borrow: () => null,
+    available: () => true, capacity: () => 3, permitted: () => true, note: () => '', severity: () => 'p2',
+    received: () => {}, reviews: async () => '', existing: async () => new Set(), wake: () => {},
+  })
+  for (const [index, failure] of failures.entries()) {
+    const decision = decideBehaviorChain(chain, fresh, NOW)
+    if (decision.kind !== 'invoke' || decision.behavior !== 'approve-pr') throw new Error('Fixture must need PR approval')
+    const id = `approval-7-${chain.resumedAfterSequence}-${index}`
+    const request = await native.request(chain, fresh, decision, id)
+    if (!request) throw new Error('Fixture must prepare a native PR approval')
+    chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id, behavior: decision.behavior,
+      basis: decision.basis, actor: decision.actor, slot: reviewer.slot, model: reviewer.model,
+      admittedAt: NOW - 500_000 + index * 100_000, request } })
+    chain = record(journal, chain, { type: 'invocation.settled', invocationId: id, callId: failure.callId ?? chainBasis(id).slice(0, 32),
+      outcome: 'preflight_failed', evidence: { status: 'failed', error_code: failure.error_code, error: failure.error,
+        ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
+        action: 'not_started', outcome: 'preflight_failed', completedAt: NOW - 400_000 + index * 100_000,
+        head_sha: null, review_id: null, receipts: null, artifact: { phase: 'reviewing' },
+        resources_settled_at: new Date(NOW - 100_000).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
+  }
+  const decision = decideBehaviorChain(chain, fresh, NOW)
+  if (decision.kind !== 'hold') throw new Error('Fixture must exhaust its PR approval attempts')
+  return record(journal, chain, { type: 'chain.held', reason: decision.reason })
+}
 function operations(db: Database.Database, journal: BehaviorChainJournal, overrides: Partial<ChainRuntimeOperations> = {}): ChainRuntimeOperations {
   const forbidden = async () => { throw new Error('Fixture must not start native work') }
   const intake = nativeChainOperations({ login: 'acme' } as Organization, {
@@ -2488,6 +2521,107 @@ it.each(['operator hold', 'changed basis', 'provider-only', 'submitting_review p
     expect(reports(db)).toHaveLength(0)
     expect(journal.read(chain.id)?.held).toBe(chain.held)
   })
+
+it('reports three native PR approval deadlines once after an earlier review report, surviving lost acknowledgement and restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'approval-report-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  const initial = setup(path)
+  const reviewExhausted = await exhaustedReviews(initial.journal)
+  const reviewOverrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }) }
+  await new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, reviewOverrides)).run()
+  expect(posts()).toHaveLength(1)
+  expect(remote[0].title).toContain('review')
+  const reviewKey = chainBasis(['review_budget_exhausted', reviewExhausted.id, 21])
+  expect(remote[0].body).toContain(`<!-- poise-repair-exhaustion:${reviewKey} -->`)
+  const resumed = record(initial.journal, initial.journal.read(reviewExhausted.id)!, { type: 'chain.resumed' })
+  const source = await exhaustedApprovals(initial.journal)
+  expect(source.resumedAfterSequence).toBe(resumed.sequence)
+  expect(source.invocations).toHaveLength(6)
+  const approvals = source.invocations.slice(3)
+  for (const invocation of approvals) {
+    expect(invocation).toMatchObject({ behavior: 'approve-pr', actor: 'reviewer', slot: 'primary' })
+    expect(invocation.request.context).toBeUndefined()
+    expect(invocation.request.argv[0]).toBe('--pr-approve')
+    expect(invocation.request.argv).not.toContain('--expected-issue-revision')
+    expect(invocation.request.argv[invocation.request.argv.indexOf('--expected-head') + 1]).toBe(HEAD)
+  }
+  expect(source.held).toContain('approve-pr failed before publication three times')
+  loseCreation = true
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }) }
+  const runtime = new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, overrides))
+  await runtime.run()
+  expect(posts()).toHaveLength(2)
+  const stored = reports(initial.db).map(row => JSON.parse(row.value))
+  expect(stored).toHaveLength(2)
+  const approvalKey = chainBasis(['approval_budget_exhausted', source.id, 21])
+  expect(approvalKey).not.toBe(reviewKey)
+  const approvalIntent = stored.find(report => report.key === approvalKey)!
+  expect(approvalIntent).toMatchObject({ source: source.id, pull: 21, holdSequence: source.sequence, head: HEAD,
+    basis: approvals[0].basis, slot: 'primary', issueNumber: null })
+  expect(remote[1].labels).toEqual([{ name: 'poise' }])
+  expect(remote[1].title).toContain('approval')
+  expect(remote[1].body).toContain('Stage: approve-pr. Cause: review_budget_exhausted.')
+  expect(remote[1].body).toContain('PR approvals on this basis')
+  expect(remote[1].body).toContain('approval submission with review_budget_exhausted, action=not_started, outcome=preflight_failed')
+  expect(remote[1].body).toContain('Next action: inspect the PR approval timeouts and source receipts')
+  expect(remote[1].body).toContain('does not recover approval or relax any review, admission or merge gate')
+  expect(remote[1].body).toContain(`hold event ${source.sequence}; head ${HEAD}; basis ${approvals[0].basis}; slot primary`)
+  for (const invocation of approvals) expect(remote[1].body).toContain(`Invocation ${invocation.id}; Caller ${invocation.callId}; completed`)
+  for (const invocation of reviewExhausted.invocations) expect(remote[1].body).not.toContain(invocation.id)
+  for (const error of REVIEW_ERRORS) expect(remote[1].body).not.toContain(error)
+  expect(remote[1].body.split(REMEDIATION_SCOPE)).toHaveLength(2)
+  expect(remote[1].body.endsWith('Include this exact paragraph in the linked PR review.')).toBe(true)
+  expect(remote[1].body).toContain(`<!-- poise-repair-exhaustion:${approvalKey} -->`)
+  expect(initial.journal.read(source.id)).toMatchObject({ held: source.held, resumedAfterSequence: resumed.sequence, invocations: source.invocations })
+  await runtime.run()
+  expect(posts()).toHaveLength(2)
+  initial.db.close(); databases.splice(databases.indexOf(initial.db), 1)
+  const { db, journal } = setup(path)
+  journal.rebuild()
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(posts()).toHaveLength(2)
+  const reconciled = reports(db).map(row => JSON.parse(row.value))
+  expect(reconciled.find(report => report.key === reviewKey)).toMatchObject({ issueNumber: 99 })
+  expect(reconciled.find(report => report.key === approvalKey)).toMatchObject({ issueNumber: 100 })
+  expect(journal.read(source.id)).toMatchObject({ held: source.held, resumedAfterSequence: resumed.sequence, invocations: source.invocations })
+  expect(decideBehaviorChain(journal.read(source.id)!, { ...fresh, checkedAt: Date.now() }, Date.now())).toMatchObject({ kind: 'wait', reason: source.held })
+  const retried = record(journal, journal.read(source.id)!, { type: 'chain.resumed' })
+  expect(decideBehaviorChain(retried, { ...fresh, checkedAt: Date.now() }, Date.now())).toMatchObject({ kind: 'invoke', behavior: 'approve-pr' })
+})
+
+it.each(['changed head', 'changed approval basis', 'operator hold', 'missing release', 'possible submission'])('does not report unverified PR approval exhaustion: %s', async change => {
+  const { db, journal } = setup()
+  const reviewExhausted = await exhaustedReviews(journal)
+  await operations(db, journal).reportHold!(record(journal, reviewExhausted, { type: 'chain.observed', observation: { ...fresh, checkedAt: Date.now() } }))
+  expect(posts()).toHaveLength(1)
+  record(journal, journal.read(reviewExhausted.id)!, { type: 'chain.resumed' })
+  const chain = structuredClone(await exhaustedApprovals(journal))
+  chain.observation = structuredClone(fresh)
+  const attempt = chain.invocations[4]
+  if (change === 'changed head') fresh.pull!.head = 'b'.repeat(40)
+  if (change === 'changed approval basis') fresh.pull!.reviewRevision = chainBasis('edited findings')
+  if (change === 'operator hold') chain.held = 'operator stop'
+  if (change === 'missing release') attempt.evidence!.resources_settled_at = null
+  if (change === 'possible submission') attempt.evidence!.review_id = 123
+  const waiting = await operations(db, journal).reportHold!(chain)
+  expect(posts()).toHaveLength(1)
+  expect(reports(db)).toHaveLength(1)
+  expect(JSON.parse(reports(db)[0].value).key).toBe(chainBasis(['review_budget_exhausted', reviewExhausted.id, 21]))
+  if (change === 'operator hold') {
+    expect(journal.read(chain.id)?.held).toContain('approve-pr failed before publication three times')
+    expect(waiting).toContain('https://github.com/acme/repo/issues/99')
+  } else {
+    expect(journal.read(chain.id)?.held).toBe(chain.held)
+    if (change === 'changed head' || change === 'changed approval basis') {
+      expect(waiting).toContain('review basis no longer verifies')
+      expect(waiting).not.toContain('https://github.com/acme/repo/issues/99')
+    } else {
+      expect(waiting).toContain('no verified approval exhaustion')
+      expect(waiting).not.toContain('https://github.com/acme/repo/issues/99')
+    }
+  }
+})
 
 it.each(['incomplete replies', 'execution budget', 'review budget', 'implementation hold'])('carries the recorded %s report policy only to its closing remediation PR', async mode => {
   const { db, journal } = setup()
