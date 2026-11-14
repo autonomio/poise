@@ -503,16 +503,24 @@ function qualifyingImplementationHold(db: Database, chain: BehaviorChain, observ
     ? { invocation, call: invocation.callId, hold } : null
 }
 
+function implementationReportIdentity(report: RepairReport, storageKey = PREFIX + report.key): boolean {
+  const keys = report.pull === null ? [chainBasis([IMPLEMENTATION_CAUSE, report.source]),
+    ...(report.attempts.length === 1 && Number.isSafeInteger(report.holdSequence) && Number(report.holdSequence) > 0
+      ? [chainBasis([IMPLEMENTATION_CAUSE, report.source, report.attempts[0].invocation, report.holdSequence])] : [])]
+    : [chainBasis([IMPLEMENTATION_CAUSE, report.source, report.pull])]
+  if (keys.some(key => storageKey === PREFIX + key) && storageKey !== PREFIX + report.key) {
+    throw new Error('Blocked report conflicts with its durable source intent')
+  }
+  return storageKey === PREFIX + report.key && keys.includes(report.key)
+}
+
 function implementationReport(db: Database, chain: BehaviorChain): RepairReport | null {
   const rows = db.prepare(`SELECT key, value FROM meta WHERE key GLOB ?
     AND json_extract(value, '$.source') GLOB ? AND json_extract(value, '$.issueNumber') = ?`)
     .all(PREFIX + '*', chain.repository.toLowerCase() + '#*', chain.issue) as Array<{ key: string, value: string }>
   const reports = rows.filter(row => {
     const report = JSON.parse(row.value) as RepairReport
-    const key = report.pull === null ? chainBasis([IMPLEMENTATION_CAUSE, report.source])
-      : chainBasis([IMPLEMENTATION_CAUSE, report.source, report.pull])
-    if (row.key === PREFIX + key && report.key !== key) throw new Error('Blocked report conflicts with its durable source intent')
-    return row.key === PREFIX + report.key && report.key === key
+    return implementationReportIdentity(report, row.key)
   }).map(row => JSON.parse(row.value) as RepairReport)
   if (reports.length > 1) throw new Error('Blocked report has conflicting source intents')
   return reports[0] ?? null
@@ -532,10 +540,7 @@ function unconfirmedImplementationReports(db: Database, repository: string): Rep
     .all(PREFIX + '*', repository.toLowerCase() + '#*') as Array<{ key: string, value: string }>
   return rows.flatMap(row => {
     const report = JSON.parse(row.value) as RepairReport
-    const key = report.pull === null ? chainBasis([IMPLEMENTATION_CAUSE, report.source])
-      : chainBasis([IMPLEMENTATION_CAUSE, report.source, report.pull])
-    if (row.key === PREFIX + key && report.key !== key) throw new Error('Blocked report conflicts with its durable source intent')
-    return row.key === PREFIX + report.key && report.key === key ? [report] : []
+    return implementationReportIdentity(report, row.key) ? [report] : []
   })
 }
 
@@ -547,10 +552,8 @@ function boundImplementationSource(db: Database, journal: BehaviorChainJournal, 
     .get(report.source) as { sequence: number } | undefined
   const accounts = getSettings()
   const repair = report.pull !== null
-  const key = repair ? chainBasis([IMPLEMENTATION_CAUSE, report.source, report.pull])
-    : chainBasis([IMPLEMENTATION_CAUSE, report.source])
   const argv = invocation?.request.argv ?? []
-  if (!source || report.key !== key || report.attempts.length !== 1
+  if (!source || !implementationReportIdentity(report) || report.attempts.length !== 1
     || repair !== (report.head !== null)
     || repair && (!Number.isSafeInteger(report.pull) || Number(report.pull) < 1 || !/^[a-f0-9]{40}$/i.test(report.head ?? ''))
     || !hold || hold.sequence !== report.holdSequence || source.resumedAfterSequence >= hold.sequence
@@ -666,6 +669,33 @@ export async function implementationReportAdmission(db: Database, journal: Behav
     if (!report) return { reason: null }
   }
   const wait = report.pull === null ? implWait : repairWait
+  if (report.pull === null && report.key !== chainBasis([IMPLEMENTATION_CAUSE, report.source])) {
+    // Scoped intents can also link an independently authored blocked-by remedy.
+    // Only positive markerless remedy evidence exempts it from report triage.
+    const source = boundImplementationSource(db, journal, chain, report)
+    const failure = source && prePrFileAndTest(source.invocations.at(-1)?.evidence?.error)
+    try {
+      const issue = await reconcileRepairReport(chain.repository, `<!-- poise-repair-exhaustion:${report.key} -->`, report.issueNumber,
+        false, failure ? (body, author) => [chain.author.toLowerCase(), chain.reviewer.toLowerCase()].includes(author.toLowerCase())
+          && !REPORT_MARKER.test(body) && body.includes(failure.file) && body.includes(failure.test) : undefined)
+      if (!issue) return { reason: `${wait}: report or linked remedy identity is unverified` }
+      if (!REPORT_MARKER.test(issue.body)) {
+        if (!source) return { reason: `${wait}: original source hold or Call changed` }
+        const fresh = await observe(source)
+        const deps = fresh.prerequisites?.evidence?.[0] as { repo?: unknown, number?: unknown,
+          found?: unknown, complete?: unknown, prerequisites?: Array<{ repo?: unknown, number?: unknown }> } | undefined
+        if (issue.state === 'open' && chainBasis([issue.title, issue.body]) === observation.issue.revision
+          && typeof deps?.repo === 'string' && deps.repo.toLowerCase() === source.repository.toLowerCase() && deps.number === source.issue
+          && deps.found === true && deps.complete === true && Array.isArray(deps.prerequisites)
+          && deps.prerequisites.some(entry => typeof entry?.repo === 'string'
+            && entry.repo.toLowerCase() === chain.repository.toLowerCase() && entry.number === chain.issue)
+          && journal.read(source.id)?.sequence === source.sequence) return { reason: null }
+        return { reason: `${wait}: linked remedy source evidence changed` }
+      }
+    } catch (error) {
+      return { reason: `${wait}: verification unavailable: ${behaviorErrorMessage(error instanceof Error ? error.message : String(error), 500)}` }
+    }
+  }
   const disposition = report.disposition
   const allowed = report.pull === null ? ['source-only', 'distinct-fix'] : ['existing-remedy', 'distinct-fix']
   if (!disposition || !allowed.includes(disposition.kind)
@@ -980,18 +1010,11 @@ function prePrReports(db: Database, chainId: string) {
  * can reopen that intent for another POST. Intake remains the normal reader. */
 export async function reportRepairExhaustion(db: Database, journal: BehaviorChainJournal, chain: BehaviorChain,
   verify: () => Promise<ChainObservation>, allowed: () => boolean): Promise<string | null> {
-  const retained = db.prepare('SELECT value FROM meta WHERE key = ?')
-    .get(PREFIX + chainBasis([IMPLEMENTATION_CAUSE, chain.id])) as { value: string } | undefined
-  if (retained) {
-    const report = JSON.parse(retained.value) as RepairReport
-    const target = report.issueNumber && journal.read(chainIdentity(chain.repository, report.issueNumber))
-    if (report.disposition && target && boundImplementationSource(db, journal, target, report)) return dispositionReason(target, report)
-  }
-  const repairRows = db.prepare(`SELECT value FROM meta WHERE key GLOB ? AND json_extract(value, '$.source') = ?`)
-    .all(PREFIX + '*', chain.id) as Array<{ value: string }>
+  const repairRows = db.prepare(`SELECT key, value FROM meta WHERE key GLOB ? AND json_extract(value, '$.source') = ?`)
+    .all(PREFIX + '*', chain.id) as Array<{ key: string, value: string }>
   for (const row of repairRows) {
     const repair = JSON.parse(row.value) as RepairReport
-    if (repair.pull === null || repair.key !== chainBasis([IMPLEMENTATION_CAUSE, repair.source, repair.pull])) continue
+    if (!implementationReportIdentity(repair, row.key)) continue
     const target = repair.issueNumber && journal.read(chainIdentity(chain.repository, repair.issueNumber))
     if (repair.disposition && target && boundImplementationSource(db, journal, target, repair)) return dispositionReason(target, repair)
   }
