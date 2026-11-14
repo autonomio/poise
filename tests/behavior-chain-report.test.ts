@@ -233,6 +233,33 @@ function blockedImplementation(journal: BehaviorChainJournal, invocationId?: str
     resources_settled_at: new Date(NOW - 100_000).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } }
   return { chain, call }
 }
+function budgetImplementation(journal: BehaviorChainJournal, count = 3) {
+  fresh = unpublished()
+  let chain = journal.read('acme/repo#7') ?? journal.append('acme/repo#7', 'seed:7', 0,
+    { type: 'chain.admitted', repository: 'acme/repo', issue: 7, branch: 'poise/issue-7', author: 'author', reviewer: 'reviewer' }, NOW - 600_000)
+  chain = record(journal, chain, { type: 'chain.observed', observation: { ...fresh, checkedAt: NOW - 600_000 } })
+  const basis = chainBasis(['issue', fresh.issue.revision])
+  for (let index = 0; index < count; index++) {
+    const id = `implementation-7-${chain.resumedAfterSequence}-${index}`
+    chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id, behavior: 'implement-issue',
+      basis, actor: chain.author, slot: reviewer.slot, model: reviewer.model,
+      admittedAt: NOW - 500_000 + index * 100_000,
+      request: { command: 'agent-interface', cwd: '/fixture',
+        argv: ['--atomic-work', chain.id, '--expected-issue-revision', fresh.issue.revision] } } })
+    chain = record(journal, chain, { type: 'invocation.settled', invocationId: id, callId: chainBasis(id).slice(0, 32),
+      outcome: BUDGET_CODE,
+      evidence: { status: 'failed', action: 'not_started', outcome: 'preflight_failed', error_code: BUDGET_CODE,
+        error: BUDGET_ERRORS[index % BUDGET_ERRORS.length],
+        completedAt: NOW - 400_000 + index * 100_000, head_sha: null,
+        artifact: { phase: 'executing', prepared: { checkout_head: HEAD }, resource_root: '/private/work' },
+        resources_settled_at: new Date(NOW - 100_000).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
+  }
+  if (count >= 3) {
+    return record(journal, chain, { type: 'chain.held',
+      reason: `implement-issue failed before publication three times: ${BUDGET_ERRORS[(count - 1) % BUDGET_ERRORS.length]}` })
+  }
+  return chain
+}
 function uncertainImplementation(journal: BehaviorChainJournal) {
   const fixture = blockedImplementation(journal, '104dbf93-4dfd-489e-90c4-a5f7447fa8bc')
   Object.assign(fixture.call, { id: 'a0dc866e144840b2a7ea923306913c49', action: null, outcome: null,
@@ -1402,6 +1429,68 @@ it.each(['operator hold', 'Resume'])('rechecks the implementation hold before re
       : { type: 'chain.held', reason: 'New invocations held by the person' })
     return fresh
   }, () => true)
+  expect(posts()).toHaveLength(0)
+  expect(reports(db)).toHaveLength(0)
+})
+
+it('reports three terminal implementation timeouts once and reuses across restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'implementation-budget-report-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  const initial = setup(path)
+  const source = budgetImplementation(initial.journal, 3)
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }) }
+  await new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, overrides)).run()
+  expect(posts()).toHaveLength(1)
+  expect(remote[0]).toMatchObject({ title: 'fix: implementation exhausted execution budget for #7', labels: [{ name: 'poise' }] })
+  const key = chainBasis(['implementation_execution_budget_exhausted', source.id])
+  for (const fact of [`<!-- poise-repair-exhaustion:${key} -->`,
+    'https://github.com/acme/repo/issues/7',
+    'Stage: implement-issue. Cause: implementation_execution_budget_exhausted.',
+    `Source: ${source.id}; hold event ${source.sequence}; basis ${source.invocations[0].basis}; slot primary`,
+    'three settled original Caller implementations',
+    'atomic_work_execution_budget_exhausted, action=not_started, outcome=preflight_failed',
+    'No publication plan, result or receipts, pushed branch, bound PR or competing linked work was observed.',
+    `Invocation ${source.invocations[0].id}`, `Caller ${source.invocations[0].callId}`,
+    `Invocation ${source.invocations[2].id}`, `Caller ${source.invocations[2].callId}`,
+    'Next action: inspect the implementation execution budget',
+    'explicitly Resume', 'never relaunches implementation',
+    REMEDIATION_SCOPE]) {
+    expect(remote[0].body).toContain(fact)
+  }
+  expect(remote[0].body.split(REMEDIATION_SCOPE)).toHaveLength(2)
+  expect(remote[0].body.endsWith('Include this exact paragraph in the linked PR review.')).toBe(true)
+  expect(reports(initial.db).map(row => JSON.parse(row.value))).toMatchObject([{ source: source.id, pull: null, head: null,
+    basis: source.invocations[0].basis, slot: 'primary',
+    attempts: source.invocations.map(invocation => ({ invocation: invocation.id, call: invocation.callId })), issueNumber: 99 }])
+  initial.db.close(); databases.splice(databases.indexOf(initial.db), 1)
+  const { db, journal } = setup(path)
+  journal.rebuild()
+  for (let pass = 0; pass < 2; pass++) {
+    vi.setSystemTime(Date.now() + 86_400_000)
+    await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+    expect(journal.read(source.id)).toMatchObject({ held: source.held, invocations: source.invocations })
+    expect(reports(db)).toHaveLength(1)
+    expect(posts()).toHaveLength(1)
+  }
+})
+
+it('does not report a single implementation timeout while retry remains', async () => {
+  const { db, journal } = setup()
+  const chain = budgetImplementation(journal, 1)
+  chain.observation = { ...fresh, checkedAt: Date.now() }
+  await operations(db, journal).reportHold!(chain)
+  expect(posts()).toHaveLength(0)
+  expect(reports(db)).toHaveLength(0)
+  expect(journal.read(chain.id)).toMatchObject({ held: null, invocations: [{ state: 'settled' }] })
+})
+
+it('does not report three implementation timeouts with write evidence', async () => {
+  const { db, journal } = setup()
+  const chain = structuredClone(budgetImplementation(journal, 3))
+  chain.observation = { ...fresh, checkedAt: Date.now() }
+  const artifact = chain.invocations[1].evidence!.artifact as Record<string, unknown>
+  artifact.result = { outcome: 'published' }
+  await operations(db, journal).reportHold!(chain)
   expect(posts()).toHaveLength(0)
   expect(reports(db)).toHaveLength(0)
 })

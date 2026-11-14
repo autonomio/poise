@@ -908,6 +908,16 @@ when retained, or explicit unavailability requiring a fresh reproduction. This
 inspection preserves the earlier failed capture independently of later untested
 edits and grants no publication, retry or approval authority.
 
+Before a PR, `implementation_execution_budget_exhausted` separately qualifies three settled original
+`implement-issue` timeout receipts after the last Resume. Each must retain `status=failed`,
+`action=not_started`, `outcome=preflight_failed`, `error_code=atomic_work_execution_budget_exhausted`,
+the pre-publication `executing` artifact and positive resource-release proof, without a publication
+plan, result or receipts, on the current seed revision, actor and slot. The durable automatic hold
+must be the exact three-failure hold for the last receipt; a later operator Hold excludes it. A fresh
+open, eligible seed must still verify no pushed branch, bound PR or competing linked work. Its identity
+is the new cause plus the source chain. A single timeout with retry remaining and any write evidence
+do not qualify.
+
 For `repair-pr`, `atomic_work_blocked` also qualifies one settled original Call
 under its matching active automatic hold after the last Resume. The same
 no-publication and positive resource-release proof is required, with fresh
