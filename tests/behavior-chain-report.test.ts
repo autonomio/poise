@@ -3535,3 +3535,89 @@ it('does not adopt or label a marker issue authored by another account', async (
   expect(posts()).toHaveLength(0)
   expect(reports(db)).toHaveLength(0)
 })
+
+function blockedSecondaryRepairWithReview(journal: BehaviorChainJournal) {
+  const secondary = { slot: 'secondary', model: 'fixture', recovery: 'fixture' }
+  const primary = { slot: 'primary', model: 'fixture', recovery: 'fixture' }
+  fresh = observation()
+  fresh.prReviewers = [primary]
+  fresh.repairer = secondary
+  const reviewCall = completedReviewCall('acme/repo', 21, HEAD, 'reviewer')
+  reviewCall.action = 'requested_changes'
+  reviewCall.outcome = 'changes_requested'
+  const response = reviewCall.artifact!.review_response as Record<string, unknown>
+  fresh.pull!.reviewContext = response.context_sha as string
+  fresh.pull!.reviewIds = [reviewCall.review_id!]
+  fresh.pull!.reviewReceipts = [{ id: reviewCall.review_id!, head: HEAD, state: 'CHANGES_REQUESTED',
+    invocation: reviewCall.id, response, submittedAt: Date.parse(reviewCall.completed_at!) }]
+  let chain = openSeed(journal)
+  chain = record(journal, chain, { type: 'chain.observed', observation: { ...fresh, checkedAt: NOW - 600_000 } })
+  const reviewBasis = chainBasis(['pr', HEAD, response.context_sha])
+  chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id: 'original-review',
+    behavior: 'review-pr', basis: reviewBasis, actor: 'reviewer', slot: 'primary', model: 'fixture',
+    admittedAt: Date.parse(reviewCall.started_at),
+    request: { command: 'agent-interface', cwd: '/fixture',
+      argv: ['--pr-review', 'https://github.com/acme/repo/pull/21', '--expected-head', HEAD] } } })
+  chain = record(journal, chain, { type: 'invocation.settled', invocationId: 'original-review',
+    callId: reviewCall.id, outcome: 'changes_requested',
+    evidence: { status: 'completed', action: 'requested_changes', outcome: 'changes_requested',
+      review_id: reviewCall.review_id, head_sha: HEAD, completedAt: Date.parse(reviewCall.completed_at!),
+      artifact: reviewCall.artifact,
+      resources_settled_at: new Date(NOW - 100_000).toISOString(),
+      resource_ownership: { version: 1, roots: [], errors: [] } } })
+  const decision = decideBehaviorChain(chain, fresh, NOW)
+  if (decision.kind !== 'invoke' || decision.behavior !== 'repair-pr') throw new Error('Fixture must need secondary repair')
+  if (decision.reviewer?.slot !== 'secondary') throw new Error('Fixture must use the secondary repair slot')
+  const id = 'original-blocked-repair'
+  chain = record(journal, chain, { type: 'invocation.admitted', invocation: { id, behavior: 'repair-pr',
+    basis: decision.basis, actor: 'author', slot: 'secondary', model: 'fixture', admittedAt: NOW - 300_000,
+    request: { command: 'agent-interface', cwd: '/fixture',
+      argv: ['--atomic-work', chain.id, '--pull-number', '21', '--expected-head', HEAD,
+        '--expected-issue-revision', fresh.issue.revision],
+      context: { head: HEAD, reviewRevision: fresh.pull!.reviewRevision } } } })
+  chain = record(journal, chain, { type: 'invocation.started', invocationId: id })
+  const call: LogEntry = { id: '09bfede268214c4caa6e0237f99e5f17', correlation_id: id, model: 'fixture',
+    behavior: 'repair_pr', source: 'poise:behavior-chain', actor: 'author', repo: 'acme/repo', pr_id: '21',
+    session_id: null, prompt: '', started_at: new Date(NOW - 300_000).toISOString(),
+    completed_at: new Date(NOW - 120_000).toISOString(), time_elapsed: '3m', status: 'failed',
+    action: 'not_started', outcome: 'preflight_failed', error_code: 'atomic_work_blocked',
+    error: 'atomic behavior blocked: Caller suite completed with failures; assertion details unavailable',
+    head_sha: null, expected_head: HEAD, response: null, receipts: null, review_id: null,
+    artifact: { phase: 'executing', prepared: { checkout_head: HEAD }, resource_root: '/private/work' },
+    resources_settled_at: new Date(NOW - 100_000).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } }
+  return { chain, call }
+}
+
+it('reports a settled secondary repair hold with its retained review panel', async () => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedSecondaryRepairWithReview(journal)
+  const forbidden = vi.fn(async () => { throw new Error('must not start work before report') })
+  await new BehaviorChainRuntime(journal, operations(db, journal, { discover: async () => [],
+    available: () => true, permitted: () => true, request: forbidden, launch: forbidden, perform: forbidden,
+    observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(1)
+  expect(remote[0]).toMatchObject({ title: 'fix: blocked repair for #21', labels: [{ name: 'poise' }] })
+  expect(remote[0].body).toContain('slot secondary')
+  expect(remote[0].body).toContain(`Caller ${call.id}`)
+  expect(remote[0].body).toContain(`head ${HEAD}; basis ${chain.invocations.find(invocation => invocation.id === call.correlation_id)?.basis}`)
+  expect(reports(db)).toHaveLength(1)
+  expect(forbidden).not.toHaveBeenCalled()
+})
+
+it('refuses a same-head repair basis change without consuming report intent', async () => {
+  const { db, journal } = setup()
+  const { call } = blockedSecondaryRepairWithReview(journal)
+  fresh.pull!.reviewRevision = chainBasis('changed findings on the same head')
+  const forbidden = vi.fn(async () => { throw new Error('must not start work before report') })
+  await new BehaviorChainRuntime(journal, operations(db, journal, { discover: async () => [],
+    available: () => true, permitted: () => true, request: forbidden, launch: forbidden, perform: forbidden,
+    observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(0)
+  expect(reports(db)).toHaveLength(0)
+  const waiting = journal.read('acme/repo#7')?.waiting ?? ''
+  expect(waiting).toContain(call.id)
+  expect(waiting).toContain('review basis')
+  expect(forbidden).not.toHaveBeenCalled()
+})
