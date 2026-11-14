@@ -375,6 +375,7 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
         f"Write JSON to {output}: {{\"commitMessage\":\"Conventional Commit subject\",\"title\":\"Conventional Commit PR title\","
         "\"body\":\"Concrete change, reason and actual checks, without a Closes footer\","
         "\"replies\":[{\"commentId\":123,\"body\":\"Your concrete answer to this actual review finding, including what changed or evidence for disagreement\"}],\"blocked\":null}}. "
+        "For repairs, retain the required title/body fields; they describe this repair but are not published. Existing PR metadata is preserved. "
         f"For a repair, include one substantive answer for each of these required unresolved root comment IDs: {json.dumps(sorted(required_reply_ids))}. "
         "This exact set includes outdated unresolved roots and roots that already have replies. Check each finding and its answer against the repaired code and current reviewer input. "
         "When an existing native reply still applies and that finding's reviewer input is unchanged, carry its entire body verbatim in replies, including its original <!-- poise-reply CALL_ID ROOT_ID --> marker. "
