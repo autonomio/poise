@@ -332,9 +332,12 @@ Unsettled original receipts and resources still require reconciliation first.
 
 When only merge-group CI failed, `ci_blocker.queue` instead retains the verified
 GitHub removal, admitted candidate, integration and first-parent base, and each
-failed check/job, workflow run and attempt. The existing hold and attention
-output name those checks and their links. Green PR-head CI alone cannot release
-this hold. The same bounded observation reads the original integration through
+failed check/job, workflow run and attempt. Caller persists this verified blocker
+before optional exact-base baseline proof. Rejected baseline proof retains its
+reason and the original queue evidence, without granting baseline recovery.
+The existing hold and attention output name those checks and their links.
+Green PR-head CI alone cannot release this hold. The same bounded observation
+reads the original integration through
 `--list-failing-ci --ref`: each original obligation needs a later successful
 check in its retained workflow, from a later attempt or run. A stale success,
 same-named check from another workflow, pending or unknown evidence stays held.
@@ -954,6 +957,17 @@ new source publication invalidates the old binding. The report link and generate
 issue recursion guard remain retained. No disposition retries the source: later
 source work still requires existing verified recovery or explicit Resume, original
 no-publication/resource evidence and absence of competing work.
+
+Before a PR, `implementation_execution_budget_exhausted` separately qualifies three settled original
+`implement-issue` timeout receipts after the last Resume. Each must retain `status=failed`,
+`action=not_started`, `outcome=preflight_failed`, `error_code=atomic_work_execution_budget_exhausted`,
+the pre-publication `executing` artifact and positive resource-release proof, without a publication
+plan, result or receipts, on the current seed revision, actor and slot. The durable automatic hold
+must be the exact three-failure hold for the last receipt; a later operator Hold excludes it. A fresh
+open, eligible seed must still verify no pushed branch, bound PR or competing linked work. Its identity
+is the new cause plus the source chain. It uses the same explicit triage and admission gate with its
+three original Calls; missing or `source-only` waits, only a current `distinct-fix` passes. A single
+timeout with retry remaining and any write evidence do not qualify.
 
 PR review deadline reports (`review_budget_exhausted`, legacy or durable) require
 the same triage before their own implementation can prepare or start. A posted

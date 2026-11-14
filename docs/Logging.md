@@ -242,13 +242,14 @@ erase that original failure; independent wrapper and invalid-output failures
 remain visible. Resolve uses Warning only for a confirmed no-action transient
 exit with a recorded safe retry. Uncertain outcomes, timeouts and policy
 refusals remain Errors. Separate attempts retain separate event IDs.
-Legacy approval batch reads, the final head check and checkout preparation retain one Error
-per failed child after recording the scheduler consequence. The fixed primitive,
-phase, checked targets, available expected heads, correlation, original process
-timing/result and recorded retry state travel together. Two failed children
-remain separate even within one sweep correlation; cancellation or failed retry
-bookkeeping cannot erase either cause. These diagnostics do not change backoff,
-launch progress or the exact-head publication checks.
+Legacy approval batch reads, the final head check and checkout preparation, and review
+launch checkout, retain one Error per failed child after recording the scheduler
+consequence. The fixed primitive, phase, checked targets, available expected heads,
+correlation, original process timing/result and recorded retry state travel together.
+Two failed children remain separate even within one sweep correlation; cancellation
+or failed retry bookkeeping cannot erase either cause. These diagnostics do not change
+backoff, launch progress or the exact-head publication checks, except a stalled review
+checkout defers without backoff and retries on the next tick.
 Checkout failures use phase `checkout` and fixed operations
 `github-interface.local-checkout-path` or `github-interface.checkout-repo`;
 other checkout callers retain default process reporting.
