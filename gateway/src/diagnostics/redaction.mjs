@@ -7,14 +7,15 @@ const CREDENTIAL_FIELD = /(?:^|(?<=["'\\{},\r\n:=]))([^"'\\:=\r\n{},]*[^ \t"'\\:
 
 // A `::` continuing a scope chain (pytest `::TestToken::`, C++) is not a header
 // separator; a `::` at a header boundary is a header whose value starts with `:`.
-// A file path opening the chain (`.../test_codex_credentials.py::`) is also a
-// scope, never a header: `/` never appears in a header name, even after the
-// `, ` that precedes it once the persisted diagnostic collapses to one line.
+// A Python file path opening the chain (`.../test_codex_credentials.py::`) is
+// also a scope: `/` plus a `.py` leaf, even after the `, ` that precedes it
+// once the persisted diagnostic collapses to one line. A bare `password.py::`
+// without `/` is a header, not a file.
 /** @param {string} value @param {RegExpMatchArray} match @returns {boolean} */
 function isScopeSeparator(value, match) {
   if (!match[0].endsWith(':') || value[match.index + match[0].length] !== ':') return false
   const field = match[1].trim()
-  if (field.includes('/') || field.endsWith('.py')) return true
+  if (field.includes('/') && field.endsWith('.py')) return true
   if (/^[ \t]/.test(match[1])) return false
   return value[match.index - 1] === ':' && value[match.index - 2] === ':'
 }

@@ -40,8 +40,8 @@ it('redacts configured secrets of every length, as Logging does', () => {
 it('keeps a scoped test identifier whose scope reads as a credential word', () => {
   const event = parseProcessDiagnostic({ version: 1, source: 'caller', severity: 'error', operation: 'provider.atomic_work',
     phase: 'validating', outcome: 'blocked', stderr_truncated: false,
-    stderr: 'FAILED caller/agent_interface/tests/test_codex_credentials.py::TestToken::test_always_asks_gh_for_the_named_account,\npassword::opaque-value\nAuthorization: Basic Zm9v' })
-  expect(event?.stderr).toBe('FAILED caller/agent_interface/tests/test_codex_credentials.py::TestToken::test_always_asks_gh_for_the_named_account,\n[redacted header]\n[redacted header]')
+    stderr: 'FAILED caller/agent_interface/tests/test_codex_credentials.py::TestToken::test_always_asks_gh_for_the_named_account,\npassword::opaque-value\npassword.py::opaque-value\nAuthorization: Basic Zm9v' })
+  expect(event?.stderr).toBe('FAILED caller/agent_interface/tests/test_codex_credentials.py::TestToken::test_always_asks_gh_for_the_named_account,\n[redacted header]\n[redacted header]\n[redacted header]')
 })
 
 it('leaves its markers whole when a secret is a single character', () => {
