@@ -712,6 +712,8 @@ class AtomicWorkLimits(TestCase):
                     if mode == "prepare":
                         return {"outcome": "prepared", "checkout_head": HEAD}
                     self.assertEqual(json.loads(args[args.index("--replies-json") + 1]), replies)
+                    self.assertEqual(args[args.index("--title") + 1], "fix: repair seed")
+                    self.assertEqual(args[args.index("--body") + 1], "Concrete repair and checks.")
                     return {"outcome": "validated" if mode == "validate" else "published", "head_sha": HEAD}
 
                 replies = [{"commentId": root, "body": earlier_answer if root == 18 else "Verified the finding against the repair and its regression."}
@@ -738,6 +740,8 @@ class AtomicWorkLimits(TestCase):
                                             f"00000000-0000-4000-8000-{attempt:012d}", "fixture-model", "poise/issue-7", 3, HEAD)
 
                 instruction = command.call_args.args[1]
+                self.assertIn("retain the required title/body fields", instruction)
+                self.assertIn("Existing PR metadata is preserved", instruction)
                 self.assertIn("required unresolved root comment IDs: [17, 18]", instruction)
                 self.assertIn("outdated", instruction)
                 self.assertIn("already have replies", instruction)

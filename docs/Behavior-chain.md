@@ -575,6 +575,10 @@ The publication primitive validates the checkout and model-written metadata in
 read-only mode before Caller records its write intent. Invalid commit subjects,
 PR titles, issue-closing references or reply targets fail as unstarted work,
 rather than becoming ambiguous writes that never occurred.
+PR title and body checks apply only when creating a PR, including first-PR
+completion after an interrupted publish. Repairs retain the required proposed
+title/body fields for the atomic plan but preserve existing PR metadata; their
+unused body does not undergo the issue-closing check.
 Validation and publication both return the existing no-write `superseded`
 outcome when GitHub confirms that the original owned PR merged at the repair's
 unchanged head, before rejecting a closed seed. The receipt retains the verified
