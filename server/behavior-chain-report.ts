@@ -308,7 +308,11 @@ function qualifyingAttempts(db: Database, chain: BehaviorChain, observation: Cha
   const decision = decideBehaviorChain({ ...chain, held: null,
     invocations: chain.invocations.filter(invocation => !['repair-pr', 'review-pr'].includes(invocation.behavior) || invocation.evidence?.status === 'completed'),
   }, observation, now)
-  if (decision.kind !== 'invoke') return fail(`reconstructed decision is ${decision.kind}: ${decision.reason}`)
+  if (decision.kind !== 'invoke') {
+    const detail = decision.kind === 'complete' ? `merge ${decision.mergeSha}`
+      : decision.kind === 'supersede' ? 'superseded' : decision.reason
+    return fail(`reconstructed decision is ${decision.kind}: ${detail}`)
+  }
   if (decision.behavior !== 'repair-pr' && decision.behavior !== 'review-pr') {
     return fail(`reconstructed decision requests ${decision.behavior}, not the held repair`)
   }
