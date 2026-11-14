@@ -1328,12 +1328,12 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
         const context = ${oversized ? "'expected received-value to equal expected-value\\nhttps://example.test/?token=' + 'boundarysecret'.repeat(3000) + '\\nafter-redaction\\n' + 'x'.repeat(12000) + '\\nafter-excerpt-limit'" : 'undefined'}
         expect('received-value', context).toBe('expected-value')
       })
-      // Flush Vitest's batched case events before the last test deliberately holds the file open.
-      it('second failed expectation', async () => {
-        await new Promise(done => setTimeout(done, 200))
+      it('second failed expectation', () => {
         expect(3).toBe(4)
       })`) : ''}
-      it('keeps the suite open', async () => {
+      it('keeps the suite open', async ({ annotate }) => {
+        // annotate awaits Vitest's pending case updates; a fixed delay can miss its throttle boundary.
+        await annotate('completed cases delivered before holding the suite open')
         console.log('VITEST_HELD ' + process.pid)
         await new Promise(() => {})
       }, 60000)
@@ -1369,14 +1369,16 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
           expect(excerpt).not.toContain('after-excerpt-limit')
         }
       } else expect(evidence).not.toContain('[poise] first test failure:')
+      const admission = /\[poise\] candidate ([a-f0-9]{64}), suite .*, run ([a-f0-9]{32})/.exec(evidence)
+      expect(admission).not.toBeNull()
+      expect(evidence).toContain(`candidate ${admission![1]}, suite node vitest.mjs run, cwd ${fixture.repo}`)
+      expect(relay.runs.has(admission![2])).toBe(true)
       now += 3_000
       const { code, stderr } = await running.done
       expect(code).toBe(124)
       expect(stderr).toContain('no test result: this suite is too big for its test box: it passed the 2 s time limit')
       expect(stderr).toContain('says nothing about your code. Skip local tests for this work')
       expect(stderr).toContain('let CI run the tests')
-      const admission = /\[poise\] candidate ([a-f0-9]{64}), suite .*, run ([a-f0-9]{32})/.exec(stderr)
-      expect(admission).not.toBeNull()
       expect(warnings).toContainEqual(expect.objectContaining({ event: 'test_relay.run.failed', id: admission![2] }))
       if (failed) {
         expect(stderr.match(/\[poise\] first test failure:/g)).toHaveLength(1)
