@@ -522,7 +522,12 @@ function implementationReport(db: Database, chain: BehaviorChain): RepairReport 
     const report = JSON.parse(row.value) as RepairReport
     return implementationReportIdentity(report, row.key)
   }).map(row => JSON.parse(row.value) as RepairReport)
-  if (reports.length > 1) throw new Error('Blocked report has conflicting source intents')
+  if (reports.length > 1) {
+    const shared = reports.every(report => report.pull === null
+      && report.key !== chainBasis([IMPLEMENTATION_CAUSE, report.source]))
+    if (shared) return null
+    throw new Error('Blocked report has conflicting source intents')
+  }
   return reports[0] ?? null
 }
 
@@ -674,10 +679,12 @@ export async function implementationReportAdmission(db: Database, journal: Behav
     // Only positive markerless remedy evidence exempts it from report triage.
     const source = boundImplementationSource(db, journal, chain, report)
     const failure = source && prePrFileAndTest(source.invocations.at(-1)?.evidence?.error)
+    const attempt = report.attempts[0]
     try {
       const issue = await reconcileRepairReport(chain.repository, `<!-- poise-repair-exhaustion:${report.key} -->`, report.issueNumber,
-        false, failure ? (body, author) => [chain.author.toLowerCase(), chain.reviewer.toLowerCase()].includes(author.toLowerCase())
-          && !REPORT_MARKER.test(body) && body.includes(failure.file) && body.includes(failure.test) : undefined)
+        false, failure && attempt ? (body, author) => [chain.author.toLowerCase(), chain.reviewer.toLowerCase()].includes(author.toLowerCase())
+          && !REPORT_MARKER.test(body) && body.includes(failure.file) && body.includes(failure.test)
+          && !body.includes(attempt.invocation) && !body.includes(attempt.call) : undefined)
       if (!issue) return { reason: `${wait}: report or linked remedy identity is unverified` }
       if (!REPORT_MARKER.test(issue.body)) {
         if (!source) return { reason: `${wait}: original source hold or Call changed` }
@@ -1154,6 +1161,7 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
         return failure ? (body: string, author: string) =>
           [chain.author.toLowerCase(), chain.reviewer.toLowerCase()].includes(author.toLowerCase())
           && !REPORT_MARKER.test(body) && body.includes(failure.file) && body.includes(failure.test)
+          && !body.includes(implementation.invocation.id) && !body.includes(implementation.call)
           : undefined
       })()
     : undefined
@@ -1230,6 +1238,7 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
         const verifier = (body: string, author: string) =>
           [chain.author.toLowerCase(), chain.reviewer.toLowerCase()].includes(author.toLowerCase())
           && !REPORT_MARKER.test(body) && body.includes(failure.file) && body.includes(failure.test)
+          && !body.includes(implementation!.invocation.id) && !body.includes(implementation!.call)
         const candidates: Array<{ number: number, url: string, state: string, labels: string[], title: unknown, body: string }> = []
         for (const entry of blockedBy) {
           const number = Number((entry as { number: number }).number)
