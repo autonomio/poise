@@ -324,6 +324,22 @@ Work impact and attention describe this automatic CI recheck instead of asking
 for Resume; attention retains the scheduled `reconciliation.nextObservationAt`.
 Unsettled original receipts and resources still require reconciliation first.
 
+When only merge-group CI failed, `ci_blocker.queue` instead retains the verified
+GitHub removal, admitted candidate, integration and first-parent base, and each
+failed check/job, workflow run and attempt. The existing hold and attention
+output name those checks and their links. Green PR-head CI alone cannot release
+this hold. The same bounded observation reads the original integration through
+`--list-failing-ci --ref`: each original obligation needs a later successful
+check in its retained workflow, from a later attempt or run. A stale success,
+same-named check from another workflow, pending or unknown evidence stays held.
+The latest matching workflow run must also have completed successfully.
+Alternatively, a failed no-write Call can retain independently verified
+`ci_dependency` proof inside its blocker and use the existing exact-base
+recovery checks; a remediation link or closure alone grants no recovery.
+Original resource settlement and current-head CI remain required. Recovery keeps
+the original Call failed and returns to ordinary review, independent approval
+of the queue diagnosis, and fresh current-base native merge-queue gates.
+
 A pre-PR implementation can recover through the same bounded observation even
 with failure reporting disabled. Its original Caller artifact must retain
 `test_dependency`: independently verified assertion evidence tying the original
@@ -776,8 +792,10 @@ repair holds, automatic implementation holds before a PR, uncertain implementati
 publication, and uncertain merge
 submissions during their ordinary bounded reconciliation, including open `poise`
 seeds whose only PR closed unmerged; no Resume or extra poller is needed.
-Reporting preserves the source hold, uncertainty and ownership and does not
-perform recovery.
+Creating a report preserves the source hold, uncertainty and ownership. A verified
+repair-exhaustion report can subsequently hand an actionable diagnosis to the
+source chain's existing `repair-pr` owner; other report causes keep their existing
+behavior.
 The initial report body includes a dated snapshot of the same
 [verified work impact](Logging.md#native-logging-view) used by Logging and existing
 Notifications. It names the work, stage, last verified progress and known retry or
@@ -825,6 +843,29 @@ remain ineligible for a new review exhaustion report.
 Revoking repository scope during verification prevents publication and leaves the
 creation intent unconsumed, so re-enabling can still report once.
 
+Repair-exhaustion recovery matches the saved automatic hold event, open source
+PR, exact head, repair basis, slot and original no-publication/resource-release
+receipts. Ordinary implementation and publication of that report issue are
+fenced, including admissions from before this routing existed. An already-started
+report implementation must settle with its original blocked, no-publication
+receipt and released resources. Its retained, untruncated Caller diagnostic must
+name the source PR, pinned head and a concrete code location. For a report with no
+implementation, a settled native issue-review receipt and its actual posted
+comment must supply that diagnosis. Creation, labeling, review completion or
+closure alone cannot admit recovery. The explanation remains worker-reported;
+the source repair verifies it.
+
+The original seed and branch remain unchanged. The existing `--note` carries the
+diagnosis, original Call, report reference and configured accounts' report guidance
+into exact-head repair preparation. The existing journal retains one recovery
+admission without resetting the original retry boundary. Source, diagnosis and
+operator holds are checked again after provider preparation; missing or changed
+evidence keeps an actionable wait. A failed or deferred recovery cannot admit
+another attempt after restart or repeated report observation. Explicit Resume
+retains its operator meaning. Publication, validation, review and CI use the
+ordinary source PR gates. This admission is separate from the bounded alternate
+model attempt; report deduplication and recursion suppression remain unchanged.
+
 Legacy review and approval ticks also report retained automatic retry stops in
 opted-in repositories, before checking model readiness and with v2 disabled.
 Their existing two same-head/model timeout policy is unchanged. Reporting requires
@@ -856,6 +897,10 @@ the bounded, redacted blocker as **worker-reported** and available structured Ca
 diagnostic facts. Caller's blocked result does not independently verify the worker's
 health-check, test-relay or other runner explanation. Its next action is to inspect
 the original Call, remedy the blocker and explicitly Resume for a fresh implementation.
+The same report exposes [private validation-time source evidence](../caller/agent_interface/README.md#inspecting-failed-unpublished-source)
+when retained, or explicit unavailability requiring a fresh reproduction. This
+inspection preserves the earlier failed capture independently of later untested
+edits and grants no publication, retry or approval authority.
 
 For `repair-pr`, `atomic_work_blocked` also qualifies one settled original Call
 under its matching active automatic hold after the last Resume. The same

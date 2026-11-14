@@ -3,7 +3,8 @@ export const SECRET_KEY = /authorization|cookie|password|passwd|secret|credentia
 
 const TERMINAL_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
 // Scan each field run once, then use the same classifier as structured facts.
-const CREDENTIAL_FIELD = /(?:^|(?<=["'\\{},\r\n:=]))([^"'\\:=\r\n{},]*[^ \t"'\\:=\r\n{},])\\*["']?[ \t]*[:=]/g
+// A colon opening a scope (pytest `::`, C++) is not a header separator.
+const CREDENTIAL_FIELD = /(?:^|(?<=["'\\{},\r\n:=]))([^"'\\:=\r\n{},]*[^ \t"'\\:=\r\n{},])\\*["']?[ \t]*(?:=|:(?!:))/g
 
 /** @param {string} value @returns {boolean} */
 function hasCredentialHeader(value) {

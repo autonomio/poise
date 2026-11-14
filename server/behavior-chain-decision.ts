@@ -25,6 +25,7 @@ export interface ChainObservation extends Record<string, unknown> {
   workPublication?: { callId: string, repliesComplete: boolean, resumable?: boolean, planSha?: string }
   greyRecovery?: { invocationId: string, receipt: Record<string, unknown> }
   ciDependency?: { invocationId: string, base: string, recovered: boolean }
+  ciRecovery?: { invocationId: string, removal: string, integration: string, recovered: boolean, reason: string }
   testDependency?: { invocationId: string, verified: boolean, recovered: boolean, reason?: string,
     recovery?: { merge: string, base: string, run: Record<string, unknown> } }
   prerequisites?: { wait: string | null, base: string | null, evidence: Record<string, unknown>[] }
@@ -93,11 +94,45 @@ export function implementationTestDependency(invocation: ChainInvocation) {
   return proof
 }
 
+/** Only Caller's original, compact no-write queue evidence can carry this hold. */
+export function queueCiBlocker(invocation: ChainInvocation) {
+  const evidence = invocation.evidence
+  const artifact = evidence?.artifact as Record<string, unknown> | undefined
+  const ci = artifact?.ci_blocker as Record<string, unknown> | undefined
+  const queue = ci?.queue as NonNullable<BehaviorChain['ciHold']>['queue']
+  if (invocation.behavior !== 'repair-pr' || evidence?.status !== 'failed' || evidence.action !== 'not_started'
+    || evidence.error_code !== 'atomic_work_blocked' || artifact?.phase !== 'executing'
+    || [artifact.plan_sha, artifact.publication_head, artifact.publication, artifact.result, artifact.replies_started,
+      evidence.receipts, evidence.review_id, evidence.head_sha, evidence.publicationResume].some(value => value != null)
+    || ci?.action !== 'list_failing_ci' || ci.head_sha !== invocation.request.context?.head
+    || !Array.isArray(ci.failing) || ci.failing.length || !queue
+    || queue.removal !== invocation.request.context?.queueRemoval || !queue.removal
+    || ![ci.head_sha, queue.integration, queue.base].every(value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value))
+    || !Array.isArray(queue.failures) || !queue.failures.length || queue.failures.some(failure => !failure
+      || typeof failure.name !== 'string' || !failure.name || typeof failure.url !== 'string' || !failure.url
+      || ![failure.check, failure.job, failure.run, failure.workflow, failure.attempt].every(id => Number.isSafeInteger(id) && id > 0))) return undefined
+  return queue
+}
+
+export function recoveredQueueRepair(chain: BehaviorChain, observation: ChainObservation) {
+  const pull = observation.pull, recovery = observation.ciRecovery
+  return chain.invocations.find(invocation => {
+    const queue = queueCiBlocker(invocation)
+    return queue && invocation.state === 'settled' && resourceReleaseProven(invocation.evidence ?? {}, true)
+      && recovery?.invocationId === invocation.id && recovery.recovered && recovery.removal === queue.removal
+      && recovery.integration === queue.integration && pull?.queueRemoval?.id === queue.removal
+      && pull.queueRemoval.reason === 'failed_checks' && invocation.request.context?.head === pull.head
+  })
+}
+
 export function chainCiDependency(chain: BehaviorChain, removal?: string | null) {
-  const invocation = [...chain.invocations].reverse().find(item => item.behavior === 'repair-pr' && item.state === 'settled' && succeeded(item)
-    && (item.evidence?.artifact as Record<string, unknown> | null)?.ci_dependency)
+  const invocation = [...chain.invocations].reverse().find(item => item.behavior === 'repair-pr' && item.state === 'settled'
+    && (succeeded(item) && (item.evidence?.artifact as Record<string, unknown> | null)?.ci_dependency
+      || queueCiBlocker(item) && resourceReleaseProven(item.evidence ?? {}, true)
+        && (item.evidence?.artifact as { ci_blocker?: Record<string, unknown> } | undefined)?.ci_blocker?.ci_dependency))
   if (!invocation) return null
-  const value = (invocation.evidence!.artifact as Record<string, unknown>).ci_dependency
+  const artifact = invocation.evidence!.artifact as Record<string, unknown>
+  const value = artifact.ci_dependency ?? (artifact.ci_blocker as Record<string, unknown> | undefined)?.ci_dependency
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('repair CI dependency is invalid')
   const dependency = value as { head: string, integration: string, base: string, removal: string, remediation: string,
     allShared: boolean, failures: Array<{ check: number, name: string, run: number, workflow: number }> }
@@ -108,6 +143,10 @@ export function chainCiDependency(chain: BehaviorChain, removal?: string | null)
       || ![item.check, item.run, item.workflow].every(id => Number.isSafeInteger(id) && id > 0))
     || dependency.allShared !== true && invocation.evidence?.action !== 'published') throw new Error('repair CI dependency lacks its verified integration evidence')
   if (removal && removal !== dependency.removal) return null
+  const queue = queueCiBlocker(invocation)
+  if (queue && (dependency.integration !== queue.integration || dependency.base !== queue.base || dependency.allShared !== true
+    || dependency.failures.length !== queue.failures.length || queue.failures.some(failure => !dependency.failures.some(item =>
+      item.check === failure.check && item.run === failure.run && item.workflow === failure.workflow && item.name === failure.name)))) return null
   return { invocation, dependency }
 }
 
@@ -136,6 +175,16 @@ function propose(chain: BehaviorChain, behavior: ChainBehavior, basis: string, a
   const history = settled(chain, behavior, basis, reviewer?.slot ?? null)
   const successful = [...history].reverse().find(succeeded)
   if (successful) return { kind: 'wait', reason: `${behavior} finished; waiting for its verified artifact or changed input` }
+  if (behavior === 'repair-pr' && chain.repairRecovery) {
+    const recovery = chain.repairRecovery
+    const admitted = chain.invocations.find(invocation => invocation.id === recovery.admission)
+    if (admitted && !succeeded(admitted)) return { kind: 'hold', reason: 'the single repair after report diagnosis failed; inspect its Call before explicitly resuming' }
+    if (!recovery.admission) {
+      if (basis !== recovery.basis || reviewer?.slot !== recovery.slot || actor !== chain.author) return { kind: 'hold',
+        reason: 'repair report diagnosis no longer matches the pinned source repair' }
+      return { kind: 'invoke', behavior, basis, actor, reviewer, reason: 'apply the retained report diagnosis through the original repair owner' }
+    }
+  }
   if (behavior === 'implement-issue' && chain.testRecovery) {
     const original = chain.invocations.find(item => item.id === chain.testRecovery!.hold.invocationId)
     if (chain.testRecovery.admission) return { kind: 'hold', reason: 'the single implementation after verified test recovery was admitted; another attempt requires Resume' }
@@ -295,8 +344,10 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
   if (dismissed) return { kind: 'hold', reason: `approval ${dismissed.id} was dismissed on the current head; a decision is required` }
   const lastQueue = lastChainQueueInvocation(chain)
   const dependency = chainCiDependency(chain, pull.queueRemoval?.id)
-  let queueVerification: string | null = null
-  if (dependency && !pull.failing.length && !pull.conflict && !pull.behind && !pull.changesRequested
+  const queueRecovery = recoveredQueueRepair(chain, observation)
+  let queueVerification = queueRecovery
+    ? chainBasis(['queue-recovery', pull.head, pull.queueRemoval?.id, queueRecovery.id, pull.reviewContext]) : null
+  if (dependency && !queueRecovery && !pull.failing.length && !pull.conflict && !pull.behind && !pull.changesRequested
     && !(pull.unresolved && !pull.approved)) {
     const recovery = observation.ciDependency
     if (recovery?.invocationId !== dependency.invocation.id || !recovery.recovered) return { kind: 'wait',
@@ -309,7 +360,7 @@ export function decideBehaviorChain(chain: BehaviorChain, observation: ChainObse
     if (removal.reason === 'merged') return { kind: 'wait', reason: 'GitHub queue reports a merge; awaiting confirmed merge evidence' }
     if (!['failed_checks', 'merge_conflict'].includes(removal.reason || '')) return { kind: 'hold', reason: `queue removal requires a decision: ${removal.reason || 'unknown reason'} (${removal.id})` }
     const repair = [...chain.invocations].reverse().find((invocation) => invocation.behavior === 'repair-pr' && succeeded(invocation)
-      && invocation.request.context?.head === pull.head && invocation.request.context.queueRemoval === removal.id)
+      && invocation.request.context?.head === pull.head && invocation.request.context.queueRemoval === removal.id) ?? queueRecovery
     if (!repair || ((pull.changesRequested || pull.failing.length || pull.conflict || pull.behind)
       && repair.request.context?.reviewRevision !== pull.reviewRevision)) return propose(chain, 'repair-pr',
       chainBasis(['queue', pull.head, removal.id, pull.reviewRevision]), chain.author, observation.repairer,

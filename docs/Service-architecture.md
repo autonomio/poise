@@ -628,8 +628,13 @@ its own instead of refusing with dirty_unowned.
   only for a known switch whose fresh health probe cannot reach the workspace
   or finds it healthy on the requested release. A healthy old release keeps
   the ordinary 502. The reset invalidates cached readiness, so recovery freshly
-  verifies `/api/service/health` on the requested release. `proxy.failed` retains
-  its Error with request and requested-release evidence; no request is replayed.
+  verifies `/api/service/health` on the requested release. `proxy.failed` is one
+  Warning only after the retryable update response is produced; unverified
+  resets, interrupted mutations and unanswered failures retain an Error.
+  Request, requested release and actual response disposition are retained in
+  diagnostics (`disconnect` records the status/disposition or an unanswered
+  response). Failed rollout evidence remains in the existing rollout diagnostics;
+  no request is replayed.
 - **Everything else.** An image of another base, a workspace started without
   the supervisor, or a changed container setting still gets a new container,
   drained first ([Deployment](#deployment)). The gateway makes the new image's
@@ -1426,7 +1431,10 @@ then attribution and normalization run again at the gateway. See the
 The host deployment verifier also sends bounded observations through that
 private operator socket. The gateway retains rollout/workspace deadline and
 recovery diagnostics using the existing v1 envelope/store, without a public
-ingestion route or a release/replacement control change; [Logging](Logging.md#collection-and-operation)
+ingestion route or a release/replacement control change. Only deployment delivery
+retries the writer's exact busy refusal, replaying the same bounded observation
+within one 30-second deadline; other refusals retain a bounded, redacted cause.
+[Logging](Logging.md#collection-and-operation)
 defines the budget, deduplication and recovery contract.
 The edge also derives the fixed `/api/link/events` route label before removing
 the URI. All ingress paths apply the narrow native cancellation exception and
@@ -1574,6 +1582,12 @@ update, or admit the existing scoped repair when a fresh conflict on the retaine
 failed head blocks that update, retaining the original Call, resource-release
 proof, repair retry bound and remaining gates
 as defined in [CI hold recovery](Behavior-chain.md#bounded-reconciliation).
+Queue-only CI holds retain their original removal, integration, workflow and
+failed attempt in the existing Caller blocker. Recovery requires later matching
+integration success or independently verified shared-baseline recovery; green
+PR-head checks alone retain the hold. The original no-write Call and native
+resource settlement remain required, and current-head review and current-base
+merge gates still apply under the same [CI hold recovery](Behavior-chain.md#bounded-reconciliation).
 For a pre-PR implementation, the existing Caller artifact and seed read can
 instead verify an original CI assertion failure on its exact prepared base, and
 the delivered main recovery with validation of every original failing test and
@@ -1794,9 +1808,23 @@ entry after recovery, retaining the original invocation's uncertainty and owners
 Implementation reports require the current automatic hold's settled blocked receipt,
 positive resource release and fresh open-seed inspection proving no publication.
 They retain the hold and distinguish worker-reported blockers from Caller diagnostic facts.
+The existing linked remediation also exposes bounded private source evidence
+from the original failed validation capture, retained through normal checkout
+cleanup under the workspace's incident-artifact lifecycle. Only its availability
+and capture identity enter receipts and reports; source bytes stay in the owning
+workspace. [Caller's inspection contract](../caller/agent_interface/README.md#inspecting-failed-unpublished-source)
+defines binding, access, limits and expiry without granting recovery authority.
 Terminal repair reports require the matching automatic hold, settled original Call,
 positive release and unchanged open PR head and repair basis, without possible
 publication effects. They preserve repair ownership and exclude CI-only recovery holds.
+Verified repair-exhaustion reports fence ordinary report implementation and can
+hand a pinned actionable diagnosis to the source chain's existing exact-head
+repair owner. The existing journal bounds that recovery to one admission without
+resetting retries; original no-publication/resource receipts, the saved automatic
+hold and unchanged source/diagnosis are rechecked. An already-admitted report's
+original implementation must settle without publication before this handoff.
+The original seed/branch, normal publication, review and CI gates remain in force;
+missing evidence, changed heads and later operator holds retain the wait.
 Uncertain implementation reports instead require the original failed `publishing`
 Call, verified resource release and fresh open-source eligibility and publication
 reconciliation. They preserve its missing-push-evidence action and execution fence,
