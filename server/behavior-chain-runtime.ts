@@ -137,6 +137,26 @@ function ciHoldCanResume(chain: BehaviorChain, observation: ChainObservation, no
       && chainBasis(queueCiBlocker(original)) === chainBasis(hold.queue))
 }
 
+function missingReceiptHoldCanResume(chain: BehaviorChain, observation: ChainObservation, now: number): boolean {
+  const held = chain.held, pull = observation.pull
+  const slot = held && /^PR review (\S+) lacks its exact-head submission receipt$/.exec(held)?.[1]
+  if (!slot || chain.mergeSha || chain.supersession || chain.ciHold || chain.testHold || chain.testRecovery || chain.repairRecovery
+    || chain.invocations.some(invocation => invocation.state !== 'settled')
+    || !pull || pull.state !== 'open' || pull.merged || !pull.reviewContext
+    || !Number.isFinite(observation.checkedAt) || observation.checkedAt > now || now - observation.checkedAt > CHAIN_OBSERVATION_MAX_AGE_MS) return false
+  const basis = chainBasis(['pr', pull.head, pull.reviewContext])
+  const original = [...chain.invocations].reverse().find(invocation => invocation.behavior === 'review-pr' && invocation.slot === slot
+    && invocation.basis === basis && invocation.state === 'settled' && invocation.evidence?.status === 'completed'
+    && invocation.evidence.action === 'requested_changes' && invocation.evidence.outcome === 'changes_requested')
+  const evidence = original?.evidence
+  if (!original || !evidence || !resourceReleaseProven(evidence, true) || typeof evidence.completedAt !== 'number'
+    || !Number.isFinite(evidence.completedAt) || observation.checkedAt < evidence.completedAt
+    || observation.checkedAt < Date.parse(String(evidence.resources_settled_at))
+    || !chainReviewResponse(chain, original, observation, now)) return false
+  const decision = decideBehaviorChain({ ...chain, held: null }, observation, now)
+  return decision.kind === 'invoke' && decision.behavior === 'repair-pr'
+}
+
 function recoveredImplementation(chain: BehaviorChain, observation: ChainObservation, now: number): BehaviorChain['testRecovery'] | null {
   const hold = chain.testHold ?? chain.testRecovery?.hold
   const original = chain.invocations.find(invocation => invocation.id === hold?.invocationId), evidence = original?.evidence
@@ -166,6 +186,41 @@ function recoveredImplementation(chain: BehaviorChain, observation: ChainObserva
     || observation.prerequisites?.base !== recovery.recovery.base
     || chain.testRecovery && chain.testRecovery.merge !== recovery.recovery.merge) return null
   return { hold, merge: recovery.recovery.merge, base: recovery.recovery.base }
+}
+
+/** This proof comes from Caller's pre-publication guard, never worker prose. */
+export function implementationPrerequisiteWait(chain: BehaviorChain, invocation: ChainInvocation, call: LogEntry): Record<string, unknown> | null {
+  const artifact = call.artifact as Record<string, unknown> | undefined
+  const prepared = artifact?.prepared as Record<string, unknown> | undefined
+  const wait = artifact?.prerequisite_wait as Record<string, unknown> | undefined
+  const deliveries = wait?.deliveries as unknown[] | undefined
+  if (invocation.behavior !== 'implement-issue' || invocation.model === null
+    || call.status !== 'completed' || call.action !== 'not_started' || call.outcome !== 'prerequisite_wait'
+    || call.head_sha != null || call.receipts != null || call.review_id != null || call.error || call.error_code
+    || artifact?.phase !== 'prerequisite_wait' || typeof artifact.plan_sha !== 'string' || !/^[0-9a-f]{64}$/.test(artifact.plan_sha)
+    || artifact.publication_head != null || artifact.replies_started != null || artifact.result != null
+    || invocation.evidence?.publicationResume != null || invocation.evidence?.publicationReceipt != null) return null
+  if (!prepared || String(prepared.repository).toLowerCase() !== chain.repository.toLowerCase()
+    || prepared.issue_number !== chain.issue || prepared.branch !== chain.branch
+    || String(prepared.actor).toLowerCase() !== chain.author.toLowerCase()
+    || prepared.pull_number !== null || prepared.head_sha !== null
+    || typeof prepared.checkout_head !== 'string' || !/^[0-9a-f]{40}$/.test(prepared.checkout_head)) return null
+  if (!wait || wait.base !== prepared.checkout_head || !Array.isArray(deliveries)
+    || typeof wait.reason !== 'string' || !wait.reason
+    || !(wait.reason.startsWith('Waiting for prerequisite ') || wait.reason.startsWith('GitHub blocked-by evidence is missing or incomplete for '))) return null
+  const prerequisites = wait.prerequisites as Record<string, unknown> | null | undefined
+  if (prerequisites !== null && prerequisites !== undefined) {
+    if (!prerequisites || typeof prerequisites !== 'object' || Array.isArray(prerequisites)
+      || String(prerequisites.repo).toLowerCase() !== chain.repository.toLowerCase()
+      || prerequisites.number !== chain.issue || typeof prerequisites.found !== 'boolean'
+      || typeof prerequisites.complete !== 'boolean' || !Array.isArray(prerequisites.prerequisites)) return null
+  }
+  for (const raw of deliveries) {
+    const delivery = raw as Record<string, unknown> | null
+    if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery)
+      || delivery.base_sha !== wait.base || typeof delivery.issue_number !== 'number') return null
+  }
+  return wait
 }
 
 class ClosedTargetFenceError extends Error {}
@@ -528,6 +583,9 @@ export class BehaviorChainRuntime {
                 const reason = `Original implementation test recovery awaits current source/publication evidence: ${observation.testDependency?.reason || 'recovery is not verified'}`
                 if (chain.waiting !== reason) this.append(chain, { type: 'chain.waiting', reason })
                 continue
+              }
+              if (chain.held && missingReceiptHoldCanResume(chain, observation, Date.now())) {
+                chain = this.append(chain, { type: 'chain.resumed' })
               }
               const mergeEvidence = observation.pull?.merged ? {
                 before: this.journal.preMergeObservation(chain.id, observation.pull.mergedAt ?? Number.NaN) as ChainObservation | null,
@@ -907,6 +965,14 @@ export class BehaviorChainRuntime {
             ? physical.completedAt : (evidence as Record<string, unknown>).completedAt } })
       this.operations.wake()
       return this.current(chain)
+    }
+    // A verified pre-publication prerequisite wait never wrote. It settles as
+    // deferred, so the ordinary dependency wait re-admits without Resume or
+    // failure-budget consumption. Worker prose alone cannot establish it.
+    if (implementationPrerequisiteWait(chain, invocation, call)) {
+      this.operations.received(invocation, call)
+      return this.append(chain, { type: 'invocation.settled', invocationId: invocation.id, callId: call.id,
+        outcome: 'prerequisite_wait', evidence: { ...receipt(call), status: 'deferred', action: 'not_started', outcome: 'prerequisite_wait' } })
     }
     const possibleWrite = call.action !== 'not_started' || (invocation.behavior === 'review-issue' || prReview)
       && (call.receipts != null || call.review_id != null || call.head_sha != null)

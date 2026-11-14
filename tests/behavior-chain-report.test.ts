@@ -1275,6 +1275,267 @@ it('blocks implementation when the report acknowledgement was lost and publishin
   expect(posts()).toHaveLength(1)
 })
 
+const INGRESS_FILE = 'gateway/tests/diagnostic-ingress-ipc.test.ts'
+const MEMORY_FILE = 'tests/test-offload.test.ts'
+const prePrDiagnostic = () => ({ version: 1 as const, source: 'caller' as const, severity: 'error' as const,
+  operation: 'provider.atomic_work', phase: 'validating', outcome: 'blocked', stderr: 'failure excerpt', stderr_truncated: false,
+  context: { message: 'failure excerpt', submission: 'none', exit_code: null, signal: null, errno: null }, filesystem: null })
+const ingressError = (candidate: string, run: string) =>
+  `atomic behavior blocked: cd gateway && npm test failed: ${INGRESS_FILE} > exhausts only deployment contention retries: AssertionError: expected busy but got 'write EPIPE' (${INGRESS_FILE}:166:168). Captured candidate ${candidate}; producing relay run ${run}`
+const memoryError = (candidate: string, run: string) =>
+  `atomic behavior blocked: npm run check: ${MEMORY_FILE} > keeps memory warnings correlatable without logging command bodies: Error: STACK_TRACE_ERROR, at ${MEMORY_FILE}:2088:30; failed-test marker. Captured candidate ${candidate}; producing relay run ${run}`
+const prePrPrerequisites = (numbers: number[]) => ({ wait: null, base: HEAD,
+  evidence: [{ repo: 'acme/repo', number: 7, found: true, complete: true, prerequisites: numbers.map(number => ({ repo: 'acme/repo', number })) }] })
+
+it('files one new report for a distinct pre-PR hold with no owner and reconciles its lost acknowledgement through the same marker', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pre-pr-second-hold-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  let { db, journal } = setup(path)
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  const firstOverrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, firstOverrides)).run()
+  expect(posts()).toHaveLength(1)
+  const originalIntent = reports(db)[0]
+  const originalKey = chainBasis(['atomic_work_blocked', chain.id])
+  expect(JSON.parse(originalIntent.value)).toMatchObject({ key: originalKey, source: chain.id, pull: null,
+    attempts: [{ invocation: call.correlation_id, call: call.id }], issueNumber: 99 })
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = memoryError('c'.repeat(64), 'd'.repeat(32)); next.call.diagnostic = prePrDiagnostic()
+  fresh.prerequisites = prePrPrerequisites([])
+  loseCreation = true
+  const secondOverrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, secondOverrides)).run()
+  // The current hold selects its own scoped intent, never the closed original.
+  const intents = reports(db).map(row => JSON.parse(row.value))
+  expect(intents).toHaveLength(2)
+  expect(intents.find(intent => intent.key === originalKey)).toEqual(JSON.parse(originalIntent.value))
+  const scoped = intents.find(intent => intent.key !== originalKey)!
+  expect(scoped).toMatchObject({ source: chain.id, pull: null, issueNumber: null,
+    attempts: [{ invocation: next.call.correlation_id, call: next.call.id }] })
+  expect(scoped.key).toBe(chainBasis(['atomic_work_blocked', chain.id, next.call.correlation_id, scoped.holdSequence]))
+  expect(posts()).toHaveLength(2)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('creation is unconfirmed')
+  db.close(); databases.splice(databases.indexOf(db), 1)
+  ;({ db, journal } = setup(path))
+  journal.rebuild()
+  searchVisible = false
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, secondOverrides)).run()
+  expect(posts()).toHaveLength(2)
+  expect(JSON.parse(reports(db).find(row => JSON.parse(row.value).key === scoped.key)!.value).issueNumber).toBeNull()
+  searchVisible = true
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, secondOverrides)).run()
+  const reconciled = reports(db).map(row => JSON.parse(row.value))
+  expect(reconciled.find(intent => intent.key === originalKey)).toEqual(JSON.parse(originalIntent.value))
+  expect(reconciled.find(intent => intent.key === scoped.key)).toMatchObject({ issueNumber: 100,
+    attempts: [{ invocation: next.call.correlation_id, call: next.call.id }] })
+  expect(posts()).toHaveLength(2)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('https://github.com/acme/repo/issues/100')
+  expect(journal.read(chain.id)?.waiting).not.toContain('https://github.com/acme/repo/issues/99')
+  expect(remote[1].body).toContain(`<!-- poise-repair-exhaustion:${scoped.key} -->`)
+})
+
+it('adopts a markerless blocked-by remedy for a distinct pre-PR hold without creation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pre-pr-remedy-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  let { db, journal } = setup(path)
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(1)
+  const originalIntent = reports(db)[0]
+  const originalKey = chainBasis(['atomic_work_blocked', chain.id])
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = memoryError('c'.repeat(64), 'd'.repeat(32)); next.call.diagnostic = prePrDiagnostic()
+  const remedy = issue(98, `Stabilize ${MEMORY_FILE} keeps memory warnings correlatable without logging command bodies under full validation.`)
+  remedy.labels = [{ name: 'poise' }]; remote.push(remedy)
+  fresh.prerequisites = prePrPrerequisites([98])
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  const intents = reports(db).map(row => JSON.parse(row.value))
+  expect(intents).toHaveLength(2)
+  expect(intents.find(intent => intent.key === originalKey)).toEqual(JSON.parse(originalIntent.value))
+  const scoped = intents.find(intent => intent.key !== originalKey)!
+  expect(scoped).toMatchObject({ source: chain.id, pull: null, issueNumber: 98,
+    attempts: [{ invocation: next.call.correlation_id, call: next.call.id }] })
+  expect(posts()).toHaveLength(1)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('https://github.com/acme/repo/issues/98')
+  db.close(); databases.splice(databases.indexOf(db), 1)
+  ;({ db, journal } = setup(path))
+  journal.rebuild()
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(reports(db).map(row => JSON.parse(row.value))).toEqual(intents)
+  expect(posts()).toHaveLength(1)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+})
+
+it('deduplicates a same pre-PR failure after Resume without creation', async () => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(posts()).toHaveLength(1)
+  const intent = reports(db)[0]
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = ingressError('c'.repeat(64), 'd'.repeat(32)); next.call.diagnostic = prePrDiagnostic()
+  await new BehaviorChainRuntime(journal, operations(db, journal, { ...overrides,
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  expect(next.call.id).not.toBe(call.id)
+  expect(reports(db)).toEqual([intent])
+  expect(posts()).toHaveLength(1)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('https://github.com/acme/repo/issues/99')
+  expect(journal.read(chain.id)?.waiting).toContain('is closed; no replacement will be created')
+  journal.rebuild()
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, { ...overrides,
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  expect(reports(db)).toEqual([intent])
+  expect(posts()).toHaveLength(1)
+})
+
+it.each(['missing file', 'same file different line', 'different diagnostic'])('retains an uncertain pre-PR failure without creation: %s', async mode => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(posts()).toHaveLength(1)
+  const intent = reports(db)[0]
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  if (mode === 'missing file') {
+    next.call.error = 'atomic behavior blocked: a different worker explanation on a later receipt'
+    next.call.diagnostic = prePrDiagnostic()
+  } else if (mode === 'same file different line') {
+    next.call.error = ingressError('c'.repeat(64), 'd'.repeat(32)).replace(':166:', ':170:')
+    next.call.diagnostic = prePrDiagnostic()
+  } else {
+    next.call.error = memoryError('c'.repeat(64), 'd'.repeat(32))
+    next.call.diagnostic = { ...prePrDiagnostic(), phase: 'provider_execution' }
+  }
+  await new BehaviorChainRuntime(journal, operations(db, journal, { ...overrides,
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  expect(reports(db)).toEqual([intent])
+  expect(posts()).toHaveLength(1)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  const waiting = journal.read(chain.id)?.waiting
+  expect(waiting).toContain('uncertain failure relationship')
+  expect(waiting).toContain(next.call.id)
+  expect(waiting).not.toContain('https://github.com/acme/repo/issues/99')
+  expect(waiting).not.toContain('is closed; no replacement will be created')
+})
+
+it.each(['unavailable', 'ambiguous'])('keeps a distinct pre-PR hold pending when its remedy read is %s', async mode => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(1)
+  const intent = reports(db)[0]
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = memoryError('c'.repeat(64), 'd'.repeat(32)); next.call.diagnostic = prePrDiagnostic()
+  if (mode === 'ambiguous') {
+    for (const number of [98, 100]) {
+      const remedy = issue(number, `Stabilize ${MEMORY_FILE} keeps memory warnings correlatable without logging command bodies under full validation.`)
+      remedy.labels = [{ name: 'poise' }]; remote.push(remedy)
+    }
+    fresh.prerequisites = prePrPrerequisites([98, 100])
+  } else {
+    fresh.prerequisites = prePrPrerequisites([98])
+  }
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  expect(reports(db)).toEqual([intent])
+  expect(posts()).toHaveLength(1)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain(mode === 'ambiguous' ? 'multiple existing remedies match' : 'existing remedy #98 read is unavailable')
+  expect(journal.read(chain.id)?.waiting).not.toContain('https://github.com/acme/repo/issues/99')
+})
+
+it('files a distinct pre-PR hold when its only blocked-by prerequisite names the same file for a different test', async () => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(1)
+  const originalIntent = reports(db)[0]
+  const originalKey = chainBasis(['atomic_work_blocked', chain.id])
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = memoryError('c'.repeat(64), 'd'.repeat(32)); next.call.diagnostic = prePrDiagnostic()
+  const unrelated = issue(98, `Stabilize ${MEMORY_FILE} recovers mid-suite when only one suite may run under full validation.`)
+  unrelated.labels = [{ name: 'poise' }]; remote.push(unrelated)
+  fresh.prerequisites = prePrPrerequisites([98])
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  const intents = reports(db).map(row => JSON.parse(row.value))
+  expect(intents).toHaveLength(2)
+  expect(intents.find(intent => intent.key === originalKey)).toEqual(JSON.parse(originalIntent.value))
+  const scoped = intents.find(intent => intent.key !== originalKey)!
+  expect(scoped).toMatchObject({ source: chain.id, pull: null, issueNumber: 100,
+    attempts: [{ invocation: next.call.correlation_id, call: next.call.id }] })
+  expect(posts()).toHaveLength(2)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('https://github.com/acme/repo/issues/100')
+  expect(journal.read(chain.id)?.waiting).not.toContain('https://github.com/acme/repo/issues/98')
+  expect(journal.read(chain.id)?.waiting).not.toContain('https://github.com/acme/repo/issues/99')
+})
+
+it('files a distinct pre-PR hold when the same file:line reports a changed failing assertion', async () => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  call.error = ingressError('a'.repeat(64), 'b'.repeat(32)); call.diagnostic = prePrDiagnostic()
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) })).run()
+  expect(posts()).toHaveLength(1)
+  const originalIntent = reports(db)[0]
+  const originalKey = chainBasis(['atomic_work_blocked', chain.id])
+  remote[0].state = 'closed'
+  record(journal, journal.read(chain.id)!, { type: 'chain.resumed' })
+  const next = blockedImplementation(journal)
+  next.call.error = ingressError('c'.repeat(64), 'd'.repeat(32)).replace("expected busy but got 'write EPIPE'", "expected busy but got 'timeout'")
+  next.call.diagnostic = prePrDiagnostic()
+  fresh.prerequisites = prePrPrerequisites([])
+  await new BehaviorChainRuntime(journal, operations(db, journal, { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+    readInvocations: async () => ({ entries: [next.call], quarantined: [] }) })).run()
+  const intents = reports(db).map(row => JSON.parse(row.value))
+  expect(intents).toHaveLength(2)
+  expect(intents.find(intent => intent.key === originalKey)).toEqual(JSON.parse(originalIntent.value))
+  const scoped = intents.find(intent => intent.key !== originalKey)!
+  expect(scoped).toMatchObject({ source: chain.id, pull: null, issueNumber: 100,
+    attempts: [{ invocation: next.call.correlation_id, call: next.call.id }] })
+  expect(posts()).toHaveLength(2)
+  expect(journal.read(chain.id)).toMatchObject({ held: next.call.error })
+  expect(journal.read(chain.id)?.waiting).toContain('https://github.com/acme/repo/issues/100')
+  expect(journal.read(chain.id)?.waiting).not.toContain('https://github.com/acme/repo/issues/99')
+})
+
 it.each(['existing-remedy', 'distinct-fix', 'missing', 'stale'] as const)(
   'gates normally admitted and reviewed repair hold reports across restart (%s)', async kind => {
     const root = mkdtempSync(join(tmpdir(), 'repair-disposition-')); roots.push(root)
@@ -2386,6 +2647,113 @@ it('reports mixed native PR review timeouts after Resume once across observation
   expect(reports(db)).toHaveLength(1)
   expect(journal.read(source.id)).toMatchObject({ held: source.held, resumedAfterSequence: resumed.sequence, invocations: source.invocations })
 })
+
+it.each([
+  { code: 'review_provider_exit', position: 0 },
+  { code: 'review_provider_exit', position: 2 },
+  { code: 'authentication_failed', position: 0 },
+  { code: 'authentication_failed', position: 2 },
+])('reports mixed PR review timeouts with $code at position $position once across restart', async ({ code, position }) => {
+  const root = mkdtempSync(join(tmpdir(), 'mixed-review-report-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  const initial = setup(path)
+  type ReviewFailure = Pick<LogEntry, 'error' | 'error_code' | 'diagnostic'> & { callId: string }
+  const fileGroup: ReviewFailure = { callId: '4672ce8cf3384703881e05bf08d9d5ed', error_code: 'review_budget_exhausted',
+    error: 'Review file-group time limit reached; incomplete analysis; reduce the review scope',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'file_group',
+      outcome: 'timed_out', stderr: '', stderr_truncated: false,
+      context: { submission: 'none', timeout_seconds: 60 }, filesystem: null } }
+  const overall: ReviewFailure = { callId: '5bfab39a3e9e46978b36f0a728385a33', error_code: 'review_budget_exhausted',
+    error: 'Review reached its total time limit; needs attention',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'overall',
+      outcome: 'timed_out', stderr: '', stderr_truncated: false,
+      context: { submission: 'none', timeout_seconds: 1413 }, filesystem: null } }
+  const provider: ReviewFailure = { callId: 'd16f8f29e3a44fac8b72674e8e3ec23e', error_code: code,
+    error: code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'provider_execution',
+      outcome: 'exit', stderr: code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+      stderr_truncated: false, context: { submission: 'none', exit_code: 1 }, filesystem: null } }
+  const timeouts = [fileGroup, overall]
+  const failures = position === 0 ? [provider, ...timeouts] : [...timeouts, provider]
+  const source = await exhaustedReviews(initial.journal, failures)
+  expect(source.invocations).toHaveLength(3)
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }) }
+  const runtime = new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, overrides))
+  await runtime.run()
+  expect(posts()).toHaveLength(1)
+  expect(remote[0].title).toBe('fix: PR review exhausted its time limits for #21')
+  expect(remote[0].body).toContain(`hold event ${source.sequence}; head ${HEAD}; basis ${source.invocations[0].basis}; slot primary`)
+  const expectedCauses = position === 0 ? `${code} or review_budget_exhausted` : `review_budget_exhausted or ${code}`
+  expect(remote[0].body).toContain(`Cause: ${expectedCauses}.`)
+  expect(remote[0].body).toContain('Last timeout phase: overall; terminal attempt: '
+    + (position === 0 ? 'review_budget_exhausted' : code) + '.')
+  for (const [index, invocation] of source.invocations.entries()) {
+    const line = remote[0].body.split('\n').find(line => line.startsWith(`- Invocation ${invocation.id};`))!
+    expect(line).toContain(`Caller ${failures[index].callId}`)
+    expect(line).toContain(`error_code=${failures[index].error_code}`)
+    const expected = failures[index] === provider
+      ? 'operation=provider.review; phase=provider_execution; timeout_seconds=unknown'
+      : failures[index] === fileGroup
+        ? 'operation=provider.review; phase=file_group; timeout_seconds=60'
+        : 'operation=provider.review; phase=overall; timeout_seconds=1413'
+    expect(line).toContain(expected)
+  }
+  for (const failure of failures) expect(remote[0].body).not.toContain(failure.error)
+  expect(remote[0].body).not.toMatch(/\/private\/work|refresh token was already used: .*token/i)
+  expect(remote[0].body).toContain(`<!-- poise-repair-exhaustion:${chainBasis(['review_budget_exhausted', source.id, 21])} -->`)
+  expect(remote[0].body).toContain('does not recover review or relax any review, admission or merge gate')
+  expect(initial.journal.read(source.id)).toMatchObject({ held: source.held, invocations: source.invocations })
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await runtime.run()
+  initial.db.close(); databases.splice(databases.indexOf(initial.db), 1)
+  const { db, journal } = setup(path)
+  journal.rebuild()
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(posts()).toHaveLength(1)
+  expect(reports(db)).toHaveLength(1)
+  expect(journal.read(source.id)).toMatchObject({ held: source.held, invocations: source.invocations })
+})
+
+it.each(['operator hold', 'changed basis', 'provider-only', 'submitting_review provider', 'provider receipt',
+  'other provider code', 'missing provider diagnostic', 'missing submission'])(
+  'does not report mixed PR review exhaustion with %s', async change => {
+    const { db, journal } = setup()
+    type ReviewFailure = Pick<LogEntry, 'error' | 'error_code' | 'diagnostic'> & { callId: string }
+    const timeout = (callId: string, phase: string, timeout_seconds: number): ReviewFailure => ({ callId,
+      error_code: 'review_budget_exhausted', error: phase === 'file_group'
+        ? 'Review file-group time limit reached; incomplete analysis; reduce the review scope'
+        : 'Review reached its total time limit; needs attention',
+      diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase,
+        outcome: 'timed_out', stderr: '', stderr_truncated: false,
+        context: { submission: 'none', timeout_seconds }, filesystem: null } })
+    const providerFailure = (error_code: string, callId = 'd16f8f29e3a44fac8b72674e8e3ec23e'): ReviewFailure => ({ callId, error_code,
+      error: error_code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+      diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'provider_execution',
+        outcome: 'exit', stderr: 'provider rejected the review', stderr_truncated: false,
+        context: { submission: 'none', exit_code: 1 }, filesystem: null } })
+    const failures = change === 'provider-only'
+      ? [providerFailure('review_provider_exit', 'd16f8f29e3a44fac8b72674e8e3ec23e'),
+        providerFailure('authentication_failed', '4672ce8cf3384703881e05bf08d9d5ed'),
+        providerFailure('review_provider_exit', '5bfab39a3e9e46978b36f0a728385a33')]
+      : [providerFailure('review_provider_exit'), timeout('4672ce8cf3384703881e05bf08d9d5ed', 'file_group', 60),
+        timeout('5bfab39a3e9e46978b36f0a728385a33', 'overall', 1413)]
+    let held = await exhaustedReviews(journal, failures)
+    if (change === 'operator hold') held = record(journal, held, { type: 'chain.held', reason: 'New invocations held by the person' })
+    const chain = structuredClone(held)
+    chain.observation = structuredClone(fresh)
+    const provider = chain.invocations[change === 'provider-only' ? 1 : 0]
+    if (change === 'changed basis') fresh.pull!.reviewContext = chainBasis('edited title, body or base')
+    if (change === 'submitting_review provider') provider.evidence!.artifact = { phase: 'submitting_review', expected_head: HEAD }
+    if (change === 'provider receipt') provider.evidence!.review_id = 123
+    if (change === 'other provider code') provider.evidence!.error_code = 'review_provider_error'
+    if (change === 'missing provider diagnostic') provider.evidence!.diagnostic = null
+    if (change === 'missing submission') (provider.evidence!.diagnostic as { context: { submission: string } }).context.submission = 'uncertain'
+    await operations(db, journal).reportHold!(chain)
+    expect(posts()).toHaveLength(0)
+    expect(reports(db)).toHaveLength(0)
+    expect(journal.read(chain.id)?.held).toBe(chain.held)
+  })
 
 it.each(['incomplete replies', 'execution budget', 'review budget', 'implementation hold'])('carries the recorded %s report policy only to its closing remediation PR', async mode => {
   const { db, journal } = setup()
