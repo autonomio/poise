@@ -1488,6 +1488,23 @@ it('still admits an ordinary issue while an unrelated review report acknowledgem
   expect(JSON.parse(reports(db)[0].value).issueNumber).toBeNull()
 })
 
+it.each(['implementation', 'review'] as const)('still admits a null-body ordinary issue while an unrelated %s report acknowledgement is lost', async kind => {
+  const { db, journal } = setup()
+  if (kind === 'implementation') await reviewedImplementationReport(db, journal)
+  else await reviewedReviewReport(db, journal, true)
+  const stored = JSON.parse(reports(db)[0].value)
+  stored.issueNumber = null
+  db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(JSON.stringify(stored), `behavior_chain_repair_report:${stored.key}`)
+  remote.push({ ...issue(88, ''), body: null as unknown as string })
+  const ordinary = journal.append('acme/repo#88', 'seed:88', 0, { type: 'chain.admitted', repository: 'acme/repo',
+    issue: 88, branch: 'poise/issue-88', author: 'author', reviewer: 'reviewer' }, NOW - 60_000)
+  const ordinaryObservation = unpublished()
+  ordinaryObservation.issueReviewers = []
+  const gate = await implementationReportAdmission(db, journal, ordinary, ordinaryObservation, async () => ordinaryObservation)
+  expect(gate).toEqual({ reason: null })
+  expect(JSON.parse(reports(db)[0].value).issueNumber).toBeNull()
+})
+
 it('keeps a legacy source-only review report fenced across ownership changes while ordinary issues still start', async () => {
   const { db, journal } = setup()
   const fixture = await reviewedReviewReport(db, journal, true)
