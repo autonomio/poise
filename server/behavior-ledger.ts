@@ -377,7 +377,7 @@ export class BehaviorLedgerObserver {
     }
     if (readIndex < 0) this.queue.shift()
     else this.queue.splice(readIndex, 1)
-    if (this.captureBatch && !this.reads && job.operation === 'capture' && !job.single && job.observation?.type !== 'loss') {
+    if (this.captureBatch && job.operation === 'capture' && !job.single && job.observation?.type !== 'loss') {
       const batch = [job]
       while (batch.length < LEDGER_CAPTURE_BATCH_LIMIT && this.queue[0]?.operation === 'capture'
         && !this.queue[0].single && this.queue[0].observation?.type !== 'loss') batch.push(this.queue.shift()!)
