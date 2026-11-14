@@ -483,3 +483,27 @@ def test_deadline_chained_symlink_escape_never_applies(workspace, monkeypatch):
     successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
     assert "deadline_restored" not in successor["artifact"]
     assert "Restored" not in seen["instruction"]
+
+
+def test_deadline_base_symlink_escape_never_applies(workspace, monkeypatch):
+    real_prepared = prepared_fixed
+
+    def with_base_link(checkout, when="2026-01-01T00:00:00+00:00"):
+        receipt = real_prepared(checkout, when)
+        (checkout / "d").mkdir(exist_ok=True)
+        os.symlink("..", checkout / "d" / "up.cjs")
+        git(checkout, "add", "d/up.cjs")
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        subprocess.run(["git", "-C", str(checkout), "-c", "user.name=fixture", "-c", "user.email=fixture@example.test",
+                        "commit", "-qm", "fixture base link"], check=True, capture_output=True, env=env)
+        receipt["checkout_head"] = git(checkout, "rev-parse", "HEAD")
+        return receipt
+
+    monkeypatch.setattr(sys.modules[__name__], "prepared_fixed", with_base_link)
+    provider = ("import time, pathlib, os; pathlib.Path('source.cjs').write_text('module.exports=1;\\n'); "
+                "os.symlink('d/up.cjs/../secret', 'escape.cjs'); time.sleep(5)")
+    original, _ = _run_deadline_original(workspace, monkeypatch, provider)
+    assert original["artifact"]["deadline_source"]["status"] == "available"
+    successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
+    assert "deadline_restored" not in successor["artifact"]
+    assert "Restored" not in seen["instruction"]

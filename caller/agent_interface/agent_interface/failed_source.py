@@ -424,7 +424,7 @@ def _confined_link(link: str, target: str) -> bool:
     return ".git" not in parts
 
 
-def _restore_entries(changes: object) -> list[tuple[str, str | None, bytes | None]]:
+def _restore_entries(changes: object, checkout: Path) -> list[tuple[str, str | None, bytes | None]]:
     if not isinstance(changes, list) or not changes:
         raise ValueError("empty deadline capture")
     entries, seen, size = [], set(), 0
@@ -460,10 +460,31 @@ def _restore_entries(changes: object) -> list[tuple[str, str | None, bytes | Non
             if not _confined_link(path, target):
                 raise ValueError("unsafe deadline capture")
         entries.append((path, mode, data))
-    # A target that passes through another captured file or symlink defeats the lexical
+    # A target that passes through another file or symlink defeats the lexical
     # confinement above: `d/up.cjs/../secret` is not `d/secret` when `d/up.cjs` is itself
-    # a link. Every traversed prefix must be a directory, never a captured entry.
+    # a link. Every traversed prefix must be a directory post-restore, never a captured
+    # entry nor an unchanged base file/symlink (capture omits unchanged paths).
     captured = {path for path, mode, _ in entries if mode is not None}
+    deleted = {path for path, mode, _ in entries if mode is None}
+    captured_links = {path for path, mode, _ in entries if mode == "120000"}
+
+    def _post_restore_dir(prefix: str) -> bool:
+        if prefix in captured:
+            return False
+        if not prefix or prefix in deleted:
+            return True
+        try:
+            return stat.S_ISDIR((checkout / prefix).lstat().st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    for path, _, _ in entries:
+        parent = PurePosixPath(path).parent.parts
+        for depth in range(1, len(parent) + 1):
+            if not _post_restore_dir("/".join(parent[:depth])):
+                raise ValueError("unsafe deadline capture")
     for path, mode, data in entries:
         if mode != "120000":
             continue
@@ -473,13 +494,24 @@ def _restore_entries(changes: object) -> list[tuple[str, str | None, bytes | Non
             if part in {"", "."}:
                 continue
             if part == "..":
-                if not parts or "/".join(parts) in captured:
+                if not parts or not _post_restore_dir("/".join(parts)):
                     raise ValueError("unsafe deadline capture")
                 parts.pop()
             else:
                 parts.append(part)
         for depth in range(1, len(parts)):
-            if "/".join(parts[:depth]) in captured:
+            if not _post_restore_dir("/".join(parts[:depth])):
+                raise ValueError("unsafe deadline capture")
+        final = "/".join(parts)
+        if final in captured_links:
+            raise ValueError("unsafe deadline capture")
+        if final and final not in captured and final not in deleted:
+            try:
+                if stat.S_ISLNK((checkout / final).lstat().st_mode):
+                    raise ValueError("unsafe deadline capture")
+            except FileNotFoundError:
+                pass
+            except OSError:
                 raise ValueError("unsafe deadline capture")
     return entries
 
@@ -530,7 +562,7 @@ def restore_deadline(database: Path, successor_call: str, checkout: Path, base: 
                     "call": predecessor["id"], "repo": predecessor["repo"], "issue": int(predecessor["pr_id"]),
                     "actor": predecessor["actor"], "base": base, "seed": seed}.items()):
             return unavailable
-        entries = _restore_entries(evidence.get("changes"))
+        entries = _restore_entries(evidence.get("changes"), checkout)
         for path, _, _ in entries:
             if not (checkout / path).is_relative_to(checkout):
                 return unavailable
