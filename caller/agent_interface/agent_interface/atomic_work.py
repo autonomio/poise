@@ -9,7 +9,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Callable
 
-from . import atoms, checkout_lock, issue_review, progress, review_budget, resource_ownership
+from . import atoms, checkout_lock, failed_source, issue_review, native_namespace, progress, review_budget, resource_ownership
 from .model_catalog import Model
 from .process_diagnostic import diagnostic_envelope, escaped_failure
 
@@ -296,7 +296,8 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
     data = issue_review.packet(repo, number, actor)
     if data["issue"]["state"] != "open":
         raise AtomicWorkFailed("seed issue is no longer open")
-    if expected_issue_revision and issue_review.revision(data["issue"]) != expected_issue_revision:
+    seed_revision = issue_review.revision(data["issue"])
+    if expected_issue_revision and seed_revision != expected_issue_revision:
         raise AtomicWorkFailed("seed issue changed before implementation/repair")
     progress.stage("preparing_checkout", "Preparing the implementation/repair checkout")
     prepared = issue_review.interface("--issue-work", *common, "--mode", "prepare", "--path", str(checkout),
@@ -304,7 +305,23 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
     if prepared.get("outcome") != "prepared":
         return prepared
     test_capture = {"call": call_id, "nonce": secrets.token_hex(32), "repository": repo, "base": prepared["checkout_head"]}
-    record({"phase": "prepared", "prepared": prepared, "test_capture": test_capture})
+    record({"phase": "prepared", "prepared": prepared, "test_capture": test_capture, "seed_revision": seed_revision})
+    restored = None
+    if pull is None:
+        try:
+            bound = resource_ownership.binding()
+        except Exception:
+            bound = None
+        if bound is not None and bound[1] == call_id:
+            try:
+                result = failed_source.restore_deadline(bound[0], call_id, checkout, prepared["checkout_head"], seed_revision)
+            except Exception as error:
+                raise AtomicWorkFailed(f"deadline restore verification failed; no publication attempted: {error}") from error
+            if result.get("status") == "restored":
+                restored = result
+                record({"phase": "prepared", "prepared": prepared, "seed_revision": seed_revision,
+                        "deadline_restored": {"predecessor": result["predecessor"], "base": result["base"],
+                                              "seed": result["seed"], "count": len(result["paths"])}})
     test_evidence = work / "test-evidence"
     test_evidence.mkdir(mode=0o700)
     evidence = {}
@@ -375,6 +392,10 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
         f"You have {int(seconds)} seconds. This invocation ends after edits/checks and that file.\n"
         f"Behavior note: {note}\nPreparation receipt:\n{json.dumps(prepared)}\nActual issue and comments:\n{json.dumps(data)}\nActual PR evidence:\n{json.dumps(evidence)}"
     )
+    if restored is not None:
+        instruction += (f"\nRestored {len(restored['paths'])} unvalidated file(s) from previous deadline attempt "
+                        f"{restored['predecessor']} on the same base and seed: {json.dumps(sorted(restored['paths']))}. "
+                        "These edits are unvalidated; validate from scratch and publish only from this attempt.\n")
     progress.stage("preparing_provider", "Preparing the atomic provider command")
     args, stdin, env = issue_review.command(model, instruction, checkout, work, seconds, UNATTENDED)
     env = dict(os.environ if env is None else env)
@@ -394,6 +415,39 @@ def run(model: Model, repo: str, number: int, branch: str, actor: str, work: Pat
             try:
                 done = checkout_lock.run_gated(lease, args, input=stdin, cwd=str(checkout), timeout=seconds, env=env, provider=model.provider)
             except subprocess.TimeoutExpired as error:
+                if pull is None:
+                    try:
+                        bound = resource_ownership.binding()
+                    except Exception:
+                        bound = None
+                    if bound is not None and bound[1] == call_id:
+                        base = prepared.get("checkout_head")
+                        proven = not lease.retained
+                        if proven:
+                            try:
+                                issue_review.stop_leftovers(work)
+                                proven = issue_review._cwd_pids(work, require_complete=True) == []
+                            except Exception:
+                                proven = False
+                        if proven:
+                            try:
+                                scope = native_namespace.active()
+                                if scope is not None:
+                                    scope.require_idle()
+                            except Exception:
+                                proven = False
+                        if proven:
+                            try:
+                                failed_source.capture_deadline(bound[0], call_id, checkout, base, seed_revision)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                record({"phase": "executing", "prepared": prepared,
+                                        "deadline_source": {"status": "unavailable", "base": base,
+                                                            "seed": seed_revision, "reason": failed_source.DEADLINE_REASON}})
+                            except Exception:
+                                pass
                 raise review_budget.ReviewLimitError(
                     "Atomic behavior provider exhausted its execution budget; no publication attempted",
                     "atomic_work_execution_budget_exhausted",
