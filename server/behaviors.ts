@@ -10,7 +10,7 @@ import { readBehaviorResourceAdmission, type BehaviorResourceBudget, type Behavi
 import { advanceBehaviorCutover, behaviorAdmissionDraining, behaviorCutoverBlockers } from './behavior-cutover'
 import { BehaviorChainRuntime } from './behavior-chain-runtime'
 import { nativeChainOperations } from './behavior-chain-native'
-import { recoverReportedRepair, repairReportImplementationFence, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, repairReportRepositories } from './behavior-chain-report'
+import { implementationReportAdmission, recoverReportedRepair, repairReportImplementationFence, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, repairReportRepositories } from './behavior-chain-report'
 import { resourceReleaseProven } from './behavior-resource-receipt'
 import { invalidateNativeCleanup, nativeCleanupSupport, requireNativeCleanup } from './native-cleanup-support'
 import { callReviewResponse } from './review-response'
@@ -3148,6 +3148,10 @@ function settleClaimAfterExit(
           const preflight503 = !call.error_code && /^(?:error: )?GitHub 503\b/.test(call.error)
             && call.action === 'not_started' && call.outcome === 'preflight_failed'
             && row.head_sha == null && row.review_id == null && row.review_comments == null && row.receipts == null
+          const authRejected = call.error_code === 'authentication_failed'
+            && call.action === 'not_started' && call.outcome === 'preflight_failed'
+            && call.diagnostic?.operation === 'provider.review' && call.diagnostic.context.submission === 'none'
+            && row.head_sha == null && row.review_id == null && row.review_comments == null && row.receipts == null
           let retryable503 = false
           if (preflight503) {
             // A single completion cannot prove remaining retry budget. Read
@@ -3170,7 +3174,7 @@ function settleClaimAfterExit(
               && !getMeta(repoHoldKey(claim.launchRepo, claim.launchActor))
               && !getMeta(`${REPO_ACCESS_HOLD_PREFIX}${claim.launchRepo.toLowerCase()}`)
           }
-          if (!timeout && !retryable503) { console.error(message); return }
+          if (!timeout && !retryable503 && !authRejected) { console.error(message); return }
           // Match periodic --diagnostics truncation and its 64 KiB envelope
           // fallback so delayed collection replays exactly.
           let error = typeof row.error === 'string' ? truncateCodePoints(row.error, 8192) : row.error
@@ -8555,6 +8559,10 @@ async function runBehaviorChains(): Promise<void> {
       wake() { checkSlotRetryPending = true; onCheckSlotReleased() },
     })
     runtime = new BehaviorChainRuntime(behaviorChainJournal(), { ...operations,
+      implementationAdmission: (chain, observation) => implementationReportAdmission(db, behaviorChainJournal(), chain, observation, async source => {
+        await requireFreshDatastore()
+        return operations.observe(source)
+      }),
       permitted: (chain, decision) => !repairReportImplementationFence(db, chain, decision.behavior) && operations.permitted(chain, decision),
       recoverReport: (chain, observation) => recoverReportedRepair(db, behaviorChainJournal(), chain, observation, async target => {
         await requireFreshDatastore()

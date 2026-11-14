@@ -2,13 +2,14 @@ import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { decideBehaviorChain, type ChainObservation } from '../server/behavior-chain-decision'
 import { BehaviorChainRuntime, ReviewScopeIndexingError, type ChainRuntimeOperations } from '../server/behavior-chain-runtime'
 import { BehaviorChainJournal, chainBasis, type BehaviorChain, type ChainEvent } from '../server/behavior-chain-store'
-import { MAX_REPAIR_REPORT_REPOSITORIES_BYTES, REMEDIATION_SCOPE, recoverReportedRepair, repairReportImplementationFence, repairReportRepositories, repairReportRepositoriesHealth, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, setRepairReportRepositories } from '../server/behavior-chain-report'
+import { MAX_REPAIR_REPORT_REPOSITORIES_BYTES, REMEDIATION_SCOPE, implementationReportAdmission, implementationReportBinding, setImplementationReportDisposition, recoverReportedRepair, repairReportImplementationFence, repairReportRepositories, repairReportRepositoriesHealth, repairReportReviewScope, reportRepairExhaustion, reportLegacyReviewTimeout, setRepairReportRepositories } from '../server/behavior-chain-report'
 import { nativeChainOperations } from '../server/behavior-chain-native'
 import { nativeRequestSha } from '../server/behavior-chain-action'
 import { behaviorChainSummary, behaviorChainWorkImpact } from '../server/behavior-chain-summary'
@@ -18,10 +19,14 @@ import type { Organization } from '../server/organizations'
 import { completedReviewCall } from './review-response-fixture'
 
 const mocks = vi.hoisted(() => ({ runFile: vi.fn(), settings: { enabled: true, seedMode: 'label', label: 'poise' },
-  accounts: { me: 'author', agentAccount: 'reviewer' } }))
+  accounts: { me: 'author', agentAccount: 'reviewer' }, database: null as Database.Database | null,
+  journal: null as BehaviorChainJournal | null }))
 vi.mock('../server/process', () => ({ runFile: mocks.runFile, spawnDetached: vi.fn(), MAX_PROCESS_ARG_BYTES: 64 * 1024 }))
 vi.mock('../server/db', () => ({ getMeta: (key: string) => key === 'me' ? mocks.accounts.me : null,
+  get db() { return mocks.database },
   writeObservation: (write: () => unknown) => write() }))
+vi.mock('../server/behavior-chain-journal', () => ({ behaviorChainJournal: () => mocks.journal }))
+vi.mock('../server/behaviors', () => ({ getBehaviorChainRuntimeHealth: () => [], getBehaviorChainCapacity: () => ({}) }))
 vi.mock('../server/settings', () => ({ getSettings: () => mocks.accounts, getBehaviorChainSettings: () => mocks.settings,
   BEHAVIOR_CHAIN_INTEGRITY_HOLD_KEY: 'behavior_chain_integrity_hold' }))
 vi.mock('../server/models', () => ({ agentInterfaceCwd: () => '/fixture' }))
@@ -336,7 +341,7 @@ function operations(db: Database.Database, journal: BehaviorChainJournal, overri
     roster: forbidden, resolve: forbidden, prepare: forbidden, borrow: () => null, available: () => false, capacity: () => 3,
     permitted: () => false, note: () => '', severity: () => 'p2', received: () => {}, reviews: forbidden, existing: async () => new Set(), wake: () => {},
   })
-  return { enabled: () => true, accounts: () => ({ author: 'author', reviewer: 'reviewer' }), discover: intake.discover,
+  const ops: ChainRuntimeOperations = { enabled: () => true, accounts: () => ({ author: 'author', reviewer: 'reviewer' }), discover: intake.discover,
     ownsRepository: () => true, observe: async chain => chain.issue === 7 ? observation() : { ...observation(),
       pull: null, publication: { pull_number: null, head_sha: null, head_invocation: null, state: null, merged: false, merge_sha: null } },
     reportHold: chain => reportRepairExhaustion(db, journal, chain, async () => {
@@ -345,6 +350,8 @@ function operations(db: Database.Database, journal: BehaviorChainJournal, overri
     }, () => true), readInvocations: async () => ({ entries: [], quarantined: [] }), received: () => {}, available: () => false,
     capacity: () => 3, permitted: () => false, request: forbidden, launch: forbidden, perform: forbidden,
     readActionResult: forbidden, resumePublication: forbidden, fenceClosedTarget: forbidden, wake: () => {}, ...overrides }
+  ops.implementationAdmission ??= (chain, observation) => implementationReportAdmission(db, journal, chain, observation, ops.observe)
+  return ops
 }
 const posts = () => mocks.runFile.mock.calls.filter(call => call[0] === 'gh' && call[1][1] === 'repos/acme/repo/issues')
 const labelPosts = () => mocks.runFile.mock.calls.filter(call => call[0] === 'gh' && call[1][1].endsWith('/labels') && call[1].includes('POST'))
@@ -932,6 +939,342 @@ it.each([false, true])('reports one verified implementation hold before a PR wit
   expect(behaviorChainWorkImpact(journal, call.id, call.correlation_id!)?.impact).toBe('recovered')
   await reportRepairExhaustion(db, journal, recovered, async () => fresh, () => true)
   expect(remote[0].body).toBe(filedBody)
+  expect(posts()).toHaveLength(1)
+})
+
+async function reviewedImplementationReport(db: Database.Database, journal: BehaviorChainJournal) {
+  const { call } = blockedImplementation(journal)
+  let entries = [call]
+  const observe = async (chain: BehaviorChain) => chain.issue === 7 ? { ...fresh, checkedAt: Date.now() } : {
+    ...unpublished(), issue: { open: true, eligible: true, revision: chainBasis([remote[0].title, remote[0].body]), commentIds: [700] },
+    issueReviewers: [reviewer], prerequisites: { wait: null, base: HEAD, evidence: [] } }
+  const request = vi.fn(async (chain: BehaviorChain, observation: ChainObservation, decision: { behavior: string }) => ({
+    command: 'agent-interface' as const, cwd: '/fixture', argv: [decision.behavior === 'review-issue' ? '--issue-review' : '--atomic-work',
+      chain.id, '--model', 'fixture', '--expected-issue-revision', observation.issue.revision] }))
+  const launch = vi.fn(async () => true)
+  const overrides = { observe, request, launch, available: () => true, permitted: () => true,
+    readInvocations: async () => ({ entries, quarantined: [] }) }
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  indexed = true
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  let report = journal.read('acme/repo#99')!
+  const review = report.invocations.at(-1)!
+  expect(review.behavior).toBe('review-issue')
+  entries = [call, { ...call, id: 'b'.repeat(32), correlation_id: review.id, behavior: 'issue_review',
+    pr_id: '99', actor: 'reviewer', status: 'completed', action: 'commented', outcome: 'commented', error: '', error_code: null,
+    started_at: new Date(review.admittedAt).toISOString(), completed_at: new Date(NOW).toISOString(), resources_settled_at: new Date(NOW).toISOString(),
+    issue_revision: (await observe(report)).issue.revision, artifact: null,
+    receipts: [{ issue: report.id, comment_id: 700, author: 'reviewer', url: 'https://github.com/acme/repo/issues/99#issuecomment-700' }] }]
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  report = journal.read(report.id)!
+  expect(report.invocations).toMatchObject([{ behavior: 'review-issue', state: 'settled', outcome: 'commented' }])
+  request.mockClear(); launch.mockClear()
+  return { call, overrides, request, launch, review: review.id }
+}
+
+it.each(['source-only', 'distinct-fix', 'missing', 'stale'] as const)(
+  'gates normally admitted and reviewed implementation reports across restart (%s)', async kind => {
+    const root = mkdtempSync(join(tmpdir(), 'source-disposition-')); roots.push(root)
+    const path = join(root, 'journal.sqlite')
+    let { db, journal } = setup(path)
+    const fixture = await reviewedImplementationReport(db, journal)
+    let report = journal.read('acme/repo#99')!
+    if (kind !== 'missing') {
+      await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+        kind: kind === 'distinct-fix' ? kind : 'source-only', review: fixture.review, commentId: 700,
+        diagnosis: kind === 'distinct-fix' ? 'Verified shared defect in tracked main code; independently implementable.'
+          : 'The failing test exists only in the unpublished source candidate.',
+        nextAction: 'Inspect the original Call; recover the source evidence, then explicitly Resume when safe.' })
+    }
+    if (kind === 'stale') {
+      remote[0].body += '\nChanged triage scope.'
+      // A new revision is reviewed normally; its old disposition cannot cover it.
+      report = journal.read(report.id)!
+      const observation = await fixture.overrides.observe(report)
+      report = record(journal, report, { type: 'invocation.admitted', invocation: { id: 'revised-review', behavior: 'review-issue',
+        actor: 'reviewer', basis: chainBasis(['issue', observation.issue.revision]), model: 'fixture', slot: reviewer.slot,
+        admittedAt: NOW, request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+      record(journal, report, { type: 'invocation.settled', invocationId: 'revised-review', callId: 'c'.repeat(32), outcome: 'commented',
+        evidence: { status: 'completed', action: 'commented', issue_revision: observation.issue.revision,
+          receipts: [{ issue: report.id, comment_id: 700, author: 'reviewer' }],
+          resources_settled_at: new Date(NOW).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
+    }
+    const original = journal.read('acme/repo#7')!
+    const intent = reports(db)
+    journal.rebuild()
+    db.close(); databases.splice(databases.indexOf(db), 1)
+    ;({ db, journal } = setup(path))
+    // Revoking report creation must not disable an existing report's admission gate.
+    vi.stubEnv('POISE_REPAIR_EXHAUSTION_REPOSITORIES', '')
+    await new BehaviorChainRuntime(journal, operations(db, journal, fixture.overrides)).run()
+    const current = journal.read('acme/repo#99')!
+    if (kind === 'distinct-fix') {
+      expect(fixture.request).toHaveBeenCalledOnce()
+      expect(fixture.launch).toHaveBeenCalledOnce()
+      expect(current.invocations.at(-1)?.behavior).toBe('implement-issue')
+    } else {
+      expect(fixture.request).not.toHaveBeenCalled()
+      expect(fixture.launch).not.toHaveBeenCalled()
+      expect(current.invocations.some(item => item.behavior === 'implement-issue')).toBe(false)
+      expect(current.waiting).toContain(kind === 'source-only' ? 'source-only disposition' : 'awaits a current explicit')
+    }
+    expect(journal.read(original.id)).toMatchObject({ held: original.held, resumedAfterSequence: original.resumedAfterSequence,
+      invocations: original.invocations })
+    if (kind === 'source-only') {
+      vi.setSystemTime(NOW + 86_400_000)
+      await new BehaviorChainRuntime(journal, operations(db, journal, fixture.overrides)).run()
+      expect(fixture.request).not.toHaveBeenCalled()
+      expect(fixture.launch).not.toHaveBeenCalled()
+      expect(journal.read(original.id)?.waiting).toContain('failing test exists only in the unpublished source candidate')
+      expect(journal.read(original.id)?.waiting).toContain('Next action: Inspect the original Call')
+      expect(journal.read(original.id)?.waiting).toContain('https://github.com/acme/repo/issues/99')
+    }
+    expect(reports(db)).toEqual(intent)
+    expect(posts()).toHaveLength(1)
+  })
+
+it.each(['resume', 'same-text-hold', 'later-call', 'publication', 'source-revision', 'closed', 'competing-work', 'stale-observation', 'preparation', 'report-during-preparation', 'admission', 'launch'] as const)(
+  'invalidates a distinct-fix disposition when its source changes (%s)', async change => {
+    const { db, journal } = setup()
+    const fixture = await reviewedImplementationReport(db, journal)
+    const report = journal.read('acme/repo#99')!
+    await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+      kind: 'distinct-fix', review: fixture.review, commentId: 700,
+      diagnosis: 'A distinct verified defect in main requires a repository fix.', nextAction: 'Implement that distinct fix.' })
+    const source = journal.read('acme/repo#7')!
+    if (change === 'resume' || change === 'later-call') record(journal, source, { type: 'chain.resumed' })
+    if (change === 'same-text-hold') record(journal, source, { type: 'chain.held', reason: source.held! })
+    if (change === 'later-call') blockedImplementation(journal, 'later-implementation')
+    if (change === 'publication') fresh = observation()
+    if (change === 'source-revision') fresh.issue.revision = chainBasis('changed source')
+    if (change === 'closed') fresh.issue.open = false
+    if (change === 'competing-work') fresh.existingPulls = ['https://github.com/acme/repo/pull/22']
+    const overrides = { ...fixture.overrides }
+    if (change === 'stale-observation') overrides.observe = async chain => {
+      const result = await fixture.overrides.observe(chain)
+      if (chain.id === source.id) result.checkedAt = NOW - 500_000
+      return result
+    }
+    if (change === 'preparation' || change === 'report-during-preparation') overrides.request = vi.fn(async (chain: BehaviorChain, observation: ChainObservation, decision: { behavior: string }) => {
+      if (change === 'preparation') {
+        const current = journal.read(source.id)!
+        record(journal, current, { type: 'chain.held', reason: current.held! })
+      } else remote[0].body += '\nChanged report after preparation.'
+      return fixture.request(chain, observation, decision)
+    })
+    // Only reconcile the report here: the held source cannot independently retry.
+    const ops = operations(db, journal, { ...overrides, ownsRepository: () => true, permitted: chain => chain.issue === 99,
+      discover: async () => [], readInvocations: async () => ({ entries: [], quarantined: [] }) })
+    if (change === 'admission') {
+      const admission = ops.implementationAdmission!
+      ops.implementationAdmission = async (...args) => {
+        const result = await admission(...args)
+        if (result.source && fixture.request.mock.calls.length) {
+          const current = journal.read(source.id)!
+          record(journal, current, { type: 'chain.held', reason: current.held! })
+        }
+        return result
+      }
+    }
+    if (change === 'launch') ops.launch = async (_invocation, _onExit, allowed) => {
+      const current = journal.read(source.id)!
+      record(journal, current, { type: 'chain.held', reason: current.held! })
+      expect(allowed()).toBe(false)
+      return false
+    }
+    await new BehaviorChainRuntime(journal, ops).run()
+    expect(fixture.launch).not.toHaveBeenCalled()
+    if (change === 'launch') {
+      expect(journal.read(report.id)?.invocations.at(-1)).toMatchObject({ outcome: 'launch_deferred' })
+      return
+    }
+    expect(journal.read(report.id)?.invocations.some(item => item.behavior === 'implement-issue')).toBe(false)
+    expect(journal.read(report.id)?.waiting).toContain('awaits a current explicit')
+    expect(posts()).toHaveLength(1)
+  })
+
+it('refuses unauthenticated, stale and unreviewed disposition controls', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  const report = journal.read('acme/repo#99')!
+  const binding = implementationReportBinding(db, report)
+  const disposition = { kind: 'source-only', review: fixture.review, commentId: 700,
+    diagnosis: 'Source candidate only.', nextAction: 'Inspect the original Call before Resume.' }
+  await expect(setImplementationReportDisposition(db, journal, report, report.sequence - 1, binding, disposition)).rejects.toThrow('changed')
+  await expect(setImplementationReportDisposition(db, journal, report, report.sequence, { ...binding, call: 'forged' }, disposition)).rejects.toThrow('stale')
+  await expect(setImplementationReportDisposition(db, journal, report, report.sequence, binding, { ...disposition, commentId: 701 })).rejects.toThrow('authenticated report review')
+  remote[0].user.login = 'outsider'
+  await expect(setImplementationReportDisposition(db, journal, report, report.sequence, binding, disposition)).rejects.toThrow('identity')
+  expect(JSON.parse(reports(db)[0].value).disposition).toBeUndefined()
+  expect(fixture.launch).not.toHaveBeenCalled()
+})
+
+it('records explicit triage through the existing HTTP chain control and rejects a stale control', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  mocks.database = db; mocks.journal = journal
+  const { handleBehaviorChains } = await import('../server/behavior-chain-api')
+  const server = createServer((req, res) => { void handleBehaviorChains(req, res, req.url || '/') })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('server did not bind')
+  const url = `http://127.0.0.1:${address.port}/api/behavior-chains`
+  try {
+    const view = await (await fetch(`${url}?id=acme/repo%2399`)).json()
+    expect(view.implementationReport).toMatchObject({ source: 'acme/repo#7', call: fixture.call.id, disposition: null })
+    const body = { id: 'acme/repo#99', sequence: view.chain.sequence, operation: 'report-disposition', binding: view.implementationReport,
+      disposition: { kind: 'source-only', review: fixture.review, commentId: 700,
+        diagnosis: 'The failure belongs to the unpublished source candidate.', nextAction: 'Inspect the original Call before explicit Resume.' } }
+    const post = () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    expect((await post()).status).toBe(200)
+    expect(journal.read('acme/repo#7')?.waiting).toContain(body.disposition.diagnosis)
+    expect((await post()).status).toBe(409)
+    expect(JSON.parse(reports(db)[0].value).disposition).toMatchObject(body.disposition)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
+})
+
+it('does not restart a pre-existing admitted report implementation without a disposition', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  let report = journal.read('acme/repo#99')!
+  const observation = await fixture.overrides.observe(report)
+  record(journal, report, { type: 'invocation.admitted', invocation: { id: 'stale-implement', behavior: 'implement-issue',
+    basis: chainBasis(['issue', observation.issue.revision]), actor: 'author', model: 'fixture', slot: reviewer.slot,
+    admittedAt: NOW - 60_000, request: { command: 'agent-interface', cwd: '/fixture',
+      argv: ['--atomic-work', report.id, '--model', 'fixture', '--expected-issue-revision', observation.issue.revision] } } })
+  const ops = operations(db, journal, { ...fixture.overrides, readInvocations: async () => ({ entries: [], quarantined: [] }) })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.launch).not.toHaveBeenCalled()
+  const current = journal.read(report.id)!
+  expect(current.invocations.find(item => item.id === 'stale-implement')).toMatchObject({ behavior: 'implement-issue', state: 'settled', outcome: 'launch_deferred' })
+  expect(current.waiting).toContain('awaits a current explicit')
+  expect(posts()).toHaveLength(1)
+})
+
+it.each(['source-only', 'distinct-fix'] as const)(
+  'allows triage after retiring a pre-existing admitted report implementation without a disposition (%s)', async kind => {
+    const { db, journal } = setup()
+    const fixture = await reviewedImplementationReport(db, journal)
+    let report = journal.read('acme/repo#99')!
+    const observation = await fixture.overrides.observe(report)
+    record(journal, report, { type: 'invocation.admitted', invocation: { id: 'stale-implement', behavior: 'implement-issue',
+      basis: chainBasis(['issue', observation.issue.revision]), actor: 'author', model: 'fixture', slot: reviewer.slot,
+      admittedAt: NOW - 60_000, request: { command: 'agent-interface', cwd: '/fixture',
+        argv: ['--atomic-work', report.id, '--model', 'fixture', '--expected-issue-revision', observation.issue.revision] } } })
+    const ops = operations(db, journal, { ...fixture.overrides, readInvocations: async () => ({ entries: [], quarantined: [] }) })
+    await new BehaviorChainRuntime(journal, ops).run()
+    expect(fixture.launch).not.toHaveBeenCalled()
+    report = journal.read(report.id)!
+    expect(report.invocations.find(item => item.id === 'stale-implement')).toMatchObject({ state: 'settled', outcome: 'launch_deferred' })
+    await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+      kind, review: fixture.review, commentId: 700,
+      diagnosis: kind === 'distinct-fix' ? 'A distinct verified defect in main requires a repository fix.'
+        : 'The failing test exists only in the unpublished source candidate.',
+      nextAction: kind === 'distinct-fix' ? 'Implement that distinct fix.' : 'Inspect the original Call before explicit Resume.' })
+    fixture.request.mockClear(); fixture.launch.mockClear()
+    await new BehaviorChainRuntime(journal, ops).run()
+    const current = journal.read(report.id)!
+    if (kind === 'distinct-fix') {
+      expect(fixture.launch).toHaveBeenCalledOnce()
+      expect(current.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started' })
+      expect(current.invocations.at(-1)?.request.implementationSource).toMatchObject({ id: 'acme/repo#7' })
+    } else {
+      expect(fixture.request).not.toHaveBeenCalled()
+      expect(fixture.launch).not.toHaveBeenCalled()
+      expect(current.waiting).toContain('source-only disposition')
+      expect(journal.read('acme/repo#7')?.waiting).toContain('failing test exists only')
+    }
+    expect(posts()).toHaveLength(1)
+  })
+
+it('retires a pre-disposition admitted report implementation once a distinct-fix is verified', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  let report = journal.read('acme/repo#99')!
+  await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+    kind: 'distinct-fix', review: fixture.review, commentId: 700,
+    diagnosis: 'A distinct verified defect in main requires a repository fix.', nextAction: 'Implement that distinct fix.' })
+  report = journal.read(report.id)!
+  const observation = await fixture.overrides.observe(report)
+  record(journal, report, { type: 'invocation.admitted', invocation: { id: 'stale-implement', behavior: 'implement-issue',
+    basis: chainBasis(['issue', observation.issue.revision]), actor: 'author', model: 'fixture', slot: reviewer.slot,
+    admittedAt: NOW - 60_000, request: { command: 'agent-interface', cwd: '/fixture',
+      argv: ['--atomic-work', report.id, '--model', 'fixture', '--expected-issue-revision', observation.issue.revision] } } })
+  const ops = operations(db, journal, { ...fixture.overrides, readInvocations: async () => ({ entries: [], quarantined: [] }) })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.launch).not.toHaveBeenCalled()
+  expect(journal.read(report.id)?.invocations.find(item => item.id === 'stale-implement'))
+    .toMatchObject({ state: 'settled', outcome: 'launch_deferred' })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.launch).toHaveBeenCalledOnce()
+  const current = journal.read(report.id)!
+  expect(current.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started' })
+  expect(current.invocations.at(-1)?.request.implementationSource).toMatchObject({ id: 'acme/repo#7' })
+  expect(posts()).toHaveLength(1)
+})
+
+it('retires a source-bound admitted report implementation when the report revision changes before recovery', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  let report = journal.read('acme/repo#99')!
+  await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+    kind: 'distinct-fix', review: fixture.review, commentId: 700,
+    diagnosis: 'A distinct verified defect in main requires a repository fix.', nextAction: 'Implement that distinct fix.' })
+  report = journal.read(report.id)!
+  const source = journal.read('acme/repo#7')!
+  const observation = await fixture.overrides.observe(report)
+  record(journal, report, { type: 'invocation.admitted', invocation: { id: 'bound-implement', behavior: 'implement-issue',
+    basis: chainBasis(['issue', observation.issue.revision]), actor: 'author', model: 'fixture', slot: reviewer.slot,
+    admittedAt: NOW - 60_000, request: { command: 'agent-interface', cwd: '/fixture',
+      argv: ['--atomic-work', report.id, '--model', 'fixture', '--expected-issue-revision', observation.issue.revision],
+      implementationSource: { id: source.id, sequence: source.sequence } } } })
+  // A crash leaves the source-bound admission pending; the report revision changes before recovery.
+  remote[0].body += '\nChanged report before recovery.'
+  const ops = operations(db, journal, { ...fixture.overrides, readInvocations: async () => ({ entries: [], quarantined: [] }) })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.launch).not.toHaveBeenCalled()
+  report = journal.read(report.id)!
+  expect(report.invocations.find(item => item.id === 'bound-implement'))
+    .toMatchObject({ state: 'settled', outcome: 'launch_deferred' })
+  expect(report.waiting).toContain('awaits a current explicit')
+  // The retired admission no longer blocks a new review and replacement disposition.
+  const revised = await fixture.overrides.observe(report)
+  report = record(journal, report, { type: 'invocation.admitted', invocation: { id: 'recovery-review', behavior: 'review-issue',
+    actor: 'reviewer', basis: chainBasis(['issue', revised.issue.revision]), model: 'fixture', slot: reviewer.slot,
+    admittedAt: NOW, request: { command: 'agent-interface', cwd: '/fixture', argv: [] } } })
+  record(journal, report, { type: 'invocation.settled', invocationId: 'recovery-review', callId: 'c'.repeat(32), outcome: 'commented',
+    evidence: { status: 'completed', action: 'commented', issue_revision: revised.issue.revision,
+      receipts: [{ issue: report.id, comment_id: 700, author: 'reviewer' }],
+      resources_settled_at: new Date(NOW).toISOString(), resource_ownership: { version: 1, roots: [], errors: [] } } })
+  report = journal.read(report.id)!
+  await setImplementationReportDisposition(db, journal, report, report.sequence, implementationReportBinding(db, report), {
+    kind: 'distinct-fix', review: 'recovery-review', commentId: 700,
+    diagnosis: 'A distinct verified defect in main requires a repository fix.', nextAction: 'Implement that distinct fix.' })
+  fixture.request.mockClear(); fixture.launch.mockClear()
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.launch).toHaveBeenCalledOnce()
+  expect(journal.read(report.id)?.invocations.at(-1)).toMatchObject({ behavior: 'implement-issue', state: 'started' })
+  expect(posts()).toHaveLength(1)
+})
+
+it('blocks implementation when the report acknowledgement was lost and publishing is disabled', async () => {
+  const { db, journal } = setup()
+  const fixture = await reviewedImplementationReport(db, journal)
+  const stored = JSON.parse(reports(db)[0].value)
+  stored.issueNumber = null
+  db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(JSON.stringify(stored), `behavior_chain_repair_report:${stored.key}`)
+  expect(implementationReportBinding(db, journal.read('acme/repo#99')!)).toBeNull()
+  vi.stubEnv('POISE_REPAIR_EXHAUSTION_REPOSITORIES', '')
+  const ops = operations(db, journal, { ...fixture.overrides, readInvocations: async () => ({ entries: [], quarantined: [] }) })
+  await new BehaviorChainRuntime(journal, ops).run()
+  expect(fixture.request).not.toHaveBeenCalled()
+  expect(fixture.launch).not.toHaveBeenCalled()
+  const current = journal.read('acme/repo#99')!
+  expect(current.invocations.some(item => item.behavior === 'implement-issue')).toBe(false)
+  expect(current.waiting).toContain('awaits a current explicit')
+  expect(JSON.parse(reports(db)[0].value).issueNumber).toBe(99)
   expect(posts()).toHaveLength(1)
 })
 
@@ -1810,6 +2153,113 @@ it('reports mixed native PR review timeouts after Resume once across observation
   expect(reports(db)).toHaveLength(1)
   expect(journal.read(source.id)).toMatchObject({ held: source.held, resumedAfterSequence: resumed.sequence, invocations: source.invocations })
 })
+
+it.each([
+  { code: 'review_provider_exit', position: 0 },
+  { code: 'review_provider_exit', position: 2 },
+  { code: 'authentication_failed', position: 0 },
+  { code: 'authentication_failed', position: 2 },
+])('reports mixed PR review timeouts with $code at position $position once across restart', async ({ code, position }) => {
+  const root = mkdtempSync(join(tmpdir(), 'mixed-review-report-')); roots.push(root)
+  const path = join(root, 'journal.sqlite')
+  const initial = setup(path)
+  type ReviewFailure = Pick<LogEntry, 'error' | 'error_code' | 'diagnostic'> & { callId: string }
+  const fileGroup: ReviewFailure = { callId: '4672ce8cf3384703881e05bf08d9d5ed', error_code: 'review_budget_exhausted',
+    error: 'Review file-group time limit reached; incomplete analysis; reduce the review scope',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'file_group',
+      outcome: 'timed_out', stderr: '', stderr_truncated: false,
+      context: { submission: 'none', timeout_seconds: 60 }, filesystem: null } }
+  const overall: ReviewFailure = { callId: '5bfab39a3e9e46978b36f0a728385a33', error_code: 'review_budget_exhausted',
+    error: 'Review reached its total time limit; needs attention',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'overall',
+      outcome: 'timed_out', stderr: '', stderr_truncated: false,
+      context: { submission: 'none', timeout_seconds: 1413 }, filesystem: null } }
+  const provider: ReviewFailure = { callId: 'd16f8f29e3a44fac8b72674e8e3ec23e', error_code: code,
+    error: code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+    diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'provider_execution',
+      outcome: 'exit', stderr: code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+      stderr_truncated: false, context: { submission: 'none', exit_code: 1 }, filesystem: null } }
+  const timeouts = [fileGroup, overall]
+  const failures = position === 0 ? [provider, ...timeouts] : [...timeouts, provider]
+  const source = await exhaustedReviews(initial.journal, failures)
+  expect(source.invocations).toHaveLength(3)
+  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }) }
+  const runtime = new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, overrides))
+  await runtime.run()
+  expect(posts()).toHaveLength(1)
+  expect(remote[0].title).toBe('fix: PR review exhausted its time limits for #21')
+  expect(remote[0].body).toContain(`hold event ${source.sequence}; head ${HEAD}; basis ${source.invocations[0].basis}; slot primary`)
+  const expectedCauses = position === 0 ? `${code} or review_budget_exhausted` : `review_budget_exhausted or ${code}`
+  expect(remote[0].body).toContain(`Cause: ${expectedCauses}.`)
+  expect(remote[0].body).toContain('Last timeout phase: overall; terminal attempt: '
+    + (position === 0 ? 'review_budget_exhausted' : code) + '.')
+  for (const [index, invocation] of source.invocations.entries()) {
+    const line = remote[0].body.split('\n').find(line => line.startsWith(`- Invocation ${invocation.id};`))!
+    expect(line).toContain(`Caller ${failures[index].callId}`)
+    expect(line).toContain(`error_code=${failures[index].error_code}`)
+    const expected = failures[index] === provider
+      ? 'operation=provider.review; phase=provider_execution; timeout_seconds=unknown'
+      : failures[index] === fileGroup
+        ? 'operation=provider.review; phase=file_group; timeout_seconds=60'
+        : 'operation=provider.review; phase=overall; timeout_seconds=1413'
+    expect(line).toContain(expected)
+  }
+  for (const failure of failures) expect(remote[0].body).not.toContain(failure.error)
+  expect(remote[0].body).not.toMatch(/\/private\/work|refresh token was already used: .*token/i)
+  expect(remote[0].body).toContain(`<!-- poise-repair-exhaustion:${chainBasis(['review_budget_exhausted', source.id, 21])} -->`)
+  expect(remote[0].body).toContain('does not recover review or relax any review, admission or merge gate')
+  expect(initial.journal.read(source.id)).toMatchObject({ held: source.held, invocations: source.invocations })
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await runtime.run()
+  initial.db.close(); databases.splice(databases.indexOf(initial.db), 1)
+  const { db, journal } = setup(path)
+  journal.rebuild()
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  expect(posts()).toHaveLength(1)
+  expect(reports(db)).toHaveLength(1)
+  expect(journal.read(source.id)).toMatchObject({ held: source.held, invocations: source.invocations })
+})
+
+it.each(['operator hold', 'changed basis', 'provider-only', 'submitting_review provider', 'provider receipt',
+  'other provider code', 'missing provider diagnostic', 'missing submission'])(
+  'does not report mixed PR review exhaustion with %s', async change => {
+    const { db, journal } = setup()
+    type ReviewFailure = Pick<LogEntry, 'error' | 'error_code' | 'diagnostic'> & { callId: string }
+    const timeout = (callId: string, phase: string, timeout_seconds: number): ReviewFailure => ({ callId,
+      error_code: 'review_budget_exhausted', error: phase === 'file_group'
+        ? 'Review file-group time limit reached; incomplete analysis; reduce the review scope'
+        : 'Review reached its total time limit; needs attention',
+      diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase,
+        outcome: 'timed_out', stderr: '', stderr_truncated: false,
+        context: { submission: 'none', timeout_seconds }, filesystem: null } })
+    const providerFailure = (error_code: string, callId = 'd16f8f29e3a44fac8b72674e8e3ec23e'): ReviewFailure => ({ callId, error_code,
+      error: error_code === 'review_provider_exit' ? 'codex review failed: refresh rejected' : 'Codex refresh token was already used',
+      diagnostic: { version: 1, source: 'caller', severity: 'error', operation: 'provider.review', phase: 'provider_execution',
+        outcome: 'exit', stderr: 'provider rejected the review', stderr_truncated: false,
+        context: { submission: 'none', exit_code: 1 }, filesystem: null } })
+    const failures = change === 'provider-only'
+      ? [providerFailure('review_provider_exit', 'd16f8f29e3a44fac8b72674e8e3ec23e'),
+        providerFailure('authentication_failed', '4672ce8cf3384703881e05bf08d9d5ed'),
+        providerFailure('review_provider_exit', '5bfab39a3e9e46978b36f0a728385a33')]
+      : [providerFailure('review_provider_exit'), timeout('4672ce8cf3384703881e05bf08d9d5ed', 'file_group', 60),
+        timeout('5bfab39a3e9e46978b36f0a728385a33', 'overall', 1413)]
+    let held = await exhaustedReviews(journal, failures)
+    if (change === 'operator hold') held = record(journal, held, { type: 'chain.held', reason: 'New invocations held by the person' })
+    const chain = structuredClone(held)
+    chain.observation = structuredClone(fresh)
+    const provider = chain.invocations[change === 'provider-only' ? 1 : 0]
+    if (change === 'changed basis') fresh.pull!.reviewContext = chainBasis('edited title, body or base')
+    if (change === 'submitting_review provider') provider.evidence!.artifact = { phase: 'submitting_review', expected_head: HEAD }
+    if (change === 'provider receipt') provider.evidence!.review_id = 123
+    if (change === 'other provider code') provider.evidence!.error_code = 'review_provider_error'
+    if (change === 'missing provider diagnostic') provider.evidence!.diagnostic = null
+    if (change === 'missing submission') (provider.evidence!.diagnostic as { context: { submission: string } }).context.submission = 'uncertain'
+    await operations(db, journal).reportHold!(chain)
+    expect(posts()).toHaveLength(0)
+    expect(reports(db)).toHaveLength(0)
+    expect(journal.read(chain.id)?.held).toBe(chain.held)
+  })
 
 it('reports three native PR approval deadlines once after an earlier review report, surviving lost acknowledgement and restart', async () => {
   const root = mkdtempSync(join(tmpdir(), 'approval-report-')); roots.push(root)

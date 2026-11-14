@@ -834,11 +834,19 @@ admissions by the reviewer account, pinned with `--expected-head`. Their basis
 includes `reviewContext` (base SHA, title and body), distinct from repair's
 `reviewRevision`. Each original receipt must retain the pre-submission `reviewing`
 phase and one of those timeout codes; differing raw messages do not change their
-typed causes. Each report lists the original code for every attempt and bounded
-diagnostic operation, phase and timeout in seconds where retained. Missing step
-evidence stays unknown; raw errors, paths and inspection arguments are excluded.
-Both codes reuse the existing review report intent and marker. `submitting_review`
-cannot prove no action even without a returned review ID.
+typed causes. An automatic three-attempt hold with exactly two of those timeout
+receipts and one `review_provider_exit` or `authentication_failed` receipt on the
+same head, basis and slot also qualifies, in any order, when the provider receipt
+retains the same `reviewing` phase, no-submission proof and a structured diagnostic
+with `submission=none`. The mixed report reuses the same review intent, marker and
+title, lists every original code with bounded operation, phase and timeout, names
+the last timeout's diagnostic phase and the terminal attempt separately, preserves
+the source hold and grants no retry or recovery authority. Each report lists the
+original code for every attempt and bounded diagnostic operation, phase and timeout
+in seconds where retained. Missing step evidence stays unknown; raw errors, paths
+and inspection arguments are excluded. All three codes reuse the existing review
+report intent and marker. `submitting_review` cannot prove no action even without
+a returned review ID.
 Native `approve-pr` deadlines use the same two timeout codes, reviewer account,
 `--expected-head` pin and `reviewing` phase, but their approval basis carries
 `reviewRevision` and their durable automatic hold must match the approval
@@ -849,8 +857,11 @@ new native observation must still require the same phase on that head and basis.
 Stale, unknown or changed findings, heads, PR review contexts or approval bases
 leave reporting pending, including title, body or base changes on an unchanged
 head. Other causes remain visible in their ordinary holds without an issue report;
-mixed repair causes or review causes outside these two timeouts cannot qualify.
-Closed or merged targets remain ineligible for a new review or approval exhaustion report.
+mixed repair causes, provider-only review episodes, other provider codes, or
+review causes outside these two timeouts and the mixed provider pair cannot
+qualify. Operator or ambiguous holds cannot qualify; only the automatic
+three-attempt hold on the same basis reports. Closed or merged targets remain
+ineligible for a new review or approval exhaustion report.
 Revoking repository scope during verification prevents publication and leaves the
 creation intent unconsumed, so re-enabling can still report once.
 
@@ -912,6 +923,37 @@ The same report exposes [private validation-time source evidence](../caller/agen
 when retained, or explicit unavailability requiring a fresh reproduction. This
 inspection preserves the earlier failed capture independently of later untested
 edits and grants no publication, retry or approval authority.
+
+These pre-PR implementation-hold reports require explicit triage before their
+own implementation can prepare or start. A posted issue review alone cannot
+authorize implementation. Through the existing guarded `/api/behavior-chains`
+control, the workspace owner records `source-only` or `distinct-fix`, with a
+diagnosis and next action. Read `GET /api/behavior-chains?id=OWNER/REPO%23N` for
+the report chain's current sequence and `implementationReport` binding, then
+POST `{ id, sequence, operation: "report-disposition", binding, disposition }`.
+`binding` is that exact read value. `disposition` contains `kind`, `review`
+(the settled native issue-review invocation ID), `commentId` (its posted receipt),
+`diagnosis` and `nextAction`. Triage must identify an independently implementable,
+verified defect to select `distinct-fix`; source-candidate-only failures select
+`source-only`. The control verifies the publishing account and report marker,
+the reviewed title/body revision and native posted-review receipt, the source's
+exact original hold event and Call, and configured ownership. It persists the
+disposition inside the existing report intent and records the diagnosis and next
+action on both chains. Labels, comment wording and closure supply no disposition.
+
+At implementation admission, missing or stale dispositions wait visibly, even
+when new report publishing is disabled. `source-only` leaves the source held and
+starts no report implementation on main. Checkout availability remains explicitly
+unverified; disposition does not depend on retaining the unpublished checkout.
+Only a current `distinct-fix` can pass through the ordinary implementation gates.
+Admission freshly verifies the original source's open state, no-publication and
+resource-release evidence before and after awaited preparation, and guards the
+source journal revision atomically with admission. Resume, a replacement Hold
+(even with identical text), a different failed Call, changed report revision or
+new source publication invalidates the old binding. The report link and generated
+issue recursion guard remain retained. No disposition retries the source: later
+source work still requires existing verified recovery or explicit Resume, original
+no-publication/resource evidence and absence of competing work.
 
 For `repair-pr`, `atomic_work_blocked` also qualifies one settled original Call
 under its matching active automatic hold after the last Resume. The same
