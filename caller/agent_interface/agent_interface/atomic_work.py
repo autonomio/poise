@@ -161,6 +161,7 @@ def _verify_ci_dependency(value: dict, repo: str, pull: int, head: str, actor: s
     if baseline.get("head_sha") != head or baseline.get("ref") != base \
             or not isinstance(failures, list) or not failures or len(failures) > 100:
         raise AtomicWorkFailed("CI dependency lacks exact-base failure evidence")
+    sgr = re.compile(r"\x1b\[[0-9;]*m")
     verified, used = [], set()
     for failure in failures:
         if not isinstance(failure, dict):
@@ -168,11 +169,12 @@ def _verify_ci_dependency(value: dict, repo: str, pull: int, head: str, actor: s
         check = next((item for item in integration["failing"] if item.get("check_run_id") == failure.get("check")), None)
         prior = next((item for item in baseline["failing"] if item.get("check_run_id") == failure.get("baselineCheck")), None)
         excerpt = failure.get("evidence")
+        visible_excerpt = sgr.sub("", excerpt) if isinstance(excerpt, str) else ""
         if not check or not prior or check["check_run_id"] in used or check.get("head_sha") != value["integration"] \
                 or prior.get("head_sha") != base or check.get("name") != prior.get("name") \
                 or check.get("state") != "completed" or check.get("conclusion") != "failure" \
                 or prior.get("state") != "completed" or prior.get("conclusion") != "failure" \
-                or not isinstance(excerpt, str) or not 20 <= len(excerpt.strip()) <= 2000:
+                or not isinstance(excerpt, str) or len(excerpt.strip()) > 2000 or len(visible_excerpt.strip()) < 20:
             raise AtomicWorkFailed("CI dependency requires matching completed failures and a specific cause excerpt")
         run = next((item for item in integration["runs"] if item.get("id") == check.get("run_id")), None)
         base_run = next((item for item in baseline["runs"] if item.get("id") == prior.get("run_id")), None)
@@ -184,7 +186,7 @@ def _verify_ci_dependency(value: dict, repo: str, pull: int, head: str, actor: s
             if not item.get("log_id"):
                 raise AtomicWorkFailed("CI dependency has no readable job log")
             log = issue_review.interface("--read-failing-ci-log", str(item["log_id"]), "--repository", repo, "--token-user", actor)
-            if log.get("repository", "").lower() != repo.lower() or excerpt not in log.get("log", ""):
+            if log.get("repository", "").lower() != repo.lower() or visible_excerpt not in sgr.sub("", log.get("log", "")):
                 raise AtomicWorkFailed("CI dependency cause is absent from its actual job logs")
         used.add(check["check_run_id"])
         verified.append({**failure, "name": check["name"], "run": run["id"], "workflow": run["workflow_id"],

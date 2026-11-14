@@ -770,7 +770,10 @@ The worker's `ciDependency` output must identify the exact candidate, latest
 queue removal, failed merge-group commit and its base, failing check/run,
 existing remediation, and a specific cause excerpt verified in both integration
 and exact-base job logs from the same workflow. Green PR checks, another PR's
-failure or a remediation link alone provide no such proof. Missing evidence
+failure or a remediation link alone provide no such proof. Comparison copies of
+the excerpt and both logs remove only ANSI SGR styling; matching stays literal,
+the raw excerpt size bound and original evidence stay intact, and the 20-character
+minimum applies to visible text. Missing evidence
 remains unresolved; candidate-specific failures still require normal repair.
 
 An unchanged, verified shared failure settles as `no_changes` with that
