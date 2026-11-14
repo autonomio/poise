@@ -912,6 +912,11 @@ The runner prints the captured-candidate digest and suite, then the existing run
 at each admission, so observed failures can name the attempt that produced them.
 The digest covers the original command specification and uncompressed captured
 tar bytes, including uncommitted edits, on both dependency-cache upload routes.
+For the full Caller pytest gate, a completed failure also ends with one bounded,
+redacted summary of the first failure or setup error, its test and the original
+candidate digest and run ID. Atomic workers put that summary first in `blocked`,
+so the original Call's retained `diagnostic.stderr` survives console truncation.
+Later runs keep their own identities and cannot replace that completed failure.
 For new atomic Calls, completed direct Vitest assertion failures would retain
 bounded gateway-authenticated evidence before the relay deletes their run, but
 recovery is currently held for #1619: candidate-controlled reports cannot

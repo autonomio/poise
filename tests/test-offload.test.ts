@@ -280,8 +280,8 @@ describe('installing it into a home volume', () => {
     const hooks = join(home, '.poise', 'test-offload')
     expect(readFileSync(join(hooks, 'relay'), 'utf8')).toBe('https://alice.example/api/link/test-relay\nalice.signed\n540\n')
     expect(statSync(join(hooks, 'relay')).mode & 0o777).toBe(0o600)
-    for (const file of ['hook.cjs', 'sitecustomize.py', 'run.mjs']) expect(readFileSync(join(hooks, file))).toEqual(readFileSync(join(SOURCE, file)))
-    expect(readdirSync(hooks).sort()).toEqual(['hook.cjs', 'relay', 'run.mjs', 'sitecustomize.py'])
+    for (const file of ['hook.cjs', 'sitecustomize.py', 'run.mjs', 'redaction.mjs']) expect(readFileSync(join(hooks, file))).toEqual(readFileSync(join(SOURCE, file)))
+    expect(readdirSync(hooks).sort()).toEqual(['hook.cjs', 'redaction.mjs', 'relay', 'run.mjs', 'sitecustomize.py'])
     // Ahead of a first start, whose entrypoint leaves a ~/.poise it finds as it is.
     expect(statSync(join(home, '.poise')).mode & 0o777).toBe(0o700)
   })
@@ -290,7 +290,7 @@ describe('installing it into a home volume', () => {
     const home = temp()
     install(home, { POISE_TEST_RELAY_URL: 'https://alice.example', POISE_TEST_RELAY_KEY: 'k' })
     install(home)
-    expect(readdirSync(join(home, '.poise', 'test-offload')).sort()).toEqual(['hook.cjs', 'run.mjs', 'sitecustomize.py'])
+    expect(readdirSync(join(home, '.poise', 'test-offload')).sort()).toEqual(['hook.cjs', 'redaction.mjs', 'run.mjs', 'sitecustomize.py'])
   })
 
   it('leaves nothing behind where it was never on', () => {
@@ -303,7 +303,7 @@ describe('installing it into a home volume', () => {
 describe('the hooks at work', () => {
   function hooked(relay: boolean): { hooks: string; env: NodeJS.ProcessEnv } {
     const hooks = temp()
-    for (const file of ['hook.cjs', 'sitecustomize.py', 'run.mjs']) copyFileSync(join(SOURCE, file), join(hooks, file))
+    for (const file of ['hook.cjs', 'sitecustomize.py', 'run.mjs', 'redaction.mjs']) copyFileSync(join(SOURCE, file), join(hooks, file))
     // Nothing listens there: a suite that reaches for its instance fails at once, and one that does not runs.
     if (relay) writeFileSync(join(hooks, 'relay'), 'http://127.0.0.1:9/api/link/test-relay\nk\n')
     // Without the npm script this very test may be running under.
@@ -688,7 +688,7 @@ describe('a suite on a test box', () => {
     relayUrl = `${relayOrigin}${TEST_RELAY_PATH}`
     relay.start()
     hooks = temp()
-    for (const file of ['run.mjs', 'hook.cjs', 'sitecustomize.py']) copyFileSync(join(SOURCE, file), join(hooks, file))
+    for (const file of ['run.mjs', 'hook.cjs', 'sitecustomize.py', 'redaction.mjs']) copyFileSync(join(SOURCE, file), join(hooks, file))
     writeFileSync(join(hooks, 'relay'), `${relayUrl}\n${KEY}\n`)
     unpacked = temp()
   }
