@@ -277,6 +277,13 @@ stale row whose holder is dead is recovered by the next writer only when the
 registered group is dead too. Each hold uses a fresh token; a released or lost
 lease never touches the row again.
 
+A provider deadline that retains the lease raises `WorkerOrphaned`, keeping the
+original timeout as exception context. Atomic work records `resources_unknown`
+in its artifact and resource ownership errors, leaving `resources_settled_at`
+unset. The checkout grants no capture, publication, retry or release authority
+while ownership is unverified. A deadline with proven release remains an
+ordinary timeout.
+
 # PR review models
 
 Provider supervision hands off after a minute of quota or reconnect diagnostics
