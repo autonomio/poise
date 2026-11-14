@@ -7,6 +7,8 @@ tests/behavior-chain-replay.test.ts
 tests/behaviors-identity.test.ts
 tests/behaviors-replay-refusal.test.ts
 tests/chat-manager-charter.test.ts
+tests/chat-manager-control.test.ts
+tests/chat-requests.test.ts
 tests/chat-worker-charter.test.ts
 tests/chat/muse-approval-stages.test.ts
 tests/chat/relay-identity.test.ts

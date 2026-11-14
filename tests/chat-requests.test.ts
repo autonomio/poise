@@ -102,10 +102,10 @@ afterEach(async () => {
 
 afterAll(async () => { database.closeDatabase(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
 
-async function session(title = 'Chat'): Promise<string> {
+async function session(title = 'Chat', role?: 'manager' | 'worker'): Promise<string> {
   // Safe mode: permission requests wait for an answer instead of passing
   // an allow_once option straight through.
-  const record = await runtime.create({ agent: 'grok', model: GROK_MODEL, title, safeMode: true })
+  const record = await runtime.create({ agent: 'grok', model: GROK_MODEL, title, safeMode: true, role })
   await until(() => runtime.get(record.id)?.status === 'idle')
   return record.id
 }
@@ -186,6 +186,34 @@ describe('open chat requests', () => {
     const after = await read()
     expect(after.revision).toBe(2)
     expect(after.requests).toEqual([])
+  })
+
+  it('lists a managed question as owner work only after its exact request is escalated', async () => {
+    const id = await session('Worker', 'worker')
+    await prompt(id)
+    const question = await askQuestion(id)
+    const signaled = (await import('../server/alerts/store')).openAlerts
+    const alerts = () => signaled({ kind: 'chat_waiting' }).filter(alert => alert.dedupeKey === `chat-waiting:${id}`)
+    expect(alerts()).toEqual([])
+    expect(await read()).toMatchObject({ revision: 1, requests: [{ id: question.requestId, ownerAction: false, escalation: null }] })
+    expect(runtime.get(id)?.ownerRequests).toEqual([])
+
+    expect(runtime.escalateQuestion(id, question.requestId, 'Choose the release target.')).toBe(true)
+    expect(runtime.escalateQuestion(id, question.requestId, 'Do not replace the first reason.')).toBe(false)
+    expect(await read()).toMatchObject({ revision: 2, requests: [{ id: question.requestId, ownerAction: true, escalation: 'Choose the release target.' }] })
+    expect(runtime.get(id)?.ownerRequests).toEqual([question.requestId])
+    expect(alerts()).toHaveLength(1)
+    expect(revisions).toEqual([1, 2])
+
+    const next = await askQuestion(id)
+    runtime.answerQuestion(id, question.requestId, { q: 'release' })
+    await expect(question.answer).resolves.toEqual({ q: 'release' })
+    expect(await read()).toMatchObject({ revision: 4, requests: [{ id: next.requestId, ownerAction: false }] })
+    expect(runtime.get(id)).toMatchObject({ status: 'waiting', ownerRequests: [] })
+    expect(alerts()).toEqual([])
+    const permission = await askPermission(id, 'Authorize this step')
+    expect((await read()).requests[0]).toMatchObject({ id: permission.requestId, ownerAction: true })
+    expect(() => runtime.escalateQuestion(id, question.requestId, 'Already answered')).toThrow('no longer pending')
   })
 
   it('frames cancel, reset and delete', async () => {
