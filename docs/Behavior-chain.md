@@ -967,6 +967,19 @@ repair ownership without admitting work or relaunching repair. Its identity is
 `atomic_work_blocked` + source chain + PR, separate from the pre-PR implementation
 identity; even a closed historical implementation report cannot cover this repair.
 
+These repair-hold reports use the same guarded `report-disposition` control with
+`existing-remedy` or `distinct-fix`. `existing-remedy` names the already-owned
+remedy issue in `remedy` and keeps it as the single implementation owner; the
+report stays fenced and the source stays held, showing the source PR/head and the
+remedy link. Only a current `distinct-fix` for a separately diagnosed,
+implementable defect with no existing owner can pass through ordinary
+implementation gates. The control binds the original report marker, settled
+no-write Call and release, reviewed report revision, current source PR head/basis
+and remedy identity, and re-verifies them before and after awaited preparation.
+Missing, stale or unauthenticated triage waits visibly; a comment alone, remedy
+closure, changed head or ambiguous publication cannot authorize implementation.
+The source still requires its own authorized recovery or explicit Resume.
+
 `implementation_publication_uncertain` qualifies an original `implement-issue`
 invocation that remains uncertain after recovery, including an unheld source.
 Its failed terminal Call is retained in `evidence.callId` while `invocation.callId`
