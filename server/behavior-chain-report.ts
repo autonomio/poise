@@ -45,6 +45,7 @@ interface RepairReport {
   slot: string | null
   attempts: Array<{ invocation: string, call: string, completedAt: number }>
   issueNumber: number | null
+  adopted?: boolean
   disposition?: { kind: 'source-only' | 'distinct-fix' | 'existing-remedy', revision: string, review: string, commentId: number,
     diagnosis: string, nextAction: string, remedy?: number }
 }
@@ -607,7 +608,11 @@ function implementationReport(db: Database, chain: BehaviorChain): RepairReport 
     const shared = reports.every(report => report.pull === null
       && report.key !== chainBasis([IMPLEMENTATION_CAUSE, report.source])
       && report.key !== chainBasis([IMPLEMENTATION_BUDGET_CAUSE, report.source]))
-    if (shared) return null
+    if (shared) {
+      const generated = reports.filter(report => !report.adopted)
+      if (!generated.length) return null
+      if (generated.length === 1) return generated[0]
+    }
     throw new Error('Blocked report has conflicting source intents')
   }
   return reports[0] ?? null
@@ -1505,7 +1510,8 @@ export async function reportRepairExhaustion(db: Database, journal: BehaviorChai
         : cause === MERGE_CAUSE ? [{ invocation: verifiedMerge!.invocation.id, call: verifiedMerge!.call,
         completedAt: Number(verifiedMerge!.invocation.evidence!.completedAt) }]
         : verified!.attempts.map(invocation => ({ invocation: invocation.id, call: invocation.callId!, completedAt: Number(invocation.evidence!.completedAt) })),
-      issueNumber: existing?.number ?? null }
+      issueNumber: existing?.number ?? null,
+      ...(existing && !REPORT_MARKER.test(existing.body) ? { adopted: true as const } : {}) }
     // FULL durability precedes the external effect. A competing runtime or a
     // crash after this insert may reconcile, but may never create again.
     if (!enabled(db, chain.repository) || !allowed()) return null
