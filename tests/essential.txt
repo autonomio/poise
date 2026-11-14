@@ -76,6 +76,7 @@ tests/behavior-chain-closed-target.test.ts
 tests/behavior-chain-native.test.ts
 tests/behavior-ledger-recovery.test.ts
 tests/behavior-ledger-store.test.ts
+tests/behavior-ledger-transport.test.ts
 tests/behaviors-db.test.ts
 tests/caller-calls.test.ts
 tests/chat-control.test.ts
