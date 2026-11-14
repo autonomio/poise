@@ -533,3 +533,16 @@ def test_deadline_parent_symlink_escape_never_captures(workspace, monkeypatch):
     successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
     assert "deadline_restored" not in successor["artifact"]
     assert "Restored" not in seen["instruction"]
+
+
+def test_deadline_repo_symlink_escape_never_captures(workspace, monkeypatch):
+    provider = ("import pathlib, os, shutil, time; repo=pathlib.Path.cwd(); root=repo.parent; outside=root/'outside'; "
+                "outside.mkdir(exist_ok=True); shutil.copytree(repo/'.git', outside/'.git', symlinks=True); "
+                "(outside/'source.cjs').write_text('module.exports=1;\\n'); "
+                "(outside/'secret.json').write_text('{\"pwned\": true}\\n'); "
+                "os.rename(repo, root/'repo-backup'); os.symlink('outside', repo); time.sleep(5)")
+    original, _ = _run_deadline_original(workspace, monkeypatch, provider)
+    assert original["artifact"]["deadline_source"]["status"] == "unavailable"
+    successor, _, seen = _run_deadline_successor(workspace, monkeypatch, "2026-01-01T00:00:00+00:00", False)
+    assert "deadline_restored" not in successor["artifact"]
+    assert "Restored" not in seen["instruction"]

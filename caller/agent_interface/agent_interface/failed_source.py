@@ -352,6 +352,12 @@ def capture_deadline(database: Path, call_id: str, checkout: Path, base: str, se
             raise ValueError("capture base mismatch")
         if checkout != Path(prepared["path"]) or checkout != Path(artifact["resource_root"]) / "repo":
             raise ValueError("capture checkout mismatch")
+        root = Path(artifact["resource_root"])
+        for candidate in (root, checkout):
+            if not stat.S_ISDIR(candidate.lstat().st_mode):
+                raise ValueError("capture checkout mismatch")
+        if root.resolve() != root or checkout.resolve() != checkout:
+            raise ValueError("capture checkout mismatch")
         repo, issue, actor = row["repo"], int(row["pr_id"]), row["actor"]
         if prepared.get("repository") != repo or prepared.get("issue_number") != issue or prepared.get("actor") != actor:
             raise ValueError("capture checkout mismatch")
