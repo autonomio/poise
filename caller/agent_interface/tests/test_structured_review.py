@@ -1928,3 +1928,206 @@ class TestVerifiedResultsOrExplicitFailures(TestCase):
         with self.assertRaises(agent_interface.review_budget.ReviewLimitError) as failure:
             run_with_github(SimpleNamespace(returncode=0, stdout=empty, stderr=""))
         self.assertEqual(failure.exception.diagnostic["refusal"], "duplicate")
+
+
+CROSS_A = ('{"auth_mode":"chatgpt","tokens":{"refresh_token":"codex-canary-xcall-A",'
+           '"account_id":"codex-canary-xcall-acct","login_owner_id":"codex-canary-xcall-login"}}')
+CROSS_B = ('{"auth_mode":"chatgpt","tokens":{"refresh_token":"codex-canary-xcall-B",'
+           '"account_id":"codex-canary-xcall-acct","login_owner_id":"codex-canary-xcall-login"}}')
+CROSS_C = ('{"auth_mode":"chatgpt","tokens":{"refresh_token":"codex-canary-xcall-C",'
+           '"account_id":"codex-canary-xcall-acct","login_owner_id":"codex-canary-xcall-login"}}')
+CROSS_REUSE = ("Your access token could not be refreshed because your refresh "
+               "token was already used. Please log out and sign in again.")
+CROSS_THREAD = "01234567-89ab-4cde-8123-456789abcdef"
+CROSS_VERDICT = {"action": "reviewed_clean", "comments": [], "assessment": ASSESSMENT}
+
+
+def write_fake_cross_call_codex(directory: Path) -> Path:
+    """A codex CLI simulating single-use refresh semantics per FAKE_CODEX_MODE.
+
+    Modes are rotate_AB (A writes B then succeeds), reject_A (A fails as
+    already-used), accept_C (C succeeds) and expect_missing (no file fails as
+    not-signed-in). Each invocation enforces isolated history (no sessions or
+    config) and private perms (0700 home, 0600 auth), logging one label to
+    FAKE_CODEX_LOG so a retry would show as a duplicate line.
+    """
+    script = directory / "codex"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "home = Path(os.environ['CODEX_HOME'])\n"
+        "auth = home / 'auth.json'\n"
+        "log = Path(os.environ['FAKE_CODEX_LOG'])\n"
+        "mode = os.environ['FAKE_CODEX_MODE']\n"
+        "def say(label):\n"
+        "    with open(log, 'a') as handle:\n"
+        "        handle.write(label + '\\n')\n"
+        "if (home / 'sessions').exists() or (home / 'config.toml').exists():\n"
+        "    sys.stderr.write('fake codex: isolated home imported personal state\\n')\n"
+        "    sys.exit(2)\n"
+        "if oct(home.stat().st_mode & 0o777) != '0o700':\n"
+        "    sys.stderr.write('fake codex: isolated home is not 0700\\n')\n"
+        "    sys.exit(2)\n"
+        "if mode == 'expect_missing':\n"
+        "    if auth.exists():\n"
+        "        sys.stderr.write('fake codex: expected missing auth\\n')\n"
+        "        sys.exit(2)\n"
+        "    say('saw:missing')\n"
+        "    msg = 'not signed in: no credentials found'\n"
+        "    sys.stdout.write(json.dumps({'type': 'turn.failed', 'message': msg}) + '\\n')\n"
+        "    sys.stderr.write(msg + '\\n')\n"
+        "    sys.exit(1)\n"
+        "if not auth.is_file():\n"
+        "    sys.stderr.write('fake codex: missing auth\\n')\n"
+        "    sys.exit(2)\n"
+        "if oct(auth.stat().st_mode & 0o777) != '0o600':\n"
+        "    sys.stderr.write('fake codex: isolated auth is not 0600\\n')\n"
+        "    sys.exit(2)\n"
+        "seen = auth.read_text()\n"
+        "if mode == 'rotate_AB':\n"
+        "    a, b = os.environ['FAKE_CODEX_A'], os.environ['FAKE_CODEX_B']\n"
+        "    if seen == a:\n"
+        "        say('saw:A')\n"
+        "        auth.write_text(b)\n"
+        "        Path(os.environ['FAKE_ROTATED_PROOF']).write_text(b)\n"
+        "    elif seen == b:\n"
+        "        say('saw:B')\n"
+        "    else:\n"
+        "        sys.stderr.write('fake codex: unexpected credential\\n')\n"
+        "        sys.exit(2)\n"
+        "elif mode == 'reject_A':\n"
+        "    if seen != os.environ['FAKE_CODEX_A']:\n"
+        "        sys.stderr.write('fake codex: expected stale A\\n')\n"
+        "        sys.exit(2)\n"
+        "    say('saw:stale')\n"
+        "    msg = os.environ['FAKE_CODEX_REUSE']\n"
+        "    sys.stdout.write(json.dumps({'type': 'turn.failed', 'message': msg}) + '\\n')\n"
+        "    sys.stderr.write(msg + '\\n')\n"
+        "    sys.exit(1)\n"
+        "elif mode == 'accept_C':\n"
+        "    if seen != os.environ['FAKE_CODEX_C']:\n"
+        "        sys.stderr.write('fake codex: expected C\\n')\n"
+        "        sys.exit(2)\n"
+        "    say('saw:C')\n"
+        "else:\n"
+        "    sys.stderr.write('fake codex: unknown mode\\n')\n"
+        "    sys.exit(2)\n"
+        "argv = sys.argv[1:]\n"
+        "out = Path(argv[argv.index('--output-last-message') + 1])\n"
+        "out.write_text(os.environ['FAKE_CODEX_VERDICT'])\n"
+        "sys.stdout.write(json.dumps({'type': 'thread.started', 'thread_id': os.environ['FAKE_CODEX_THREAD']}) + '\\n')\n"
+    )
+    script.chmod(0o700)
+    return script
+
+
+class TestCodexCrossCallPreservation(TestCase):
+    """A stale cross-Call seed preserves rejection without touching the sign-in.
+
+    Covers autonomio/poise#1822: the isolated file is worker-writable and a
+    same-account forgery is indistinguishable from a rotation, so Caller never
+    writes back and a spent refresh token fails as typed authentication_failed
+    with the canonical auth.json byte-identical. Concurrent losers fail through
+    the same stale-seed path as the sequential second Call here. Within-Call
+    multi-turn persistence is #1797's scope; these packets are single-group.
+    Every credential here is a canary in an isolated temporary home.
+    """
+
+    def run_review(self, directory, packet, calls):
+        def submit(args, **kwargs):
+            calls.append(args)
+            action = {"--request-changes": "requested_changes", "--reviewed-clean": "reviewed_clean",
+                      "--approve-pr": "approved_pr"}[args[1]]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                {"action": action, "review_id": 91, "head_sha": "a" * 40}), stderr="")
+
+        text = f"policy\n\nPR packet:\n{packet}\n\nAllowed:\nnone"
+        with patch.object(structured_review.subprocess, "run", side_effect=submit), \
+                patch.object(ReviewWatch, "check_closed", lambda self: None):
+            return structured_review.run(str(directory), "system", text, CATALOG.resolve("gpt-6-astra-ultra"),
+                                         "pr_review", "https://github.com/o/r/pull/12", "bit-mis",
+                                         "a" * 40, 60, packet=packet)
+
+    def fake_env(self, original: Path, fake: Path, log: Path, proof: Path) -> dict:
+        return {"CODEX_HOME": str(original), "CODEX_CLI": str(fake),
+                "FAKE_CODEX_A": CROSS_A, "FAKE_CODEX_B": CROSS_B, "FAKE_CODEX_C": CROSS_C,
+                "FAKE_CODEX_REUSE": CROSS_REUSE, "FAKE_CODEX_VERDICT": json.dumps(CROSS_VERDICT),
+                "FAKE_CODEX_THREAD": CROSS_THREAD, "FAKE_CODEX_LOG": str(log),
+                "FAKE_ROTATED_PROOF": str(proof)}
+
+    def test_sequential_stale_seed_fails_typed_leaving_sign_in_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            original = tmp / "home" / ".codex"
+            original.mkdir(parents=True)
+            (original / "auth.json").write_text(CROSS_A)
+            (original / "auth.json").chmod(0o600)
+            (original / "config.toml").write_text("personal = true")
+            (original / "sessions").mkdir()
+            (original / "sessions" / "old.jsonl").write_text("personal history")
+            before = (original / "auth.json").read_bytes()
+            log = tmp / "sightings.log"
+            proof = tmp / "rotated-proof.txt"
+            base = self.fake_env(original, write_fake_cross_call_codex(tmp), log, proof)
+            # The first Call consumes A and keeps its rotation private.
+            first_calls = []
+            with patch.dict(os.environ, {**base, "FAKE_CODEX_MODE": "rotate_AB"}):
+                result = self.run_review(tmp, COMPLETE_PACKET, first_calls)
+            self.assertIn('"review_id": 91', result)
+            self.assertEqual(len(first_calls), 1)
+            self.assertEqual(first_calls[0][1], "--reviewed-clean")
+            self.assertEqual(log.read_text().split(), ["saw:A"])
+            self.assertEqual(proof.read_text(), CROSS_B)
+            self.assertEqual((original / "auth.json").read_bytes(), before)
+            self.assertEqual((original / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("codex-canary", result)
+            # The next Call seeds the spent A and preserves the rejection.
+            second_calls = []
+            with patch.dict(os.environ, {**base, "FAKE_CODEX_MODE": "reject_A"}):
+                with self.assertRaises(atoms.AgentPreflightError) as failure:
+                    self.run_review(tmp, COMPLETE_PACKET, second_calls)
+            self.assertEqual(failure.exception.code, "authentication_failed")
+            self.assertIn("already used", str(failure.exception))
+            self.assertNotIn("codex-canary", str(failure.exception))
+            self.assertNotIn("codex-canary", failure.exception.diagnostic["stderr"])
+            self.assertEqual(failure.exception.diagnostic["submission"], "none")
+            self.assertEqual(second_calls, [])
+            self.assertEqual(log.read_text().split(), ["saw:A", "saw:stale"])
+            self.assertEqual((original / "auth.json").read_bytes(), before)
+            self.assertEqual((original / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((original / "sessions" / "old.jsonl").read_text(), "personal history")
+
+    def test_external_rotation_and_logout_are_respected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            original = tmp / "home" / ".codex"
+            original.mkdir(parents=True)
+            (original / "auth.json").write_text(CROSS_A)
+            (original / "auth.json").chmod(0o600)
+            log = tmp / "sightings.log"
+            proof = tmp / "rotated-proof.txt"
+            base = self.fake_env(original, write_fake_cross_call_codex(tmp), log, proof)
+            # An external re-sign-in wins: the next Call seeds C, never overwrites it.
+            (original / "auth.json").write_text(CROSS_C)
+            (original / "auth.json").chmod(0o600)
+            external = (original / "auth.json").read_bytes()
+            calls = []
+            with patch.dict(os.environ, {**base, "FAKE_CODEX_MODE": "accept_C"}):
+                result = self.run_review(tmp, COMPLETE_PACKET, calls)
+            self.assertIn('"review_id": 91', result)
+            self.assertEqual(log.read_text().split(), ["saw:C"])
+            self.assertEqual((original / "auth.json").read_bytes(), external)
+            self.assertEqual((original / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("codex-canary", result)
+            # A logout stays a logout: nothing is resurrected, failure stays typed.
+            (original / "auth.json").unlink()
+            logout_calls = []
+            with patch.dict(os.environ, {**base, "FAKE_CODEX_MODE": "expect_missing"}):
+                with self.assertRaises(atoms.AgentPreflightError) as failure:
+                    self.run_review(tmp, COMPLETE_PACKET, logout_calls)
+            self.assertEqual(failure.exception.code, "authentication_failed")
+            self.assertIn("not signed in", str(failure.exception))
+            self.assertEqual(logout_calls, [])
+            self.assertEqual(log.read_text().split(), ["saw:C", "saw:missing"])
+            self.assertFalse((original / "auth.json").exists())
