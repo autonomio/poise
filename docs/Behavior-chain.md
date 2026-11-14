@@ -982,6 +982,43 @@ is the new cause plus the source chain. It uses the same explicit triage and adm
 three original Calls; missing or `source-only` waits, only a current `distinct-fix` passes. A single
 timeout with retry remaining and any write evidence do not qualify.
 
+PR review deadline reports (`review_budget_exhausted`, legacy or durable) require
+the same triage before their own implementation can prepare or start. A posted
+issue review alone cannot authorize implementation. Read `GET
+/api/behavior-chains?id=OWNER/REPO%23N` for the report chain's current sequence
+and `reviewReport` binding (`key`, `source`, `pull`, `head`, `holdSequence`
+— null for legacy PR-scoped reports, the hold event for durable chain reports —
+`attempts` as invocation/call pairs, `revision`, `disposition`), then POST the
+same `{ id, sequence, operation: "report-disposition", binding, disposition }`
+with that exact binding value. `implementationReport` keeps its single
+invocation/call shape for pre-PR reports. Triage must identify an independently
+implementable, verified defect to select `distinct-fix`; source-review-only
+diagnoses select `source-only`. The control verifies the publishing account and
+report marker, the reviewed title/body revision and native posted-review receipt,
+and the source: durable binds the exact original hold event, review-pr
+invocations, basis, slot and sole PR ownership; legacy binds the PR-scoped key,
+configured ownership and that no chain owns the PR. It persists the disposition
+inside the existing report intent and records the diagnosis and next action in
+waiting reasons on the report chain and, for durable, the source chain. Liveness
+goes in those reasons only; the report body is never edited. Labels, comment
+wording and closure supply no disposition.
+
+At admission, missing or stale review dispositions wait visibly, even when new
+report publishing is disabled. `source-only` starts no report implementation and
+leaves the original exact-head review obligation and explicit retry path intact.
+Only a current `distinct-fix` can pass through the ordinary implementation gates.
+Durable admission re-verifies the source through a fresh observation and the
+qualifying review attempts (exact head, basis, slot and Calls) with sole
+ownership; legacy re-verifies the marker, configured ownership, that no chain
+owns the PR, and that the report is unchanged. A review ownership change
+(legacy↔durable cutover, a different chain owning the PR), Resume, a replacement
+Hold, different Calls, a changed report revision or a new head invalidates the
+old binding. Original review Calls prove no-submission and resource release, not
+publication. No recovery is added: retry stays explicit and automatic retry stays
+stopped. Admitted-but-unlaunched report implementations retire as
+`launch_deferred`; launched work settles through its original receipts under the
+original reconciliation and publication fences.
+
 For `repair-pr`, `atomic_work_blocked` also qualifies one settled original Call
 under its matching active automatic hold after the last Resume. The same
 no-publication and positive resource-release proof is required, with fresh
