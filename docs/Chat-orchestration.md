@@ -85,7 +85,8 @@ are still dropped.
 
 A creating chat can explicitly steer its own worker or answer its pending
 question with known task data. A Worker started by the owner sends its native
-question to the Manager when one exists. Pending permissions go to the owner.
+question to the Manager when that chat is open. Otherwise the question goes
+to the owner and appears in Answer here. Pending permissions go to the owner.
 Native answer validation still applies and the transcript names the answering chat.
 Answering a question that someone else answered first names the first answerer
 relative to the caller ("by you", "by the person", "by the workspace Manager",

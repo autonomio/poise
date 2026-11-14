@@ -55,7 +55,8 @@ db.exec(`
     kind TEXT NOT NULL CHECK (kind IN ('permission', 'question')),
     seq INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    escalation TEXT
+    escalation TEXT,
+    addressed_to_owner INTEGER CHECK (addressed_to_owner IN (0, 1))
   );
   CREATE INDEX IF NOT EXISTS idx_chat_pending_session ON chat_pending(session_id);
 
@@ -132,6 +133,9 @@ db.transaction(() => {
   const columns = db.prepare('PRAGMA table_info(chat_pending)').all() as { name: string }[]
   if (!columns.some((column) => column.name === 'escalation')) {
     db.exec('ALTER TABLE chat_pending ADD COLUMN escalation TEXT')
+  }
+  if (!columns.some((column) => column.name === 'addressed_to_owner')) {
+    db.exec('ALTER TABLE chat_pending ADD COLUMN addressed_to_owner INTEGER CHECK (addressed_to_owner IN (0, 1))')
   }
 }).immediate()
 
@@ -328,8 +332,9 @@ export const appendEvent = db.transaction((sessionId: string, event: ChatEvent, 
       .run(event.id, sessionId, 'permission', seq, at)
     bumpRequestRevision(row.instance)
   } else if (event.type === 'question.asked') {
-    cachedStatement(db, 'INSERT OR REPLACE INTO chat_pending (request_id, session_id, kind, seq, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(event.id, sessionId, 'question', seq, at)
+    cachedStatement(db, `INSERT OR REPLACE INTO chat_pending (request_id, session_id, kind, seq, created_at, addressed_to_owner)
+      SELECT ?, s.id, 'question', ?, ?, ${QUESTION_TO_OWNER} FROM chat_sessions s WHERE s.id = ?`)
+      .run(event.id, seq, at, sessionId)
     bumpRequestRevision(row.instance)
   } else if (event.type === 'question.escalated') {
     const changed = cachedStatement(db, `
@@ -410,11 +415,16 @@ export function findTurnFinished(sessionId: string, turnId: string): ChatEnvelop
 
 export interface PendingRequest { requestId: string, sessionId: string, kind: 'permission' | 'question', seq: number, ownerAction: boolean }
 
-// A chat created by another chat asks that chat first. Native permissions
-// always belong to the person because a creating chat cannot grant them.
-const OWNER_ACTION = `(p.kind = 'permission' OR p.escalation IS NOT NULL OR (
-  s.role IS NOT 'worker' AND json_extract(s.record, '$.createdBy.sessionId') IS NULL
+// A chat created by another chat asks that chat first. An owner-created
+// Worker without an open Manager asks the owner, like other owner chats.
+const QUESTION_TO_OWNER = `(json_extract(s.record, '$.createdBy.sessionId') IS NULL AND (
+  s.role IS NOT 'worker' OR NOT EXISTS (
+    SELECT 1 FROM chat_sessions manager WHERE manager.instance = s.instance AND manager.role = 'manager' AND manager.status <> 'closed'
+  )
 ))`
+// Preserve the addressee of new questions. Older pending rows have no
+// captured addressee. Permissions and Manager escalations are for the owner.
+const OWNER_ACTION = `(p.kind = 'permission' OR p.escalation IS NOT NULL OR COALESCE(p.addressed_to_owner, ${QUESTION_TO_OWNER}))`
 
 /** One open request with its stored title and ask time, for the handling
  *  log. Read before the answering event deletes the pending row. */

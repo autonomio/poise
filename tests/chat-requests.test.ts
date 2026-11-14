@@ -188,7 +188,30 @@ describe('open chat requests', () => {
     expect(after.requests).toEqual([])
   })
 
+  it.each(['absent', 'closed'] as const)('asks the owner when the workspace Manager is %s', async (manager) => {
+    if (manager === 'closed') await runtime.close(await session('Manager', 'manager'))
+    const id = await session('Worker', 'worker')
+    await prompt(id)
+    const question = await askQuestion(id)
+    const { openAlerts } = await import('../server/alerts/store')
+    const alerts = () => openAlerts({ kind: 'chat_waiting' }).filter(alert => alert.dedupeKey === `chat-waiting:${id}`)
+
+    expect(await read()).toMatchObject({ revision: 1, requests: [{ id: question.requestId, ownerAction: true, escalation: null }] })
+    expect(runtime.get(id)?.ownerRequests).toEqual([question.requestId])
+    expect(alerts()).toHaveLength(1)
+
+    if (manager === 'absent') {
+      await session('Manager', 'manager')
+      expect((await read()).requests).toMatchObject([{ id: question.requestId, ownerAction: true }])
+    }
+    runtime.answerQuestion(id, question.requestId, { q: 'release' })
+    await expect(question.answer).resolves.toEqual({ q: 'release' })
+    expect((await read()).requests).toEqual([])
+    expect(alerts()).toEqual([])
+  })
+
   it('lists a managed question as owner work only after its exact request is escalated', async () => {
+    await session('Manager', 'manager')
     const id = await session('Worker', 'worker')
     await prompt(id)
     const question = await askQuestion(id)
@@ -214,6 +237,15 @@ describe('open chat requests', () => {
     const permission = await askPermission(id, 'Authorize this step')
     expect((await read()).requests[0]).toMatchObject({ id: permission.requestId, ownerAction: true })
     expect(() => runtime.escalateQuestion(id, question.requestId, 'Already answered')).toThrow('no longer pending')
+  })
+
+  it('still lists a pending owner-created Worker question from an earlier version', async () => {
+    const id = await session('Worker', 'worker')
+    storage.appendEvent(id, { type: 'question.asked', id: 'old-question', turnId: 'old-turn',
+      questions: [{ id: 'q', question: 'Which target?', options: [], freeText: true, multiSelect: false }] })
+    database.db.prepare('UPDATE chat_pending SET addressed_to_owner = NULL WHERE request_id = ?').run('old-question')
+
+    expect((await read()).requests).toMatchObject([{ id: 'old-question', ownerAction: true }])
   })
 
   it('frames cancel, reset and delete', async () => {
