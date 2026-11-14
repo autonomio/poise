@@ -2284,32 +2284,110 @@ it.each(['custom label', 'all issues'])('preserves exactly-once implementation r
   expect(remote[0].labels).toEqual([{ name: 'poise' }])
 })
 
-it('reconciles a lost implementation report acknowledgement after restart without another POST', async () => {
+it.each(['stale datastore', 'lost acknowledgement'])('rechecks pending implementation reporting after restart: %s', async mode => {
   const root = mkdtempSync(join(tmpdir(), 'implementation-report-')); roots.push(root)
   const path = join(root, 'journal.sqlite')
   const initial = setup(path)
   const { chain, call } = blockedImplementation(initial.journal)
-  const overrides = { observe: async () => ({ ...fresh, checkedAt: Date.now() }),
+  vi.setSystemTime(NOW + 40 * 60_000)
+  expect(Date.now() - chain.invocations[0].admittedAt).toBe(45 * 60_000)
+  const observe = vi.fn(async () => ({ ...fresh, checkedAt: Date.now() }))
+  const overrides = { discover: async () => [], observe,
     readInvocations: async () => ({ entries: [call], quarantined: [] }) }
-  loseCreation = true
+  stale = mode === 'stale datastore'
+  loseCreation = mode === 'lost acknowledgement'
   await new BehaviorChainRuntime(initial.journal, operations(initial.db, initial.journal, overrides)).run()
-  expect(posts()).toHaveLength(1)
-  expect(JSON.parse(reports(initial.db)[0].value).issueNumber).toBeNull()
+  const original = initial.journal.read(chain.id)!
+  expect(original.ciHold).toBeUndefined(); expect(original.testHold).toBeUndefined()
+  expect(original.waiting).toContain(stale ? 'stale review datastore' : 'creation is unconfirmed')
+  expect(posts()).toHaveLength(stale ? 0 : 1)
+  expect(reports(initial.db)).toHaveLength(stale ? 0 : 1)
+  if (!stale) expect(JSON.parse(reports(initial.db)[0].value).issueNumber).toBeNull()
   initial.db.close(); databases.splice(databases.indexOf(initial.db), 1)
   const { db, journal } = setup(path)
   journal.rebuild()
-  searchVisible = false
-  for (let pass = 0; pass < 2; pass++) {
-    vi.setSystemTime(Date.now() + 86_400_000)
-    await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
-    expect(journal.read(chain.id)?.waiting).toContain('creation is unconfirmed')
+  const runtime = new BehaviorChainRuntime(journal, operations(db, journal, overrides))
+  const recheck = async () => {
+    const current = journal.read(chain.id)!
+    const checkedAt = Number(current.observation!.checkedAt)
+    const intent = reports(db)
+    const postCount = posts().length, observations = observe.mock.calls.length
+    expect(journal.reconciliationAt(current)).toBe(checkedAt + 120_000)
+    expect(journal.reconcilable('', checkedAt + 120_000, false)).toEqual([])
+    vi.setSystemTime(checkedAt + 119_999)
+    for (let pass = 0; pass < 2; pass++) await runtime.run()
+    expect(journal.reconcilable('', Date.now(), true)).toEqual([])
+    expect(journal.read(chain.id)).toEqual(current)
+    expect(observe).toHaveBeenCalledTimes(observations)
+    expect(reports(db)).toEqual(intent); expect(posts()).toHaveLength(postCount)
+    vi.setSystemTime(checkedAt + 120_000)
+    expect(journal.reconcilable('', Date.now(), true).map(row => row.id)).toEqual([chain.id])
+    await runtime.run()
+    expect(observe).toHaveBeenCalledTimes(observations + 1)
+  }
+  stale = false
+  if (mode === 'lost acknowledgement') {
+    searchVisible = false
+    const intent = reports(db)
+    for (let pass = 0; pass < 2; pass++) {
+      await recheck()
+      expect(journal.read(chain.id)?.waiting).toContain('creation is unconfirmed')
+      expect(reports(db)).toEqual(intent)
+      expect(posts()).toHaveLength(1)
+      journal.rebuild()
+    }
   }
   searchVisible = true
-  vi.setSystemTime(Date.now() + 86_400_000)
-  await new BehaviorChainRuntime(journal, operations(db, journal, overrides)).run()
+  await recheck()
   expect(JSON.parse(reports(db)[0].value).issueNumber).toBe(99)
-  expect(journal.read(chain.id)).toMatchObject({ held: call.error, invocations: [{ state: 'settled', callId: call.id }] })
+  expect(journal.read(chain.id)).toMatchObject({ held: original.held, invocations: original.invocations,
+    resumedAfterSequence: original.resumedAfterSequence, branch: original.branch, author: original.author, reviewer: original.reviewer })
+  expect(journal.read(chain.id)?.waiting).toContain('admission pending normal datastore intake and ownership gates')
+  for (const closed of [false, true]) {
+    remote[0].state = closed ? 'closed' : 'open'
+    journal.rebuild()
+    const current = journal.read(chain.id)!
+    const checkedAt = Number(current.observation!.checkedAt)
+    const next = checkedAt + checkedAt - current.invocations[0].admittedAt
+    expect(journal.reconciliationAt(current)).toBe(next)
+    vi.setSystemTime(checkedAt + 120_000)
+    expect(journal.reconcilable('', Date.now(), true)).toEqual([])
+    await runtime.run()
+    expect(journal.read(chain.id)).toEqual(current)
+    vi.setSystemTime(next)
+    await runtime.run()
+    if (closed) expect(journal.read(chain.id)?.waiting).toContain('is closed; no replacement will be created')
+  }
+  const terminal = journal.read(chain.id)!
+  expect(journal.reconciliationAt(terminal)).toBe(Number(terminal.observation!.checkedAt) * 2 - terminal.invocations[0].admittedAt)
   expect(posts()).toHaveLength(1)
+})
+
+it.each(['operator hold', 'pre-Resume receipt'])('does not accelerate retained pending reporting after %s', async change => {
+  const { db, journal } = setup()
+  const { chain, call } = blockedImplementation(journal)
+  vi.setSystemTime(NOW + 40 * 60_000)
+  stale = true
+  const observe = vi.fn(async () => ({ ...fresh, checkedAt: Date.now() }))
+  const runtime = new BehaviorChainRuntime(journal, operations(db, journal, { discover: async () => [], observe,
+    readInvocations: async () => ({ entries: [call], quarantined: [] }) }))
+  await runtime.run()
+  let source = journal.read(chain.id)!
+  expect(source.waiting).toContain('Work-failure reporting pending:')
+  if (change === 'pre-Resume receipt') source = record(journal, source, { type: 'chain.resumed' })
+  source = record(journal, source, { type: 'chain.held', reason: change === 'operator hold'
+    ? 'New invocations held by the person' : call.error })
+  journal.rebuild()
+  expect(journal.read(chain.id)).toEqual(source)
+  const checkedAt = Number(source.observation!.checkedAt)
+  expect(journal.reconciliationAt(source)).toBe(checkedAt + checkedAt - source.invocations[0].admittedAt)
+  stale = false
+  vi.setSystemTime(checkedAt + 120_000)
+  expect(journal.reconcilable('', Date.now(), true)).toEqual([])
+  for (let pass = 0; pass < 2; pass++) await runtime.run()
+  expect(observe).toHaveBeenCalledTimes(1)
+  expect(journal.read(chain.id)).toEqual(source)
+  expect(posts()).toHaveLength(0); expect(reports(db)).toHaveLength(0)
 })
 
 it.each(['operator hold', 'pre-Resume receipt', 'ordinary retry', 'stale observation', 'closed source', 'closed native source',
