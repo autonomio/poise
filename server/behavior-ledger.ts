@@ -315,9 +315,9 @@ export class BehaviorLedgerObserver {
     this.setPending(message.pending)
     if (job.operation === 'capture') {
       if (job.batch && message.status >= 400 && !this.stopTimedOut) {
-        // The whole transaction rolled back. Retry individually so one poison
+        // The whole transaction rolled back. Retry 4xx individually so one poison
         // observation cannot shed its valid neighbors or be counted twice.
-        for (const capture of job.batch) capture.single = true
+        if (message.status < 500) for (const capture of job.batch) capture.single = true
         this.queue.unshift(...job.batch)
         if (message.status >= 500) this.retryAt = Date.now() + CAPTURE_RETRY_MS
         this.pump(true)
