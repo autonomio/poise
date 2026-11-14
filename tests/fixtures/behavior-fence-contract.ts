@@ -160,6 +160,14 @@ try {
       assert.equal(page.events[0].message, call.error)
       assert.equal(page.events[0].phase, call.diagnostic!.phase)
       assert.equal(page.events[0].correlationId, call.correlation_id)
+      const raw = JSON.parse(wire)[0].diagnostic
+      for (const key of ['executable', 'exit_code', 'signal', 'submission', 'message']) {
+        assert.equal(call.diagnostic!.context[key], raw[key] ?? null)
+      }
+      assert.equal(page.events[0].exitCode, raw.exit_code ?? null)
+      assert.equal(page.events[0].signal, raw.signal ?? null)
+      assert.equal(page.events[0].context.executable, raw.executable ?? null)
+      assert.equal(page.events[0].stderr, raw.stderr ?? null)
     }
     if (blocked) {
       assert.equal(current.held, call.error)

@@ -187,6 +187,13 @@ validation step. Caller-authored validation reasons and JSON line/column details
 are retained in both the error and diagnostic message before cleanup; other
 exception text remains excluded. These failures keep `atomic_work_failed` and
 the existing result, resource-release and retry rules.
+Recognized atomic provider failures retain `provider.atomic_work` diagnostics
+with the safe `executable`, observed exit code (including zero for a failed
+terminal) or negative-result signal, and `submission: none`. Caller names a
+failed terminal explicitly and reports `provider cause unavailable` without
+retaining either raw stream. Existing fixed account/rate-limit markers remain.
+An observed exit 137 stays an exit; the lease gate does not distinguish a child
+signal from an explicit exit with that status.
 The outer detached Caller records an explicit unknown cause and observed exit
 status when its inner continuation leaves no cause. These SQLite records survive
 Poise restarts; they authorize neither publication nor resource release.

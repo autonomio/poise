@@ -1866,18 +1866,42 @@ fs.writeFileSync(path.join(process.env.FIXTURE_RETENTION, 'identity'), JSON.stri
 
   it('recovers mid-suite when only one suite may run', async () => {
     await startAll({ maxRuns: 1 })
-    const run = suite(repository(), [process.execPath, '-e', 'console.log("started"); setTimeout(() => console.log("complete"), 300)'])
-    await new Promise((done) => { run.child.stdout?.once('data', done) })
-    relay.stop()
-    await startAll2({ maxRuns: 1 })
-    const { code, stdout, stderr } = await run.done
-    expect(code).toBe(0)
-    expect(stdout).toBe('started\nstarted\ncomplete\n')
-    expect(stderr).toContain('interrupted validation')
-    expect(stderr).not.toContain('with HTTP 429:')
-    expect(stderr).not.toContain('Skip local tests')
-    expect(relay.runs.size).toBe(0)
-    expect([...boxes.values()].filter((box) => box.snapshotName !== null)).toHaveLength(2)
+    const repo = repository()
+    const run = suite(repo, [process.execPath, '-e', 'console.log("started"); const fs = require("fs");'
+      + ' if (fs.existsSync("gate")) { setTimeout(() => console.log("complete"), 100) }'
+      + ' else { fs.writeFileSync("held.pid", String(process.pid)); fs.writeFileSync("gate", "held"); setInterval(() => {}, 1000) }'])
+    let output = ''
+    let errors = ''
+    run.child.stdout?.on('data', (chunk) => { output += chunk })
+    run.child.stderr?.on('data', (chunk) => { errors += chunk })
+    const diagnostic = () => `stdout:\n${output}\nstderr:\n${errors}\nrunner exit: ${run.child.exitCode}`
+    try {
+      await until(() => output.includes('started'), 'the first suite to start', 5_000)
+        .catch((error: Error) => { throw new Error(`${error.message}\n${diagnostic()}`) })
+      await until(() => existsSync(join(repo, 'gate')), 'the first suite to hold', 3_000)
+        .catch((error: Error) => { throw new Error(`${error.message}\n${diagnostic()}`) })
+      // Delayed observation: the held suite must still be incomplete before the relay is interrupted.
+      await new Promise((done) => setTimeout(done, 750))
+      expect(output).toBe('started\n')
+      relay.stop()
+      await startAll2({ maxRuns: 1 })
+      await until(() => run.child.exitCode !== null, 'the replacement suite to finish', 5_000)
+        .catch((error: Error) => { throw new Error(`${error.message}\n${diagnostic()}\nruns: ${relay.runs.size}`) })
+      const { code, stdout, stderr } = await run.done
+      expect(code).toBe(0)
+      expect(stdout).toBe('started\nstarted\ncomplete\n')
+      expect(stderr).toContain('interrupted validation')
+      expect(stderr).not.toContain('with HTTP 429:')
+      expect(stderr).not.toContain('Skip local tests')
+      expect(relay.runs.size).toBe(0)
+      expect([...boxes.values()].filter((box) => box.snapshotName !== null)).toHaveLength(2)
+    } finally {
+      // Fake Render ends only the box wrapper; the held suite is a separate process.
+      if (existsSync(join(repo, 'held.pid'))) {
+        const pid = Number(readFileSync(join(repo, 'held.pid'), 'utf8'))
+        if (pid) try { process.kill(pid, 'SIGTERM') } catch { /* the suite already ended */ }
+      }
+    }
   })
 
   it('sends no second admission after a lost admission response', async () => {

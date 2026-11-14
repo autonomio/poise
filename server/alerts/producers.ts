@@ -58,6 +58,18 @@ function minutes(ms: number): string {
 const CLAUDE_SIGN_IN = 'sign-in:claude'
 const ACCOUNTS: AlertTarget = { settings: 'accounts' }
 
+export function connectionSignInNeeded(key: string, title: string, body: string, section: 'accounts' | 'extensions'): void {
+  record(`the sign-in alert for ${key}`, () => {
+    const dedupeKey = `sign-in:${key}`
+    raiseAlert({ kind: 'sign_in_needed', dedupeKey, title, body, path: `/?settings=${section}`, target: { settings: section } })
+    updateAlertDetails(dedupeKey, title, body)
+  })
+}
+
+export function connectionSignInCleared(key: string): void {
+  record(`the end of the sign-in alert for ${key}`, () => resolveAlert(`sign-in:${key}`))
+}
+
 /** The Claude auth monitor's status: `reauth_required` alerts for a Claude
  *  that was configured, and the alert clears once Claude is `authenticated`
  *  again, which also records the configuration. A Claude that was never
@@ -138,8 +150,8 @@ const GH_ROLES = [
 
 /** What Connected accounts read from each CLI's own status command. An
  *  installed, configured CLI that says it is not signed in alerts until it
- *  says it is; for gh, so does your GitHub account or the agent account when
- *  gh does not hold it signed in. A CLI that was never configured raises no
+ *  says it is. For gh, a missing configured identity or a rejected saved
+ *  credential also alerts. A CLI that was never configured raises no
  *  sign-in demand, and a stale demand clears once its CLI is gone without a
  *  record. One whose state is unknown, or whose record is corrupt, changes
  *  nothing. Claude is left to its auth monitor (claudeAuthStatusChanged). */
@@ -201,12 +213,13 @@ function ghAccountsChecked(gh: ConnectedAccount, identities: GitHubIdentities): 
   const held = gh.accounts
   for (const role of GH_ROLES) {
     const login = role.login(identities)
-    const signedIn = held.some((account) => account.signedIn && account.login.toLowerCase() === login.toLowerCase())
+    const matching = held.filter((account) => account.login.toLowerCase() === login.toLowerCase())
     // An account that is not set is not one gh has to hold.
-    if (!login || signedIn) {
+    if (!login || matching.some((account) => account.signedIn)) {
       record(`the end of the alert "${role.title}"`, () => resolveAlert(role.key))
       continue
     }
+    if (matching.length && !matching.some((account) => account.credentialRejected)) continue
     record(`the alert "${role.title}"`, () => raiseAlert({
       kind: 'sign_in_needed',
       dedupeKey: role.key,
@@ -215,6 +228,14 @@ function ghAccountsChecked(gh: ConnectedAccount, identities: GitHubIdentities): 
       path: CONNECTED_ACCOUNTS_PATH,
       target: ACCOUNTS,
     }))
+  }
+  const required = new Set(GH_ROLES.map((role) => role.login(identities).toLowerCase()))
+  for (const account of held) {
+    const login = account.login.toLowerCase()
+    const key = `gh:stored:${login}`
+    if (required.has(login) || account.signedIn) connectionSignInCleared(key)
+    else if (account.credentialRejected) connectionSignInNeeded(key, `Reconnect GitHub account ${account.login}`,
+      'GitHub no longer accepts this saved sign-in. Connect it in Settings → Accounts.', 'accounts')
   }
 }
 
