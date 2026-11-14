@@ -12,7 +12,8 @@ from unittest import TestCase
 from unittest.mock import patch
 
 import agent_interface as api
-from agent_interface import review_budget, review_continuation as continuation, review_receipt, review_stages, structured_review
+from agent_interface import issue_review, review_budget, review_continuation as continuation, review_receipt, \
+    review_stages, structured_review
 from agent_interface.model_catalog import CATALOG
 
 HEAD, BASE = "a" * 40, "b" * 40
@@ -57,6 +58,11 @@ class TestReviewContinuation(TestCase):
             self.stack.enter_context(patch.object(module, "monotonic", lambda: self.clock.now))
         self.stack.enter_context(patch.object(structured_review, "ReviewWatch", return_value=nullcontext(
             SimpleNamespace(check_closed=lambda: None))))
+        # The fixture binds a native-source Call in this process, so cleanup
+        # takes the legacy host-wide process scan; an unreadable runner-owned
+        # /proc entry must not fail settlement. Production keeps its
+        # fail-closed scan; allocation, physical cleanup and receipts stay real.
+        self.stack.enter_context(patch.object(issue_review, "_cwd_pids", return_value=[]))
         self.posts = []
         self.stack.enter_context(patch.object(structured_review.subprocess, "run", side_effect=self.submit))
         self.repository = SimpleNamespace(diff_packet=lambda value, _limit, **_kwargs: value, inspect=self.inspect)
@@ -116,8 +122,13 @@ class TestReviewContinuation(TestCase):
         node = packet(files)
         observed, interrupted = [], False
 
-        def ask(_root, _model, _system, prompt, _schema, _watch, timeout):
+        def ask(root, _model, _system, prompt, _schema, _watch, timeout):
             nonlocal interrupted
+            # Codex, Antigravity and Muse read this file as their output
+            # schema; without evidence their verdicts cannot validate.
+            on_disk = json.loads((root / "verdict.schema.json").read_text())
+            self.assertIn("evidence", on_disk["required"])
+            self.assertIn("evidence", on_disk["properties"])
             value = supplied(prompt)
             group = value.get("review_scope", "integration")
             integration = "required_cross_unit_evidence" in value

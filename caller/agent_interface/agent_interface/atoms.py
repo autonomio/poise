@@ -274,6 +274,17 @@ def prompt(
     )
 
 
+def analysis_policy(system: str, text: str, packet: str) -> str:
+    """Material review input for the continuation basis, without the packet
+    body or the appended pinned-repository suffix. The suffix starts after
+    the packet; a note that repeats its heading must not truncate the basis."""
+    marker = "\n\nPinned review repository:"
+    at = text.find(packet) if packet else -1
+    cut = text.find(marker, at + len(packet) if at >= 0 else 0)
+    base = text[:cut] if cut >= 0 else text
+    return system + "\n" + (base.replace(packet, "<pinned packet>", 1) if packet else base)
+
+
 def run_agent(
     pwd: str,
     system: str,
@@ -298,7 +309,7 @@ def run_agent(
     from . import review_continuation
     if review_continuation.enabled() and (spec.provider == "claude" or repository is None or capped):
         raise AgentPreflightError("review continuation requires uncapped structured analysis with a pinned repository")
-    policy = system + "\n" + text.split("\n\nPinned review repository:", 1)[0].replace(packet, "<pinned packet>", 1)
+    policy = analysis_policy(system, text, packet)
     review_receipt.prepare_response(packet, spec.identity, review_scope, policy=policy)
     if spec.provider == "claude":
         prompt_bytes = len(text.encode("utf-8"))

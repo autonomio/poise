@@ -398,10 +398,12 @@ def _review_once(root: Path, ask, model: Model, system: str, text: str, watch: R
                  total_groups: int = 1, expected_group_seconds: float | None = None,
                  checkpoint=None) -> tuple[str, dict, float]:
     schema = verdict_schema(behavior, inspection=repository is not None, verify_fixes=verify_fixes)
-    (root / "verdict.schema.json").write_text(json.dumps(schema))
     if checkpoint is not None:
         schema["required"].append("evidence")
         schema["properties"]["evidence"] = {"type": "array", "items": {"type": "string"}, "maxItems": 4096}
+    # Codex, Antigravity and Muse read this file as their output schema; it
+    # must require the same evidence the continuation validates below.
+    (root / "verdict.schema.json").write_text(json.dumps(schema))
     context = checkpoint.context() if checkpoint is not None else ""
     round_number = 0
     correction_attempted = False
