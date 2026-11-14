@@ -773,11 +773,13 @@ def completed_pytest_then_no_result(directory, setup):
         (work / name).mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     secret = "completed-pytest-credential-sentinel"
-    test = paths[0] + "/test_first.py::test_credentials_are_redacted_before_cli_serialization"
+    test = paths[0] + "/test_first.py::test_credentials_are_redacted_before_cli_serialization[retained response]"
     fixture = ("import pytest\n@pytest.fixture\ndef broken():\n"
                f"    raise RuntimeError('first setup cause {secret}')\n"
-               "def test_credentials_are_redacted_before_cli_serialization(broken):\n    pass\n") if setup else (
-                   "def test_credentials_are_redacted_before_cli_serialization():\n"
+               "@pytest.mark.parametrize('body', ['retained response'])\n"
+               "def test_credentials_are_redacted_before_cli_serialization(broken, body):\n    pass\n") if setup else (
+                   "import pytest\n@pytest.mark.parametrize('body', ['retained response'])\n"
+                   "def test_credentials_are_redacted_before_cli_serialization(body):\n"
                    f"    assert 1 == 2, 'first assertion cause {secret}'\n")
     (work / paths[0] / "test_first.py").write_text(fixture + "\ndef test_later_failure():\n    assert False, 'later unrelated cause'\n")
     # Pytest emits this after its detailed reports and short test summary.

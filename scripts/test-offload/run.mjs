@@ -207,7 +207,7 @@ function callerPytestFailure() {
     value = cleanText(value).trimEnd()
     if (/^=+ (?:ERRORS|FAILURES) =+$/.test(value)) reports = true
     if (/^=+ short test summary info =+$/.test(value)) shortSummary = true
-    if (reports && /^_{3,} .* _{3,}$/.test(value)) {
+    if (reports && /^_+ .* _+$/.test(value)) {
       if (firstReport) reportEnded = true
       else {
         firstReport = true
@@ -222,7 +222,7 @@ function callerPytestFailure() {
       detail += (detail ? '\n' : '') + bounded(value, 1200 - detail.length)
     }
     if (shortSummary && !short && (!kind || value.startsWith(kind + ' '))) {
-      const summary = /^(FAILED|ERROR) (\S+)(?: - (.*))?$/.exec(value)
+      const summary = /^(FAILED|ERROR) (.+?)(?: - (.*))?$/.exec(value)
       // Redact the node ID apart from its detail, on its own line: a credential
       // word in the test name would otherwise swallow the identifier as a header
       // field, here or in any later redaction pass over the assembled summary.
