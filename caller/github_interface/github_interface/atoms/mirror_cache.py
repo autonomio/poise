@@ -129,6 +129,13 @@ def prune_mirrors(root: Path, cap_bytes: int, now_ms: int, fresh_ms: int, dry_ru
                     except BlockingIOError:
                         held.append({"path": path, "reason": "the Caller mirror lock is busy"})
                         continue
+                    # A receipt may have been committed just before its
+                    # mirror was renamed. Recovery owns that generation.
+                    with os.scandir(owner_fd) as entries:
+                        recovery = re.compile(re.escape(name) + r"\.discard-[0-9a-f]{32}\.receipt")
+                        if any(recovery.fullmatch(entry.name) for entry in entries):
+                            held.append({"path": path, "reason": "mirror has a pending recovery receipt"})
+                            continue
                     mirror_fd = os.open(name, DIRECTORY_FLAGS, dir_fd=owner_fd)
                     try:
                         if not _bare(mirror_fd):

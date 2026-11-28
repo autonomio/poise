@@ -88,7 +88,25 @@ def recover(mirror: Path) -> None:
                         continue
                     # The receipt was durable before rename. Only move the
                     # same recorded generation, never a later replacement.
-                    descriptor = os.open(mirror.name, FLAGS, dir_fd=parent)
+                    try:
+                        descriptor = os.open(mirror.name, FLAGS, dir_fd=parent)
+                    except FileNotFoundError:
+                        # Neither pathname names the recorded generation.
+                        # Preserve the receipt for inspection and report this
+                        # attempt; the next checkout can create a new mirror.
+                        try:
+                            os.link(receipt, receipt + ".missing", src_dir_fd=parent, dst_dir_fd=parent,
+                                    follow_symlinks=False)
+                        except FileExistsError:
+                            source = os.stat(receipt, dir_fd=parent, follow_symlinks=False)
+                            destination = os.stat(receipt + ".missing", dir_fd=parent, follow_symlinks=False)
+                            if not stat.S_ISREG(source.st_mode) or not os.path.samestat(source, destination):
+                                raise ValueError("missing mirror receipt destination changed")
+                        os.unlink(receipt, dir_fd=parent)
+                        os.fsync(parent)
+                        print(f"mirror recovery held {receipt}: generation missing; receipt retained", file=sys.stderr)
+                        held = True
+                        continue
                     try:
                         info = os.fstat(descriptor)
                         if (info.st_dev, info.st_ino) != identity or _read(descriptor, marker) != marker.encode():

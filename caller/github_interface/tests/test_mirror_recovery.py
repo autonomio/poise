@@ -1,6 +1,7 @@
 import os
 import fcntl
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -85,6 +86,34 @@ class TestMirrorRecovery(TestCase):
             os.close(descriptor)
         self.assertEqual((self.mirror / "user-work").read_text(), "keep")
         self.assertEqual(sorted(path.name for path in old.iterdir()), ["objects"])
+
+    def test_missing_generation_retains_evidence_then_allows_a_new_mirror(self):
+        descriptor = self.create()
+        try:
+            with patch.object(mirror_recovery.os, "rename", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    mirror_recovery.discard(self.mirror, descriptor)
+        finally:
+            os.close(descriptor)
+        shutil.rmtree(self.mirror)
+        unlink = os.unlink
+        def interrupted_unlink(name, **kwargs):
+            if str(name).endswith(".receipt"):
+                raise OSError("interrupted")
+            return unlink(name, **kwargs)
+        with patch.object(mirror_recovery.os, "unlink", side_effect=interrupted_unlink):
+            with self.assertRaisesRegex(RuntimeError, "mirror recovery held"):
+                mirror_recovery.recover(self.mirror)
+        with self.assertRaisesRegex(RuntimeError, "mirror recovery held"):
+            mirror_recovery.recover(self.mirror)
+        self.assertEqual(len(list(self.parent.glob("*.receipt.missing"))), 1)
+        mirror_recovery.recover(self.mirror)
+        descriptor = self.create()
+        try:
+            self.assertTrue(mirror_recovery.discard(self.mirror, descriptor))
+        finally:
+            os.close(descriptor)
+        self.assertEqual(len(list(self.parent.glob("*.receipt.missing"))), 1)
 
     def test_process_killed_at_each_removal_boundary_is_recovered(self):
         script = """
