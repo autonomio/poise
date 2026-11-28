@@ -1,5 +1,3 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { mocks, fixture, loadModules, restartModules, arrangeCli, pr, HEAD_SHA, NEXT_HEAD_SHA, recordCompletedInitialReview, agentLog } from './behaviors-runtime-fixture'
 
@@ -111,25 +109,14 @@ describe('PR account routing', () => {
     expect(headReads.slice(1).every(([, args]) => value(args, '--token-user') === actor)).toBe(true)
   })
 
-  it.each(['manual', 'pr_review', 'pr_approve'] as const)('starts no %s worker after a permanent missing-tree checkout failure', async (mode) => {
+  it.each(['manual', 'pr_review', 'pr_approve'] as const)('starts %s with the selected reviewer when no user checkout exists', async (mode) => {
     await initial('poise-user')
-    const diagnostic = { version: 1, operation: 'reset', outcome: 'exit', exit_code: 128,
-      stderr: `fatal: unable to read tree ${'5'.repeat(40)}` }
-    const failure = Object.assign(new Error(diagnostic.stderr), {
-      code: 1, stderr: `caller_diagnostic: ${JSON.stringify(diagnostic)}\n`,
-    })
     const original = mocks.runFile.getMockImplementation()!
     mocks.runFile.mockImplementation(async (command, args, options) => {
       if (command === 'github-interface' && args[0] === '--local-checkout-path') {
         throw Object.assign(new Error('checkout not found'), {
           code: 1, stderr: `error: checkout not found under /dev: ${pr.repo}\n`,
         })
-      }
-      if (command === 'github-interface' && args[0] === '--checkout-repo') {
-        const path = value(args, '--path')
-        await mkdir(path, { recursive: true })
-        await writeFile(join(path, 'partial'), 'invalid snapshot')
-        throw failure
       }
       if (command === 'github-interface' && args[0] === '--head-sha') {
         const result = await original(command, args, options)
@@ -142,14 +129,11 @@ describe('PR account routing', () => {
       : replayAgentJob({ behavior: mode, repo: pr.repo, pr_id: pr.number }, async () => ({
         author: 'poise-user', actor: 'review-bot', accounts: { me: 'poise-user', agent: 'review-bot' },
       }))
-    await expect(attempt).rejects.toBe(failure)
-    const [owner, repo] = pr.repo.toLowerCase().split('/')
-    expect(await readdir(join(fixture.tempRoot, 'review-checkouts', HEAD_SHA, owner))).toEqual([`${repo}.lock`])
-    const preparations = mocks.runFile.mock.calls.filter(([command, args]) => command === 'github-interface' && args[0] === '--checkout-repo')
-    expect(preparations).toHaveLength(1)
-    expect(preparations[0][1]).toEqual(expect.arrayContaining(['--token-user', 'review-bot']))
-    expect(preparations[0][2]).toMatchObject({ timeoutMs: 30_000 })
-    expect(mocks.spawnDetached).not.toHaveBeenCalled()
+    await attempt
+    expect(mocks.spawnDetached).toHaveBeenCalledOnce()
+    expect(value(mocks.spawnDetached.mock.calls[0][1], '--actor')).toBe('review-bot')
+    expect(mocks.spawnDetached.mock.calls[0][1]).toContain(pr.url)
+    expect(mocks.runFile.mock.calls.some(([command, args]) => command === 'github-interface' && args[0] === '--checkout-repo')).toBe(false)
   })
 
   it('abandons admission when accounts change after activity evidence', async () => {
@@ -337,16 +321,11 @@ describe('PR account routing', () => {
     expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--resolve-nonblocking-conversations-if-ready')).toBe(false)
   })
 
-  it('attributes a checkout access failure to the selected main account', async () => {
+  it('attributes a review access failure to the selected main account', async () => {
     const { behaviors } = await initial()
     const original = mocks.runFile.getMockImplementation()!
     mocks.runFile.mockImplementation(async (command, args, options) => {
-      if (command === 'github-interface' && args[0] === '--local-checkout-path') {
-        const message = `error: checkout not found under /fixture: ${pr.repo}`
-        throw Object.assign(new Error(message), { code: 1, stderr: message })
-      }
-      if (command === 'github-interface' && args[0] === '--checkout-repo') {
-        expect(value(args, '--token-user')).toBe('poise-user')
+      if (command === 'github-interface' && args[0] === '--head-sha' && value(args, '--token-user') === 'poise-user') {
         throw new Error('GitHub 404: Not Found')
       }
       return original(command, args, options)
