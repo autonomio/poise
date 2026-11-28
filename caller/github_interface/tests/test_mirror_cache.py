@@ -13,7 +13,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from github_interface import cli
-from github_interface.atoms import local, mirror_cache
+from github_interface.atoms import local, mirror_cache, mirror_recovery
 
 
 FRESH_MS = 300_000
@@ -70,6 +70,23 @@ class TestMirrorCache(TestCase):
         self.assertTrue((mirror / "HEAD").exists())
         real = self.prune()
         self.assertEqual(dry, real)
+        self.assertFalse(mirror.exists())
+
+    def test_pruning_retains_a_generation_with_a_pending_recovery_receipt(self) -> None:
+        mirror = self.mirror()
+        descriptor = os.open(mirror, mirror_recovery.FLAGS)
+        try:
+            with patch.object(mirror_recovery.os, "rename", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    mirror_recovery.discard(mirror, descriptor)
+        finally:
+            os.close(descriptor)
+        age_tree(mirror)
+        report = self.prune()
+        self.assertTrue(mirror.exists())
+        self.assertFalse(report["removed"])
+        self.assertTrue(any("recovery receipt" in item["reason"] for item in report["held"]))
+        mirror_recovery.recover(mirror)
         self.assertFalse(mirror.exists())
 
     def test_descendant_write_keeps_a_mirror_even_when_its_directory_is_old(self) -> None:
