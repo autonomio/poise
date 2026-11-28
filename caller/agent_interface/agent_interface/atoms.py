@@ -7,6 +7,7 @@ from .provider_progress import claude_error, claude_result
 import json
 import os
 import re
+import shlex
 import subprocess
 from urllib.parse import urlparse
 
@@ -123,6 +124,12 @@ def repo_name(pr: str, pwd: str | None = None) -> str:
     raise ValueError("repository cannot be determined from PR URL or working directory")
 
 
+def explicit_repository(pr: str) -> list[str]:
+    """Pin URL-based reviews independently of the working directory's Git remote."""
+    path = urlparse(str(pr)).path.strip("/").split("/")
+    return ["--repository", f"{path[0]}/{path[1]}"] if len(path) >= 4 and path[2] == "pull" else []
+
+
 def actor(value: str) -> str:
     actor_name = str(value).strip()
     if not USERNAME_RE.fullmatch(actor_name):
@@ -166,6 +173,7 @@ def last_reviewed_head(pwd: str, pr: str, actor_name: str) -> str | None:
         "--token-user",
         actor(actor_name),
     ]
+    args.extend(explicit_repository(pr))
     try:
         done = subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=limit)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -233,6 +241,7 @@ def packet(
             "--token-user",
             actor(actor_name),
         ]
+        args.extend(explicit_repository(pr))
         if p:
             args.extend(["--p", _priority(p)])
         if since_head:
@@ -283,6 +292,10 @@ def fixed_mutation_args(actor_name: str, head: str) -> str:
         f"--expected-head {expected_head(head)} "
         f"--token-user {actor(actor_name)}"
     )
+
+
+def mutation_repository_args(pr: str) -> str:
+    return " ".join(shlex.quote(part) for part in explicit_repository(pr))
 
 
 def prompt(

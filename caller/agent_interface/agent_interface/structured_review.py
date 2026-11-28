@@ -24,7 +24,7 @@ from uuid import UUID
 from pathlib import Path
 from time import monotonic
 
-from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, ReviewVerdictError, actor, bounded_cause, credential_rejected, expected_head, pr_ref, provider_blocked
+from .atoms import AgentPreflightError, MAX_GOVERNED_PROMPT_BYTES, ReviewVerdictError, actor, bounded_cause, credential_rejected, expected_head, explicit_repository, pr_ref, provider_blocked
 from .atoms import packet as fetch_packet
 from .model_catalog import Model
 from .process_diagnostic import diagnostic_envelope
@@ -223,6 +223,9 @@ def _file_capped_followup(packet: str, pr: str, actor_name: str, head: str,
             or base_sha is None:
         raise review_budget.ReviewLimitError(
             "a capped approval round needs a readable PR packet", "review_contract_violation")
+    target = explicit_repository(pr)
+    if target and target[1].lower() != repo.lower():
+        raise review_budget.ReviewLimitError("capped approval packet differs from its repository", "review_contract_violation")
     existing = checkpoint.followup_issue() if checkpoint is not None else None
     if existing is None:
         existing = followup.find_capped_issue(packet, str(number), head, comments)
@@ -235,6 +238,7 @@ def _file_capped_followup(packet: str, pr: str, actor_name: str, head: str,
         followup.render_title(repo, str(number), review_round),
         followup.render_body(repo, str(number), head, base_sha, review_round, review_cap, comments),
         reserve=SUBMISSION_RESERVE_SECONDS + VERIFICATION_RESERVE_SECONDS,
+        **({"repository": target[1]} if target else {}),
         **({"checkpoint": checkpoint} if checkpoint is not None else {}),
     )
     return followup.issue_reference(issue)
@@ -698,7 +702,7 @@ def _run_once(pwd: str, system: str, text: str, model: Model, behavior: str,
         review_round: int | None = None, review_cap: int | None = None,
         continuation_policy: str = "", review_scope: str = "", continuation_session=None) -> str:
     # Target and credentials are controller-owned, never model output.
-    fixed = ["--expected-head", expected_head(head), "--token-user", actor(actor_name)]
+    fixed = [*explicit_repository(pr), "--expected-head", expected_head(head), "--token-user", actor(actor_name)]
     ref = pr_ref(pr)
     ask = ASK.get(model.provider)
     if ask is None:

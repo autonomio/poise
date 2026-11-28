@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { CheckSemaphore } from '../server/check-semaphore'
@@ -19,7 +19,6 @@ const APPROVAL_CHECKS = [
   ['review-activity-since', 'review-activity'],
   ['head-sha', 'head-check'],
   ['local-checkout-path', 'checkout'],
-  ['checkout-repo', 'checkout'],
 ] as const
 
 async function start(primitive = RESOLVE, script = "setInterval(() => {}, 1000)", timeout = false) {
@@ -33,27 +32,12 @@ async function start(primitive = RESOLVE, script = "setInterval(() => {}, 1000)"
   database.setMeta(`behavior_${behavior.replaceAll('-', '_')}_enabled`, '1')
   fixture.agentLogs = [{ ...completedReviewCall(pr.repo, pr.number, HEAD_SHA, 'review-bot') }]
   vi.stubEnv('CALLER_BIN_ROOT', fixture.tempRoot)
-  const missingCheckout = primitive === 'checkout-repo'
-    ? "if (process.argv[2] === '--local-checkout-path') { process.stderr.write('error: checkout not found under /fake/dev: ' + process.argv[3] + '/' + process.argv[4] + '\\n'); process.exit(1) }\n"
-    : ''
-  writeFileSync(join(fixture.tempRoot, 'github-interface'), `#!${process.execPath}\n${missingCheckout}${script}\n`, { mode: 0o700 })
+  writeFileSync(join(fixture.tempRoot, 'github-interface'), `#!${process.execPath}\n${script}\n`, { mode: 0o700 })
   const original = mocks.runFile.getMockImplementation()!
   let failing = true
   mocks.runFile.mockImplementation((command: string, args: string[], options: RunFileOptions) => {
-    if (primitive === 'checkout-repo' && command === 'github-interface' && args[0] === '--local-checkout-path') {
-      return mocks.realRunFile!(command, args, options)
-    }
     if (failing && command === 'github-interface' && args[0] === `--${primitive}`) {
       return mocks.realRunFile!(command, args, timeout ? { ...options, timeoutMs: 500 } : options)
-    }
-    if (primitive === 'checkout-repo') {
-      if (command === 'github-interface' && args[0] === '--checkout-repo') {
-        mkdirSync(args[3]!, { recursive: true })
-        return Promise.resolve({ stdout: JSON.stringify({ action: 'checkout_repo', repository: pr.repo, path: args[3] }), stderr: '' })
-      }
-      if (command === 'git') return Promise.resolve({
-        stdout: args[0] === 'remote' ? `https://github.com/${pr.repo}.git` : args[0] === 'rev-parse' ? HEAD_SHA : '', stderr: '',
-      })
     }
     if (command === 'github-interface' && args[0] === '--merge-candidates') return Promise.resolve({
       stdout: JSON.stringify({ action: 'merge_candidates', actor: 'review-bot', graphql_cost: 1, records: [{
@@ -132,12 +116,6 @@ it.each(APPROVAL_CHECKS)('retains one attributed approval timeout and retries no
   await behaviors.runEnabledBehaviorsOnce()
   expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
   expect(mocks.spawnDetached.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--expected-head', HEAD_SHA]))
-  if (primitive === 'checkout-repo') {
-    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === '--checkout-repo')).toHaveLength(2)
-    expect(mocks.spawnDetached.mock.calls[0]![1]).toEqual(expect.arrayContaining([
-      '--pwd', join(fixture.tempRoot, 'review-checkouts', HEAD_SHA, pr.repo.toLowerCase()),
-    ]))
-  }
   expect(behaviors.getBehaviorFailureState('approve-prs', CHECK)).toBeNull()
   expect(events()).toHaveLength(1)
 })
@@ -187,7 +165,7 @@ it.each(['requested-changes-addressed', 'review-activity-since'])('keeps a full 
   }
 })
 
-it.each(['requested-changes-addressed', 'head-sha', 'local-checkout-path', 'checkout-repo'])('keeps the original approval process failure when retry bookkeeping throws (%s)', async (primitive) => {
+it.each(['requested-changes-addressed', 'head-sha', 'local-checkout-path'])('keeps the original approval process failure when retry bookkeeping throws (%s)', async (primitive) => {
   const { database, behaviors } = await start(primitive, failureScript('original read failure'))
   const setMeta = database.setMeta
   vi.spyOn(database, 'setMeta').mockImplementation((key, value) => {
@@ -213,7 +191,7 @@ it('retains an independent approval launch failure after a successful head check
   })])
 })
 
-it.each(['requested-changes-addressed', 'head-sha', 'local-checkout-path', 'checkout-repo'])('keeps a failed approval read if shutdown interrupts its handler (%s)', async (primitive) => {
+it.each(['requested-changes-addressed', 'head-sha', 'local-checkout-path'])('keeps a failed approval read if shutdown interrupts its handler (%s)', async (primitive) => {
   const { behaviors } = await start(primitive, failureScript('original read failure'))
   const original = mocks.runFile.getMockImplementation()!
   let stopping: Promise<void> | undefined
@@ -230,7 +208,7 @@ it.each(['requested-changes-addressed', 'head-sha', 'local-checkout-path', 'chec
     severity: 'error', exitCode: 1, stderr: 'original read failure', context: expect.objectContaining({ retry: null }) })])
 })
 
-it.each(['local-checkout-path', 'checkout-repo'])('retains distinct failed checkout attempts (%s)', async (primitive) => {
+it.each(['local-checkout-path'])('retains distinct failed checkout attempts (%s)', async (primitive) => {
   const { database, behaviors } = await start(primitive, failureScript('checkout failed'))
   await behaviors.runEnabledBehaviorsOnce()
   const key = `behavior_approve_prs_failure:${CHECK}`
@@ -688,28 +666,17 @@ setInterval(() => {}, 1000)
       stdout: JSON.stringify({ version: 1, streamId: 'a'.repeat(32), events: [], cursor: 0, hasMore: false, backfillPending: false }), stderr: '',
     })
     if (command === 'github-interface' && args[0] === '--local-checkout-path') {
-      const error = Object.assign(new Error('Command failed (1): github-interface'),
-        { code: 1, killed: false, signal: null, stdout: '',
-          stderr: `error: checkout not found under /fake/dev: ${args[1]}/${args[2]}\n` })
-      return Promise.reject(error)
+      if (failing) {
+        expect(options.timeoutMs).toBe(30_000)
+        return mocks.realRunFile!(command, args, { ...options, timeoutMs: 500 })
+      }
+      return Promise.resolve({ stdout: JSON.stringify({ action: 'local_checkout_path', repository: pr.repo, path: fixture.tempRoot }), stderr: '' })
     }
-    if (failing && command === 'github-interface' && args[0] === '--checkout-repo') {
-      expect(options.timeoutMs).toBe(30_000)
-      return mocks.realRunFile!(command, args, { ...options, timeoutMs: 500 })
-    }
-    if (command === 'github-interface' && args[0] === '--checkout-repo') {
-      mkdirSync(args[3]!, { recursive: true })
-      return Promise.resolve({ stdout: JSON.stringify({ action: 'checkout_repo', repository: pr.repo, path: args[3] }), stderr: '' })
-    }
-    if (command === 'git') return Promise.resolve({
-      stdout: args[0] === 'remote' ? `https://github.com/${pr.repo}.git` : args[0] === 'rev-parse' ? HEAD_SHA : '', stderr: '',
-    })
     return original(command, args, options)
   })
   logging = await import('../server/logging')
   vi.spyOn(process.stderr, 'write').mockReturnValue(true)
   logging.startLogging()
-  const checkoutPath = join(fixture.tempRoot, 'review-checkouts', HEAD_SHA, pr.repo.toLowerCase())
   for (let attempt = 0; attempt < 2; attempt++) {
     await behaviors.runEnabledBehaviorsOnce()
     const retry = behaviors.getBehaviorFailureState('review-new-prs', CHECK)!
@@ -720,7 +687,7 @@ setInterval(() => {}, 1000)
     expect(new Set(recorded.map((event) => event.id)).size).toBe(attempt + 1)
     expect(new Set(recorded.map((event) => event.correlationId)).size).toBe(attempt + 1)
     const latest = recorded.find((event) => event.correlationId === retry.correlationId)!
-    expect(latest).toMatchObject({ operation: 'github-interface.checkout-repo', behavior: 'review-new-prs',
+    expect(latest).toMatchObject({ operation: 'github-interface.local-checkout-path', behavior: 'review-new-prs',
       phase: 'checkout', severity: 'error', repository: pr.repo, target: TARGET, account: 'review-bot',
       exitCode: null, signal: 'SIGKILL', timeoutMs: 30_000, correlationId: retry.correlationId,
       stderr: expect.stringContaining('delayed checkout'),
@@ -735,7 +702,6 @@ setInterval(() => {}, 1000)
     expect(database.listBehaviorLaunchClaims('review-new-prs')).toEqual([])
     expect(database.db.prepare("SELECT target FROM behavior_seen WHERE key = 'pr-operation'").all()).toEqual([])
     expect(behaviors.getBehaviorCheckSlots().stats()).toMatchObject({ running: 0, behaviorRunning: 0 })
-    expect(existsSync(checkoutPath)).toBe(false)
     expect(mocks.captureOutcome).toHaveBeenCalledWith(expect.objectContaining({
       nativeId: retry.correlationId, outcome: 'preflight_failed', state: 'failed', activity: 'settled',
     }))
@@ -743,8 +709,7 @@ setInterval(() => {}, 1000)
   failing = false
   await behaviors.runEnabledBehaviorsOnce()
   expect(mocks.spawnDetached).toHaveBeenCalledTimes(1)
-  expect(mocks.spawnDetached.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--expected-head', HEAD_SHA, '--pwd', checkoutPath]))
-  expect(existsSync(checkoutPath)).toBe(true)
+  expect(mocks.spawnDetached.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--expected-head', HEAD_SHA, '--pwd', fixture.tempRoot]))
   expect(behaviors.getBehaviorFailureState('review-new-prs', CHECK)).toBeNull()
   expect(events()).toHaveLength(2)
 })
@@ -767,18 +732,9 @@ it('keeps the checkout failure when claim release throws', async () => {
       stdout: JSON.stringify({ version: 1, streamId: 'a'.repeat(32), events: [], cursor: 0, hasMore: false, backfillPending: false }), stderr: '',
     })
     if (command === 'github-interface' && args[0] === '--local-checkout-path') {
-      const error = Object.assign(new Error('Command failed (1): github-interface'),
-        { code: 1, killed: false, signal: null, stdout: '',
-          stderr: `error: checkout not found under /fake/dev: ${args[1]}/${args[2]}\n` })
-      return Promise.reject(error)
-    }
-    if (command === 'github-interface' && args[0] === '--checkout-repo') {
       checkoutFailed = true
       return mocks.realRunFile!(command, args, options)
     }
-    if (command === 'git') return Promise.resolve({
-      stdout: args[0] === 'remote' ? `https://github.com/${pr.repo}.git` : args[0] === 'rev-parse' ? HEAD_SHA : '', stderr: '',
-    })
     return original(command, args, options)
   })
   const realReleaseSeen = database.releaseSeenOwned.bind(database)
@@ -797,7 +753,7 @@ it('keeps the checkout failure when claim release throws', async () => {
   logging.startLogging()
   await behaviors.runEnabledBehaviorsOnce()
   const recorded = events()
-  const checkout = recorded.filter((event) => event.operation === 'github-interface.checkout-repo')
+  const checkout = recorded.filter((event) => event.operation === 'github-interface.local-checkout-path')
   expect(checkout).toEqual([expect.objectContaining({ behavior: 'review-new-prs',
     phase: 'checkout', severity: 'error', repository: pr.repo, target: TARGET, exitCode: 1,
     stderr: expect.stringContaining('original checkout failure'),

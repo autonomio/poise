@@ -583,18 +583,15 @@ existing exit-based admission rules. Crashes, malformed or
 mismatched health, and failed recovery commands remain independent faults, even
 while a stale episode is open. The freshness limit remains 120 seconds.
 
-If Caller explicitly reports a missing local checkout, Poise can provision an
-owned checkout through Caller's existing checkout primitive, verify its origin,
-commit and clean state, and publish it atomically. Concurrent requests share
-provisioning; changed or existing user checkouts are never replaced. The
-checkout is provisioned as the selected opposite account, the reviewer, which Poise names
-to Caller with `--token-user`. CLI errors retain bounded, credential-redacted
-terminal diagnostics. Review receipts and launch claims remain authoritative;
-dependency repair never fabricates a verdict.
-Provisioned checkouts (`~/.poise/review-checkouts/<head>`) are removed a day
-after a review last resolved their head, checked in the background when Poise
-starts and every hour after, whether or not reviews run; a later review of
-that head provisions it again. User checkouts are never removed.
+If Caller explicitly reports a missing local checkout, Poise uses the same
+repository identity directory and full PR URL as behavior chains. Caller
+authenticates as the selected reviewer, pins the repository, and prepares an
+isolated, head-pinned checkout when the review requires one. Existing user
+checkouts are never replaced.
+CLI errors retain bounded, credential-redacted terminal diagnostics; review
+receipts and launch claims remain authoritative. Existing provisioned
+checkouts (`~/.poise/review-checkouts/<head>`) continue to be pruned a day
+after their last recorded use.
 
 A closed legacy failure can recover when Caller subsequently supplies an exact
 `not_started` / `preflight_failed` result. The same no-action rule applies before

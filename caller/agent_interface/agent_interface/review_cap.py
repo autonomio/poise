@@ -108,6 +108,7 @@ def file_followup_issue(
     *,
     reserve: float = 0,
     checkpoint=None,
+    repository: str | None = None,
 ) -> dict:
     """File the capped round's follow-up issue; fail loudly, never half-publish.
 
@@ -132,6 +133,8 @@ def file_followup_issue(
         "--token-user",
         actor_name,
     ]
+    if repository is not None:
+        args.extend(["--repository", repository])
     try:
         def execute(grant):
             return subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=grant)

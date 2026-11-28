@@ -1,43 +1,27 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { withProcessLock } from '../server/process-lock'
 import {
-  pruneReviewCheckouts, resolveReviewCheckout, REVIEW_CHECKOUT_RETENTION_MS, startReviewCheckoutPruning, stopReviewCheckoutPruning,
+  pruneReviewCheckouts, resolveReviewCheckout, reviewIdentityDirectory, reviewPrRef, REVIEW_CHECKOUT_RETENTION_MS, startReviewCheckoutPruning, stopReviewCheckoutPruning,
 } from '../server/review-checkout'
 
 const mocks = vi.hoisted(() => ({ runFile: vi.fn() }))
 vi.mock('../server/process', () => ({ runFile: mocks.runFile }))
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, rm: vi.fn(actual.rm) }
-})
 const owner = 'autonomio', repo = 'autonomio', actor = 'bit-mis', head = 'a'.repeat(40)
-const remote = `https://github.com/${owner}/${repo}.git`
 let root: string
-let wrongHead = false
-let dirty = false
-let failedFetch = false
 const resolveCheckout = (signal?: AbortSignal) => resolveReviewCheckout(owner, repo, 146, actor, head, signal)
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'poise-review-checkout-'))
   vi.stubEnv('POISE_DB', join(root, 'cache.db'))
-  wrongHead = dirty = failedFetch = false
+  vi.stubEnv('TMPDIR', root)
   mocks.runFile.mockReset().mockImplementation(async (command: string, args: string[]) => {
     if (command === 'github-interface' && args[0] === '--local-checkout-path') {
       throw Object.assign(new Error('Command failed (1): github-interface'), {
         code: 1, stderr: `error: checkout not found under /dev: ${owner}/${repo}\n`,
       })
     }
-    if (command === 'github-interface' && args[0] === '--checkout-repo') {
-      if (failedFetch) throw new Error('reviewer cannot read repository')
-      await mkdir(args[3], { recursive: true })
-      return { stdout: JSON.stringify({ action: 'checkout_repo', repository: `${owner}/${repo}`, path: args[3] }), stderr: '' }
-    }
-    if (command === 'git' && args[0] === 'remote' && args[1] === 'get-url') return { stdout: remote, stderr: '' }
-    if (command === 'git' && args[0] === 'rev-parse') return { stdout: wrongHead ? 'b'.repeat(40) : head, stderr: '' }
-    if (command === 'git' && args[0] === 'status') return { stdout: dirty ? ' M file.ts' : '', stderr: '' }
     return { stdout: '', stderr: '' }
   })
 })
@@ -45,104 +29,46 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   await rm(root, { recursive: true, force: true })
 })
-describe('review checkout provisioning through Caller', () => {
+describe('review workspace selection', () => {
   it('uses an existing user checkout without changing it', async () => {
     mocks.runFile.mockResolvedValueOnce({ stdout: JSON.stringify({ action: 'local_checkout_path', repository: `${owner}/${repo}`, path: root }), stderr: '' })
     expect(await resolveCheckout()).toBe(root)
+    expect(reviewPrRef(root, owner, repo, 146)).toBe('#146')
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
   })
-  it('coalesces concurrent provisioning, pins the head and uses only the reviewer identity', async () => {
-    const paths = await Promise.all([resolveCheckout(), resolveCheckout(), resolveCheckout()])
-    expect(new Set(paths).size).toBe(1)
-    expect(paths[0]).toBe(join(root, 'review-checkouts', head, owner, repo))
-    const fetches = mocks.runFile.mock.calls.filter(([command, args]) => command === 'github-interface' && args[0] === '--checkout-repo')
-    expect(fetches).toHaveLength(1)
-    expect(fetches[0][1].slice(0, 3)).toEqual(['--checkout-repo', `${owner}/${repo}`, '--path'])
-    expect(fetches[0][1].slice(4)).toEqual(['--token-user', actor])
-    expect(mocks.runFile).toHaveBeenCalledWith('git', ['checkout', '--quiet', '--detach', head], expect.any(Object))
-    expect(mocks.runFile.mock.calls.some(([command]) => command === 'gh')).toBe(false)
-  })
-  it.each([undefined, false])('keeps checkout child timeouts and forwards diagnostic ownership (%s)', async (reportFailure) => {
-    await resolveReviewCheckout(owner, repo, 146, actor, head, undefined, reportFailure)
-    expect(mocks.runFile.mock.calls.some(([command]) => command === 'git')).toBe(true)
-    for (const [, , options] of mocks.runFile.mock.calls) {
-      expect(options).toMatchObject({ timeoutMs: 30_000, reportFailure: reportFailure ?? true })
-    }
-  })
-  it.each(['head changed', 'denied access', 'dirty checkout'] as const)('does not publish or retain staging after %s', async (cause) => {
-    wrongHead = cause === 'head changed'
-    failedFetch = cause === 'denied access'
-    dirty = cause === 'dirty checkout'
-    await expect(resolveCheckout()).rejects.toThrow()
-    expect(await readdir(join(root, 'review-checkouts', head, owner))).toEqual([`${repo}.lock`])
-  })
-  it('keeps the checkout failure when staging cleanup fails', async () => {
-    failedFetch = true
-    vi.mocked(rm).mockRejectedValueOnce(new Error('staging cleanup failed'))
-    await expect(resolveCheckout()).rejects.toThrow('reviewer cannot read repository')
-  })
-  it('does not overwrite a managed checkout that was subsequently changed', async () => {
+  it('uses the existing chain identity directory and a full PR URL on a missing checkout', async () => {
     const path = await resolveCheckout()
-    await writeFile(join(path, 'user-work'), 'keep')
-    dirty = true
-    await expect(resolveCheckout()).rejects.toThrow('local changes')
-    expect(await readFile(join(path, 'user-work'), 'utf8')).toBe('keep')
-    expect(mocks.runFile.mock.calls.filter(([, args]) => args[0] === '--checkout-repo')).toHaveLength(1)
+    expect(path).toBe(reviewIdentityDirectory(owner, repo))
+    expect(reviewPrRef(path, owner, repo, 146)).toBe(`https://github.com/${owner}/${repo}/pull/146`)
+    expect(mocks.runFile.mock.calls.map(([, args]) => args[0])).toEqual(['--local-checkout-path'])
+    expect((await stat(path)).isDirectory()).toBe(true)
   })
-  it.each(['timeout', 'GitHub 404', 'malformed response'] as const)('does not provision on %s', async (cause) => {
+  it('does not clone when the PR head moves and keeps repository identity', async () => {
+    const heads = [head, 'b'.repeat(40)]
+    const paths = await Promise.all(heads.map(value => resolveReviewCheckout(owner, repo, 146, actor, value)))
+    expect(new Set(paths)).toEqual(new Set([reviewIdentityDirectory(owner, repo)]))
+    expect(mocks.runFile.mock.calls.every(([, args]) => args[0] === '--local-checkout-path')).toBe(true)
+  })
+  it.each([undefined, false])('forwards process diagnostic ownership (%s)', async (reportFailure) => {
+    await resolveReviewCheckout(owner, repo, 146, actor, head, undefined, reportFailure)
+    expect(mocks.runFile).toHaveBeenCalledWith('github-interface', ['--local-checkout-path', owner, repo],
+      expect.objectContaining({ timeoutMs: 30_000, reportFailure: reportFailure ?? true }))
+  })
+  it.each(['timeout', 'GitHub 404', 'malformed response'] as const)('does not fall back on %s', async (cause) => {
     if (cause === 'malformed response') mocks.runFile.mockResolvedValueOnce({ stdout: 'null', stderr: '' })
     else mocks.runFile.mockRejectedValueOnce(Object.assign(new Error(cause), { code: 1, stderr: cause }))
     await expect(resolveCheckout()).rejects.toThrow()
     expect(mocks.runFile).toHaveBeenCalledTimes(1)
   })
-  it('provisions as whichever agent account reviews, named to Caller', async () => {
-    expect(await resolveReviewCheckout(owner, repo, 146, 'other-reviewer', head)).toBe(join(root, 'review-checkouts', head, owner, repo))
-    const fetches = mocks.runFile.mock.calls.filter(([command, args]) => command === 'github-interface' && args[0] === '--checkout-repo')
-    expect(fetches.map(([, args]) => args.slice(4))).toEqual([['--token-user', 'other-reviewer']])
-  })
   it('rejects path traversal before invoking any process', async () => {
     await expect(resolveReviewCheckout(owner, '..', 146, actor, head)).rejects.toThrow('Invalid review')
     expect(mocks.runFile).not.toHaveBeenCalled()
   })
-
-  it.each(['retention', 'provisioning'] as const)('cancels admission promptly while the %s lock is held', async (stage) => {
-    await resolveCheckout()
-    const lockPath = stage === 'retention' ? join(root, 'review-checkouts', '.lock')
-      : join(root, 'review-checkouts', head, owner, `${repo}.lock`)
-    let release!: () => void
-    const gate = new Promise<void>((resolve) => { release = resolve })
-    let entered!: () => void
-    const holding = new Promise<void>((resolve) => { entered = resolve })
-    const holder = withProcessLock({ path: lockPath }, async () => { entered(); await gate })
+  it('does not create the identity directory after cancellation', async () => {
     const controller = new AbortController()
-    let attempt: Promise<string> | undefined
-    let lockSpy: ReturnType<typeof vi.spyOn> | undefined
-    try {
-      await holding
-      mocks.runFile.mockClear()
-      const locks = await import('../server/process-lock')
-      const acquire = locks.withProcessLock
-      let reached!: () => void
-      const waiting = new Promise<void>((resolve) => { reached = resolve })
-      lockSpy = vi.spyOn(locks, 'withProcessLock').mockImplementation((options, operation) => {
-        const pending = acquire(options, operation)
-        if (options.path === lockPath) reached()
-        return pending
-      })
-      attempt = resolveCheckout(controller.signal)
-      const outcome = attempt.then(() => 'unexpected admission', (error: Error) => error.message)
-      await waiting
-      controller.abort(new Error('review cancelled'))
-      expect(await Promise.race([outcome, new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), 300))]))
-        .toBe('review cancelled')
-      expect(mocks.runFile.mock.calls.some(([, args]) => args[0] === '--checkout-repo')).toBe(false)
-    } finally {
-      lockSpy?.mockRestore()
-      release()
-      await holder
-      await attempt?.catch(() => undefined)
-    }
-    expect(await resolveCheckout()).toBe(join(root, 'review-checkouts', head, owner, repo))
+    controller.abort(new Error('review cancelled'))
+    await expect(resolveCheckout(controller.signal)).rejects.toThrow('review cancelled')
+    await expect(stat(reviewIdentityDirectory(owner, repo))).rejects.toThrow()
   })
 })
 describe('review checkout retention', () => {
@@ -181,17 +107,6 @@ describe('review checkout retention', () => {
     expect(await pruneReviewCheckouts(root)).toEqual([])
   })
 
-  it('counts a day from the last review that resolved the head', async () => {
-    const path = await resolveCheckout()
-    const headPath = join(checkouts(), head)
-    const old = new Date(Date.now() - 2 * day)
-    await utimes(headPath, old, old)
-    expect(await resolveCheckout()).toBe(path)
-    expect(Date.now() - (await stat(headPath)).mtimeMs).toBeLessThan(60_000)
-    expect(await pruneReviewCheckouts(root)).toEqual([])
-    expect(await entries()).toEqual([head])
-  })
-
   it('judges a head again under the lock, so it keeps one a review marked while the prune waited', async () => {
     await provisioned('b'.repeat(40), 2 * day)
     let pruning: Promise<string[]> | undefined
@@ -204,19 +119,6 @@ describe('review checkout retention', () => {
     })
     expect(await pruning).toEqual([])
     expect(await entries()).toEqual(['b'.repeat(40)])
-  })
-
-  it('marks its head only under the lock a prune judges heads under', async () => {
-    let resolving: Promise<string> | undefined
-    let whileLocked: string[] = []
-    await withProcessLock({ path: join(checkouts(), '.lock') }, async () => {
-      resolving = resolveCheckout()
-      await settle()
-      whileLocked = await entries()
-    })
-    expect(await resolving).toBe(join(checkouts(), head, owner, repo))
-    expect(whileLocked).toEqual([])
-    expect(await entries()).toEqual([head])
   })
 
   it('prunes when Poise starts and every interval after, whether or not reviews run', async () => {
@@ -238,6 +140,6 @@ describe('review checkout retention', () => {
     await provisioned('b'.repeat(40), 2 * day)
     await resolveCheckout()
     await settle()
-    expect(await entries()).toEqual(['b'.repeat(40), head].sort())
+    expect(await entries()).toEqual(['b'.repeat(40)])
   })
 })

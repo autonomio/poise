@@ -34,7 +34,7 @@ import { withNoticeDiagnosticIdentity } from './logging-context'
 import { diagnostic, diagnosticFailure } from './logging'
 import { getModelSettings, requireAgentAccount } from './settings'
 import { prAccounts, prAccountsMatch, prReviewer } from './pr-accounts'
-import { resolveReviewCheckout } from './review-checkout'
+import { resolveReviewCheckout, reviewPrRef } from './review-checkout'
 import { ISSUE_REVIEW_BEHAVIOR, freezeAgentLogSnapshot, parseAgentLogPage, parseAgentLogRow, parseAgentLogStdout, scopedAgentLogs } from './agent-log-parse'
 import type { AgentLogParseReply, AgentLogParseRequest } from './agent-log-worker'
 import type { AgentLogIdentity, AgentLogSnapshot, LogEntry, QuarantinedAgentLog } from './agent-log-parse'
@@ -919,7 +919,7 @@ export async function triggerPrReview(
     number: Number(num), head: expectedHead, slot, plannedSlots: [slot], startedAt: new Date().toISOString() })
   try { await spawnDetached(CLI, [
     '--pr-review',
-    `#${num}`,
+    reviewPrRef(pwd, owner, repo, Number(num)),
     '--model',
     model,
     '--recovery-model',
@@ -1016,7 +1016,7 @@ export async function replayAgentJob(input: {
     repository: repo, number: Number(prId), head: expectedHead, slot, plannedSlots: [slot], startedAt: new Date().toISOString() })
   try { await spawnDetached(CLI, [
     flag,
-    `#${prId}`,
+    reviewPrRef(pwd, owner, repoName, Number(prId)),
     '--model',
     model,
     '--recovery-model',

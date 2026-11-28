@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
-import { lstat, mkdir, mkdtemp, readdir, rename, rm, utimes } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { runFile } from './process'
 import { withProcessLock } from './process-lock'
 
@@ -82,10 +82,6 @@ export function poiseStateRoot(): string {
     ? dirname(resolve(process.env.POISE_DB)) : join(homedir(), '.poise')
 }
 
-function poiseRoot(): string {
-  return poiseStateRoot()
-}
-
 /**
  * Prunes review checkouts now and every hour while Poise runs, whether or not
  * reviews do, one prune at a time and in the background.
@@ -94,7 +90,7 @@ export function startReviewCheckoutPruning(intervalMs = PRUNE_INTERVAL_MS): void
   if (pruneTimer) return
   const run = () => {
     if (pruning) return
-    pruning = pruneReviewCheckouts(poiseRoot())
+    pruning = pruneReviewCheckouts(poiseStateRoot())
       .catch((error: unknown) => console.error('[review-checkout] prune failed:', (error as Error).message))
       .finally(() => { pruning = null })
   }
@@ -133,72 +129,27 @@ export async function resolveReviewCheckout(
     }
     return result.path
   } catch (error) {
-    // Only the CLI's specific absence error permits provisioning. A denied
+    // Only the CLI's specific absence error permits the identity directory. A denied
     // credential, timeout or malformed reply must still fail closed.
     const failure = error as { code?: unknown, stderr?: unknown }
     if (failure?.code !== 1 || typeof failure.stderr !== 'string'
       || !failure.stderr.trim().endsWith(`: ${owner}/${repo}`)
       || !failure.stderr.trim().startsWith('error: checkout not found under ')) throw error
   }
-  const root = poiseRoot()
-  const headDirectory = join(root, 'review-checkouts', head)
-  const base = join(headDirectory, owner.toLowerCase())
-  const path = join(base, repo.toLowerCase())
-  const remote = `https://github.com/${owner}/${repo}.git`
-  // Marks the head used, so its checkouts stay for a day after this review;
-  // see pruneReviewCheckouts.
-  await withProcessLock({ path: join(root, 'review-checkouts', MARK_LOCK), signal }, async () => {
-    await mkdir(base, { recursive: true })
-    const used = new Date()
-    await utimes(headDirectory, used, used)
-  })
-  // Local git shares the machine with agent turns; it gets the same timeout as
-  // other review CLI calls so load alone cannot fail verification.
-  const verify = async (cwd: string): Promise<void> => {
-    const origin = await runFile('git', ['remote', 'get-url', 'origin'], { cwd, signal, reportFailure, timeoutMs: 30_000 })
-    const commit = await runFile('git', ['rev-parse', 'HEAD'], { cwd, signal, reportFailure, timeoutMs: 30_000 })
-    const status = await runFile('git', ['status', '--porcelain'], { cwd, signal, reportFailure, timeoutMs: 30_000 })
-    if (origin.stdout.trim().toLowerCase() !== remote.toLowerCase()
-      || commit.stdout.trim() !== head || status.stdout.trim()) throw new Error('Managed review checkout differs from the expected repository/head or has local changes')
-  }
-  return withProcessLock({ path: `${path}.lock`, timeoutMs: 10_000, signal }, async () => {
-    signal?.throwIfAborted()
-    let exists = false
-    try {
-      const metadata = await lstat(path)
-      if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('Managed review checkout is not a directory')
-      exists = true
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== 'ENOENT') throw error
-    }
-    if (exists) { await verify(path); return path }
-    const temporary = await mkdtemp(join(base, '.staging-'))
-    const checkout = join(temporary, owner, repo)
-    try {
-      await mkdir(dirname(checkout), { recursive: true, mode: 0o700 })
-      // Provisioned as the reviewer, who must be able to read the repository.
-      const { stdout } = await runFile('github-interface', ['--checkout-repo', `${owner}/${repo}`, '--path', checkout, '--token-user', actor], {
-        signal, reportFailure, timeoutMs: 30_000, maxOutputBytes: 1024 * 1024,
-      })
-      const result = JSON.parse(stdout) as { action?: unknown, repository?: unknown, path?: unknown }
-      if (result?.action !== 'checkout_repo' || result.repository !== `${owner}/${repo}`
-        || result.path !== checkout) throw new Error('github-interface --checkout-repo returned malformed state')
-      // Caller owns network/authentication. Pin locally using only the history
-      // Caller fetched; a fork commit absent from that history fails closed.
-      await runFile('git', ['checkout', '--quiet', '--detach', head], { cwd: checkout, signal, reportFailure, timeoutMs: 30_000 })
-      await verify(checkout)
-      signal?.throwIfAborted()
-      await rename(checkout, path)
-      return path
-    } finally {
-      // Staging cleanup must never replace the checkout failure the caller
-      // reports: both launch surfaces suppress child reporting and attribute
-      // this error, so a cleanup rejection would erase the original cause.
-      try {
-        await rm(temporary, { recursive: true, force: true })
-      } catch (cleanupError) {
-        console.error(`[review-checkout] could not remove ${temporary}:`, (cleanupError as Error).message)
-      }
-    }
-  })
+  // Caller obtains and pins its isolated review checkout itself. The same
+  // identity directory and full PR URL are already used by behavior chains.
+  const path = reviewIdentityDirectory(owner, repo)
+  signal?.throwIfAborted()
+  await mkdir(path, { recursive: true })
+  signal?.throwIfAborted()
+  return path
+}
+
+export function reviewIdentityDirectory(owner: string, repo: string): string {
+  return join(tmpdir(), 'poise-gh-interface', owner, repo)
+}
+
+export function reviewPrRef(path: string, owner: string, repo: string, number: number): string {
+  return path === reviewIdentityDirectory(owner, repo)
+    ? `https://github.com/${owner}/${repo}/pull/${number}` : `#${number}`
 }

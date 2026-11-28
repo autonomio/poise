@@ -288,6 +288,21 @@ class TestRepositoryLifecycle(TestCase):
             with rr.prepare("/repo", PR, "bot", HEAD, PACKET):
                 self.fail("wrong checkout yielded")
 
+    def test_pinned_checkout_timeout_retains_evidence_for_governed_and_structured_reviews(self):
+        failure = subprocess.TimeoutExpired(["github-interface", "--checkout-review"], 240, output="private-output")
+        with review_budget.ReviewBudget(), patch.object(rr.subprocess, "run", side_effect=failure):
+            with self.assertRaises(atoms.AgentPreflightError) as raised:
+                with rr.prepare("/repo", PR, "bot", HEAD, PACKET):
+                    self.fail("timed-out checkout yielded")
+            self.assertEqual(raised.exception.code, "review_budget_exhausted")
+            self.assertEqual(raised.exception.diagnostic["phase"], "checkout")
+            self.assertEqual(raised.exception.diagnostic["outcome"], "timed_out")
+            self.assertNotIn("private-output", json.dumps(raised.exception.diagnostic))
+        with review_budget.ReviewBudget(), patch.object(rr.subprocess, "run", side_effect=failure):
+            with rr.prepare("/repo", PR, "bot", HEAD, PACKET, allow_unavailable=True) as repository:
+                self.assertTrue(any("pinned checkout timed out" in warning for warning in repository.warnings))
+                self.assertNotIn("private-output", json.dumps(repository.warnings))
+
     def test_initial_inspection_process_error_is_returned_with_its_cause(self):
         for timed_out in (False, True):
             checkout = {}

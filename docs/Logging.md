@@ -265,9 +265,9 @@ Two failed children remain separate even within one sweep correlation; cancellat
 or failed retry bookkeeping cannot erase either cause. These diagnostics do not change
 backoff, launch progress or the exact-head publication checks, except a stalled review
 checkout defers without backoff and retries on the next tick.
-Checkout failures use phase `checkout` and fixed operations
-`github-interface.local-checkout-path` or `github-interface.checkout-repo`;
-other checkout callers retain default process reporting.
+Checkout lookup failures use phase `checkout` and operation
+`github-interface.local-checkout-path`; Caller's isolated checkout and other
+checkout callers retain their own process reporting.
 JavaScript DOMException identity and numeric code are retained in context as
 `exceptionName` and `exceptionCode`, with no process `exitCode`. Actual subprocess
 exit codes remain process evidence, even when the same number names an exception.

@@ -19,7 +19,7 @@ from .interface import chain_seed, checkout_review, review_context, approve_pr, 
 TOP_HELP = """usage: github-interface BEHAVIOR ...
 
 behaviors:
-  --pr-review PR [--p p2] [--since-head SHA] [--manifest-only] --expected-head SHA --token-user USER
+  --pr-review PR [--p p2] [--since-head SHA] [--manifest-only] --expected-head SHA --token-user USER [--repository OWNER/REPO]
   --approve-pr PR --expected-head SHA --token-user USER
   --head-sha PR --token-user USER [--repository OWNER/REPO]
   --review-clearance --mode snapshot|begin|complete [--results-json JSON]
@@ -32,18 +32,18 @@ behaviors:
   --read-file PATH
   --write-file PATH --content CONTENT
   --request-change PR --file FILE --line LINE --body BODY --expected-head SHA --token-user USER
-  --request-changes PR (--comments FILE | --comments-json JSON) --expected-head SHA --token-user USER
+  --request-changes PR (--comments FILE | --comments-json JSON) --expected-head SHA --token-user USER [--repository OWNER/REPO]
   --reviewed-clean PR --expected-head SHA --token-user USER
   --requested-changes-addressed PR --username USER --token-user USER
   --requested-changes-addressed --requests-json JSON --username USER --token-user USER
   --requested-review-ready PR --username USER --token-user USER
-  --review-activity-since PR --username USER --since TIMESTAMP --token-user USER
+  --review-activity-since PR --username USER --since TIMESTAMP --token-user USER [--repository OWNER/REPO]
   --review-activity-since --requests-json JSON --username USER --token-user USER
   --resolve-conversation CONVERSATION_ID
   --resolve-pr-conversations PR
   --resolve-nonblocking-conversations-if-ready PR --username USER --expected-head SHA --token-user USER
   --create-issue --title TITLE --body BODY
-  --create-pr-linked-issue PR --title TITLE --body BODY --token-user USER
+  --create-pr-linked-issue PR --title TITLE --body BODY --token-user USER [--repository OWNER/REPO]
   --post-pr-comment PR --body BODY
   --mergeable PR
   --grey-ci-candidates --requests-json JSON --token-user USER
@@ -250,6 +250,7 @@ def _arguments(behavior: str) -> argparse.ArgumentParser:
         parser.add_argument("--since-head", default=None, metavar="SHA",
                             help="diff since this previously reviewed head instead of the merge base")
         _add_expected_head(parser)
+        _add_repository(parser, suppress_default=True)
         return parser
 
     if behavior in {"--create-issue", "--create-pr-linked-issue"}:
@@ -257,6 +258,8 @@ def _arguments(behavior: str) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(prog=prog)
         parser.add_argument("--title", required=True)
         parser.add_argument("--body", required=True)
+        if behavior == "--create-pr-linked-issue":
+            _add_repository(parser, suppress_default=True)
         return parser
 
     if behavior == "--request-changes":
@@ -266,6 +269,7 @@ def _arguments(behavior: str) -> argparse.ArgumentParser:
         source.add_argument("--comments", help="file containing a JSON array of inline review comments")
         source.add_argument("--comments-json", help="inline JSON array of review comments")
         _add_expected_head(parser)
+        _add_repository(parser, suppress_default=True)
         return parser
 
     if behavior == "--request-change":
@@ -309,6 +313,7 @@ def _arguments(behavior: str) -> argparse.ArgumentParser:
         if behavior == "--review-activity-since":
             # One PR names its watermark here; each batch request carries its own.
             parser.add_argument("--since", required=False)
+            _add_repository(parser, suppress_default=True)
         return parser
 
     if behavior in {"--approve-pr", "--reviewed-clean"}:
@@ -490,6 +495,6 @@ def _add_expected_head(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-head", required=True, metavar="SHA")
 
 
-def _add_repository(parser: argparse.ArgumentParser) -> None:
+def _add_repository(parser: argparse.ArgumentParser, *, suppress_default: bool = False) -> None:
     # Without it the repository comes from the working directory.
-    parser.add_argument("--repository", metavar="OWNER/REPO")
+    parser.add_argument("--repository", metavar="OWNER/REPO", default=argparse.SUPPRESS if suppress_default else None)
