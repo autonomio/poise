@@ -108,8 +108,29 @@ class TestPinnedCheckout(TestCase):
                 self.assertEqual(response["results"][1]["matches"][0]["path"], "consumer.py")
                 return target
 
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                self.assertEqual(len(list(pool.map(prepare, range(3)))), 3)
+            # The archive alone exceeds this bound, but sparse checkout never
+            # downloads it. Source and inspection remain bounded.
+            with patch.object(rc, "MAX_CHECKOUT_BYTES", 1_000_000):
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    self.assertEqual(len(list(pool.map(prepare, range(3)))), 3)
+
+    def test_archive_heavy_tree_preserves_limits_and_unsafe_name_checks(self):
+        archives = [{"path": f"captures/{index}.zip", "type": "blob", "mode": "100644",
+                     "size": 3_000_000} for index in range(479)]
+        source = {"path": "source.py", "type": "blob", "mode": "100644", "size": 100}
+        self.assertEqual(rc.bounded_tree({"tree": archives + [source]}), archives + [source])
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            rc.bounded_tree({"tree": archives + [{**source, "size": rc.MAX_CHECKOUT_BYTES + 1}]})
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            rc.bounded_tree({"tree": [{"path": "unsafe\narchive.zip", "type": "blob", "mode": "100644",
+                                       "size": rc.MAX_CHECKOUT_BYTES + 1}]})
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            rc.bounded_tree({"tree": [{"path": "unsafe\rarchive.zip", "type": "blob", "mode": "100644",
+                                       "size": rc.MAX_CHECKOUT_BYTES + 1}]})
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            rc.bounded_tree({"tree": archives}, frozenset(item["path"] for item in archives))
+        with self.assertRaisesRegex(ValueError, "file or byte limit"):
+            rc.bounded_tree({"tree": archives * (rc.MAX_FILES // len(archives) + 1)})
 
     def test_checkout_pins_head_and_merge_base_and_never_adopts_pr_instructions(self):
         with tempfile.TemporaryDirectory() as work:
@@ -156,6 +177,16 @@ class TestPinnedCheckout(TestCase):
                     rc.checkout("o", "r", "a" * 40, "b" * 40, "token", target, metadata, {"tree": []})
                 run.assert_not_called()
                 self.assertFalse(target.exists())
+
+    def test_deferred_diff_still_counts_a_required_oversized_archive(self):
+        entry = {"path": "capture.zip", "type": "blob", "mode": "100644", "size": rc.MAX_CHECKOUT_BYTES + 1}
+        with tempfile.TemporaryDirectory() as root, patch.object(rc, "_git") as run:
+            target = Path(root) / "review"
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                rc.checkout("o", "r", "a" * 40, "b" * 40, "token", target, {"tree": [entry]},
+                            {"tree": []}, diff_files=["capture.zip"])
+            run.assert_not_called()
+            self.assertFalse(target.exists())
 
     def test_failed_checkout_is_removed(self):
         with tempfile.TemporaryDirectory() as root, patch.object(rc, "_git", side_effect=RuntimeError("fetch failed")):
