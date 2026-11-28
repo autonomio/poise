@@ -233,6 +233,30 @@ raise SystemExit(1)
                 local._MIRROR_LOCK.reset(token)
         self.assertNotEqual(evidence.read_text(), "[]")
 
+    def test_credential_cache_daemon_does_not_retain_the_mirror_lock(self):
+        lock = self.parent / "repo.lock"
+        environment = {**os.environ, "HOME": str(self.parent), "XDG_CACHE_HOME": str(self.parent / "cache"),
+                       "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+        script = """
+import subprocess
+subprocess.run(['git', '-c', 'credential.helper=cache --timeout=30', 'credential', 'approve'],
+               input='protocol=https\\nhost=example.invalid\\nusername=fixture\\npassword=fixture\\n\\n',
+               text=True, check=True, close_fds=False)
+"""
+        try:
+            with open(lock, "w") as file:
+                fcntl.flock(file, fcntl.LOCK_EX)
+                token = local._MIRROR_LOCK.set(file.fileno())
+                try:
+                    with patch.dict(os.environ, environment, clear=True):
+                        local._run([sys.executable, "-c", script], "fixture")
+                finally:
+                    local._MIRROR_LOCK.reset(token)
+            with open(lock) as contender:
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            subprocess.run(["git", "credential-cache", "exit"], env=environment, capture_output=True, timeout=10)
+
     def test_recovery_waits_for_transport_that_outlived_git(self):
         source = self.parent / "source"
         source.mkdir()
