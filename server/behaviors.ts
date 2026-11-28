@@ -106,7 +106,7 @@ import { behaviorErrorMessage, behaviorIncidentDiagnostics, REVIEW_BUDGET_STOPPE
 import { classifyBehaviorDiagnostic, diagnosticClassification, isRepoAccessDenied, isTimeoutCause, rateLimitRetryAtMs, type DiagnosticClassification, type DiagnosticOptions } from '../src/behavior-failure-cause'
 import { recoverLegacyDatastore } from './legacy-datastore-recovery'
 import { DATASTORE_MAX_AGE_SECONDS, datastoreFreshnessByOrganization, initialDatastoreFreshness, openStaleMirrors, recordStaleMirrorBlock, runDatastoreHealth, staleDatastoreFailure, staleMirrorMessage, type DatastoreFreshness, type StaleDatastoreError } from './datastore-health'
-import { resolveReviewCheckout } from './review-checkout'
+import { resolveReviewCheckout, reviewPrRef } from './review-checkout'
 import { claudeSubscriptionEnvironment, isAbortError, processFailureEvidence, runFile, runningCallerLaunches, spawnDetached } from './process'
 import { CheckSemaphore, DEFAULT_CHECK_SLOT_CAP, checkSlotsBusyError, type CheckSlotStats } from './check-semaphore'
 import { ProcessLockError, withProcessLock } from './process-lock'
@@ -3537,7 +3537,7 @@ async function spawnReviewLaunch(prepared: PreparedReviewTarget, claimId: string
   }
   const args = [
     '--pr-review',
-    `#${prepared.num}`,
+    reviewPrRef(pwd, prepared.owner, prepared.repo, Number(prepared.num)),
     '--model',
     prepared.model,
     '--recovery-model',
@@ -5231,7 +5231,7 @@ async function fireApprove(
   const reviewSlot = legacyReviewSlot(catalog, model, slot, claimTarget)
   const args = [
     '--pr-approve',
-    `#${num}`,
+    reviewPrRef(pwd, owner, repo, Number(num)),
     '--model',
     model,
     '--recovery-model',

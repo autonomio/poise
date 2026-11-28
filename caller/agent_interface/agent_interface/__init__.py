@@ -3121,6 +3121,7 @@ def review_facts(
             utc_stamp(since),
             "--token-user",
             actor,
+            *atoms.explicit_repository(pr),
         ],
         text=True,
         capture_output=True,

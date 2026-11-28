@@ -56,6 +56,8 @@ repo_name = atoms.repo_name
 def allowed(pr: str, actor: str, expected_head: str) -> list[str]:
     ref = shlex.quote(atoms.pr_ref(pr))
     fixed = atoms.fixed_mutation_args(actor, expected_head)
+    repository = atoms.mutation_repository_args(pr)
+    fixed = f"{fixed} {repository}" if repository else fixed
     return [
         f"Bash(github-interface --request-changes {ref} --comments-json * --assessment-json * {fixed})",
         f"Bash(github-interface --reviewed-clean {ref} --assessment-json * {fixed})",

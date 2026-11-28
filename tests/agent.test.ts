@@ -58,7 +58,10 @@ vi.mock('../server/claude-auth', async importOriginal => ({
     requireReady: vi.fn(),
   },
 }))
-vi.mock('../server/review-checkout', () => ({ resolveReviewCheckout: vi.fn(async () => '/repo') }))
+vi.mock('../server/review-checkout', async importOriginal => ({
+  ...await importOriginal<typeof import('../server/review-checkout')>(),
+  resolveReviewCheckout: vi.fn(async () => '/repo'),
+}))
 
 vi.mock('../server/gh', () => ({
   getHeadSha: vi.fn(),
@@ -920,6 +923,23 @@ describe('manual review model selection', () => {
     expect(spawnDetached).toHaveBeenCalledOnce()
     expect(vi.mocked(spawnDetached).mock.calls[0][1]).toEqual(expect.arrayContaining([
       '--model', 'gpt-6-astra-ultra', '--review-round', '1', '--review-cap', '3',
+    ]))
+  })
+
+  it('passes the full PR identity for manual review and replay without a user checkout', async () => {
+    const checkout = await import('../server/review-checkout')
+    vi.mocked(checkout.resolveReviewCheckout).mockResolvedValueOnce(checkout.reviewIdentityDirectory('owner', 'repo'))
+    const { triggerPrReview, replayAgentJob } = await import('../server/agent')
+    const { spawnDetached } = await import('../server/process')
+    await triggerPrReview('https://github.com/owner/repo/pull/12')
+    vi.mocked(checkout.resolveReviewCheckout).mockResolvedValueOnce(checkout.reviewIdentityDirectory('owner', 'repo'))
+    await replayAgentJob({ behavior: 'pr_approve', repo: 'owner/repo', pr_id: 12 }, mocks.admit)
+    expect(spawnDetached).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(spawnDetached).mock.calls[0][1]).toEqual(expect.arrayContaining([
+      '--pr-review', 'https://github.com/owner/repo/pull/12', '--actor', 'bit-mis', '--expected-head', 'a'.repeat(40),
+    ]))
+    expect(vi.mocked(spawnDetached).mock.calls[1][1]).toEqual(expect.arrayContaining([
+      '--pr-approve', 'https://github.com/owner/repo/pull/12', '--actor', 'bit-mis', '--expected-head', 'a'.repeat(40),
     ]))
   })
 

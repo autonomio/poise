@@ -456,12 +456,12 @@ class Session:
         return issue
 
     def reconcile_review(self, pwd: str, pr: str, actor: str) -> str:
-        from .atoms import pr_ref
+        from .atoms import explicit_repository, pr_ref
         response = self.read(self.finalization["verdict"])
         with caller_store.connect(self.database) as conn:
             retained = _artifact(conn, self.finalization["call"])["review_response"]
         args = [os.getenv("GITHUB_INTERFACE_CLI", "github-interface"), "--pull-action-state", pr_ref(pr),
-                "--queue-evidence", "--token-user", actor]
+                "--queue-evidence", "--token-user", actor, *explicit_repository(pr)]
         done = self.funded(lambda grant: subprocess.run(args, cwd=pwd, text=True, capture_output=True, timeout=grant),
                            review_budget.timeout(60, reserve=review_budget.FINAL_CHECK_SECONDS),
                            reserve=review_budget.FINAL_CHECK_SECONDS)

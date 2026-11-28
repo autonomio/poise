@@ -268,7 +268,7 @@ class TestStructuredVerdict(TestCase):
         self.assertNotIn("CODEX_API_KEY", model_call.kwargs["env"])
         self.assertEqual(run.submissions[0], ["github-interface", "--request-changes", "#12", "--comments",
                                           json.dumps([FINDING]), "--assessment-json", json.dumps(ASSESSMENT),
-                                          "--expected-head", "a" * 40, "--token-user", "bit-mis"])
+                                          "--repository", "o/r", "--expected-head", "a" * 40, "--token-user", "bit-mis"])
         self.assertFalse(Path(mutation.args[0][4]).exists())
         self.assertEqual(mutation.kwargs["cwd"], "/repo")
 
@@ -584,7 +584,7 @@ class TestStagedReview(TestCase):
         self.assertEqual(mutation[:4], ["github-interface", "--request-changes", "#12", "--comments"])
         self.assertEqual(json.loads(mutation[4]), [first, second])
         self.assertEqual(mutation[5:], ["--assessment-json", json.dumps(ASSESSMENT, ensure_ascii=False),
-                                       "--expected-head", "a" * 40, "--token-user", "bit-mis"])
+                                       "--repository", "o/r", "--expected-head", "a" * 40, "--token-user", "bit-mis"])
 
     def test_verified_fixes_survive_later_groups_with_new_blockers(self):
         node = json.loads(staged_packet([f"src/f{i:02d}.py" for i in range(9)]))
