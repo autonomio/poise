@@ -322,9 +322,9 @@ class TestGovernedClaudeContinuation(TestCase):
         def review(_prompt):
             command = self.launches[-1][1]
             rules = json.loads(command[command.index("--settings") + 1])["permissions"]["allow"]
-            self.assertEqual(rules, pr_review.allowed("#12", "reviewer", HEAD) + [review_repository.INSPECTION_RULE])
+            self.assertEqual(rules, pr_review.allowed("https://github.com/o/r/pull/12", "reviewer", HEAD) + [review_repository.INSPECTION_RULE])
             review_receipt.complete_response(ASSESSMENT, HEAD)
-            done = self.github(["github-interface", "--reviewed-clean", "#12"])
+            done = self.github(["github-interface", "--reviewed-clean", "#12", "--repository", "o/r"])
             review_receipt.record(done.stdout)
             return "Completed the ordinary governed review."
         self.reply = review
