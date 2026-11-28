@@ -6,12 +6,16 @@ import shutil
 import subprocess
 import uuid
 from contextlib import ExitStack
+from contextvars import ContextVar
 from pathlib import Path
 from threading import Thread
 from time import monotonic
 from urllib.parse import urlparse
 
 from .process_diagnostic import GitProcessError, StderrCapture, failure
+from . import mirror_recovery
+
+_MIRROR_LOCK: ContextVar[int | None] = ContextVar("mirror_lock", default=None)
 
 # One bare mirror per repository, outside ~/dev, so a fresh checkout is a
 # local clone instead of a full download.
@@ -132,44 +136,47 @@ def checkout_repo(
             return False
         return True
 
-    with open(mirror.parent / f"{repo}.lock", "w") as lock:
-        # Refresh, snapshot and materialization share one recovery allowance.
-        for attempt in range(2):
-            with ExitStack() as owned:
-                materializing = False
-                try:
+    lock_path = mirror.parent / f"{repo}.lock"
+    # Refresh, snapshot and materialization share one recovery allowance.
+    for attempt in range(2):
+        with ExitStack() as owned:
+            materializing = False
+            snapshot_fd = None
+            mirror_fd = None
+            try:
+                with open(lock_path, "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
+                    mirror_recovery.recover(mirror)
+                    # Reserve the destination before Git runs; an earlier
+                    # absence check cannot authorize deleting a later arrival.
+                    path.mkdir(parents=True)
+                    snapshot_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    owned.callback(os.close, snapshot_fd)
+                    mirror.mkdir(exist_ok=True)
+                    mirror_fd = os.open(mirror, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    owned.callback(os.close, mirror_fd)
+                    inherited = _MIRROR_LOCK.set(lock.fileno())
                     try:
-                        # Reserve the destination before Git runs; an earlier
-                        # absence check cannot authorize deleting a later arrival.
-                        path.mkdir(parents=True)
-                        snapshot_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        owned.callback(os.close, snapshot_fd)
-                        mirror.mkdir(exist_ok=True)
-                        mirror_fd = os.open(mirror, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        owned.callback(os.close, mirror_fd)
                         refresh()
                     finally:
-                        fcntl.flock(lock, fcntl.LOCK_UN)
-                    # Independent objects let both materializations run outside
-                    # the flock, even when another checkout replaces the mirror.
-                    materializing = True
-                    _run(["git", "-C", str(path), "reset", "--hard", "--quiet", "HEAD"], token)
-                except RuntimeError as error:
-                    if materializing and not _is_missing_tree_reset(error):
-                        raise
-                    if not discard(path, snapshot_fd):
-                        raise RuntimeError(f"checkout destination changed during recovery: {path}") from error
-                    if attempt:
-                        raise
+                        _MIRROR_LOCK.reset(inherited)
+                # Closing, rather than unlocking, leaves any surviving Git
+                # descendant holding its inherited lock until it exits.
+                materializing = True
+                _run(["git", "-C", str(path), "reset", "--hard", "--quiet", "HEAD"], token)
+            except RuntimeError as error:
+                if snapshot_fd is None or mirror_fd is None or materializing and not _is_missing_tree_reset(error):
+                    raise
+                if not discard(path, snapshot_fd):
+                    raise RuntimeError(f"checkout destination changed during recovery: {path}") from error
+                if attempt:
+                    raise
+                with open(lock_path, "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
-                    try:
-                        # A replacement generation belongs to its new owner.
-                        discard(mirror, mirror_fd)
-                    finally:
-                        fcntl.flock(lock, fcntl.LOCK_UN)
-                    continue
-                break
+                    # A replacement generation belongs to its new owner.
+                    mirror_recovery.discard(mirror, mirror_fd)
+                continue
+            break
     _run(["git", "-C", str(path), "remote", "set-url", "origin", remote], token)
     return {"branch": branch, "head_sha": _run(["git", "-C", str(path), "rev-parse", "HEAD"], token)}
 
@@ -194,7 +201,9 @@ def _run(command: list[str], token: str, *secrets: str) -> str:
                            for index, secret in enumerate((token, *secrets))}}
     cwd = command[2] if command[1:2] == ["-C"] else os.getcwd()
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        lock_fd = _MIRROR_LOCK.get()
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   pass_fds=(lock_fd,) if lock_fd is not None else ())
     except OSError as error:
         raise failure(cwd, env, command[1:], started, capture, error=error) from error
     with process:

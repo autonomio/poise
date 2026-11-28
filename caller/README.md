@@ -162,6 +162,10 @@ mirror generation if it is still current. A concurrent replacement is reused;
 filter and other reset failures do not rebuild the mirror. A permanent missing
 tree fails with the existing redacted Git diagnostic before managed review
 preparation can publish a head checkout or start a review or approval worker.
+Before discarding a mirror, Caller records its directory identity and a
+matching marker. A later checkout resumes interrupted removal under the same
+lock; unproved or changed generations are retained and the checkout reports
+the hold instead of creating more abandoned packs.
 
 `github-interface --prune-mirrors ROOT --cap-bytes N --now-ms N
 [--fresh-ms N] [--dry-run]` is local maintenance and needs no GitHub account.
