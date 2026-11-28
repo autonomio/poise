@@ -234,26 +234,34 @@ raise SystemExit(1)
         self.assertNotEqual(evidence.read_text(), "[]")
 
     def test_credential_cache_daemon_does_not_retain_the_mirror_lock(self):
-        lock = self.parent / "repo.lock"
+        source, cache = self.parent / "source", self.parent / "mirrors"
+        source.mkdir()
+        def git(*args):
+            subprocess.run(["git", "-C", str(source), *args], check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        (source / "readme").write_text("first")
+        git("add", "readme")
+        git("commit", "-qm", "first")
         environment = {**os.environ, "HOME": str(self.parent), "XDG_CACHE_HOME": str(self.parent / "cache"),
                        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
-        script = """
-import subprocess
-subprocess.run(['git', '-c', 'credential.helper=cache --timeout=30', 'credential', 'approve'],
-               input='protocol=https\\nhost=example.invalid\\nusername=fixture\\npassword=fixture\\n\\n',
-               text=True, check=True, close_fds=False)
-"""
+        marker = self.parent / "hook-ran"
         try:
-            with open(lock, "w") as file:
-                fcntl.flock(file, fcntl.LOCK_EX)
-                token = local._MIRROR_LOCK.set(file.fileno())
-                try:
-                    with patch.dict(os.environ, environment, clear=True):
-                        local._run([sys.executable, "-c", script], "fixture")
-                finally:
-                    local._MIRROR_LOCK.reset(token)
-            with open(lock) as contender:
-                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.dict(os.environ, environment, clear=True):
+                local.checkout_repo("owner", "repo", "main", "fixture", self.parent / "first", cache, str(source))
+                hook = cache / "owner" / "repo.git" / "hooks" / "reference-transaction"
+                hook.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n'
+                                'printf "protocol=https\\nhost=example.invalid\\nusername=fixture\\npassword=fixture\\n\\n"'
+                                ' | git -c "credential.helper=cache --timeout=30" credential approve\n')
+                hook.chmod(0o700)
+                (source / "readme").write_text("second")
+                git("add", "readme")
+                git("commit", "-qm", "second")
+                local.checkout_repo("owner", "repo", "main", "fixture", self.parent / "second", cache, str(source))
+                self.assertTrue(marker.exists())
+                with open(cache / "owner" / "repo.lock") as contender:
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             subprocess.run(["git", "credential-cache", "exit"], env=environment, capture_output=True, timeout=10)
 
