@@ -89,7 +89,7 @@ describe('expected probe misses', () => {
     expect(seen[0].stderr).toContain('not a git repository')
   })
 
-  it('logs a real provisioning failure but not the checkout probe miss before it', async () => {
+  it('does not log an expected checkout miss or start redundant provisioning', async () => {
     if (process.platform === 'win32') return
     const root = start()
     const bin = mkdtempSync(join(root, 'caller-bin-'))
@@ -106,10 +106,9 @@ describe('expected probe misses', () => {
     chmodSync(join(bin, 'github-interface'), 0o700)
     vi.stubEnv('CALLER_BIN_ROOT', bin)
     await expect(resolveReviewCheckout('octocat', 'hello', 1, 'reviewer', 'a'.repeat(40)))
-      .rejects.toThrow('Command failed')
+      .resolves.toBe(join(tmpdir(), 'poise-gh-interface', 'octocat', 'hello'))
     const seen = events().filter((event) => event.operation === 'github-interface.checkout-repo')
-    expect(seen).toHaveLength(1)
-    expect(seen[0].stderr).toContain('reviewer cannot read repository')
+    expect(seen).toHaveLength(0)
     expect(JSON.stringify(events())).not.toContain('checkout not found')
   })
 })
