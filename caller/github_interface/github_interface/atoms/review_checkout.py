@@ -19,20 +19,24 @@ OPAQUE_FILES = OPAQUE_SUFFIXES | {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ic
 
 
 def opaque_path(name: str) -> bool:
-    # Sparse patterns cannot represent a newline. Keep such files available
-    # rather than silently changing which source is accessible.
-    return "\n" not in name and PurePosixPath(name).suffix.lower() in OPAQUE_FILES
+    # Sparse patterns cannot safely represent line breaks. Keep such files
+    # available rather than silently changing which source is accessible.
+    return "\n" not in name and "\r" not in name and PurePosixPath(name).suffix.lower() in OPAQUE_FILES
 
 
 def sparse_literal(name: str) -> str:
     return re.sub(r"([\\*?\[\] ])", r"\\\1", name)
 
 
-def bounded_tree(tree: dict) -> list[dict]:
+def bounded_tree(tree: dict, required_opaque: frozenset[str] = frozenset()) -> list[dict]:
     if tree.get("truncated") or not isinstance(tree.get("tree"), list):
         raise ValueError("review checkout requires a complete repository tree")
     files = tree["tree"]
-    if len(files) > MAX_FILES or sum(item.get("size", 0) for item in files) > MAX_CHECKOUT_BYTES:
+    # Sparse checkout excludes opaque blobs, unless the deferred diff needs
+    # their contents. Line breaks cannot be excluded by sparse patterns.
+    if len(files) > MAX_FILES or sum(item.get("size", 0) for item in files
+                                    if not (item.get("type") == "blob" and opaque_path(item["path"])
+                                            and item["path"] not in required_opaque)) > MAX_CHECKOUT_BYTES:
         raise ValueError("review checkout exceeds its file or byte limit")
     for item in files:
         path = PurePosixPath(item["path"])
@@ -49,7 +53,11 @@ def checkout(owner: str, repo: str, head: str, merge_base: str, token: str,
     for sha in (head, merge_base):
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise ValueError("review checkout requires pinned commit SHAs")
-    files, base_files = bounded_tree(head_tree), bounded_tree(base_tree)
+    if diff_files is not None and (not isinstance(diff_files, list) or len(diff_files) > MAX_FILES
+            or any(not isinstance(name, str) for name in diff_files) or len(set(diff_files)) != len(diff_files)):
+        raise ValueError("review diff requires distinct pinned repository paths")
+    required_opaque = frozenset(diff_files or [])
+    files, base_files = bounded_tree(head_tree, required_opaque), bounded_tree(base_tree, required_opaque)
     guidance = [item for item in base_files if item.get("type") == "blob"
                 and item.get("mode") in ("100644", "100755")
                 and PurePosixPath(item["path"]).name.lower() in ("agents.md", "claude.md")]
@@ -99,9 +107,7 @@ def checkout(owner: str, repo: str, head: str, merge_base: str, token: str,
                     "files": tracked, "instructions": instructions, "unavailable": unavailable}
         if diff_files is not None:
             available = {item["path"] for item in files + base_files}
-            if not isinstance(diff_files, list) or len(diff_files) > MAX_FILES \
-                    or any(not isinstance(name, str) or name not in available for name in diff_files) \
-                    or len(set(diff_files)) != len(diff_files):
+            if any(name not in available for name in diff_files):
                 raise ValueError("review diff requires distinct pinned repository paths")
             diff = git("-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
                        merge_base, head, "--", *(f":(literal){name}" for name in sorted(diff_files)),

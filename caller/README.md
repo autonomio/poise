@@ -148,6 +148,11 @@ before submitting.
 
 ## Repository checkouts
 
+Pinned review checkouts retain the 20,000-entry and 256 MiB per-tree limits.
+The byte limit counts source that will be materialized and opaque files needed
+by a deferred diff; opaque files excluded by sparse checkout do not consume
+that budget. Names that sparse patterns cannot safely represent still count.
+
 Repository checkouts reuse a bare mirror under a per-repository lock. The lock
 covers refreshing the mirror and taking an independent full-history snapshot;
 working-tree files are materialized after it is released. A slow checkout or
